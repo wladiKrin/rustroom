@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [A Straighten drag's other half: airlight and histogram (2026-09-26)](#2026-09-26--a-straighten-drags-other-half-airlight-and-histogram-branch-drag-frame-overheads)
 - [M7.3b — one geometric resample, and a prefix reordered around it (2026-09-25)](#2026-09-25--m73b-one-geometric-resample-and-a-prefix-reordered-around-it)
 - [The Export dialog: presets beside summarised sections (2026-09-22)](#the-export-dialog-presets-beside-summarised-sections-2026-09-22)
 - [The dialogs in one language (2026-09-22)](#the-dialogs-in-one-language-2026-09-22)
@@ -151,6 +152,44 @@ goldens unmoved.
 - ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
+
+### 2026-09-26 — a Straighten drag's other half: airlight and histogram (branch `drag-frame-overheads`)
+
+**Found by use**: after M7.3b the author reported that geometry drags were "still a bit slow". The
+first finding was a retraction. M7.3b's "~4× faster geometric drags" holds only when NR or dehaze
+is on, which is **2 and 1 of the author's 49 edited photos**. On DSCF6263 (lens + geometry only) a
+Straighten drag runs the same code as on `main`.
+
+The rest of the frame was then **measured, not guessed**. `probe_straighten_drag` replays a drag
+through the real `RenderEngine` on the photo's own sidecar at rung 3200 (the author's *fitted* view
+is 6.8 Mpx). The new `TIMING` lines split each frame:
+
+| Part | Before | After |
+|---|---|---|
+| Straighten resample (CPU) | 37.8 | 37.4 |
+| GPU tail (almost all transfer: 82 MB up, 27 MB down) | 19.3 | ~20 |
+| **Histogram** (one thread over 6.8 Mpx) | **12.4** | **2.2** |
+| **Airlight replay** (every render, dehaze or not, from the 26 Mpx source) | **12.1** | **0.0** |
+| Clone into the tail | 2.6 | 2.5 |
+| **Frame** | **84.5 ms** | **62–65 ms** |
+
+- **Histogram**: chunked rayon fold/reduce. It is exact because integer counts sum the same however
+  the frame is split. `the_parallel_histogram_equals_the_serial_one` pins it, and a sabotaged
+  reduce was caught.
+- **Airlight**: `pipeline::prefix_airlight_key`, built from the SAME replay list as
+  `prefix_airlight` (`airlight_replay`), and memoised in `PrefixCache` (one slot; the worker owns
+  one buffer). ⚠⚠ **The key carries the geometry exactly when a masked capture step is replayed**:
+  those steps build coverage from `edits.geometry`, which their own `PrefixStepKey` does not carry,
+  so with global dehaze off the replay can depend on the angle.
+  `the_airlight_key_decides_the_airlight` checks "equal keys ⇒ equal airlight" over every pair of 10
+  variants. Two key sabotages were caught: dropping NR broke the property, and dropping the geometry
+  term tripped the masked-capture assertion.
+- ⚠ **Found in passing, not fixed**: `PrefixCache` evicts DEEPEST-first, and at a whole-frame NATIVE
+  rung one 312 MB checkpoint fills the 512 MB budget. So only the post-lens checkpoint survives, and
+  a geometry drag there re-runs NR/dehaze in *both* orders. Region-scoped 1:1 normally avoids that
+  path.
+
+**Next**: GPU geometry (brainstorm started), which prices against the ~63 ms frame that remains.
 
 ### 2026-09-25 — M7.3b: one geometric resample, and a prefix reordered around it
 

@@ -1064,7 +1064,18 @@ fn render_cached(
     // ⚠ Computed unconditionally rather than only when dehaze is active: `prefix_airlight` runs
     // the prefix on a 65k-pixel copy, and a branch here would be a second place that has to agree
     // with `Dehaze::is_active`.
-    let airlight = pipeline::prefix_airlight(edits, buffer, resampler, lens.clone());
+    // ⚠ The `TIMING` lines below split a frame into its parts under `RUSTROOM_DEBUG_RENDER`. They
+    // were added 2026-09-26 when a Straighten drag's non-geometry half was ~54 ms on a photo with
+    // an empty tail, and found 12.1 ms of airlight replay and 12.4 ms of single-threaded
+    // histogram inside it. The total per-render line above cannot show that.
+    let t_air = std::time::Instant::now();
+    let airlight = cache.airlight(edits, buffer, resampler, lens.clone());
+    if std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some() {
+        eprintln!(
+            "  TIMING airlight {:6.1} ms",
+            t_air.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     // ⚠ Cloned rather than moved: the GPU seam below needs the same profile per step, and a
     // `LensShot` is a handful of bytes plus a shared profile handle.
     let steps = build_prefix_steps(edits, scale, lens.clone(), resampler, Some(airlight));
@@ -1329,10 +1340,17 @@ fn render_cached(
         // allocations.
         let (pw, ph) = (img.width(), img.height());
         let rect = region.and_then(|r| r.clamped(pw, ph));
+        let t_clone = std::time::Instant::now();
         let input = match rect {
             Some(r) => img.crop(r.x, r.y, r.w, r.h),
             None => (*img).clone(),
         };
+        if debug_steps {
+            eprintln!(
+                "  TIMING input clone {:6.1} ms",
+                t_clone.elapsed().as_secs_f64() * 1000.0
+            );
+        }
         (input, rect, pw, ph, ran)
     };
     let region_scoped = was_scoped;
@@ -1363,7 +1381,14 @@ fn render_cached(
         region: clip,
         max_dim,
     };
+    let t_cov = std::time::Instant::now();
     let coverage = brush_cache.get_or_build(edits, cov_spec);
+    if debug_steps {
+        eprintln!(
+            "  TIMING coverage {:6.1} ms",
+            t_cov.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     // ⚠⚠ **M8.3g's gate, derived ONCE and passed down rather than re-derived.** Three things
     // downstream need the float image, and each is a view mode or a setting:
     //
@@ -1506,15 +1531,34 @@ fn render_cached(
             )
         }
         None => {
+            let t_build = std::time::Instant::now();
             let (pipe, chain) = build_tail(color::OutputSpace::Srgb);
+            if debug_steps {
+                eprintln!(
+                    "  TIMING build_tail {:6.1} ms  cpu stages {:?}  gpu chain {}",
+                    t_build.elapsed().as_secs_f64() * 1000.0,
+                    pipe.stage_names(),
+                    chain.is_some()
+                );
+            }
             // ⚠⚠ **M8.3g: the tail's last chain quantizes on the GPU and downloads 27 MB instead
             // of 82.** Measured at rung 3200: 6.33 ms of copy+map plus a 6.87 ms `to_vec` become
             // 2.59 + 2.19, and `pack`'s own `to_rgba8` disappears rather than moving.
             match chain {
                 Some(c) if !float_needed => {
+                    let t_cpu = std::time::Instant::now();
                     let mid = pipe.run(input);
                     let (w, h) = (mid.width(), mid.height());
-                    match c.run_rgba8(&mid) {
+                    let t_gpu = std::time::Instant::now();
+                    let got = c.run_rgba8(&mid);
+                    if debug_steps {
+                        eprintln!(
+                            "  TIMING cpu tail {:6.1} ms  gpu run_rgba8 {:6.1} ms",
+                            (t_gpu - t_cpu).as_secs_f64() * 1000.0,
+                            t_gpu.elapsed().as_secs_f64() * 1000.0
+                        );
+                    }
+                    match got {
                         Some(b) => (Packed::Rgba8 { bytes: b, w, h }, None),
                         // ⚠ A GPU failure falls back through `apply`, which retries once and then
                         // takes the CPU path. One wasted attempt on a rare path beats a second
@@ -1551,7 +1595,14 @@ fn render_cached(
     // that can disagree is the shape `render_max_dim` and `Session::geometry_mode` were each
     // fixed for; here there is only one.
     let bytes = matches!(out, Packed::Rgba8 { .. });
+    let t_pack = std::time::Instant::now();
     let mut frame = pack(out, proofed, region, max_dim, display_space, visualize);
+    if debug_steps {
+        eprintln!(
+            "  TIMING pack {:6.1} ms",
+            t_pack.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     frame.grade_view = plane;
     // ⚠ `edits` here is already the **view** edits — `Session::view_edits` has run
     // `preview_edits`, which is what resets the crop in geometry mode — so this is the geometry

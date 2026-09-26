@@ -768,14 +768,32 @@ pub fn prefix_airlight(
     let long = small.width().max(small.height()).max(1);
     let full_long = src.width().max(src.height()).max(1);
     let scale = RenderScale::new(long as f32 / full_long as f32);
+    let mut cur = small;
+    for s in airlight_replay(edits, scale, lens, resampler) {
+        cur = s.stage.apply(cur);
+    }
+    stages::dehaze::airlight(&cur)
+}
+
+/// The steps [`prefix_airlight`] replays: the prefix up to dehaze, minus the resampling family.
+///
+/// ⚠⚠ **The one list both [`prefix_airlight`] and [`prefix_airlight_key`] are built from**, so
+/// the computation and the key a cache stores it under cannot drift apart.
+fn airlight_replay(
+    edits: &Edits,
+    scale: RenderScale,
+    lens: Option<lens_profile::LensShot>,
+    resampler: Resampler,
+) -> Vec<PrefixStep> {
     // ⚠ `None`, so the replay cannot recurse: dehaze is never constructed here.
     let steps = build_prefix_steps(edits, scale, lens, resampler, None);
     let upto = steps
         .iter()
         .position(|s| s.stage.name() == "dehaze")
         .unwrap_or(steps.len());
-    let mut cur = small;
-    for s in &steps[..upto] {
+    steps
+        .into_iter()
+        .take(upto)
         // ⚠⚠ **The resampling family is SKIPPED, and that is the whole point.** The airlight is an
         // order statistic over the frame, so replaying geometry made it a function of the ANGLE —
         // measured at 6.06-6.81 levels across an ordinary Straighten drag on DSCF6291, and
@@ -790,15 +808,52 @@ pub fn prefix_airlight(
         // crop into a hazy sky and one into a clear foreground share one value. That IS what
         // invariance means — and a crop drag is continuous too, so re-estimating there would
         // reintroduce the defect in the gesture most likely to expose it.
-        if matches!(
-            s.key,
-            PrefixStepKey::LensCorrection(..) | PrefixStepKey::Geometry(..)
-        ) {
-            continue;
-        }
-        cur = s.stage.apply(cur);
-    }
-    stages::dehaze::airlight(&cur)
+        .filter(|s| {
+            !matches!(
+                s.key,
+                PrefixStepKey::LensCorrection(..) | PrefixStepKey::Geometry(..)
+            )
+        })
+        .collect()
+}
+
+/// Everything [`prefix_airlight`]'s answer depends on, for one source buffer: equal keys mean an
+/// equal airlight, so a caller may keep the last value and skip the replay.
+///
+/// ⚠⚠ **Why this exists (2026-09-26): the replay ran on EVERY render**, including renders with no
+/// dehaze anywhere, and it starts with a 256 px downscale of the whole SOURCE buffer. Measured at
+/// **12.1 ms of an 84.5 ms Straighten frame** on a 26 Mpx X-T4 decode — a whole frame spent on a
+/// number nothing used, and one a straighten drag can never change.
+///
+/// ⚠⚠ **The geometry is in the key exactly when a masked capture step is replayed.** Those steps
+/// build their coverage from `edits.geometry` (see [`build_prefix_steps`]), which their own
+/// `PrefixStepKey` does not carry, so with global dehaze off the replay CAN depend on the angle.
+/// Leaving it out would serve a stale airlight during a Straighten drag on such a photo.
+/// `the_airlight_key_decides_the_airlight` pins "equal keys, equal airlight" on that case too.
+///
+/// ⚠ The source buffer is NOT in the key: the caller owns one buffer per cache (the render
+/// worker is rebuilt with its buffer). Nor is the render scale: no `PrefixStepKey` variant
+/// carries it, and the replay's own scale is a function of the buffer alone.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AirlightKey {
+    steps: Vec<PrefixStepKey>,
+    geometry: Option<edit_model::Geometry>,
+}
+
+pub fn prefix_airlight_key(
+    edits: &Edits,
+    resampler: Resampler,
+    lens: Option<lens_profile::LensShot>,
+) -> AirlightKey {
+    let steps: Vec<PrefixStepKey> = airlight_replay(edits, RenderScale::FULL, lens, resampler)
+        .into_iter()
+        .map(|s| s.key)
+        .collect();
+    let geometry = steps
+        .iter()
+        .any(|k| matches!(k, PrefixStepKey::MaskedCapture(..)))
+        .then_some(edits.geometry);
+    AirlightKey { steps, geometry }
 }
 
 /// One prefix stage's parameters, identifying the image that stage produces.
@@ -2654,6 +2709,112 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// ⚠⚠ **The property a memo of the airlight relies on: equal keys, equal airlight.** Checked
+    /// over every pair of a set of variants chosen to hit each thing the replay reads: noise
+    /// reduction, spots, dehaze on and off (which changes where the replay stops), a mask's
+    /// capture correction, and reframes on either side of it.
+    ///
+    /// ⚠ Both halves are asserted to occur, or the implication would hold vacuously: some pairs
+    /// must share a key (a Straighten drag on a plain photo is the case the memo is for) and some
+    /// must not.
+    #[test]
+    fn the_airlight_key_decides_the_airlight() {
+        let img = structured(220, 180);
+        let r = crate::resample::Resampler::CatmullRom;
+        let dehazed = Edits {
+            dehaze: edit_model::Dehaze { amount: 60.0 },
+            ..Default::default()
+        };
+        let masked_nr = Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                    from: [0.0, 0.0],
+                    to: [1.0, 0.0],
+                    invert: true,
+                }),
+                refine: Vec::new(),
+                adjustments: edit_model::LocalAdjustments {
+                    noise_reduction: edit_model::NoiseReduction {
+                        luminance: 70.0,
+                        color: 70.0,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                disabled: false,
+            }],
+            ..Default::default()
+        };
+        let with = |base: &Edits, f: &dyn Fn(&mut Edits)| {
+            let mut e = base.clone();
+            f(&mut e);
+            e
+        };
+        let angle = |e: &mut Edits| e.geometry.angle = 6.0;
+        let nr = |e: &mut Edits| {
+            e.noise_reduction = edit_model::NoiseReduction {
+                luminance: 80.0,
+                color: 80.0,
+                ..Default::default()
+            }
+        };
+        let spot = |e: &mut Edits| {
+            e.spots = vec![edit_model::Spot {
+                centre: [0.3, 0.3],
+                source: [0.7, 0.7],
+                radius: 0.08,
+                feather: 20.0,
+                mode: edit_model::SpotMode::Clone,
+            }]
+        };
+        let variants = [
+            Edits::default(),
+            with(&Edits::default(), &angle),
+            dehazed.clone(),
+            with(&dehazed, &angle),
+            with(&dehazed, &nr),
+            with(&with(&dehazed, &nr), &angle),
+            with(&dehazed, &spot),
+            with(&Edits::default(), &spot),
+            masked_nr.clone(),
+            with(&masked_nr, &angle),
+        ];
+        let keys: Vec<_> = variants
+            .iter()
+            .map(|e| super::prefix_airlight_key(e, r, None))
+            .collect();
+        let airs: Vec<_> = variants
+            .iter()
+            .map(|e| super::prefix_airlight(e, &img, r, None))
+            .collect();
+        let (mut shared, mut distinct) = (0, 0);
+        for i in 0..variants.len() {
+            for j in i + 1..variants.len() {
+                if keys[i] == keys[j] {
+                    shared += 1;
+                    assert_eq!(
+                        airs[i], airs[j],
+                        "variants {i} and {j} share a key but not an airlight"
+                    );
+                } else {
+                    distinct += 1;
+                }
+            }
+        }
+        assert!(
+            shared > 0 && distinct > 0,
+            "fixture: {shared} shared, {distinct} distinct"
+        );
+        // ⚠⚠ The masked-capture case specifically: its step key carries no geometry, so without
+        // the geometry term these two would share a key.
+        assert_ne!(
+            keys[8], keys[9],
+            "a masked capture step must key on the geometry"
+        );
+        // And the case the memo is for: a Straighten drag on a dehazed photo shares one key.
+        assert_eq!(keys[2], keys[3]);
     }
 
     #[test]
