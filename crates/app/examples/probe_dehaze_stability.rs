@@ -52,6 +52,7 @@ fn main() {
         let air = pipeline::prefix_airlight(&e, &buffer, Resampler::default(), None);
         let spec = pipeline::RenderSpec {
             space: color::OutputSpace::Srgb,
+            intent: color::RenderingIntent::default(),
             resampler: Resampler::default(),
             baseline: as_shot,
             airlight: Some(air),

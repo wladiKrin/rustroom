@@ -75,6 +75,7 @@ fn main() {
 
     let spec = RenderSpec {
         space: color::OutputSpace::Srgb,
+        intent: color::RenderingIntent::default(),
         resampler,
         baseline: d.metadata.as_shot.unwrap_or_default(),
         airlight: None,

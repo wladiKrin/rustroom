@@ -67,6 +67,7 @@ fn main() {
                 std::sync::Arc::clone(ctx),
                 vec![Box::new(GpuOutputTransformStage::new(
                     color::OutputSpace::Srgb,
+                    color::RenderingIntent::default(),
                     ctx,
                 ))],
             );

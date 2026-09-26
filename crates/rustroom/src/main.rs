@@ -217,6 +217,7 @@ fn render(
         None,
         pipeline::RenderSpec {
             space,
+            intent: color::RenderingIntent::default(),
             resampler,
             // ⚠ The white-balance baseline the decode left the picture at. Without it a Kelvin in
             // the sidecar would mean one thing in the GUI and another from the CLI.

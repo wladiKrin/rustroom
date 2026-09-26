@@ -1608,6 +1608,7 @@ fn render_cached_with(
         // space they are rendering into.
         let render_spec = pipeline::RenderSpec {
             space,
+            intent: color::RenderingIntent::default(),
             // ⚠ The tail resamples nothing — every resampling stage is in the prefix — so this
             // is carried for consistency rather than because it changes a pixel here.
             resampler,
@@ -1778,6 +1779,7 @@ fn render_cached_with(
                     Some(&coverage),
                     pipeline::RenderSpec {
                         space: color::OutputSpace::Srgb,
+                        intent: color::RenderingIntent::default(),
                         resampler,
                         baseline: wb_baseline,
                         airlight: Some(airlight),
@@ -1990,6 +1992,7 @@ pub fn render_once(
     // happens to be lens-less" is a coincidence, not a guarantee, and this is a reference.
     let spec = pipeline::RenderSpec {
         space: color::OutputSpace::Srgb,
+        intent: color::RenderingIntent::default(),
         resampler,
         baseline: color::wb::Illuminant::default(),
         airlight: Some(pipeline::prefix_airlight(edits, buffer, resampler, lens)),

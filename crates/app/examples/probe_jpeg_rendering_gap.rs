@@ -19,6 +19,7 @@ fn main() {
     let scale = RenderScale::new(1.0);
     let spec = RenderSpec {
         space: color::OutputSpace::Srgb,
+        intent: color::RenderingIntent::default(),
         resampler,
         baseline: color::wb::Illuminant::default(),
         airlight: None,

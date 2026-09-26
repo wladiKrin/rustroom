@@ -156,7 +156,11 @@ const REPLACEABLE: &[(&str, Builder)] = &[
     // ⚠ Last, as in the tail — and the only stage here that is on **every** photograph, which is
     // what the cost gate exists to keep honest.
     ("output_transform", |_, _, _, _, spec, ctx| {
-        Some(Box::new(GpuOutputTransformStage::new(spec.space, ctx)))
+        Some(Box::new(GpuOutputTransformStage::new(
+            spec.space,
+            spec.intent,
+            ctx,
+        )))
     }),
 ];
 
@@ -808,7 +812,11 @@ mod tests {
     #[test]
     fn a_lone_output_transform_chains_and_a_lone_display_rendering_does_not() {
         let Some(ctx) = ctx() else { return };
-        let ot = GpuOutputTransformStage::new(RenderSpec::default().space, &ctx);
+        let ot = GpuOutputTransformStage::new(
+            RenderSpec::default().space,
+            RenderSpec::default().intent,
+            &ctx,
+        );
         let dr = GpuDisplayRenderingStage::new(None, None, &ctx);
         assert!(
             worth_a_chain(&[ot.cpu_cost()]),

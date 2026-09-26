@@ -11,23 +11,28 @@
 //! - **Perceptual** leaves chroma below [`KNEE`] of the boundary alone and compresses above it, so
 //!   the working space's edge lands exactly on the target's and saturated gradations survive.
 //!
-//! The boundary is a table per space over (lightness, hue), found once by bisection and read
-//! bilinearly — the GPU twin uploads the same tables, so there is one definition of the boundary.
+//! ⚠⚠ **The boundary is found EXACTLY, per pixel, by bisection — not read from a table.** A
+//! bilinear (lightness × hue) table was built first and failed on the golden chart: pure sRGB
+//! primaries sit exactly ON the gamut's corners (the cusps), where linear interpolation of the
+//! boundary underestimates it most, and a pure red came back **49 levels** desaturated. Saturated
+//! colour lives precisely at those corners. The bisection's step is Oklab → linear — cubes and a
+//! matrix, no cube root — and it runs only for pixels that need it: out-of-gamut ones under
+//! relative, those past the knee under perceptual (the knee itself is one in-gamut test).
 
 use crate::oklab::{oklab_to_prophoto, prophoto_to_oklab};
 use crate::OutputSpace;
-use std::sync::OnceLock;
 
-/// Lightness samples in the boundary tables, `L = 0 ..= 1`.
-pub const NL: usize = 65;
-/// Hue samples in the boundary tables, `h = 0 .. 2π`, wrapping.
-pub const NH: usize = 256;
 /// Perceptual: the fraction of the boundary below which chroma is left alone.
 pub const KNEE: f32 = 0.8;
-/// The largest chroma the bisection considers. ProPhoto's imaginary primaries reach far past any
-/// real target; this bounds its table rather than the targets'.
-const C_MAX: f32 = 2.0;
-const BISECTION_STEPS: usize = 40;
+/// The largest chroma the working space's bisection considers. ProPhoto's imaginary primaries
+/// reach far past any real target.
+pub const C_MAX: f32 = 2.0;
+/// Bisection steps: 2⁻²⁴ of the interval, at float precision.
+pub const BISECTION_STEPS: u32 = 24;
+/// How far outside `[0, 1]` a channel may sit and still count as in gamut. ⚠ Float noise, not a
+/// tolerance on colour: a pure sRGB primary taken through ProPhoto and back reads ~1e-7 outside,
+/// and without this it would be "out of gamut" by rounding alone.
+pub const IN_GAMUT_EPS: f32 = 1e-6;
 
 /// How out-of-gamut colour is brought into the target.
 #[derive(
@@ -55,29 +60,23 @@ impl RenderingIntent {
     }
 }
 
-/// One output space's gamut boundary, and the working space's, over (lightness, hue).
-pub struct GamutMap {
-    space: OutputSpace,
-    /// The largest chroma `space` holds, `[l * NH + h]`.
-    target: Vec<f32>,
-    /// The largest chroma ProPhoto holds, on the same grid: where the source ends.
-    source: Vec<f32>,
+/// Whether linear `rgb` in `space` is inside `[0, 1]³`, to float noise.
+fn inside(rgb: [f32; 3]) -> bool {
+    rgb.iter()
+        .all(|v| (-IN_GAMUT_EPS..=1.0 + IN_GAMUT_EPS).contains(v))
 }
 
-fn fits(space: OutputSpace, lab: [f32; 3]) -> bool {
-    space
-        .from_working(oklab_to_prophoto(lab))
-        .iter()
-        .all(|v| (0.0..=1.0).contains(v))
+/// Whether the Oklab colour `[l, c·cos h, c·sin h]` fits `space`.
+fn fits(space: OutputSpace, l: f32, c: f32, (ca, sa): (f32, f32)) -> bool {
+    inside(space.from_working(oklab_to_prophoto([l, c * ca, c * sa])))
 }
 
-/// The largest chroma at `(l, h)` that `space` holds: the last in-gamut point of a bisection.
-fn bisect(space: OutputSpace, l: f32, h: f32) -> f32 {
-    let (ca, sa) = (h.cos(), h.sin());
-    let (mut lo, mut hi) = (0.0f32, C_MAX);
+/// The largest chroma in `[lo, hi]` that `space` holds at lightness `l` along direction
+/// `(cos h, sin h)`: the last in-gamut point of a bisection. ⚠ `lo` must fit.
+fn bisect(space: OutputSpace, l: f32, dir: (f32, f32), mut lo: f32, mut hi: f32) -> f32 {
     for _ in 0..BISECTION_STEPS {
         let mid = 0.5 * (lo + hi);
-        if fits(space, [l, mid * ca, mid * sa]) {
+        if fits(space, l, mid, dir) {
             lo = mid;
         } else {
             hi = mid;
@@ -86,68 +85,20 @@ fn bisect(space: OutputSpace, l: f32, h: f32) -> f32 {
     lo
 }
 
-fn table(space: OutputSpace) -> Vec<f32> {
-    let mut t = vec![0.0; NL * NH];
-    for li in 0..NL {
-        let l = li as f32 / (NL - 1) as f32;
-        for hi in 0..NH {
-            let h = hi as f32 / NH as f32 * std::f32::consts::TAU;
-            t[li * NH + hi] = bisect(space, l, h);
-        }
-    }
-    t
-}
-
-/// Bilinear read of a boundary table at lightness `l ∈ [0, 1]` and hue `h` in radians.
-fn lookup(t: &[f32], l: f32, h: f32) -> f32 {
-    let v = l.clamp(0.0, 1.0) * (NL - 1) as f32;
-    let l0 = (v.floor() as usize).min(NL - 2);
-    let fl = v - l0 as f32;
-    let u = h.rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU * NH as f32;
-    let h0 = (u.floor() as usize) % NH;
-    let h1 = (h0 + 1) % NH;
-    let fh = u - u.floor();
-    let at = |li: usize, hi: usize| t[li * NH + hi];
-    let row = |li| at(li, h0) + fh * (at(li, h1) - at(li, h0));
-    row(l0) + fl * (row(l0 + 1) - row(l0))
+/// The gamut map into one output space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GamutMap {
+    space: OutputSpace,
 }
 
 impl GamutMap {
-    /// The map into `space`, built on first use and shared thereafter.
-    pub fn for_space(space: OutputSpace) -> &'static GamutMap {
-        static MAPS: [OnceLock<GamutMap>; 4] = [
-            OnceLock::new(),
-            OnceLock::new(),
-            OnceLock::new(),
-            OnceLock::new(),
-        ];
-        let k = OutputSpace::ALL
-            .iter()
-            .position(|&s| s == space)
-            .expect("ALL lists every space");
-        MAPS[k].get_or_init(|| {
-            static SOURCE: OnceLock<Vec<f32>> = OnceLock::new();
-            GamutMap {
-                space,
-                target: table(space),
-                source: SOURCE.get_or_init(|| table(OutputSpace::ProPhoto)).clone(),
-            }
-        })
-    }
-
-    /// The target boundary table, `NL × NH`, row-major by lightness — for the GPU twin.
-    pub fn target_table(&self) -> &[f32] {
-        &self.target
-    }
-
-    /// The working space's boundary table on the same grid — for the GPU twin.
-    pub fn source_table(&self) -> &[f32] {
-        &self.source
+    pub fn for_space(space: OutputSpace) -> GamutMap {
+        GamutMap { space }
     }
 
     /// The largest chroma the target holds at Oklab lightness `l` and hue `h` (radians).
     pub fn boundary(&self, l: f32, h: f32) -> f32 {
-        lookup(&self.target, l, h)
+        bisect(self.space, l, (h.cos(), h.sin()), 0.0, C_MAX)
     }
 
     /// Bring a **linear ProPhoto** colour inside the target under `intent`; the result is still
@@ -160,13 +111,7 @@ impl GamutMap {
         if self.space == OutputSpace::ProPhoto {
             return rgb;
         }
-        if intent == RenderingIntent::RelativeColorimetric
-            && self
-                .space
-                .from_working(rgb)
-                .iter()
-                .all(|v| (0.0..=1.0).contains(v))
-        {
+        if intent == RenderingIntent::RelativeColorimetric && inside(self.space.from_working(rgb)) {
             return rgb;
         }
         let [l, a, b] = prophoto_to_oklab(rgb);
@@ -177,22 +122,31 @@ impl GamutMap {
             return [1.0; 3];
         }
         let c = a.hypot(b);
-        let h = b.atan2(a);
-        let bound = self.boundary(l, h);
+        if c <= 0.0 {
+            // A grey outside the target can only be a lightness overshoot, handled above; this
+            // is float noise on the axis.
+            return rgb;
+        }
+        let dir = (a / c, b / c);
         let target = match intent {
-            RenderingIntent::RelativeColorimetric => c.min(bound),
+            // ⚠ `c` itself is outside, so the boundary lies in `[0, c]`.
+            RenderingIntent::RelativeColorimetric => bisect(self.space, l, dir, 0.0, c),
             RenderingIntent::Perceptual => {
-                let t = KNEE * bound;
-                if c <= t {
+                // ⚠ The knee test is ONE in-gamut check: `c ≤ KNEE·bound` exactly when
+                // `c / KNEE` still fits. Most pixels stop here.
+                let reach = c / KNEE;
+                if fits(self.space, l, reach, dir) {
                     return rgb;
                 }
-                perceptual_chroma(c, t, bound, lookup(&self.source, l, h))
+                let bound = bisect(self.space, l, dir, 0.0, reach);
+                let source = bisect(OutputSpace::ProPhoto, l, dir, bound, C_MAX.max(bound));
+                perceptual_chroma(c, KNEE * bound, bound, source)
             }
         };
         if target >= c {
             return rgb;
         }
-        let s = if c > 0.0 { target / c } else { 0.0 };
+        let s = target / c;
         oklab_to_prophoto([l, a * s, b * s])
     }
 }
@@ -200,7 +154,7 @@ impl GamutMap {
 /// Perceptual's knee: identity at `t`, with slope 1 there, mapping `source` exactly onto `bound`
 /// and never past it. `k·x / (1 + (k−1)·x)` is the rational curve with `f(0) = 0`, `f'(0) = k`,
 /// `f(1) = 1`.
-fn perceptual_chroma(c: f32, t: f32, bound: f32, source: f32) -> f32 {
+pub fn perceptual_chroma(c: f32, t: f32, bound: f32, source: f32) -> f32 {
     let s = source.max(bound);
     if s - t <= f32::EPSILON || bound - t <= f32::EPSILON {
         return c.min(bound);
@@ -284,19 +238,20 @@ mod tests {
     }
 
     #[test]
-    fn every_stored_boundary_is_inside_and_a_little_more_is_outside() {
+    fn every_boundary_is_inside_and_a_little_more_is_outside() {
         for space in TARGETS {
             let m = GamutMap::for_space(space);
             let mut checked = 0;
-            for li in 1..NL - 1 {
-                let l = li as f32 / (NL - 1) as f32;
-                for hi in (0..NH).step_by(7) {
-                    let h = hi as f32 / NH as f32 * std::f32::consts::TAU;
-                    let c = m.target[li * NH + hi];
-                    assert!(fits(space, [l, c * h.cos(), c * h.sin()]));
-                    let more = c * 1.01 + 1e-4;
+            for li in 1..64 {
+                let l = li as f32 / 64.0;
+                for hi in 0..40 {
+                    let h = hi as f32 / 40.0 * std::f32::consts::TAU;
+                    let dir = (h.cos(), h.sin());
+                    let c = m.boundary(l, h);
+                    assert!(fits(space, l, c, dir));
+                    let more = c * 1.001 + 1e-5;
                     assert!(
-                        !fits(space, [l, more * h.cos(), more * h.sin()]),
+                        !fits(space, l, more, dir),
                         "{space:?} L={l} h={h}: {c} is not the edge"
                     );
                     checked += 1;
@@ -306,24 +261,30 @@ mod tests {
         }
     }
 
-    /// ⚠ To 1%, not exactly: next to black and white both boundaries shrink to a few thousandths
-    /// and P3's measured 0.5% past ProPhoto's at chroma 0.007 — bisection noise, not a gamut.
-    /// `map` takes the larger of the two for exactly that reason.
+    /// ⚠⚠ **To 1%, not exactly — and the gap is REAL, not rounding.** Measured 2026-09-26 with the
+    /// exact boundary: at Oklab hue ~30° (red) Display P3 reaches up to **0.65%** more chroma than
+    /// ProPhoto, at every lightness. After white-point adaptation ProPhoto does not quite hold that
+    /// sliver of P3's red. `map` takes the larger of the two for exactly this reason.
     #[test]
     fn the_working_space_boundary_contains_every_target() {
+        let pro = GamutMap::for_space(OutputSpace::ProPhoto);
         for space in TARGETS {
             let m = GamutMap::for_space(space);
-            for (t, s) in m.target.iter().zip(&m.source) {
-                assert!(
-                    s * 1.01 + 1e-6 >= *t,
-                    "{space:?}: target {t} beyond source {s}"
-                );
+            for li in 1..32 {
+                let l = li as f32 / 32.0;
+                for hi in 0..36 {
+                    let h = hi as f32 / 36.0 * std::f32::consts::TAU;
+                    let (t, s) = (m.boundary(l, h), pro.boundary(l, h));
+                    assert!(
+                        t <= s * 1.01,
+                        "{space:?} L={l} h={h}: target {t} beyond source {s}"
+                    );
+                }
             }
         }
     }
 
-    /// ⚠ The bound is MEASURED: the bilinear boundary overshoots the true one slightly where it is
-    /// convex, and `encode` clamps that residue. What is asserted is that the residue stays small.
+    /// ⚠ The bound is MEASURED: what is left for `encode`'s clamp is float residue.
     #[test]
     fn every_mapped_colour_lands_inside_the_target() {
         let mut worst = 0.0f32;
@@ -338,7 +299,7 @@ mod tests {
                 }
             }
         }
-        // Measured 2026-09-26: 7.3e-4 of full scale.
+        // Measured 2026-09-26: 4.2e-4 of full scale.
         assert!(worst < 1e-3, "worst excursion {worst}");
     }
 
@@ -362,7 +323,7 @@ mod tests {
                 }
             }
         }
-        // Measured 2026-09-26: lightness 1.2e-7 (float), hue 0.0014°.
+        // Measured 2026-09-26: lightness 1.8e-7 (float), hue 0.0009°.
         assert!(worst_l < 1e-6, "lightness moved by {worst_l}");
         assert!(worst_h < 0.01, "hue moved by {worst_h}°");
     }

@@ -1140,6 +1140,9 @@ impl PrefixKey {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RenderSpec {
     pub space: color::OutputSpace,
+    /// How colour `space` cannot hold is brought inside it (M6.4c). A tail-only property: no
+    /// prefix stage reads it, so no `PrefixKey` carries it.
+    pub intent: color::RenderingIntent,
     pub resampler: Resampler,
     pub baseline: color::wb::Illuminant,
     /// The frame-global dehaze airlight, from [`prefix_airlight`].
@@ -1160,6 +1163,7 @@ impl Default for RenderSpec {
     fn default() -> Self {
         Self {
             space: color::OutputSpace::Srgb,
+            intent: color::RenderingIntent::default(),
             resampler: Resampler::default(),
             baseline: color::wb::Illuminant::default(),
             airlight: None,
@@ -1491,6 +1495,7 @@ pub fn build_pipeline_split_tapped(
     } = profile;
     let RenderSpec {
         space,
+        intent,
         resampler,
         baseline,
         airlight,
@@ -1697,7 +1702,7 @@ pub fn build_pipeline_split_tapped(
         )));
     }
 
-    tail.push(Box::new(OutputTransform::new(space)));
+    tail.push(Box::new(OutputTransform::new(space, intent)));
 
     (
         Pipeline::new(prefix),
@@ -1786,6 +1791,7 @@ pub fn build_pipeline_to(
         scale,
         RenderSpec {
             space,
+            intent: color::RenderingIntent::default(),
             resampler,
             ..RenderSpec::default()
         },
@@ -5249,7 +5255,10 @@ mod per_pixel_tests {
                 edit_model::LutSpace::SrgbDisplay,
                 60.0,
             )),
-            Box::new(OutputTransform::new(color::OutputSpace::Srgb)),
+            Box::new(OutputTransform::new(
+                color::OutputSpace::Srgb,
+                color::RenderingIntent::default(),
+            )),
         ];
         for s in &stages {
             assert!(

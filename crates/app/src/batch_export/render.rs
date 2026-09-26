@@ -149,6 +149,7 @@ pub fn export_one(
     let airlight = pipeline::prefix_airlight(edits, &scaled, render.resampler, source.lens.clone());
     let spec = pipeline::RenderSpec {
         space: opts.space,
+        intent: color::RenderingIntent::default(),
         resampler: render.resampler,
         baseline: source.baseline,
         airlight: Some(airlight),

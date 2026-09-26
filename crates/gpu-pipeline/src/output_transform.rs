@@ -7,7 +7,7 @@
 //! a neutral frame would build a one-stage chain and pay a 34 ms toll for 28.6 ms of work.
 
 use crate::{GpuContext, GpuImage, GpuStage};
-use color::OutputSpace;
+use color::{OutputSpace, RenderingIntent};
 use pipeline::PipelineStage;
 use std::sync::Arc;
 
@@ -19,8 +19,10 @@ const MODE_PROPHOTO: u32 = 2;
 const WGSL: &str = r#"
 struct Params_output_transform {
     mode: u32,
-    pad0: u32,
-    pad1: u32,
+    // 0 relative colorimetric, 1 perceptual — `color::RenderingIntent`.
+    intent: u32,
+    // 1 when the target is the working space itself: the gamut map is the identity.
+    identity: u32,
     pad2: u32,
     // ⚠ Three vec4 rows rather than a mat3x3: a mat3x3 in a uniform is padded to three vec4s
     // anyway, and writing the rows explicitly means the Rust side cannot disagree with WGSL's
@@ -61,7 +63,67 @@ fn encode_channel_output_transform(v: f32, q: Params_output_transform) -> f32 {
     return pow(c, 1.0 / 1.8);
 }
 
-fn apply_output_transform(p: vec3<f32>, x: u32, y: u32, q: Params_output_transform, base: u32) -> vec3<f32> {
+// ⚠⚠ The gamut map is `color::gamut::GamutMap::map`, line for line: an exact per-pixel bisection
+// of the boundary, never a table (a bilinear table desaturated a pure sRGB red by 49 levels at the
+// gamut's corners — see `color::gamut`). The constants are substituted from that module.
+fn inside_output_transform(v: vec3<f32>) -> bool {
+    return all(v >= vec3<f32>(-GAMUT_EPS)) && all(v <= vec3<f32>(1.0 + GAMUT_EPS));
+}
+
+fn fits_output_transform(l: f32, c: f32, dir: vec2<f32>, q: Params_output_transform, target_space: bool) -> bool {
+    let p = oklab_to_prophoto(l, c * dir.x, c * dir.y);
+    if (!target_space) { return inside_output_transform(p); }
+    return inside_output_transform(vec3<f32>(dot(q.r0.xyz, p), dot(q.r1.xyz, p), dot(q.r2.xyz, p)));
+}
+
+fn bisect_output_transform(l: f32, dir: vec2<f32>, lo_in: f32, hi_in: f32, q: Params_output_transform, target_space: bool) -> f32 {
+    var lo = lo_in;
+    var hi = hi_in;
+    for (var i = 0u; i < GAMUT_STEPS; i = i + 1u) {
+        let mid = 0.5 * (lo + hi);
+        if (fits_output_transform(l, mid, dir, q, target_space)) { lo = mid; } else { hi = mid; }
+    }
+    return lo;
+}
+
+fn gamut_map_output_transform(p: vec3<f32>, q: Params_output_transform) -> vec3<f32> {
+    if (q.identity == 1u) { return p; }
+    if (q.intent == 0u) {
+        let lin = vec3<f32>(dot(q.r0.xyz, p), dot(q.r1.xyz, p), dot(q.r2.xyz, p));
+        if (inside_output_transform(lin)) { return p; }
+    }
+    let lab = prophoto_to_oklab(p.x, p.y, p.z);
+    let l = lab.x;
+    if (l <= 0.0) { return vec3<f32>(0.0); }
+    if (l >= 1.0) { return vec3<f32>(1.0); }
+    let c = length(lab.yz);
+    if (c <= 0.0) { return p; }
+    let dir = lab.yz / c;
+    var target_c: f32;
+    if (q.intent == 0u) {
+        target_c = bisect_output_transform(l, dir, 0.0, c, q, true);
+    } else {
+        let reach = c / GAMUT_KNEE;
+        if (fits_output_transform(l, reach, dir, q, true)) { return p; }
+        let bound = bisect_output_transform(l, dir, 0.0, reach, q, true);
+        let src = max(bisect_output_transform(l, dir, bound, max(GAMUT_C_MAX, bound), q, false), bound);
+        let t = GAMUT_KNEE * bound;
+        let eps = 1.1920929e-7;
+        if (src - t <= eps || bound - t <= eps) {
+            target_c = min(c, bound);
+        } else {
+            let k = (src - t) / (bound - t);
+            let xx = (c - t) / (src - t);
+            target_c = min(t + (bound - t) * k * xx / (1.0 + (k - 1.0) * xx), bound);
+        }
+    }
+    if (target_c >= c) { return p; }
+    let s = target_c / c;
+    return oklab_to_prophoto(l, lab.y * s, lab.z * s);
+}
+
+fn apply_output_transform(p_in: vec3<f32>, x: u32, y: u32, q: Params_output_transform, base: u32) -> vec3<f32> {
+    let p = gamut_map_output_transform(p_in, q);
     // ⚠ Primaries first, in linear light, then the transfer. Encoding before converting would
     // apply a matrix to gamma-encoded values, which is meaningless and does not fail loudly.
     let lin = vec3<f32>(
@@ -81,11 +143,13 @@ pub struct GpuOutputTransformStage {
     /// Row-major, extracted from the CPU's own transform.
     rows: [[f32; 3]; 3],
     mode: u32,
+    space: OutputSpace,
+    intent: RenderingIntent,
     cpu: pipeline::OutputTransform,
 }
 
 impl GpuOutputTransformStage {
-    pub fn new(space: OutputSpace, _ctx: &Arc<GpuContext>) -> Self {
+    pub fn new(space: OutputSpace, intent: RenderingIntent, _ctx: &Arc<GpuContext>) -> Self {
         // ⚠⚠ **The matrix is EXTRACTED from `OutputSpace::from_working`, never copied.** It is a
         // linear map, so its columns are just the images of the basis vectors — which means there
         // is no second copy of any matrix to go stale, ProPhoto's identity included. This repo has
@@ -105,7 +169,9 @@ impl GpuOutputTransformStage {
         Self {
             rows,
             mode,
-            cpu: pipeline::OutputTransform::new(space),
+            space,
+            intent,
+            cpu: pipeline::OutputTransform::new(space, intent),
         }
     }
 }
@@ -134,6 +200,13 @@ impl GpuStage for GpuOutputTransformStage {
     fn per_pixel(&self, _w: usize, _h: usize) -> Option<crate::per_pixel::Part<'_>> {
         let mut params = [0u8; 80];
         params[0..4].copy_from_slice(&self.mode.to_le_bytes());
+        let intent: u32 = match self.intent {
+            RenderingIntent::RelativeColorimetric => 0,
+            RenderingIntent::Perceptual => 1,
+        };
+        params[4..8].copy_from_slice(&intent.to_le_bytes());
+        let identity = u32::from(self.space == OutputSpace::ProPhoto);
+        params[8..12].copy_from_slice(&identity.to_le_bytes());
         for (r, row) in self.rows.iter().enumerate() {
             for (c, v) in row.iter().enumerate() {
                 let at = 16 + r * 16 + c * 4;
@@ -144,13 +217,21 @@ impl GpuStage for GpuOutputTransformStage {
         params[68..72].copy_from_slice(&color::PROPHOTO_TOE_END.to_le_bytes());
         Some(crate::per_pixel::Part {
             name: "output_transform",
-            wgsl: WGSL.to_string(),
+            // ⚠ The grid and the knee are substituted from `color::gamut`, never re-typed.
+            wgsl: format!(
+                "const GAMUT_KNEE: f32 = {:?};\nconst GAMUT_C_MAX: f32 = {:?};\nconst GAMUT_STEPS: u32 = {}u;\nconst GAMUT_EPS: f32 = {:?};\n{WGSL}",
+                color::gamut::KNEE,
+                color::gamut::C_MAX,
+                color::gamut::BISECTION_STEPS,
+                color::gamut::IN_GAMUT_EPS,
+            ),
             params: params.to_vec(),
             tables: Vec::new(),
             // ⚠ The sRGB prelude, so `encode_channel_output_transform`'s mode-0 branch calls a
-            // function this crate defines exactly once.
+            // function this crate defines exactly once; Oklab for the gamut map.
             preludes: crate::per_pixel::Preludes {
                 srgb: true,
+                oklab: true,
                 ..Default::default()
             },
             needs_position: false,
@@ -184,10 +265,15 @@ mod tests {
         ]
     }
 
-    fn chained(ctx: &Arc<GpuContext>, space: OutputSpace, img: ImageBuf) -> ImageBuf {
+    fn chained(
+        ctx: &Arc<GpuContext>,
+        space: OutputSpace,
+        intent: RenderingIntent,
+        img: ImageBuf,
+    ) -> ImageBuf {
         crate::GpuChain::new(
             ctx.clone(),
-            vec![Box::new(GpuOutputTransformStage::new(space, ctx))],
+            vec![Box::new(GpuOutputTransformStage::new(space, intent, ctx))],
         )
         .apply(img)
     }
@@ -210,8 +296,9 @@ mod tests {
         let Some(ctx) = ctx() else { return };
         for space in SPACES {
             let img = ImageBuf::from_vec(6, 1, spread());
-            let cpu = pipeline::OutputTransform::new(space).apply(img.clone());
-            let gpu = chained(&ctx, space, img);
+            let cpu = pipeline::OutputTransform::new(space, RenderingIntent::default())
+                .apply(img.clone());
+            let gpu = chained(&ctx, space, RenderingIntent::default(), img);
             let d = crate::compare(&cpu, &gpu);
             assert!(
                 d.worst_levels < 0.1,
@@ -229,13 +316,21 @@ mod tests {
     fn the_four_spaces_differ_from_one_another() {
         let Some(ctx) = ctx() else { return };
         let img = ImageBuf::from_vec(6, 1, spread());
-        let srgb = chained(&ctx, OutputSpace::Srgb, img.clone());
+        let srgb = chained(
+            &ctx,
+            OutputSpace::Srgb,
+            RenderingIntent::default(),
+            img.clone(),
+        );
         for other in [
             OutputSpace::DisplayP3,
             OutputSpace::AdobeRgb,
             OutputSpace::ProPhoto,
         ] {
-            let d = crate::compare(&srgb, &chained(&ctx, other, img.clone()));
+            let d = crate::compare(
+                &srgb,
+                &chained(&ctx, other, RenderingIntent::default(), img.clone()),
+            );
             assert!(
                 d.worst_levels > 1.0,
                 "{other:?} renders the same as sRGB; moved {} levels",
@@ -261,14 +356,20 @@ mod tests {
             "fixture must be out of gamut, got {lin:?}"
         );
         let img = ImageBuf::from_vec(1, 1, px.to_vec());
-        let gpu = chained(&ctx, OutputSpace::Srgb, img.clone());
+        let gpu = chained(
+            &ctx,
+            OutputSpace::Srgb,
+            RenderingIntent::default(),
+            img.clone(),
+        );
         assert!(
             gpu.data().iter().all(|v| v.is_finite()),
             "out-of-gamut colour must stay finite, got {:?}",
             gpu.data()
         );
         // ⚠ Finite alone would pass against a shader that zeroed everything.
-        let cpu = pipeline::OutputTransform::new(OutputSpace::Srgb).apply(img);
+        let cpu = pipeline::OutputTransform::new(OutputSpace::Srgb, RenderingIntent::default())
+            .apply(img);
         let d = crate::compare(&cpu, &gpu);
         assert!(d.worst_levels < 0.1, "worst {} levels", d.worst_levels);
     }
@@ -296,7 +397,12 @@ mod tests {
             0.05, 0.9, 0.08, 0.95, 0.03, 0.9, -0.5, 0.02, 0.03, 2.4, 2.1, 1.8,
         ];
         for space in SPACES {
-            let gpu = chained(&ctx, space, ImageBuf::from_vec(4, 1, px.clone()));
+            let gpu = chained(
+                &ctx,
+                space,
+                RenderingIntent::default(),
+                ImageBuf::from_vec(4, 1, px.clone()),
+            );
             for (i, v) in gpu.data().iter().enumerate() {
                 assert!(
                     v.is_finite() && (0.0..=1.0).contains(v),
@@ -313,6 +419,7 @@ mod tests {
         let Some(ctx) = ctx() else { return };
         let s = GpuOutputTransformStage::new(
             OutputSpace::ProPhoto,
+            RenderingIntent::default(),
             crate::shared().expect("checked above"),
         );
         assert_eq!(s.rows, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
@@ -326,9 +433,53 @@ mod tests {
             ctx.clone(),
             vec![Box::new(GpuOutputTransformStage::new(
                 OutputSpace::Srgb,
+                RenderingIntent::default(),
                 &ctx,
             ))],
         );
         assert_eq!(chain.scratch_needed(), 0);
+    }
+
+    /// ⚠⚠ Every space × intent on colours OUTSIDE every target — an in-gamut fixture would pass
+    /// with the whole gamut map missing from the shader. The fixture is asserted to move first.
+    #[test]
+    fn the_gamut_map_matches_the_cpu_for_every_space_and_intent() {
+        let Some(ctx) = ctx() else { return };
+        let mut px = Vec::new();
+        for r in [0.0f32, 0.1, 0.5, 0.9] {
+            for g in [0.0f32, 0.3, 0.8] {
+                for b in [0.0f32, 0.2, 0.7, 1.0] {
+                    px.extend_from_slice(&[r, g, b]);
+                }
+            }
+        }
+        let n = px.len() / 3;
+        let img = ImageBuf::from_vec(n, 1, px);
+        let perceptual =
+            pipeline::OutputTransform::new(OutputSpace::Srgb, RenderingIntent::Perceptual)
+                .apply(img.clone());
+        let relative = pipeline::OutputTransform::new(
+            OutputSpace::Srgb,
+            RenderingIntent::RelativeColorimetric,
+        )
+        .apply(img.clone());
+        assert!(
+            crate::compare(&perceptual, &relative).worst_levels > 5.0,
+            "the fixture must tell the intents apart"
+        );
+        for space in SPACES {
+            for intent in RenderingIntent::ALL {
+                let cpu = pipeline::OutputTransform::new(space, intent).apply(img.clone());
+                let gpu = chained(&ctx, space, intent, img.clone());
+                let d = crate::compare(&cpu, &gpu);
+                assert!(
+                    d.worst_levels < 0.5,
+                    "{space:?} {intent:?}: worst {} levels over {} of {} samples",
+                    d.worst_levels,
+                    d.differing,
+                    d.total
+                );
+            }
+        }
     }
 }
