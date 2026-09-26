@@ -168,9 +168,11 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-25)
 
-**2907 tests**, **78 goldens**. ✅ **M7.3b (2026-09-25)** is on branch **`m7.3b-geometry-fusion`**,
-gated green and **not yet confirmed by use or merged**. It fuses perspective into `GeometryStage`,
-reorders the prefix, and moves spots before perspective. `grep -n 'M7.3b' docs/JOURNAL.md`.
+**2907 tests**, **78 goldens**. ✅ **M7.3b (2026-09-25, confirmed by use and merged 2026-09-26)**
+fuses perspective into `GeometryStage`, reorders the prefix, and moves spots before perspective.
+`grep -n 'M7.3b' docs/JOURNAL.md`. ⚠⚠ **Its drag speedup applies only when NR or dehaze is on**,
+which is 2 and 1 of the author's 49 edited photos. Quoting "4x faster geometric drags" without that
+condition overstated it, and the author noticed.
 ⚠ `Edits::version` is **never written** (always 0); do not trust any note giving it a value.
 
 ✅ **Stacks — same-stem files as one grid cell (2026-09-25, confirmed by use).** `Pictures/fuji` was
@@ -239,8 +241,9 @@ Every planned phase closed except **M7.3b** (since done, 2026-09-25), so the roa
   `license = "GPL-3.0-or-later"` all along. ⚠⚠ **Do not re-open it from a list**; it exists in the plan
   only as the record of the broken-`ls` check in *Standing lessons* below.
 
-**▶ The order the user set: finish M7.3b (✅ on its branch, awaiting use and merge), then Phase 9's
-checklist from the top.** ⚠ **Proposed and not yet scheduled:** masks' *scene* sliders (WB, exposure,
+**▶ The order the user set: M7.3b is ✅ done; next are the drag-frame fixes (threaded histogram,
+remembered airlight), then GPU geometry (being brainstormed 2026-09-26), then Phase 9's checklist
+from the top.** ⚠ **Proposed and not yet scheduled:** masks' *scene* sliders (WB, exposure,
 contrast, tone regions) run after the global tone curve today, where Lightroom applies them as
 offsets at the global slider's position. It was raised in M7.3b's brainstorm and split off as its
 own milestone. It is the author's call.
