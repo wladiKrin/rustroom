@@ -31,10 +31,17 @@ use rayon::prelude::*;
 pub const RADIUS_FULL: f32 = 6.0;
 /// Hue feather outside a range, degrees.
 pub const FEATHER_DEG: f32 = 10.0;
-/// Edge strength (half the lightness step across a pixel, see `sobel`) where the correction starts
-/// and where it is complete.
-const EDGE_LO: f32 = 0.02;
-const EDGE_HI: f32 = 0.08;
+/// Edge strength (half the lightness step across a pixel, see `sobel`, in cube-root-of-luminance
+/// units) where the correction starts and where it is complete.
+///
+/// ⚠⚠ **Measured, not guessed, and the first guess was wrong in a way that mattered
+/// photographically.** At 0.02..0.08, **76%** of DSCF6263's pixels at the fit rung counted as
+/// "near an edge" — foliage texture — so green defringe would have greyed the leaves across the
+/// frame. Shares above each level there: 0.05 → 31%, 0.10 → 5%, 0.15 → 1%. Fringing sits at
+/// STRONG edges (a dark branch against sky reads ~0.2–0.3), so the band starts at 0.08. ⚠ It is
+/// still a judgement to confirm on a photograph with real fringing.
+const EDGE_LO: f32 = 0.08;
+const EDGE_HI: f32 = 0.16;
 
 pub struct DefringeStage {
     global: Defringe,
@@ -120,26 +127,38 @@ impl PipelineStage for DefringeStage {
         if w == 0 || h == 0 {
             return image;
         }
-        let lab: Vec<[f32; 3]> = (0..w * h)
-            .into_par_iter()
-            .map(|i| prophoto_to_oklab(image.pixel(i % w, i / w)))
+        // ⚠⚠ The edge map reads a cheap lightness — the cube root of luminance, one `cbrt` a pixel —
+        // and the full Oklab conversion runs only where an edge is near. The first version
+        // converted and STORED every pixel (an 82 MB array at the fit rung) and measured 116 ms on
+        // DSCF6263 at 3200 px, which a straighten drag would pay on every frame: geometry precedes
+        // this step. Oklab's own L is a cube root of a cone-response mix; the edge thresholds are
+        // about steps, where the two agree.
+        let t0 = std::time::Instant::now();
+        let l: Vec<f32> = image
+            .data()
+            .par_chunks(3)
+            .map(|p| color::luminance([p[0], p[1], p[2]]).max(0.0).cbrt())
             .collect();
-        let l: Vec<f32> = lab.iter().map(|p| p[0]).collect();
-        let edge = max_filter(&sobel(&l, w, h), w, h, self.radius);
+        let t1 = std::time::Instant::now();
+        let grad = sobel(&l, w, h);
+        let t2 = std::time::Instant::now();
+        let edge = max_filter(&grad, w, h, self.radius);
+        let t3 = std::time::Instant::now();
         let planes: Vec<(Vec<f32>, f32)> = self
             .locals
             .iter()
             .map(|(m, amount)| (m.coverage_plane(&image), *amount))
             .collect();
         let g = self.global;
-        image.map_pixels_xy(|x, y, c| {
+        let t4 = std::time::Instant::now();
+        let out = image.map_pixels_xy(|x, y, c| {
             let i = y * w + x;
             let e = smoothstep(EDGE_LO, EDGE_HI, edge[i]);
             if e <= 0.0 {
                 return c;
             }
             let local: f32 = planes.iter().map(|(p, a)| p[i] * a).sum();
-            let [ll, a, b] = lab[i];
+            let [ll, a, b] = prophoto_to_oklab(c);
             let hue = b.atan2(a).to_degrees();
             let purple =
                 (g.purple_amount + local).clamp(0.0, 100.0) * membership(g.purple_hue, hue);
@@ -150,7 +169,21 @@ impl PipelineStage for DefringeStage {
             }
             let k = 1.0 - wgt;
             oklab_to_prophoto([ll, a * k, b * k])
-        })
+        });
+        // ⚠ Kept, the `RUSTROOM_DEBUG_MASK` precedent: the phase split is what priced this stage.
+        if std::env::var("RUSTROOM_DEBUG_DEFRINGE").is_ok() {
+            let ms = |a: std::time::Instant, b: std::time::Instant| (b - a).as_secs_f64() * 1e3;
+            eprintln!(
+                "DEFRINGE {w}x{h} r={} light={:.1} sobel={:.1} max={:.1} masks={:.1} apply={:.1}",
+                self.radius,
+                ms(t0, t1),
+                ms(t1, t2),
+                ms(t2, t3),
+                ms(t3, t4),
+                ms(t4, std::time::Instant::now()),
+            );
+        }
+        out
     }
 }
 

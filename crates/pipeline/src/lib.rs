@@ -121,6 +121,7 @@ pub use resample::Resampler;
 pub use stages::color_grading::ColorGradingStage;
 pub use stages::contrast::{ContrastStage, PIVOT as CONTRAST_PIVOT};
 pub use stages::creative_look::CreativeLookStage;
+pub use stages::defringe::DefringeStage;
 pub use stages::dehaze::DehazeStage;
 // ⚠⚠ Re-exported so `gpu-pipeline` substitutes these into WGSL rather than transcribing them.
 // ⚠ `T_MIN` and `A_MIN` are ALIASED on the way out: they are dehaze's own floors and a bare name
