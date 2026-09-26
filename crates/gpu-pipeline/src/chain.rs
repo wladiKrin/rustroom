@@ -1548,7 +1548,11 @@ mod tests {
         let plain = chain.run_rgba8(&img).expect("gpu");
         assert_eq!(bytes, plain, "keeping the input must not change a byte");
         let back = kept.download(&ctx).expect("download");
-        assert_eq!(back.data(), img.data(), "the kept image is the input, untouched");
+        assert_eq!(
+            back.data(),
+            img.data(),
+            "the kept image is the input, untouched"
+        );
         let again = three_stages(&ctx);
         let hit = again.run_rgba8_from(&kept).expect("gpu");
         assert_eq!(
@@ -1600,7 +1604,11 @@ mod tests {
         let (_, kept) = chain
             .run_keeping_output(Input::Resident(&resident), false)
             .expect("gpu");
-        assert_eq!(chain.transfer_counts().0, 0, "a resident input uploads nothing");
+        assert_eq!(
+            chain.transfer_counts().0,
+            0,
+            "a resident input uploads nothing"
+        );
         assert_eq!(kept.download(&ctx).expect("download").data(), want.data());
         assert_eq!(
             resident.download(&ctx).expect("download").data(),

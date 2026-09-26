@@ -400,7 +400,11 @@ mod tests {
             ..Default::default()
         };
         (
-            PrefixKey::new(&e, pipeline::RenderScale::FULL, pipeline::Resampler::Bilinear),
+            PrefixKey::new(
+                &e,
+                pipeline::RenderScale::FULL,
+                pipeline::Resampler::Bilinear,
+            ),
             tag,
         )
     }
@@ -420,7 +424,10 @@ mod tests {
         assert!(cache.resident_final(&key).is_none(), "empty to start");
         let img = gpu_pipeline::GpuImage::upload(ctx, &small(0.1)).expect("upload");
         cache.keep_resident_final(key.clone(), img);
-        assert!(cache.resident_final(&key).is_some(), "a hit under its own key");
+        assert!(
+            cache.resident_final(&key).is_some(),
+            "a hit under its own key"
+        );
         assert!(
             cache.resident_final(&(fake_key(2), None)).is_none(),
             "another checkpoint misses"
@@ -449,7 +456,10 @@ mod tests {
             key.clone(),
             gpu_pipeline::GpuImage::upload(ctx, &src).expect("upload"),
         );
-        assert!(cache.settle_from_resident(ctx), "the first settle downloads");
+        assert!(
+            cache.settle_from_resident(ctx),
+            "the first settle downloads"
+        );
         let got = cache.get(&fake_key(3)).expect("the download is the final");
         assert_eq!(got.data(), src.data(), "sample for sample");
         assert_eq!(cache.final_len(), 1);

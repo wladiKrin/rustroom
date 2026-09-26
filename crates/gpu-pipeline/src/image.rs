@@ -168,7 +168,11 @@ impl GpuImage {
         rx.recv().ok()?.ok()?;
         let data: Vec<f32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
         readback.unmap();
-        Some(core_image::ImageBuf::from_vec(self.width, self.height, data))
+        Some(core_image::ImageBuf::from_vec(
+            self.width,
+            self.height,
+            data,
+        ))
     }
 }
 
@@ -244,11 +248,8 @@ mod tests {
             return;
         };
         let n = 8 * 6 * 3;
-        let src = core_image::ImageBuf::from_vec(
-            8,
-            6,
-            (0..n).map(|i| (i % 97) as f32 / 97.0).collect(),
-        );
+        let src =
+            core_image::ImageBuf::from_vec(8, 6, (0..n).map(|i| (i % 97) as f32 / 97.0).collect());
         let mut g = GpuImage::upload(ctx, &src).expect("upload");
         let back = g.download(ctx).expect("download");
         assert_eq!((back.width(), back.height()), (8, 6));

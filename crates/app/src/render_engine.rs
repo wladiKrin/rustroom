@@ -422,8 +422,7 @@ impl RenderEngine {
                                 && gpu_pipeline::shared()
                                     .is_some_and(|ctx| cache.settle_from_resident(ctx));
                             if settled {
-                                settle_downloads
-                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                settle_downloads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 if debug_render {
                                     eprintln!(
                                         "  settle: {:6.1} ms  rung {:5}  downloaded the resident final",
@@ -2982,9 +2981,15 @@ mod tests {
         }
         let mut cache = PrefixCache::default();
         let (_, a) = tail_frame(0.3, 2.0, 200, &mut cache);
-        assert_eq!(a.gpu_prefix_steps, 1, "fixture check: geometry ran on the GPU");
+        assert_eq!(
+            a.gpu_prefix_steps, 1,
+            "fixture check: geometry ran on the GPU"
+        );
         let (b_frame, b) = tail_frame(0.6, 2.0, 200, &mut cache);
-        assert!(b.resident_final_hit, "fixture check: the tail hits after the step");
+        assert!(
+            b.resident_final_hit,
+            "fixture check: the tail hits after the step"
+        );
         assert_eq!(b.tail_uploads, 0);
         let (c_frame, c) = tail_frame(0.6, 3.0, 200, &mut cache);
         assert_eq!(c.gpu_prefix_steps, 1, "the geometry re-ran");
