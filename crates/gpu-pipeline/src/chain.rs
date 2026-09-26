@@ -77,10 +77,16 @@ enum Input<'a> {
     Cpu(&'a ImageBuf),
     /// Already on the GPU: copied GPU-side, no upload. See [`GpuChain::apply_from`].
     Resident(&'a GpuImage),
+    /// ONLY the plane a previous chain deposited, at these dimensions — never an upload. See
+    /// [`GpuChain::run_rgba8_from_plane`].
+    Plane(usize, usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Download {
+    /// No readback at all: the output stays on the GPU, deposited for the next chain. See
+    /// [`GpuChain::run_to_plane`].
+    None,
     /// The resident f32 image: `w * h * 12` bytes.
     Float,
     /// Packed RGBA8, quantized by a final dispatch: `w * h * 4` bytes.
@@ -244,6 +250,35 @@ impl GpuChain {
             .map(|data| ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()))
     }
 
+    /// Run the chain and leave its output ON THE GPU, deposited for the next chain — no download.
+    ///
+    /// ⚠⚠ **The handoff (2026-09-26).** When the last prefix step and the whole tail run on the
+    /// GPU, the prefix's 82 MB float result never needs to reach the CPU: the tail takes it with
+    /// [`Self::run_rgba8_from_plane`]. Returns the output size; `None` if the chain offers no slot
+    /// or the GPU fails, and the caller then renders the ordinary way.
+    pub fn run_to_plane(&self, image: &ImageBuf) -> Option<(usize, usize)> {
+        crate::guarded(|| self.run_with(Input::Cpu(image), Download::None))?;
+        Some(self.output_dims(image.width(), image.height()))
+    }
+
+    /// [`Self::run_to_plane`] from a GPU-resident input — the resident input and the handoff
+    /// together, which is a Straighten drag's steady state.
+    pub fn run_to_plane_from(&self, resident: &GpuImage) -> Option<(usize, usize)> {
+        crate::guarded(|| self.run_with(Input::Resident(resident), Download::None))?;
+        Some(self.output_dims(resident.width(), resident.height()))
+    }
+
+    /// Run the chain on the plane a previous chain deposited at `w` x `h`, quantised to 8-bit.
+    ///
+    /// ⚠ **Never uploads.** With no plane to take (none deposited, wrong size, another thread's)
+    /// it returns `None` without allocating, and the caller renders the ordinary way.
+    pub fn run_rgba8_from_plane(&self, w: usize, h: usize) -> Option<Vec<u8>> {
+        if self.stages.is_empty() {
+            return None;
+        }
+        crate::guarded(|| self.run_with(Input::Plane(w, h), Download::Rgba8))
+    }
+
     /// The chain's output size for an input of `w` x `h`: every stage's `output_dims`, folded.
     pub fn output_dims(&self, w: usize, h: usize) -> (usize, usize) {
         self.stages
@@ -279,6 +314,7 @@ impl GpuChain {
         let (iw, ih) = match input {
             Input::Cpu(image) => (image.width(), image.height()),
             Input::Resident(r) => (r.width(), r.height()),
+            Input::Plane(w, h) => (w, h),
         };
         let ctx = &self.ctx;
         let device = &ctx.device;
@@ -292,6 +328,11 @@ impl GpuChain {
             .take_shared
             .and_then(|slot| ctx.plane(slot).take(iw, ih));
         let shared_taken = shared.is_some();
+        // ⚠ A plane-only run that finds no plane has no pixels to work on: refuse, and the caller
+        // falls back to its CPU path. Refusing BEFORE allocating is what makes it cheap.
+        if matches!(input, Input::Plane(..)) && !shared_taken {
+            return None;
+        }
         let mut img = match shared {
             Some(img) => img,
             None => GpuImage::new(ctx, iw, ih)?,
@@ -328,7 +369,7 @@ impl GpuChain {
         let t_memcpy = std::time::Instant::now();
         let mut enc = device.create_command_encoder(&Default::default());
         let staging = match (shared_taken, input) {
-            (true, _) => None,
+            (true, _) | (false, Input::Plane(..)) => None,
             // ⚠⚠ A GPU-resident input is COPIED, never used in place: stages write into `img`, and
             // the resident image must survive for the next frame of the drag. A GPU-side copy
             // costs a fraction of the staging upload it replaces, and counts as no upload.
@@ -369,7 +410,7 @@ impl GpuChain {
         // 0.05 ms to create and a 27 MB one proportionally less, so this is not worth caching —
         // unlike the staging buffer, whose cost was `mapped_at_creation` rather than allocation.
         let packed = match mode {
-            Download::Float => None,
+            Download::Float | Download::None => None,
             Download::Rgba8 => Some(device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("chain-packed"),
                 size: (ow * oh * 4) as u64,
@@ -399,6 +440,36 @@ impl GpuChain {
         // which is a **2.8x** saving rather than the 4x the size ratio suggests, because a download
         // carries a **1.28 ms fixed cost** that no size reduction touches.
         let d_memcpy = t_memcpy.elapsed();
+        // ⚠⚠ **No readback: submit, deposit, return.** The next chain on this queue is ordered
+        // after this submission, so it reads the finished pixels without this thread waiting.
+        // That wait and the 82 MB copy out are what a handoff exists to skip.
+        if mode == Download::None {
+            let slot = self.offer_output?;
+            ctx.queue.submit(Some(enc.finish()));
+            ctx.plane(slot).deposit(ow, oh, img);
+            // ⚠⚠ **Dropped, NOT returned to the staging cache.** Nothing waited for the GPU, so the
+            // copy out of this buffer may still be in flight; handing it back would let the next
+            // upload overwrite it mid-copy — a plausible wrong frame. wgpu keeps a dropped buffer
+            // alive until its submission completes, which is exactly the lifetime needed.
+            drop(staging);
+            if std::env::var("RUSTROOM_DEBUG_XFER").is_ok() {
+                eprintln!(
+                    "CHAIN {:>26} {}x{} -> plane {}x{} took={} memcpy={:.2} (no download)",
+                    self.stages
+                        .iter()
+                        .map(|s| s.name())
+                        .collect::<Vec<_>>()
+                        .join("+"),
+                    iw,
+                    ih,
+                    ow,
+                    oh,
+                    shared_taken,
+                    d_memcpy.as_secs_f64() * 1e3,
+                );
+            }
+            return Some(Vec::new());
+        }
         let t_submit = std::time::Instant::now();
         let (src, out_bytes) = match &packed {
             Some(p) => (p, (ow * oh * 4) as u64),
