@@ -431,7 +431,20 @@ above. Only *anchoring* wants the forward map.
 
 ## Performance
 
-### ⬜ One GPU device for the window and the pipeline (recorded 2026-09-26, payoff UNMEASURED)
+### ⛔ One GPU device for the window and the pipeline — DECLINED on a measurement (2026-09-26)
+
+⚠⚠ **Measured before building, and the premise failed.** With `RUSTROOM_DEBUG_NO_UPLOAD` (the window
+keeps its old picture and never uploads a new frame), the tail's GPU submit+wait in a real drag was
+**36.8 ms median at rung 3200 (n=150)**, the same as with uploads (~34–37) and still ~10 ms over the
+headless probe (~26.8). So the window's handling of new frames (the readback, the conversion and the
+re-upload), which is what sharing a device would remove, is **not** where the gap goes. Add the
+drawbacks (a GPU fault would take the window down; one queue would let a 700 ms export submission
+freeze the UI; startup coupled to eframe) and it is not worth building. ⚠ The gap's real cause is
+**unidentified**: the window's baseline drawing, or the app's render thread being scheduled
+differently from a CLI probe. Neither is measured. Do not re-propose sharing without a new
+measurement that points at it.
+
+The original entry, kept for the record:
 
 `gpu_pipeline::shared()` creates its own wgpu device, and eframe has another. In the app a Straighten
 drag frame is ~41 ms against ~29 ms headless, and the whole difference is GPU submit+wait (the CPU

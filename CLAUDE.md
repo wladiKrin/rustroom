@@ -244,8 +244,9 @@ Every planned phase closed except **M7.3b** (since done, 2026-09-25), so the roa
 **▶ The order the user set: M7.3b ✅, the drag-frame fixes ✅ and GPU geometry ✅ (all merged and
 confirmed by use 2026-09-26); next is Phase 9's checklist from the top.** A Straighten drag on
 DSCF6263: **~97 → ~41 ms per frame in the app** (85.0 → 28.8 ms headless). ⚠ The remaining app-vs-probe
-gap (~12 ms) is GPU time lost to the window drawing on its OWN wgpu device. Only sharing one device
-would remove it; it is in `docs/BACKLOG.md` with its payoff unmeasured. ⚠ **Proposed and not yet scheduled:** masks' *scene* sliders (WB, exposure,
+gap (~10–12 ms) is GPU submit+wait, and it is **NOT** the window's per-frame upload: freezing the window
+changed nothing, so the shared-device idea is ⛔ declined on that measurement (`docs/BACKLOG.md`). The
+real cause is unidentified. ⚠ **Proposed and not yet scheduled:** masks' *scene* sliders (WB, exposure,
 contrast, tone regions) run after the global tone curve today, where Lightroom applies them as
 offsets at the global slider's position. It was raised in M7.3b's brainstorm and split off as its
 own milestone. It is the author's call.
