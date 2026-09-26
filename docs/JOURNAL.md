@@ -161,7 +161,7 @@ goldens unmoved.
 ### 2026-09-27 — M9.6 defringe: purple/green, global and in masks (branch `m9.6-defringe`)
 
 **3,014 tests**, **81 goldens** (+`defringe`; the other 80 unmoved), gate green. Spec
-`2026-09-26-m9.6-defringe-design.md`, plan of the same date. 🟡 **Awaiting use.**
+`2026-09-26-m9.6-defringe-design.md`, plan of the same date. ✅ **Confirmed by use and merged 2026-09-27.**
 
 **What shipped.** `Edits.defringe` (purple/green amount 0..100 and an Oklab hue range each; Lens
 group) and `LocalAdjustments.defringe` (−100..+100, Lightroom's meaning — negative protects a mask's
