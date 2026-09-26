@@ -19,9 +19,9 @@ pub struct OutputTransform {
 }
 
 impl OutputTransform {
-    /// ⚠ The intent decides what happens to colour `space` cannot hold (M6.4c): both intents keep
-    /// hue and lightness and move chroma only, where the per-channel clip they replaced shifted
-    /// hue. See `color::gamut`.
+    /// ⚠ The intent decides what happens to colour `space` cannot hold (M6.4c). The default,
+    /// `Clip`, is the per-channel clamp this stage always did; the other two keep hue and
+    /// lightness and move chroma only. See `color::gamut` for why the clip stayed the default.
     pub fn new(space: color::OutputSpace, intent: color::RenderingIntent) -> Self {
         Self {
             space,
@@ -46,8 +46,9 @@ impl crate::per_pixel::PerPixel for OutputTransform {
         // values, which is meaningless and does not fail loudly.
         //
         // ⚠ Out-of-gamut colour arrives here with negative components — that is the point of a
-        // wide working space, not a bug. The gamut map brings it inside at constant hue first;
-        // `encode`'s clamp is left only the map's float residue (measured under 1e-3).
+        // wide working space, not a bug. Under `Clip` the map is the identity and `encode` clamps
+        // each channel; under the other two it brings the colour inside at constant hue first and
+        // `encode`'s clamp is left only float residue (measured under 1e-3).
         let lin = self.space.from_working(self.gamut.map(self.intent, c));
         [
             self.space.encode(lin[0]),

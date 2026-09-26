@@ -559,7 +559,7 @@ fn golden_orient_mirror() {
 }
 
 /// M6.4c: the PERCEPTUAL intent on the same saturated chart as `saturation_plus50`, which renders
-/// relative colorimetric (the default). Every other golden goes through the default intent, so
+/// through the default, `Clip`. Every other golden goes through the default intent, so
 /// without this one a regression in perceptual's knee would be invisible. ⚠ The test asserts the
 /// two references differ, so the pair cannot silently collapse into one intent.
 #[test]
@@ -1018,11 +1018,9 @@ fn the_composite_goldens_discriminate() {
             .run(chart()),
         );
         let distinct: std::collections::HashSet<u8> = px.iter().copied().collect();
-        // ⚠ At most the floor, not equal to it (M6.4c): a brightened primary is now gamut-mapped
-        // at constant lightness instead of pinning a channel at 255, so a composite can pin FEWER
-        // samples than the chart. What this guards is a composite adding clipping of its own.
-        assert!(
-            clipped(&px) <= floor,
+        assert_eq!(
+            clipped(&px),
+            floor,
             "{op:?} clipped {} samples against the chart's own {floor}",
             clipped(&px)
         );

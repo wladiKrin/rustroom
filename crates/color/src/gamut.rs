@@ -2,10 +2,18 @@
 //!
 //! ⚠⚠ **Why this is ours and not LittleCMS's.** All four output profiles are *matrix-shaper*
 //! profiles, which carry no perceptual tables, so lcms's "perceptual" on them falls back to
-//! colorimetric — the same per-channel clip this module replaces. That clip shifts hue: an orange
-//! whose blue goes negative is pulled toward yellow, a violet toward blue.
+//! colorimetric — a per-channel clip. That clip shifts hue: an orange whose blue goes negative is
+//! pulled toward yellow, a violet toward blue.
 //!
-//! Both intents here work in **Oklab at constant lightness and hue**, moving chroma only:
+//! ⚠⚠ **[`RenderingIntent::Clip`] IS that clip, it is the DEFAULT, and that is the author's call
+//! from his own photographs (2026-09-26).** `probe_gamut_crops` rendered his six most out-of-gamut
+//! photos (23–46% of the frame outside sRGB) all ways: the clip was the most vivid in every crop,
+//! and the hue-preserving intents read duller — reds brown-orange, foliage teal. The camera
+//! profiles were tuned under Adobe's pipeline, whose export does this same clip. So the clip is
+//! kept as the default and the two below are the alternatives, not replacements.
+//!
+//! The two hue-preserving intents work in **Oklab at constant lightness and hue**, moving chroma
+//! only:
 //! - **Relative colorimetric** leaves every in-gamut colour bit-identical and cuts chroma at the
 //!   target's boundary.
 //! - **Perceptual** leaves chroma below [`KNEE`] of the boundary alone and compresses above it, so
@@ -39,21 +47,33 @@ pub const IN_GAMUT_EPS: f32 = 1e-6;
     Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
 )]
 pub enum RenderingIntent {
-    /// In-gamut colour untouched; outside, chroma cut to the boundary at constant hue.
+    /// Each channel clamped on its own — what every export did before M6.4c, and what Adobe's
+    /// relative colorimetric does on a matrix profile. Vivid; shifts hue. **The default** (see
+    /// the module doc for why).
     #[default]
+    Clip,
+    /// In-gamut colour untouched; outside, chroma cut to the boundary at constant hue.
     RelativeColorimetric,
     /// Saturated colour compressed smoothly toward the boundary, keeping gradation.
     Perceptual,
 }
 
 impl RenderingIntent {
-    pub const ALL: [RenderingIntent; 2] = [
+    pub const ALL: [RenderingIntent; 3] = [
+        RenderingIntent::Clip,
+        RenderingIntent::Perceptual,
+        RenderingIntent::RelativeColorimetric,
+    ];
+
+    /// The two that keep hue — what every property test of the gamut map is about.
+    pub const HUE_PRESERVING: [RenderingIntent; 2] = [
         RenderingIntent::Perceptual,
         RenderingIntent::RelativeColorimetric,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
+            RenderingIntent::Clip => "Clip",
             RenderingIntent::Perceptual => "Perceptual",
             RenderingIntent::RelativeColorimetric => "Relative colorimetric",
         }
@@ -108,7 +128,9 @@ impl GamutMap {
     /// on an in-gamut colour, perceptual below the knee, ProPhoto as the target — so those
     /// pixels are bit-identical to the transform this replaced, not merely close.
     pub fn map(&self, intent: RenderingIntent, rgb: [f32; 3]) -> [f32; 3] {
-        if self.space == OutputSpace::ProPhoto {
+        // ⚠ Clip maps nothing: `OutputSpace::encode` clamps each channel, which IS the clip, so
+        // the default render is bit-identical to the transform before M6.4c.
+        if self.space == OutputSpace::ProPhoto || intent == RenderingIntent::Clip {
             return rgb;
         }
         if intent == RenderingIntent::RelativeColorimetric && inside(self.space.from_working(rgb)) {
@@ -130,6 +152,7 @@ impl GamutMap {
         let dir = (a / c, b / c);
         let target = match intent {
             // ⚠ `c` itself is outside, so the boundary lies in `[0, c]`.
+            RenderingIntent::Clip => unreachable!("returned above"),
             RenderingIntent::RelativeColorimetric => bisect(self.space, l, dir, 0.0, c),
             RenderingIntent::Perceptual => {
                 // ⚠ The knee test is ONE in-gamut check: `c ≤ KNEE·bound` exactly when
@@ -290,7 +313,7 @@ mod tests {
         let mut worst = 0.0f32;
         for space in TARGETS {
             let m = GamutMap::for_space(space);
-            for intent in RenderingIntent::ALL {
+            for intent in RenderingIntent::HUE_PRESERVING {
                 for c in spread() {
                     let lin = space.from_working(m.map(intent, c));
                     for v in lin {
@@ -309,7 +332,7 @@ mod tests {
         let mut worst_h = 0.0f32;
         for space in TARGETS {
             let m = GamutMap::for_space(space);
-            for intent in RenderingIntent::ALL {
+            for intent in RenderingIntent::HUE_PRESERVING {
                 for c in spread() {
                     let before = lch(c);
                     if before[0] <= 0.0 || before[0] >= 1.0 || before[1] < 1e-3 {
@@ -356,7 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn prophoto_is_the_identity_for_both_intents() {
+    fn prophoto_is_the_identity_for_every_intent() {
         let m = GamutMap::for_space(OutputSpace::ProPhoto);
         for intent in RenderingIntent::ALL {
             for c in spread() {
@@ -404,9 +427,26 @@ mod tests {
         let clipped = hue_diff_deg(lch(old_clip(space, red))[2], h0);
         assert!(clipped > 3.0, "the old clip shifted hue by only {clipped}°");
         let m = GamutMap::for_space(space);
-        for intent in RenderingIntent::ALL {
+        for intent in RenderingIntent::HUE_PRESERVING {
             let d = hue_diff_deg(lch(m.map(intent, red))[2], h0);
             assert!(d < 0.05, "{intent:?} shifted hue by {d}°");
         }
+    }
+
+    /// ⚠⚠ Clip is the transform before M6.4c, bit for bit: the map returns its argument and the
+    /// encode's per-channel clamp does the rest. The fixture is out of gamut, or "returns its
+    /// argument" would hold for every intent.
+    #[test]
+    fn clip_maps_nothing() {
+        let m = GamutMap::for_space(OutputSpace::Srgb);
+        let mut seen = 0;
+        for c in spread() {
+            if crate::is_out_of_gamut(c, OutputSpace::Srgb) {
+                assert_eq!(m.map(RenderingIntent::Clip, c), c);
+                seen += 1;
+            }
+        }
+        assert!(seen > 100);
+        assert_eq!(RenderingIntent::default(), RenderingIntent::Clip);
     }
 }

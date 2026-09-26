@@ -19,7 +19,7 @@ const MODE_PROPHOTO: u32 = 2;
 const WGSL: &str = r#"
 struct Params_output_transform {
     mode: u32,
-    // 0 relative colorimetric, 1 perceptual — `color::RenderingIntent`.
+    // 0 relative colorimetric, 1 perceptual, 2 clip — `color::RenderingIntent`.
     intent: u32,
     // 1 when the target is the working space itself: the gamut map is the identity.
     identity: u32,
@@ -87,7 +87,8 @@ fn bisect_output_transform(l: f32, dir: vec2<f32>, lo_in: f32, hi_in: f32, q: Pa
 }
 
 fn gamut_map_output_transform(p: vec3<f32>, q: Params_output_transform) -> vec3<f32> {
-    if (q.identity == 1u) { return p; }
+    // ⚠ Clip maps nothing: the encode's per-channel clamp is the clip.
+    if (q.identity == 1u || q.intent == 2u) { return p; }
     if (q.intent == 0u) {
         let lin = vec3<f32>(dot(q.r0.xyz, p), dot(q.r1.xyz, p), dot(q.r2.xyz, p));
         if (inside_output_transform(lin)) { return p; }
@@ -203,6 +204,7 @@ impl GpuStage for GpuOutputTransformStage {
         let intent: u32 = match self.intent {
             RenderingIntent::RelativeColorimetric => 0,
             RenderingIntent::Perceptual => 1,
+            RenderingIntent::Clip => 2,
         };
         params[4..8].copy_from_slice(&intent.to_le_bytes());
         let identity = u32::from(self.space == OutputSpace::ProPhoto);

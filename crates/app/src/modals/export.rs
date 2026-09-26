@@ -452,9 +452,11 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                         })
                                         .response
                                         .on_hover_text(
-                                            "Perceptual compresses saturated colour to keep its \
-                                             gradation; Relative colorimetric leaves in-gamut colour \
-                                             untouched and cuts the rest at the gamut's edge. Both keep hue.",
+                                            "Clip clamps each channel: vivid, what Lightroom does, but \
+                                             it can shift hue. Perceptual and Relative colorimetric keep \
+                                             hue: perceptual compresses saturated colour to keep its \
+                                             gradation, relative leaves in-gamut colour untouched and \
+                                             cuts the rest at the gamut's edge.",
                                         );
                                 });
                                 ui.end_row();
