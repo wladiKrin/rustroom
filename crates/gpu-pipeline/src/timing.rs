@@ -97,6 +97,151 @@ impl Timings {
     }
 }
 
+/// The query set and buffers for one timed chain run.
+///
+/// ⚠ Built per run rather than cached: a run's pair count is its stage count plus three, and the
+/// objects are a few hundred bytes. Caching would add an invalidation rule for a debug path.
+pub(crate) struct Recorder {
+    set: wgpu::QuerySet,
+    resolve: wgpu::Buffer,
+    read: wgpu::Buffer,
+    labels: Vec<(String, Option<Pair>)>,
+    next: u32,
+    capacity: u32,
+}
+
+impl Recorder {
+    /// Room for `pairs` begin/end pairs.
+    pub(crate) fn new(ctx: &crate::GpuContext, pairs: u32) -> Self {
+        let capacity = pairs.max(1) * 2;
+        let set = ctx.device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("gpu-time"),
+            ty: wgpu::QueryType::Timestamp,
+            count: capacity,
+        });
+        // ⚠ A resolve destination's size and offset must be multiples of 256.
+        let align = wgpu::QUERY_RESOLVE_BUFFER_ALIGNMENT;
+        let bytes = (u64::from(capacity) * u64::from(wgpu::QUERY_SIZE)).div_ceil(align) * align;
+        let resolve = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gpu-time-resolve"),
+            size: bytes,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let read = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gpu-time-read"),
+            size: bytes,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        Self {
+            set,
+            resolve,
+            read,
+            labels: Vec::new(),
+            next: 0,
+            capacity,
+        }
+    }
+
+    /// Reserve a begin/end pair under `label`.
+    ///
+    /// # Panics
+    /// Past capacity: the caller sized the recorder from its own stage count, so this is a bug
+    /// in the caller and not a runtime condition.
+    pub(crate) fn pair(&mut self, label: &str) -> Pair {
+        assert!(
+            self.next + 2 <= self.capacity,
+            "timing recorder over capacity at {label}"
+        );
+        let p = Pair {
+            begin: self.next,
+            end: self.next + 1,
+        };
+        self.next += 2;
+        self.labels.push((label.to_owned(), Some(p)));
+        p
+    }
+
+    /// Record a label with no marks — an upload that never happened.
+    pub(crate) fn skipped(&mut self, label: &str) {
+        self.labels.push((label.to_owned(), None));
+    }
+
+    /// A compute pass's timestamp writes for `p`.
+    pub(crate) fn pass_writes(&self, p: Pair) -> wgpu::ComputePassTimestampWrites<'_> {
+        wgpu::ComputePassTimestampWrites {
+            query_set: &self.set,
+            beginning_of_pass_write_index: Some(p.begin),
+            end_of_pass_write_index: Some(p.end),
+        }
+    }
+
+    /// An encoder mark at `index` — a pair's begin or end — for the copies outside any pass.
+    pub(crate) fn mark(&self, enc: &mut wgpu::CommandEncoder, index: u32) {
+        enc.write_timestamp(&self.set, index);
+    }
+
+    /// Encode the resolve and the copy into the readable buffer. Called after the last mark and
+    /// before the encoder is finished.
+    pub(crate) fn resolve(&self, enc: &mut wgpu::CommandEncoder) {
+        if self.next == 0 {
+            return;
+        }
+        enc.resolve_query_set(&self.set, 0..self.next, &self.resolve, 0);
+        enc.copy_buffer_to_buffer(
+            &self.resolve,
+            0,
+            &self.read,
+            0,
+            u64::from(self.next) * u64::from(wgpu::QUERY_SIZE),
+        );
+    }
+
+    /// Wait for the submission, read the ticks and assemble.
+    ///
+    /// `submitted_at` is when the caller submitted; the wall is measured from it to the end of
+    /// this wait. On the ordinary path the caller has already waited, so the wait here returns at
+    /// once and the wall equals its own stopwatch; on a handoff chain this IS the wait.
+    pub(crate) fn finish(
+        self,
+        ctx: &crate::GpuContext,
+        submitted_at: std::time::Instant,
+        waited_for_timing: bool,
+    ) -> Option<Timings> {
+        let bytes = u64::from(self.next) * u64::from(wgpu::QUERY_SIZE);
+        if bytes == 0 {
+            return None;
+        }
+        let slice = self.read.slice(..bytes);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = ctx.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        rx.recv().ok()?.ok()?;
+        let wall_ms = submitted_at.elapsed().as_secs_f64() * 1e3;
+        // ⚠ Read as 8-byte chunks rather than a `cast_slice`, which would panic on an unaligned
+        // mapping; the render worker must not die for a debug readout.
+        let ticks: Vec<u64> = slice
+            .get_mapped_range()
+            .chunks_exact(8)
+            .map(|c| u64::from_le_bytes(c.try_into().expect("8 bytes")))
+            .collect();
+        self.read.unmap();
+        Some(assemble(
+            &self.labels,
+            &ticks,
+            ctx.timestamp_period(),
+            wall_ms,
+            waited_for_timing,
+        ))
+    }
+}
+
 static UNSUPPORTED_NOTED: AtomicBool = AtomicBool::new(false);
 
 /// Say once per process that timing was asked for on a device without timestamp queries.
