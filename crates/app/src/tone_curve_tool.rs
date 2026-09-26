@@ -143,9 +143,180 @@ pub fn curve_points(points: &[[f32; 2]], n: usize) -> Vec<[f32; 2]> {
         .collect()
 }
 
+/// The composite curve **including the parametric curve**, as `n` display-space samples.
+///
+/// ⚠ Sampled through `ToneCurveStage::from_edits`, the very constructor a render uses, so what the
+/// widget draws in Parametric mode is the function the pipeline applies. The channel curves are left
+/// out on purpose: this is the composite, drawn in its own colour.
+pub fn combined_points(
+    points: &[[f32; 2]],
+    param: &edit_model::ParametricCurve,
+    n: usize,
+) -> Vec<[f32; 2]> {
+    let n = n.max(2);
+    let e = edit_model::Edits {
+        tone_curve: edit_model::ToneCurve {
+            points: points.to_vec(),
+        },
+        tone_curve_parametric: *param,
+        ..Default::default()
+    };
+    let stage = ToneCurveStage::from_edits(&e);
+    (0..n)
+        .map(|i| {
+            let u = i as f32 / (n - 1) as f32;
+            [u, to_display(stage.sample(from_display(u)))]
+        })
+        .collect()
+}
+
+/// One of the parametric curve's four regions, left to right on the widget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Region {
+    Shadows,
+    Darks,
+    Lights,
+    Highlights,
+}
+
+impl Region {
+    /// Left to right, the order the panel shows the sliders in.
+    pub const ALL: [Region; 4] = [
+        Region::Shadows,
+        Region::Darks,
+        Region::Lights,
+        Region::Highlights,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Region::Shadows => "Shadows",
+            Region::Darks => "Darks",
+            Region::Lights => "Lights",
+            Region::Highlights => "Highlights",
+        }
+    }
+
+    /// The amount this region owns.
+    pub fn amount(self, p: &mut edit_model::ParametricCurve) -> &mut f32 {
+        match self {
+            Region::Shadows => &mut p.shadows,
+            Region::Darks => &mut p.darks,
+            Region::Lights => &mut p.lights,
+            Region::Highlights => &mut p.highlights,
+        }
+    }
+}
+
+/// The region under display-space `u`, read through the same sanitised splits the curve uses.
+pub fn region_at(splits: [f32; 3], u: f32) -> Region {
+    let s = pipeline::parametric::sanitised_splits(splits);
+    if u < s[0] {
+        Region::Shadows
+    } else if u < s[1] {
+        Region::Darks
+    } else if u < s[2] {
+        Region::Lights
+    } else {
+        Region::Highlights
+    }
+}
+
+/// The narrowest a region may be squeezed by dragging a split, in display x.
+const MIN_SPLIT_GAP: f32 = 0.05;
+
+/// Move split `i` to display-space `u`, never crossing a neighbour or the ends.
+///
+/// ⚠ Clamped rather than refused, so a split dragged hard into its neighbour stops against it —
+/// the crop tool's "stops at the edge" behaviour.
+pub fn drag_split(splits: &mut [f32; 3], i: usize, u: f32) {
+    let lo = if i == 0 {
+        MIN_SPLIT_GAP
+    } else {
+        splits[i - 1] + MIN_SPLIT_GAP
+    };
+    let hi = if i == 2 {
+        1.0 - MIN_SPLIT_GAP
+    } else {
+        splits[i + 1] - MIN_SPLIT_GAP
+    };
+    if lo <= hi {
+        splits[i] = u.clamp(lo, hi);
+    }
+}
+
+/// An amount after a vertical drag of `dy` pixels (down positive, egui's convention) over a widget
+/// `height` pixels tall: dragging the full height up adds 200, so bottom-to-top spans the range.
+pub fn drag_amount(amount: f32, dy: f32, height: f32) -> f32 {
+    if height <= 0.0 {
+        return amount;
+    }
+    (amount - dy / height * 200.0).clamp(-100.0, 100.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn combined_points_are_the_point_curve_when_the_parametric_curve_is_inactive() {
+        let pts = [[0.0, 0.0], [0.3, 0.4], [1.0, 1.0]];
+        assert_eq!(
+            combined_points(&pts, &edit_model::ParametricCurve::default(), 64),
+            curve_points(&pts, 64)
+        );
+        let lifted = edit_model::ParametricCurve {
+            shadows: 80.0,
+            ..Default::default()
+        };
+        let c = combined_points(&pts, &lifted, 64);
+        assert!(
+            c[8][1] > curve_points(&pts, 64)[8][1],
+            "shadows must lift the drawn curve"
+        );
+    }
+
+    #[test]
+    fn the_region_under_a_point_follows_the_splits() {
+        let s = [0.25, 0.5, 0.75];
+        assert_eq!(region_at(s, 0.1), Region::Shadows);
+        assert_eq!(region_at(s, 0.3), Region::Darks);
+        assert_eq!(region_at(s, 0.6), Region::Lights);
+        assert_eq!(region_at(s, 0.9), Region::Highlights);
+        assert_eq!(region_at([0.05, 0.1, 0.15], 0.3), Region::Highlights);
+    }
+
+    #[test]
+    fn a_split_stops_at_its_neighbours() {
+        let mut s = [0.25, 0.5, 0.75];
+        drag_split(&mut s, 1, 0.9);
+        assert!((s[1] - 0.70).abs() < 1e-6, "{s:?}");
+        drag_split(&mut s, 0, -1.0);
+        assert!((s[0] - MIN_SPLIT_GAP).abs() < 1e-6, "{s:?}");
+        drag_split(&mut s, 2, 2.0);
+        assert!((s[2] - (1.0 - MIN_SPLIT_GAP)).abs() < 1e-6, "{s:?}");
+        assert!(s[0] < s[1] && s[1] < s[2]);
+    }
+
+    #[test]
+    fn a_drag_up_raises_the_amount_and_is_clamped() {
+        assert_eq!(drag_amount(0.0, -50.0, 200.0), 50.0);
+        assert_eq!(drag_amount(0.0, 50.0, 200.0), -50.0);
+        assert_eq!(drag_amount(90.0, -100.0, 200.0), 100.0);
+        assert_eq!(drag_amount(10.0, 5.0, 0.0), 10.0);
+    }
+
+    #[test]
+    fn each_region_owns_its_amount() {
+        let mut p = edit_model::ParametricCurve::default();
+        for (k, r) in Region::ALL.into_iter().enumerate() {
+            *r.amount(&mut p) = k as f32 + 1.0;
+        }
+        assert_eq!(
+            (p.shadows, p.darks, p.lights, p.highlights),
+            (1.0, 2.0, 3.0, 4.0)
+        );
+    }
 
     fn d(v: f32) -> f32 {
         to_display(v)
