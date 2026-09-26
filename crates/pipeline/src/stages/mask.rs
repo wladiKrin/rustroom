@@ -166,6 +166,153 @@ impl MaskStage {
         }
     }
 
+    /// One coverage map per component (index 0 the base) for `image` — `None` for a component
+    /// that answers per pixel (analytic, luminance, colour) rather than from a raster.
+    ///
+    /// ⚠⚠ Lifted out of `apply` (M9.6) so the defringe step reads a mask's coverage through the
+    /// SAME code: one definition of "where a mask is", not a second rasterisation path.
+    fn coverage_maps(
+        &self,
+        image: &ImageBuf,
+    ) -> Vec<Option<std::sync::Arc<crate::brush::CoverageMap>>> {
+        let (w, h) = (image.width(), image.height());
+        let (fw, fh, x0, y0) = match self.region {
+            Some(r) => (r.full_w, r.full_h, r.x0, r.y0),
+            None => (w, h, 0, 0),
+        };
+        // ⚠ Whole-frame, never region-sized. Coverage is defined over the frame, so a
+        // region-sized raster would move under panning — the same class of bug the mask overlay
+        // hit in 3.1a.
+        // ⚠ One entry per component, index 0 being the base. An analytic or range component
+        // rasterizes nothing and answers from inside the loop; only a painted one has a map.
+        let build_map = |src: &CoverageSource, j: usize| match src {
+            // ⚠ Neither of these rasterizes anything: one answers from the position, the other
+            // from the pixel, both inside the loop below.
+            CoverageSource::Analytic(_) | CoverageSource::Range(_) | CoverageSource::Colour(_) => {
+                None
+            }
+            CoverageSource::Painted {
+                prebuilt: Some(c), ..
+            } => Some(std::sync::Arc::clone(c)),
+            CoverageSource::Painted {
+                brush, geometry, ..
+            } => {
+                // ⚠ Clip to this render's region. `w`/`h` are the incoming image's dimensions,
+                // which *are* the region's size, and `x0`/`y0` its frame-space origin. With no
+                // region the clip is `None` and the result is the whole frame, byte for byte.
+                //
+                // ⚠ This must be the same rectangle `render_engine`'s `BrushCache` clips to, or a
+                // prebuilt map would disagree with this fallback. It is, by construction: both
+                // derive from the same `RegionRect`. A mismatch would not error — it would read
+                // `outside` across the difference, fading the mask out partway across the image.
+                let clip = self.region.map(|r| (r.x0, r.y0, w, h));
+                // ⚠⚠ **The buffer is in hand here and has not been cloned yet**, so the sampler
+                // costs nothing at all. This is also the *only* path an auto-masked brush can
+                // take: `render_engine`'s `BrushCache` declines to prebuild a map for a brush
+                // whose `needs_base()` is true, which is what stops a gated brush ever rendering
+                // positionally while the canvas tint shows it stopping at an edge.
+                let view = BaseView {
+                    image: image,
+                    x0,
+                    y0,
+                };
+                // ⚠⚠ **Planned ONCE and offered to both.** `plan_dabs` does the `SPACING`
+                // interpolation, the per-dab gate reference, the clip rejection and the box; the
+                // GPU and the CPU then consume the same plan, so they cannot disagree about which
+                // dabs exist. A GPU path planning its own would be a second copy of that
+                // arithmetic — the duplication `adjustment_stages` exists to avoid for stages.
+                //
+                // ⚠ Fails toward the CPU at every step: no rasteriser offered, a plan that yields
+                // nothing, or a rasteriser that declines (no adapter, a box below its floor, an
+                // allocation refused) all fall through to `rasterize_in`, costing only the attempt.
+                let built = self
+                    .coverage_gpu
+                    .as_ref()
+                    .and_then(|r| {
+                        let plan =
+                            crate::brush::plan_dabs(brush, geometry, fw, fh, clip, Some(&view))?;
+                        r.rasterize(
+                            &plan,
+                            brush.invert,
+                            Some(crate::brush::BaseRef {
+                                plane: image.data(),
+                                w,
+                                h,
+                                x0,
+                                y0,
+                            }),
+                        )
+                    })
+                    .map(std::sync::Arc::new)
+                    .unwrap_or_else(|| {
+                        std::sync::Arc::new(crate::brush::rasterize_in(
+                            brush,
+                            geometry,
+                            fw,
+                            fh,
+                            clip,
+                            Some(&view),
+                        ))
+                    });
+                // ⚠ Reported, not cached here. This stage holds no cache and does no lookup: what
+                // identifies a base lives beside `PrefixKey`, in `render_engine`. See the
+                // coverage-cache spec's §4.0.
+                // ⚠ Reported, not cached here. This stage holds no cache and does no lookup: what
+                // identifies a base lives beside `PrefixKey`, in `render_engine`. See the
+                // coverage-cache spec's §4.0.
+                //
+                // ⚠ `(i, j)` — the mask's position in `edits.masks` and the component's position
+                // within it — so a deposited map lands under the key `render_engine` computed for
+                // *that shape*. Filing a refinement's coverage under the base's index would be a
+                // stale hit, which renders positionally while the tint shows the gate working.
+                if let Some((sink, i)) = &self.deposit {
+                    sink.deposit(*i, j, std::sync::Arc::clone(&built));
+                }
+                Some(built)
+            }
+        };
+        let mut maps: Vec<Option<std::sync::Arc<crate::brush::CoverageMap>>> =
+            Vec::with_capacity(1 + self.composite.refine.len());
+        maps.push(build_map(&self.composite.base, 0));
+        for (j, (_, src)) in self.composite.refine.iter().enumerate() {
+            maps.push(build_map(src, j + 1));
+        }
+        maps
+    }
+
+    /// This mask's coverage at every pixel of `image`, row-major, in `[0, 1]` — exactly the
+    /// weight `apply` blends with. For the prefix's defringe step (M9.6), which scales a local
+    /// amount by it rather than blending a sub-stage's output.
+    pub fn coverage_plane(&self, image: &ImageBuf) -> Vec<f32> {
+        let (w, h) = (image.width(), image.height());
+        let (fw, fh, x0, y0) = match self.region {
+            Some(r) => (r.full_w, r.full_h, r.x0, r.y0),
+            None => (w, h, 0, 0),
+        };
+        if w == 0 || h == 0 || fw == 0 || fh == 0 {
+            return vec![0.0; w * h];
+        }
+        let aspect = fw as f32 / fh as f32;
+        let maps = self.coverage_maps(image);
+        let mut out = vec![0.0f32; w * h];
+        use rayon::prelude::*;
+        out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+            for (x, o) in row.iter_mut().enumerate() {
+                let mut facts = BaseFacts::default();
+                let cx = PixelCtx {
+                    u: (x0 + x) as f32 / fw as f32,
+                    v: (y0 + y) as f32 / fh as f32,
+                    aspect,
+                    fx: x0 + x,
+                    fy: y0 + y,
+                    maps: &maps,
+                };
+                *o = self.composite.at(&cx, image.pixel(x, y), &mut facts);
+            }
+        });
+        out
+    }
+
     /// The description this stage was built from: the mask, the geometry and the region.
     ///
     /// ⚠⚠ **Deliberately whole rather than piecemeal.** A GPU twin needs the mask's *shape* as
@@ -329,104 +476,8 @@ impl PipelineStage for MaskStage {
         }
         let aspect = fw as f32 / fh as f32;
 
-        // ⚠ Whole-frame, never region-sized. Coverage is defined over the frame, so a
-        // region-sized raster would move under panning — the same class of bug the mask overlay
-        // hit in 3.1a.
-        // ⚠ One entry per component, index 0 being the base. An analytic or range component
-        // rasterizes nothing and answers from inside the loop; only a painted one has a map.
-        let build_map = |src: &CoverageSource, j: usize| match src {
-            // ⚠ Neither of these rasterizes anything: one answers from the position, the other
-            // from the pixel, both inside the loop below.
-            CoverageSource::Analytic(_) | CoverageSource::Range(_) | CoverageSource::Colour(_) => {
-                None
-            }
-            CoverageSource::Painted {
-                prebuilt: Some(c), ..
-            } => Some(std::sync::Arc::clone(c)),
-            CoverageSource::Painted {
-                brush, geometry, ..
-            } => {
-                // ⚠ Clip to this render's region. `w`/`h` are the incoming image's dimensions,
-                // which *are* the region's size, and `x0`/`y0` its frame-space origin. With no
-                // region the clip is `None` and the result is the whole frame, byte for byte.
-                //
-                // ⚠ This must be the same rectangle `render_engine`'s `BrushCache` clips to, or a
-                // prebuilt map would disagree with this fallback. It is, by construction: both
-                // derive from the same `RegionRect`. A mismatch would not error — it would read
-                // `outside` across the difference, fading the mask out partway across the image.
-                let clip = self.region.map(|r| (r.x0, r.y0, w, h));
-                // ⚠⚠ **The buffer is in hand here and has not been cloned yet**, so the sampler
-                // costs nothing at all. This is also the *only* path an auto-masked brush can
-                // take: `render_engine`'s `BrushCache` declines to prebuild a map for a brush
-                // whose `needs_base()` is true, which is what stops a gated brush ever rendering
-                // positionally while the canvas tint shows it stopping at an edge.
-                let view = BaseView {
-                    image: &image,
-                    x0,
-                    y0,
-                };
-                // ⚠⚠ **Planned ONCE and offered to both.** `plan_dabs` does the `SPACING`
-                // interpolation, the per-dab gate reference, the clip rejection and the box; the
-                // GPU and the CPU then consume the same plan, so they cannot disagree about which
-                // dabs exist. A GPU path planning its own would be a second copy of that
-                // arithmetic — the duplication `adjustment_stages` exists to avoid for stages.
-                //
-                // ⚠ Fails toward the CPU at every step: no rasteriser offered, a plan that yields
-                // nothing, or a rasteriser that declines (no adapter, a box below its floor, an
-                // allocation refused) all fall through to `rasterize_in`, costing only the attempt.
-                let built = self
-                    .coverage_gpu
-                    .as_ref()
-                    .and_then(|r| {
-                        let plan =
-                            crate::brush::plan_dabs(brush, geometry, fw, fh, clip, Some(&view))?;
-                        r.rasterize(
-                            &plan,
-                            brush.invert,
-                            Some(crate::brush::BaseRef {
-                                plane: image.data(),
-                                w,
-                                h,
-                                x0,
-                                y0,
-                            }),
-                        )
-                    })
-                    .map(std::sync::Arc::new)
-                    .unwrap_or_else(|| {
-                        std::sync::Arc::new(crate::brush::rasterize_in(
-                            brush,
-                            geometry,
-                            fw,
-                            fh,
-                            clip,
-                            Some(&view),
-                        ))
-                    });
-                // ⚠ Reported, not cached here. This stage holds no cache and does no lookup: what
-                // identifies a base lives beside `PrefixKey`, in `render_engine`. See the
-                // coverage-cache spec's §4.0.
-                // ⚠ Reported, not cached here. This stage holds no cache and does no lookup: what
-                // identifies a base lives beside `PrefixKey`, in `render_engine`. See the
-                // coverage-cache spec's §4.0.
-                //
-                // ⚠ `(i, j)` — the mask's position in `edits.masks` and the component's position
-                // within it — so a deposited map lands under the key `render_engine` computed for
-                // *that shape*. Filing a refinement's coverage under the base's index would be a
-                // stale hit, which renders positionally while the tint shows the gate working.
-                if let Some((sink, i)) = &self.deposit {
-                    sink.deposit(*i, j, std::sync::Arc::clone(&built));
-                }
-                Some(built)
-            }
-        };
         let t_cov = std::time::Instant::now();
-        let mut maps: Vec<Option<std::sync::Arc<crate::brush::CoverageMap>>> =
-            Vec::with_capacity(1 + self.composite.refine.len());
-        maps.push(build_map(&self.composite.base, 0));
-        for (j, (_, src)) in self.composite.refine.iter().enumerate() {
-            maps.push(build_map(src, j + 1));
-        }
+        let maps = self.coverage_maps(&image);
         let d_cov = t_cov.elapsed();
         // ⚠ An **optimisation, not a correctness guard** — verified by deleting it and watching
         // every test still pass. An empty coverage map reads 0 everywhere, and blending at
@@ -901,6 +952,39 @@ mod tests {
     }
 
     use edit_model::{Brush, BrushStroke};
+
+    /// ⚠⚠ `coverage_plane` must be EXACTLY the weight `apply` blends with — the defringe step's
+    /// one definition of "where a mask is" rests on it. Recovered from `apply` itself as
+    /// `(out − base) / (lifted − base)` on a flat grey, for an analytic mask and a painted one,
+    /// and the plane is first shown to vary (a constant plane would match a constant mask).
+    #[test]
+    fn the_coverage_plane_is_the_weight_apply_blends_with() {
+        for m in [masked([0.0, 0.5], [1.0, 0.5]), painted()] {
+            let img = flat(32, 20);
+            let stage = MaskStage::new(&m, RenderScale::FULL, &Geometry::default());
+            let plane = stage.coverage_plane(&img);
+            let (lo, hi) = plane
+                .iter()
+                .fold((f32::MAX, f32::MIN), |(a, b), &c| (a.min(c), b.max(c)));
+            assert!(
+                hi - lo > 0.5,
+                "the fixture's coverage must vary: {lo}..{hi}"
+            );
+            let out = stage.apply(img.clone());
+            let lifted = img.pixel(0, 0)[0] * 2.0;
+            for y in 0..20 {
+                for x in 0..32 {
+                    let base = img.pixel(x, y)[0];
+                    let c = (out.pixel(x, y)[0] - base) / (lifted - base);
+                    assert!(
+                        (c - plane[y * 32 + x]).abs() < 1e-4,
+                        "({x},{y}): apply blended {c}, the plane says {}",
+                        plane[y * 32 + x]
+                    );
+                }
+            }
+        }
+    }
 
     fn painted() -> MaskedAdjustment {
         MaskedAdjustment {
