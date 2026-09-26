@@ -113,7 +113,14 @@ impl eframe::App for RustroomApp {
                     && s.texture
                         .as_ref()
                         .is_some_and(|t| t.size() == [frame.width, frame.height]);
+                // ⚠ MEASUREMENT SWITCH (2026-09-26): with `RUSTROOM_DEBUG_NO_UPLOAD` set, a new frame
+                // never reaches the window's GPU once a picture is on screen — the window keeps
+                // drawing the old one. It exists to answer ONE question: does the window's handling
+                // of new frames cost the render pipeline GPU time (the ~12 ms app-vs-probe gap)?
+                let frozen =
+                    s.texture.is_some() && std::env::var_os("RUSTROOM_DEBUG_NO_UPLOAD").is_some();
                 match (&mut s.texture, reuse) {
+                    _ if frozen => {}
                     (Some(t), true) => t.set(img, egui::TextureOptions::LINEAR),
                     _ => {
                         s.texture =
