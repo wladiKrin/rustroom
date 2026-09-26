@@ -222,6 +222,8 @@ pub struct RenderEngine {
     ///
     /// ⚠ Unconditional rather than `#[cfg(test)]`, for `requests_issued`'s reason.
     warmed: Arc<std::sync::atomic::AtomicUsize>,
+    /// How many settles downloaded the resident final instead of rendering. See `warmed`.
+    settle_downloads: Arc<std::sync::atomic::AtomicUsize>,
     /// Where this engine's worker looks for `.cube` files, kept so the **full-resolution
     /// handover** can carry it onto the replacement engine.
     ///
@@ -262,8 +264,11 @@ impl RenderEngine {
         let (res_tx, res_rx) = channel::<RenderedFrame>();
         let warmed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let warmed_worker = Arc::clone(&warmed);
+        let settle_downloads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let settles_worker = Arc::clone(&settle_downloads);
         let handle = thread::spawn(move || {
             let warmed = warmed_worker;
+            let settle_downloads = settles_worker;
             let mut cache = PrefixCache::default();
             // ⚠⚠ **Resolved HERE rather than on the UI thread**, and cached by name: a 64³ cube
             // is 786 KB and this loop runs on every slider frame. One slot is enough — a photo
@@ -358,7 +363,7 @@ impl RenderEngine {
                 );
                 if debug_render {
                     eprintln!(
-                        "render: {:6.1} ms  rung {:5}  frame {}x{} ({:.1} Mpx)  region {}  masks {}  prefix_ran {}  scoped {}  bytes {}  handoff {}",
+                        "render: {:6.1} ms  rung {:5}  frame {}x{} ({:.1} Mpx)  region {}  masks {}  prefix_ran {}  scoped {}  bytes {}  handoff {}  tail_up {}  hit {}",
                         t0.elapsed().as_secs_f64() * 1000.0,
                         req.spec.max_dim,
                         frame.width,
@@ -373,6 +378,8 @@ impl RenderEngine {
                         if ran.region_scoped { "yes" } else { "no " },
                         if ran.bytes { "yes" } else { "no " },
                         if ran.handoff { "yes" } else { "no " },
+                        ran.tail_uploads,
+                        if ran.resident_final_hit { "yes" } else { "no " },
                     );
                 }
                 if res_tx.send(frame).is_err() {
@@ -399,36 +406,55 @@ impl RenderEngine {
                 // a whole-image one nobody asked for — the point is the cache it leaves behind,
                 // and the swap is invisible only because plan 1 made the two paths agree.
                 // ⚠⚠ A HANDOFF frame leaves no final checkpoint either (2026-09-26), so it settles
-                // exactly as a scoped frame does: without this, releasing a Straighten drag and
-                // then moving Exposure would re-run the geometry for the first tail edit.
+                // too: without this, releasing a Straighten drag and then moving Exposure would
+                // re-run the geometry for the first tail edit. ⚠⚠ **But its settle is a DOWNLOAD,
+                // not a render** — its final is already on the GPU as the resident final, and
+                // reading it back (~10 ms) replaces a re-run of the last step and a whole tail
+                // nobody saw (92-108 ms measured). A scoped drag has no whole-frame resident and
+                // renders whole-buffer as it always did.
                 if ran.region_scoped || ran.handoff {
                     match req_rx.recv_timeout(WARM_BEHIND) {
                         Ok(newer) => pending = Some(newer),
                         Err(RecvTimeoutError::Disconnected) => return,
                         Err(RecvTimeoutError::Timeout) => {
                             let t1 = std::time::Instant::now();
-                            let (_, warm) = render_cached(
-                                &buffer,
-                                &edits,
-                                FrameSpec {
-                                    region: None,
-                                    ..req.spec
-                                },
-                                source_scale,
-                                lens.clone(),
-                                wb_baseline,
-                                rendering,
-                                &mut cache,
-                                &mut brush_cache,
-                            );
-                            warmed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            if debug_render {
-                                eprintln!(
-                                    "  warm behind: {:6.1} ms  rung {:5}  prefix_ran {}",
-                                    t1.elapsed().as_secs_f64() * 1000.0,
-                                    req.spec.max_dim,
-                                    warm.prefix_stages,
+                            let settled = ran.handoff
+                                && gpu_pipeline::shared()
+                                    .is_some_and(|ctx| cache.settle_from_resident(ctx));
+                            if settled {
+                                settle_downloads
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                if debug_render {
+                                    eprintln!(
+                                        "  settle: {:6.1} ms  rung {:5}  downloaded the resident final",
+                                        t1.elapsed().as_secs_f64() * 1000.0,
+                                        req.spec.max_dim,
+                                    );
+                                }
+                            } else {
+                                let (_, warm) = render_cached(
+                                    &buffer,
+                                    &edits,
+                                    FrameSpec {
+                                        region: None,
+                                        ..req.spec
+                                    },
+                                    source_scale,
+                                    lens.clone(),
+                                    wb_baseline,
+                                    rendering,
+                                    &mut cache,
+                                    &mut brush_cache,
                                 );
+                                warmed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                if debug_render {
+                                    eprintln!(
+                                        "  warm behind: {:6.1} ms  rung {:5}  prefix_ran {}",
+                                        t1.elapsed().as_secs_f64() * 1000.0,
+                                        req.spec.max_dim,
+                                        warm.prefix_stages,
+                                    );
+                                }
                             }
                         }
                     }
@@ -441,6 +467,7 @@ impl RenderEngine {
             _handle: handle,
             requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             warmed,
+            settle_downloads,
             looks_dir: kept_looks_dir,
         }
     }
@@ -473,6 +500,12 @@ impl RenderEngine {
     /// How many warm-behind renders the worker has run. See the field's doc for why it exists.
     pub fn warm_renders(&self) -> usize {
         self.warmed.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// How many settles downloaded the resident final rather than rendering. See `warmed`.
+    pub fn settle_downloads(&self) -> usize {
+        self.settle_downloads
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Return the newest finished frame, if any (drops older ones).
@@ -3044,10 +3077,12 @@ mod tests {
         assert_eq!(a.data(), b.data(), "the same checkpoint, sample for sample");
     }
 
-    /// ⚠⚠ The engine settles a handed-off frame, or releasing a Straighten drag would leave no
-    /// final checkpoint and the first tail edit afterwards would re-run the geometry.
+    /// ⚠⚠ **A handed-off frame is settled by a DOWNLOAD, not a render (2026-09-26).** The
+    /// warm-behind used to re-run the last step and a whole tail nobody saw; now it reads the
+    /// resident final into the CPU cache — `settle_downloads` says so, `warm_renders` stays 0 —
+    /// and the next tail frame renders what a from-scratch render renders.
     #[test]
-    fn a_handed_off_frame_is_warmed_behind() {
+    fn a_handed_off_frame_is_settled_by_a_download() {
         if gpu_pipeline::shared().is_none() {
             eprintln!("SKIPPED: no GPU adapter on this machine");
             return;
@@ -3055,15 +3090,33 @@ mod tests {
         let engine = chained_engine(&hazy_buffer());
         let mut e = hsl_edits();
         e.geometry.angle = 3.0;
-        engine.request(
-            e,
-            FrameSpec {
-                gpu_tail: true,
-                ..FrameSpec::fit(200)
-            },
-        );
+        let spec = FrameSpec {
+            gpu_tail: true,
+            ..FrameSpec::fit(200)
+        };
+        engine.request(e.clone(), spec);
         let _ = wait_for_frame(&engine);
-        wait_until(|| engine.warm_renders() == 1, "the warm-behind render");
+        wait_until(|| engine.settle_downloads() == 1, "the settle download");
+        std::thread::sleep(WARM_BEHIND * 3);
+        assert_eq!(engine.warm_renders(), 0, "nothing was re-rendered");
+        e.exposure = 0.7;
+        engine.request(e.clone(), spec);
+        let frame = wait_for_frame(&engine);
+        let (want, _) = render_cached(
+            &hazy_buffer(),
+            &e,
+            spec,
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            pipeline::ProfileRendering::default(),
+            &mut PrefixCache::default(),
+            &mut BrushCache::default(),
+        );
+        assert_eq!(
+            frame.rgba, want.rgba,
+            "the settled final feeds the next tail frame"
+        );
     }
 
     /// ⚠ The other direction, and it is not symmetry: without it a seam that fired
