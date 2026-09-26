@@ -158,7 +158,8 @@ goldens unmoved.
 ### 2026-09-26 — M5.1c: the parametric curve (branch `m5.1c-parametric-curve`)
 
 **2,940 tests**, **79 goldens** (78 unmoved + `parametric_curve`), gate green. Spec and plan
-`2026-09-26-m5.1c-parametric-curve-*`. **Not yet confirmed by use.**
+`2026-09-26-m5.1c-parametric-curve-*`. ✅ **Confirmed by use and merged 2026-09-26** ("works"); the
+slider strength was accepted as is.
 
 **Decisions (the author's):** a **separate representation**, like Lightroom's (`Edits.tone_curve_parametric`:
 four amounts and three splits), NOT sliders rewriting the point curve. A slider cannot be read back
