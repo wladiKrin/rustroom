@@ -108,6 +108,47 @@ impl FusedMap {
     }
 }
 
+/// [`FusedMap`]'s constants, exported so a GPU twin receives them rather than re-deriving them.
+///
+/// ⚠⚠ **One definition of the map's constants**: the crop origin, the rotation, the orientation
+/// and the homography are computed here, by the code the CPU renders with, and handed over.
+/// `inverse` is `None` when the keystone is inactive; the CPU's original path does no homography
+/// then, and neither must the twin (a neutral homography is the identity only to within f32).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MapParams {
+    /// The crop's origin in the oriented, rotated canvas.
+    pub crop_origin: [f32; 2],
+    /// `[cx, cy, sin, cos]` about the oriented canvas centre; `None` at angle 0.
+    pub rotation: Option<[f32; 4]>,
+    /// Quarter turns clockwise, 0..=3.
+    pub quarter: u32,
+    pub mirror: bool,
+    /// The source's `w - 1` and `h - 1`.
+    pub last: [f32; 2],
+    /// The source frame's centre, in pixels; the homography's unit is `centre[1]`.
+    pub centre: [f32; 2],
+    pub inverse: Option<[[f32; 3]; 3]>,
+}
+
+impl FusedMap {
+    pub(super) fn params(&self, keystone: bool) -> MapParams {
+        MapParams {
+            crop_origin: [self.x0, self.y0],
+            rotation: self.rot.map(|(cx, cy, s, c)| [cx, cy, s, c]),
+            quarter: match self.orientation.rotate {
+                Quarter::Zero => 0,
+                Quarter::Cw90 => 1,
+                Quarter::Cw180 => 2,
+                Quarter::Cw270 => 3,
+            },
+            mirror: self.orientation.mirror,
+            last: [self.w1, self.h1],
+            centre: [self.scx, self.scy],
+            inverse: keystone.then(|| self.hom.inverse_matrix()),
+        }
+    }
+}
+
 /// The gather, producing only `rect` of the cropped output.
 ///
 /// ⚠⚠ **`GeometryStage::apply` on the fused path is this at full extent**, so the whole-buffer and

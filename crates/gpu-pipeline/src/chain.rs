@@ -33,6 +33,15 @@ pub trait GpuStage: Send + Sync {
         0
     }
 
+    /// This stage's output size for an input of `w` x `h`. Default: unchanged.
+    ///
+    /// ⚠⚠ **Only GPU geometry overrides it (2026-09-26)**, and it may only shrink or permute —
+    /// the chain writes the output into the same buffer (see `GpuImage::relabel`). It must agree
+    /// with the CPU twin's `PipelineStage::output_dims`; the geometry twin delegates to it.
+    fn output_dims(&self, w: usize, h: usize) -> (usize, usize) {
+        (w, h)
+    }
+
     /// Record this stage's dispatch. The image is bound at group 0, binding 0.
     ///
     /// ⚠ `scratch` holds exactly [`GpuStage::scratch_planes`] buffers — a slice rather than a
@@ -61,8 +70,23 @@ pub trait GpuStage: Send + Sync {
 /// ⚠⚠ The two modes share **one** upload, one compute pass and one submit — the whole point is
 /// that only the *download* differs, so a second code path would be two things that could come to
 /// disagree about how a chain runs.
+/// Where a chain's input comes from.
+#[derive(Clone, Copy)]
+enum Input<'a> {
+    /// Uploaded through staging (or taken from a deposited plane).
+    Cpu(&'a ImageBuf),
+    /// Already on the GPU: copied GPU-side, no upload. See [`GpuChain::apply_from`].
+    Resident(&'a GpuImage),
+    /// ONLY the plane a previous chain deposited, at these dimensions — never an upload. See
+    /// [`GpuChain::run_rgba8_from_plane`].
+    Plane(usize, usize),
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Download {
+    /// No readback at all: the output stays on the GPU, deposited for the next chain. See
+    /// [`GpuChain::run_to_plane`].
+    None,
     /// The resident f32 image: `w * h * 12` bytes.
     Float,
     /// Packed RGBA8, quantized by a final dispatch: `w * h * 4` bytes.
@@ -214,6 +238,54 @@ impl GpuChain {
     /// ⚠ [`crate::accelerate`] asks so it can decide whether the tail's output is
     /// display-referred. Asked rather than inferred from "`output_transform` is always last",
     /// which is true of today's pipeline and is an assumption rather than a guarantee.
+    /// Run the chain on an image that is ALREADY on the GPU, downloading the result.
+    ///
+    /// ⚠⚠ **The resident input (2026-09-26).** A drag of a prefix step resumes from the same
+    /// checkpoint on every frame, so re-uploading it each frame is pure waste: 2.3 ms of memcpy
+    /// plus the staging copy at 6.8 Mpx. The caller keeps the checkpoint on the GPU and hands it
+    /// here. `None` on any GPU failure — the caller then runs the CPU stage, as every seam does.
+    pub fn apply_from(&self, resident: &GpuImage) -> Option<ImageBuf> {
+        let (w, h) = self.output_dims(resident.width(), resident.height());
+        crate::guarded(|| self.run_with(Input::Resident(resident), Download::Float))
+            .map(|data| ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()))
+    }
+
+    /// Run the chain and leave its output ON THE GPU, deposited for the next chain — no download.
+    ///
+    /// ⚠⚠ **The handoff (2026-09-26).** When the last prefix step and the whole tail run on the
+    /// GPU, the prefix's 82 MB float result never needs to reach the CPU: the tail takes it with
+    /// [`Self::run_rgba8_from_plane`]. Returns the output size; `None` if the chain offers no slot
+    /// or the GPU fails, and the caller then renders the ordinary way.
+    pub fn run_to_plane(&self, image: &ImageBuf) -> Option<(usize, usize)> {
+        crate::guarded(|| self.run_with(Input::Cpu(image), Download::None))?;
+        Some(self.output_dims(image.width(), image.height()))
+    }
+
+    /// [`Self::run_to_plane`] from a GPU-resident input — the resident input and the handoff
+    /// together, which is a Straighten drag's steady state.
+    pub fn run_to_plane_from(&self, resident: &GpuImage) -> Option<(usize, usize)> {
+        crate::guarded(|| self.run_with(Input::Resident(resident), Download::None))?;
+        Some(self.output_dims(resident.width(), resident.height()))
+    }
+
+    /// Run the chain on the plane a previous chain deposited at `w` x `h`, quantised to 8-bit.
+    ///
+    /// ⚠ **Never uploads.** With no plane to take (none deposited, wrong size, another thread's)
+    /// it returns `None` without allocating, and the caller renders the ordinary way.
+    pub fn run_rgba8_from_plane(&self, w: usize, h: usize) -> Option<Vec<u8>> {
+        if self.stages.is_empty() {
+            return None;
+        }
+        crate::guarded(|| self.run_with(Input::Plane(w, h), Download::Rgba8))
+    }
+
+    /// The chain's output size for an input of `w` x `h`: every stage's `output_dims`, folded.
+    pub fn output_dims(&self, w: usize, h: usize) -> (usize, usize) {
+        self.stages
+            .iter()
+            .fold((w, h), |(w, h), s| s.output_dims(w, h))
+    }
+
     pub fn last_name(&self) -> Option<&'static str> {
         self.stages.last().map(|s| s.name())
     }
@@ -234,11 +306,16 @@ impl GpuChain {
         }
         // ⚠ Guarded for the same reason `apply` is — this one's `None` reaches a caller that
         // retries through `apply`, so a panic here would otherwise kill the worker just the same.
-        crate::guarded(|| self.run_with(image, Download::Rgba8))
+        crate::guarded(|| self.run_with(Input::Cpu(image), Download::Rgba8))
     }
 
     /// The GPU path, or `None` on any failure at all.
-    fn run_with(&self, image: &ImageBuf, mode: Download) -> Option<Vec<u8>> {
+    fn run_with(&self, input: Input<'_>, mode: Download) -> Option<Vec<u8>> {
+        let (iw, ih) = match input {
+            Input::Cpu(image) => (image.width(), image.height()),
+            Input::Resident(r) => (r.width(), r.height()),
+            Input::Plane(w, h) => (w, h),
+        };
         let ctx = &self.ctx;
         let device = &ctx.device;
         // ⚠⚠ **The shared upload (M8.3l).** When this chain is a mask's first sub-stage, the
@@ -249,13 +326,21 @@ impl GpuChain {
         // dimensions, and a refusal costs only the lock.
         let shared = self
             .take_shared
-            .and_then(|slot| ctx.plane(slot).take(image.width(), image.height()));
+            .and_then(|slot| ctx.plane(slot).take(iw, ih));
         let shared_taken = shared.is_some();
-        let img = match shared {
+        // ⚠ A plane-only run that finds no plane has no pixels to work on: refuse, and the caller
+        // falls back to its CPU path. Refusing BEFORE allocating is what makes it cheap.
+        if matches!(input, Input::Plane(..)) && !shared_taken {
+            return None;
+        }
+        let mut img = match shared {
             Some(img) => img,
-            None => GpuImage::new(ctx, image.width(), image.height())?,
+            None => GpuImage::new(ctx, iw, ih)?,
         };
         let bytes = img.bytes();
+        // ⚠⚠ The output size, known before anything is encoded. Everything after the pass — the
+        // quantise buffer, the readback, the deposit — is sized from THIS, never from `image`.
+        let (ow, oh) = self.output_dims(iw, ih);
 
         // ── upload, once ──────────────────────────────────────────────────────────────
         // ⚠ A `MAP_WRITE` staging buffer rather than `queue.write_buffer`: measured 1.86 ms
@@ -283,18 +368,26 @@ impl GpuChain {
         // `gpu-pipeline` change" — this is that change, and it is a print, not a path.
         let t_memcpy = std::time::Instant::now();
         let mut enc = device.create_command_encoder(&Default::default());
-        let staging = if shared_taken {
-            None
-        } else {
-            let staging = ctx.cache.take_staging(device, bytes)?;
-            staging
-                .slice(..bytes)
-                .get_mapped_range_mut()
-                .copy_from_slice(bytemuck::cast_slice(image.data()));
-            staging.unmap();
-            enc.copy_buffer_to_buffer(&staging, 0, &img.buffer, 0, bytes);
-            self.uploads.fetch_add(1, Ordering::Relaxed);
-            Some(staging)
+        let staging = match (shared_taken, input) {
+            (true, _) | (false, Input::Plane(..)) => None,
+            // ⚠⚠ A GPU-resident input is COPIED, never used in place: stages write into `img`, and
+            // the resident image must survive for the next frame of the drag. A GPU-side copy
+            // costs a fraction of the staging upload it replaces, and counts as no upload.
+            (false, Input::Resident(r)) => {
+                enc.copy_buffer_to_buffer(&r.buffer, 0, &img.buffer, 0, bytes);
+                None
+            }
+            (false, Input::Cpu(image)) => {
+                let staging = ctx.cache.take_staging(device, bytes)?;
+                staging
+                    .slice(..bytes)
+                    .get_mapped_range_mut()
+                    .copy_from_slice(bytemuck::cast_slice(image.data()));
+                staging.unmap();
+                enc.copy_buffer_to_buffer(&staging, 0, &img.buffer, 0, bytes);
+                self.uploads.fetch_add(1, Ordering::Relaxed);
+                Some(staging)
+            }
         };
 
         // ── every stage, one pass ─────────────────────────────────────────────────────
@@ -312,15 +405,15 @@ impl GpuChain {
         //
         // ⚠ Scratch is allocated **once for the whole chain, and only when something asks** — so
         // an HSL-only chain allocates nothing and costs exactly what it did in M8.3b.
-        let scratch = GpuImage::scratch(ctx, image.width(), image.height(), self.scratch_needed());
+        let scratch = GpuImage::scratch(ctx, iw, ih, self.scratch_needed());
         // ⚠ The packed target is allocated only in bytes mode. Measured, an 82 MB buffer costs
         // 0.05 ms to create and a 27 MB one proportionally less, so this is not worth caching —
         // unlike the staging buffer, whose cost was `mapped_at_creation` rather than allocation.
         let packed = match mode {
-            Download::Float => None,
+            Download::Float | Download::None => None,
             Download::Rgba8 => Some(device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("chain-packed"),
-                size: (image.width() * image.height() * 4) as u64,
+                size: (ow * oh * 4) as u64,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             })),
@@ -329,6 +422,10 @@ impl GpuChain {
             let mut pass = enc.begin_compute_pass(&Default::default());
             for s in &self.stages {
                 s.encode(ctx, &mut pass, &img, &scratch);
+                // ⚠ Relabelled BETWEEN stages, so a stage after a resize dispatches over the new
+                // size. wgpu 29's pass holds no borrow of `img`, which is what makes this legal.
+                let (w, h) = s.output_dims(img.width(), img.height());
+                img.relabel(w, h);
             }
             // ⚠ Inside the **same** pass, so it sees every stage's writes under the in-pass
             // barrier this chain already depends on and measures.
@@ -343,10 +440,40 @@ impl GpuChain {
         // which is a **2.8x** saving rather than the 4x the size ratio suggests, because a download
         // carries a **1.28 ms fixed cost** that no size reduction touches.
         let d_memcpy = t_memcpy.elapsed();
+        // ⚠⚠ **No readback: submit, deposit, return.** The next chain on this queue is ordered
+        // after this submission, so it reads the finished pixels without this thread waiting.
+        // That wait and the 82 MB copy out are what a handoff exists to skip.
+        if mode == Download::None {
+            let slot = self.offer_output?;
+            ctx.queue.submit(Some(enc.finish()));
+            ctx.plane(slot).deposit(ow, oh, img);
+            // ⚠⚠ **Dropped, NOT returned to the staging cache.** Nothing waited for the GPU, so the
+            // copy out of this buffer may still be in flight; handing it back would let the next
+            // upload overwrite it mid-copy — a plausible wrong frame. wgpu keeps a dropped buffer
+            // alive until its submission completes, which is exactly the lifetime needed.
+            drop(staging);
+            if std::env::var("RUSTROOM_DEBUG_XFER").is_ok() {
+                eprintln!(
+                    "CHAIN {:>26} {}x{} -> plane {}x{} took={} memcpy={:.2} (no download)",
+                    self.stages
+                        .iter()
+                        .map(|s| s.name())
+                        .collect::<Vec<_>>()
+                        .join("+"),
+                    iw,
+                    ih,
+                    ow,
+                    oh,
+                    shared_taken,
+                    d_memcpy.as_secs_f64() * 1e3,
+                );
+            }
+            return Some(Vec::new());
+        }
         let t_submit = std::time::Instant::now();
         let (src, out_bytes) = match &packed {
-            Some(p) => (p, (image.width() * image.height() * 4) as u64),
-            None => (&img.buffer, bytes),
+            Some(p) => (p, (ow * oh * 4) as u64),
+            None => (&img.buffer, img.bytes()),
         };
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("chain-readback"),
@@ -381,7 +508,7 @@ impl GpuChain {
         // ⚠ A deposit nobody takes is cleared by the enclosing mask's `end_mask`, which stops it
         // outliving its frame.
         if let Some(slot) = self.offer_output {
-            ctx.plane(slot).deposit(image.width(), image.height(), img);
+            ctx.plane(slot).deposit(ow, oh, img);
         }
         let out: Vec<u8> = slice.get_mapped_range().to_vec();
         readback.unmap();
@@ -395,8 +522,8 @@ impl GpuChain {
                     .map(|s| s.name())
                     .collect::<Vec<_>>()
                     .join("+"),
-                image.width(),
-                image.height(),
+                iw,
+                ih,
                 bytes as f64 / 1.0e6,
                 out_bytes as f64 / 1.0e6,
                 shared_taken,
@@ -429,8 +556,8 @@ impl PipelineStage for GpuChain {
         if self.stages.is_empty() {
             return image;
         }
-        let (w, h) = (image.width(), image.height());
-        match crate::guarded(|| self.run_with(&image, Download::Float)) {
+        let (w, h) = self.output_dims(image.width(), image.height());
+        match crate::guarded(|| self.run_with(Input::Cpu(&image), Download::Float)) {
             Some(data) => ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()),
             None => self.cpu_fallback(image),
         }
@@ -983,5 +1110,92 @@ mod tests {
         for (i, (s, o)) in small.data().iter().zip(out.data()).enumerate() {
             assert_eq!(*o, s * 2.0, "sample {i} is wrong after a larger render");
         }
+    }
+
+    /// A stage that keeps the top half of the image. Its output is the leading prefix of the
+    /// buffer, so its GPU encode moves nothing: it tests the chain's SIZE plumbing and nothing else.
+    struct TopHalf(TopHalfCpu);
+    struct TopHalfCpu;
+    impl PipelineStage for TopHalfCpu {
+        fn name(&self) -> &'static str {
+            "top_half"
+        }
+        fn apply(&self, image: ImageBuf) -> ImageBuf {
+            let (w, h) = (image.width(), image.height());
+            image.crop(0, 0, w, h / 2)
+        }
+        fn output_dims(&self, w: usize, h: usize) -> (usize, usize) {
+            (w, h / 2)
+        }
+    }
+    impl GpuStage for TopHalf {
+        fn name(&self) -> &'static str {
+            "top_half"
+        }
+        fn cpu_cost(&self) -> f32 {
+            1000.0
+        }
+        fn output_dims(&self, w: usize, h: usize) -> (usize, usize) {
+            (w, h / 2)
+        }
+        fn encode(
+            &self,
+            _: &GpuContext,
+            _: &mut wgpu::ComputePass,
+            _: &GpuImage,
+            _: &[wgpu::Buffer],
+        ) {
+        }
+        fn cpu(&self) -> &dyn PipelineStage {
+            &self.0
+        }
+    }
+
+    /// ⚠⚠ **A stage may change the image's size (GPU geometry, 2026-09-26)**, and everything after
+    /// it must see the NEW size: a later stage's dispatch, the quantise, the readback, the deposit
+    /// and the image handed back. An exposure AFTER the resize proves the relabel reaches later
+    /// stages; the byte count and the plane's dimensions prove it reaches the ends.
+    #[test]
+    fn a_size_changing_stage_is_honoured_to_the_end_of_the_chain() {
+        let Some(ctx) = ctx() else { return };
+        let src = ramp(32, 20);
+        let chain = || {
+            GpuChain::new(
+                ctx.clone(),
+                vec![
+                    Box::new(TopHalf(TopHalfCpu)),
+                    Box::new(GpuExposureStage::new(1.0, ctx.clone())),
+                ],
+            )
+        };
+        let c = chain();
+        let out = c.apply(src.clone());
+        assert_eq!(
+            c.transfer_counts(),
+            (1, 1),
+            "fixture: the GPU path must have run"
+        );
+        assert_eq!((out.width(), out.height()), (32, 10));
+        let want = src.crop(0, 0, 32, 10);
+        for (i, (w, o)) in want.data().iter().zip(out.data()).enumerate() {
+            assert_eq!(*o, w * 2.0, "sample {i}");
+        }
+        assert_eq!(c.output_dims(32, 20), (32, 10));
+
+        let bytes = chain().run_rgba8(&src).expect("the GPU path");
+        assert_eq!(bytes.len(), 32 * 10 * 4);
+
+        let mut offering = chain();
+        offering.offer_output(Slot::Mask);
+        let _ = offering.apply(src.clone());
+        assert!(
+            ctx.plane(Slot::Mask).take(32, 20).is_none(),
+            "deposited at the INPUT size"
+        );
+        let _ = offering.apply(src);
+        assert!(
+            ctx.plane(Slot::Mask).take(32, 10).is_some(),
+            "not deposited at the output size"
+        );
     }
 }

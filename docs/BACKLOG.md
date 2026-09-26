@@ -431,6 +431,19 @@ above. Only *anchoring* wants the forward map.
 
 ## Performance
 
+### ⬜ One GPU device for the window and the pipeline (recorded 2026-09-26, payoff UNMEASURED)
+
+`gpu_pipeline::shared()` creates its own wgpu device, and eframe has another. In the app a Straighten
+drag frame is ~41 ms against ~29 ms headless, and the whole difference is GPU submit+wait (the CPU
+copies match exactly). A synthetic second-device load reproduced **part** of it (+3.8 ms median over
+five runs, p90 up to 54 ms). Reusing the preview texture freed the UI thread (5.5 → 2.0 ms) and changed
+the drag frame not at all. **What sharing would buy:** one queue instead of two contending, and the
+tail's 8-bit output written straight into the display texture (no 27 MB readback, no `tovec`, no second
+upload). ⚠ **What it costs:** the render engine would need eframe's device before the first photo opens,
+and the histogram and the readout would still need bytes (a small readback, or computed on the GPU).
+⚠ The ~12 ms is an upper bound on the win, not an estimate of it. Measure the window's own GPU time
+first. `grep -n 'The gap, measured' docs/JOURNAL.md`.
+
 ### ⛔ CLOSED 2026-09-18 — spot removal on the GPU is NOT worth doing, and this is why (MEASURED)
 
 Item 5 of the agreed GPU-port order, closed **without being built**. `crates/app/examples/probe_spot_cost.rs`
@@ -715,6 +728,16 @@ met with a measurement rather than a search.
 
 ### 🟡 A GPU buffer resident across the prefix→tail seam — UPLOAD HALF DONE (M8.14, 2026-09-18), DOWNLOAD HALF DECLINED
 
+> ⚠⚠ **CORRECTION 2026-09-26: the step→tail half did NOT work on the byte path — the ordinary preview
+> frame — from M8.14 until 2026-09-26.** `accelerate`'s arm that hands back the `output_transform`
+> chain never called `mark_shared`, so the tail re-uploaded after every GPU prefix step
+> (`took=false` in `RUSTROOM_DEBUG_XFER`). The M8.14 figure below was real for the path its probe
+> took, which was not the one a user sees. Fixed with `the_handed_back_chain_takes_the_prefix_plane`
+> (63 → 48.7 ms on a Straighten frame at rung 3200). ⚠ And **the download half is now BUILT for the
+> LAST prefix step** (the `gpu-geometry` branch, the author's call as "scope C"): one resident slot
+> and a no-download handoff, with the warm-behind filling the final checkpoint. That is not the
+> general `PrefixCache`-of-`GpuImage` priced below. `grep -n 'GPU geometry' docs/JOURNAL.md`.
+>
 > **✅ THE UPLOAD HALF SHIPPED 2026-09-18 as M8.14.** Consecutive GPU prefix steps, and the last one
 > and the tail's first chain, hand the device buffer over. Measured at rung 6246 on a quiet machine:
 > step→step **14.8–18.8 ms**, step→tail **28.5–30.6**, together **43.3–49.4 ms ≈ 5.6–6.3%** of a

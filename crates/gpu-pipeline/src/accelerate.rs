@@ -364,6 +364,14 @@ pub fn accelerate_prefix_stage(
                 image,
             )?)
         }
+        // ⚠ Since 2026-09-26. Declines on a frame too small to resample, where the CPU stage
+        // passes the image through untouched.
+        "geometry" => Box::new(crate::GpuGeometryStage::new(
+            &edits.geometry,
+            edits.perspective,
+            resampler,
+            image,
+        )?),
         _ => return None,
     };
     // ⚠ The same question the tail asks, and it fails toward the CPU for the same reason: a wrong
@@ -593,7 +601,15 @@ fn walk(
         // ⚠ The name is **checked**, not assumed. `output_transform` ends every tail today, and
         // that is a fact about the current pipeline rather than a guarantee about the next one —
         // and it is the stage that clamps, so it is what makes the output display-referred.
-        Some(c) if c.last_name() == Some("output_transform") => (Pipeline::new(out), Some(c)),
+        //
+        // ⚠⚠ `mark_shared` here too (2026-09-26). This arm is the byte path, the ordinary preview
+        // frame, and it was the one arm that never offered the take — so every frame after an
+        // accelerated prefix step re-uploaded the plane the prefix had just left on the GPU.
+        // `the_handed_back_chain_takes_the_prefix_plane` pins it.
+        Some(mut c) if c.last_name() == Some("output_transform") => {
+            mark_shared(&mut c, share_input, out.is_empty());
+            (Pipeline::new(out), Some(c))
+        }
         Some(mut c) => {
             mark_shared(&mut c, share_input, out.is_empty());
             out.push(Box::new(c));
@@ -1279,20 +1295,21 @@ mod tests {
 
     /// ⚠⚠ **A FORCING FUNCTION, not a coverage test.** Naming the prefix stages with no GPU twin
     /// is what makes adding one a deliberate act: this test breaks, and whoever breaks it has to
-    /// say why. It broke for noise reduction, and it broke again for lens correction.
+    /// say why. It broke for noise reduction, for lens correction, and (2026-09-26) for geometry.
     ///
-    /// ⚠ What is left are the two **analytic** resamplers, and they are not a third instance of
-    /// this mechanism: perspective is a homography and geometry a rotation, a few arithmetic
-    /// operations per pixel wanting no field and no lattice at all — and M8.5 took both from
-    /// ~160 ms to ~34 by giving them eight cores rather than a GPU. The older note that called the
-    /// three resamplers "ONE mechanism" was wrong about that and is corrected here.
+    /// ⚠ Geometry was left out on the argument that eight cores had made it cheap (M8.5: ~160 ms
+    /// to ~34). That was true of its COMPUTE and missed its TRANSFERS: on a fitted rung of 6.8 Mpx
+    /// a Straighten frame was 63 ms, and the win came from keeping the pixels on the GPU — the
+    /// resident input and the no-download handoff — which only a twin makes possible. See
+    /// `docs/superpowers/specs/2026-09-26-gpu-geometry-design.md`.
     #[test]
     fn every_other_prefix_stage_is_left_alone() {
         let Some(ctx) = ctx() else { return };
         let img = hazy(64, 64);
-        // ⚠ No "perspective" since M7.3b: the keystone is part of the geometry step. Spot removal
-        // is here because it was measured and closed unported (`docs/BACKLOG.md`).
-        for name in ["geometry", "spot_removal"] {
+        // ⚠ Geometry has a twin since 2026-09-26. Spot removal is here because it was measured
+        // and closed unported (`docs/BACKLOG.md`), and a name nothing implements must fall through
+        // too.
+        for name in ["spot_removal", "no_such_stage"] {
             assert!(
                 accelerate_prefix_stage(
                     name,
@@ -1666,6 +1683,29 @@ mod tests {
             },
             ctx,
         )
+    }
+
+    /// ⚠⚠ **The handed-back chain may take the prefix's plane — found missing 2026-09-26.** The
+    /// byte path's chain (the one ending in `output_transform`, returned rather than pushed) was
+    /// built WITHOUT `mark_shared`, so after an accelerated prefix step every ordinary preview
+    /// frame re-uploaded the 82 MB it had just left on the GPU (`took=false` in
+    /// `RUSTROOM_DEBUG_XFER`). The prefix→tail seam only ever worked for float tails.
+    #[test]
+    fn the_handed_back_chain_takes_the_prefix_plane() {
+        let Some(ctx) = ctx() else { return };
+        let e = with_hsl();
+        let facts = |prefix_offered| TailFacts {
+            region: None,
+            profile: ProfileRendering::default(),
+            spec: RenderSpec::default(),
+            prefix_offered,
+        };
+        let (_, chain) = accelerate(tail_of(&e), &e, SCALE, facts(true), &ctx);
+        let chain = chain.expect("fixture check: this tail ends in a chain");
+        assert_eq!(chain.takes_from(), Some(crate::Slot::Prefix));
+        // And not without an offer: a tail after a CPU prefix must upload.
+        let (_, chain) = accelerate(tail_of(&e), &e, SCALE, facts(false), &ctx);
+        assert_eq!(chain.expect("a chain").takes_from(), None);
     }
 
     /// ⚠⚠ The condition M8.3g's whole gate rests on, and it is answered **by construction** here
