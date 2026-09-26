@@ -431,6 +431,19 @@ above. Only *anchoring* wants the forward map.
 
 ## Performance
 
+### ⬜ One GPU device for the window and the pipeline (recorded 2026-09-26, payoff UNMEASURED)
+
+`gpu_pipeline::shared()` creates its own wgpu device, and eframe has another. In the app a Straighten
+drag frame is ~41 ms against ~29 ms headless, and the whole difference is GPU submit+wait (the CPU
+copies match exactly). A synthetic second-device load reproduced **part** of it (+3.8 ms median over
+five runs, p90 up to 54 ms). Reusing the preview texture freed the UI thread (5.5 → 2.0 ms) and changed
+the drag frame not at all. **What sharing would buy:** one queue instead of two contending, and the
+tail's 8-bit output written straight into the display texture (no 27 MB readback, no `tovec`, no second
+upload). ⚠ **What it costs:** the render engine would need eframe's device before the first photo opens,
+and the histogram and the readout would still need bytes (a small readback, or computed on the GPU).
+⚠ The ~12 ms is an upper bound on the win, not an estimate of it. Measure the window's own GPU time
+first. `grep -n 'The gap, measured' docs/JOURNAL.md`.
+
 ### ⛔ CLOSED 2026-09-18 — spot removal on the GPU is NOT worth doing, and this is why (MEASURED)
 
 Item 5 of the agreed GPU-port order, closed **without being built**. `crates/app/examples/probe_spot_cost.rs`

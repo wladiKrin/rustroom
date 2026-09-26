@@ -241,10 +241,11 @@ Every planned phase closed except **M7.3b** (since done, 2026-09-25), so the roa
   `license = "GPL-3.0-or-later"` all along. ⚠⚠ **Do not re-open it from a list**; it exists in the plan
   only as the record of the broken-`ls` check in *Standing lessons* below.
 
-**▶ The order the user set: M7.3b ✅; the drag-frame fixes and GPU geometry are built on branches
-`drag-frame-overheads` → `gpu-geometry` (stacked, awaiting use and merge); then Phase 9's checklist
-from the top.** A Straighten drag on DSCF6263 at the author's fitted rung: **85.0 → 62.8 → 28.8 ms**
-(median of 40, `probe_straighten_drag`). ⚠ **Proposed and not yet scheduled:** masks' *scene* sliders (WB, exposure,
+**▶ The order the user set: M7.3b ✅, the drag-frame fixes ✅ and GPU geometry ✅ (all merged and
+confirmed by use 2026-09-26); next is Phase 9's checklist from the top.** A Straighten drag on
+DSCF6263: **~97 → ~41 ms per frame in the app** (85.0 → 28.8 ms headless). ⚠ The remaining app-vs-probe
+gap (~12 ms) is GPU time lost to the window drawing on its OWN wgpu device. Only sharing one device
+would remove it; it is in `docs/BACKLOG.md` with its payoff unmeasured. ⚠ **Proposed and not yet scheduled:** masks' *scene* sliders (WB, exposure,
 contrast, tone regions) run after the global tone curve today, where Lightroom applies them as
 offsets at the global slider's position. It was raised in M7.3b's brainstorm and split off as its
 own milestone. It is the author's call.
