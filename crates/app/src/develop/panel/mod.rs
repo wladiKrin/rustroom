@@ -2,6 +2,7 @@
 
 pub mod adjustments;
 pub mod color_wheel;
+pub mod defringe;
 pub mod geometry;
 pub mod hsl_bands;
 pub mod look;
@@ -263,7 +264,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                     buffer: &s.buffer,
                                     hist: Some(&s.hist),
                                 },
-                                Some(&mut s.picking_wb),
+                                adjustments::Pickers {
+                                    wb: Some(&mut s.picking_wb),
+                                    fringe: Some(&mut s.picking_fringe),
+                                },
                                 &mut ed,
                             );
                         }
