@@ -85,6 +85,15 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_micros(200));
         }
     };
+    // ⚠⚠ `PROBE_UI_LOAD=1` stands in for the WINDOW (2026-09-26): a second, independent wgpu device
+    // — as eframe's is — writing a fresh texture of the frame's size and submitting at 60 Hz, which
+    // is roughly what egui does on every drag frame. The in-app tail measured ~7-10 ms more GPU
+    // submit+wait than this probe with identical CPU copies; this says whether contention is why.
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let load = std::env::var_os("PROBE_UI_LOAD").is_some().then(|| {
+        let stop = stop.clone();
+        std::thread::spawn(move || ui_load(rung, &stop))
+    });
     // Warm: the first frames compile shaders and fill the lens checkpoint.
     for a in [0.0, 0.1, 0.2] {
         frame(a);
@@ -95,10 +104,71 @@ fn main() {
     let n = 40;
     let mut all: Vec<f64> = (0..n).map(|i| frame(0.5 + 0.05 * i as f32)).collect();
     all.sort_by(|a, b| a.total_cmp(b));
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Some(h) = load {
+        let _ = h.join();
+    }
     eprintln!(
         "median wall per drag frame: {:.1} ms  (p10 {:.1}, p90 {:.1}, n {n})",
         all[n / 2],
         all[n / 10],
         all[n * 9 / 10]
     );
+}
+
+/// A window-like GPU load on its OWN device: one texture of the frame's size rewritten and
+/// submitted every 16 ms, until `stop`.
+fn ui_load(rung: usize, stop: &std::sync::atomic::AtomicBool) {
+    use eframe::wgpu;
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .expect("an adapter");
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+            .expect("a device");
+    let (w, h) = (rung as u32, (rung as u32 * 2) / 3);
+    let size = wgpu::Extent3d {
+        width: w,
+        height: h,
+        depth_or_array_layers: 1,
+    };
+    let bytes = vec![128u8; (w * h * 4) as usize];
+    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+        let t = std::time::Instant::now();
+        // ⚠ A NEW texture each time, as `ctx.load_texture` makes one per frame.
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("ui-load"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            size,
+        );
+        queue.submit(None);
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        if let Some(rest) = std::time::Duration::from_millis(16).checked_sub(t.elapsed()) {
+            std::thread::sleep(rest);
+        }
+    }
 }

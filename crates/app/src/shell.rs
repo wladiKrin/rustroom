@@ -89,11 +89,25 @@ impl eframe::App for RustroomApp {
                     frame.width,
                     frame.height,
                 ));
+                // ⚠ Timed under `RUSTROOM_DEBUG_RENDER` (2026-09-26): the worker's `render:` line
+                // cannot see what the UI thread spends turning a frame into a texture, and the
+                // in-app drag ran ~11 ms slower than the headless probe with no line saying where.
+                let t_tex = std::time::Instant::now();
                 let img = egui::ColorImage::from_rgba_unmultiplied(
                     [frame.width, frame.height],
                     &frame.rgba,
                 );
+                let t_load = std::time::Instant::now();
                 s.texture = Some(ctx.load_texture("preview", img, egui::TextureOptions::LINEAR));
+                if std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some() {
+                    eprintln!(
+                        "  UI texture: convert {:5.1} ms  load {:5.1} ms  {}x{}",
+                        (t_load - t_tex).as_secs_f64() * 1e3,
+                        t_load.elapsed().as_secs_f64() * 1e3,
+                        frame.width,
+                        frame.height
+                    );
+                }
                 // ⚠ A whole-image frame is kept as the backdrop a region render is painted over.
                 // ⚠ `Some(..)` only — a region frame must NOT replace it, or the backdrop would
                 // become the very slice it exists to surround and the black would come back.
