@@ -158,6 +158,37 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-27 — M9.7 persistent history: Ctrl+Z survives a restart (branch `m9.7-persistent-history`)
+
+**3,027 tests**, 81 goldens unmoved, gate green. Spec `2026-09-27-m9.7-persistent-history-design.md`,
+plan of the same date. 🟡 **Awaiting use.**
+
+**What shipped.** A photo's undo/redo steps are stored in the catalog (migration 9,
+`photo_history(folder_id, file_name, copy, body)`, keyed like `photos` so a copy has its own;
+cascades with its folder) as a versioned JSON body (`history_store`, the newest **100** undo and
+redo steps). Stored at the one `finalize_session` stash choke point and for the open photo in
+`eframe::App::on_exit`; a history with nothing to undo or redo deletes its row. Restored on a stash
+miss through `take_matching`'s rule — its present must equal the edits on disk, or the row is
+deleted — and `ActionLog::seed` puts its steps at the FRONT of the log (in force, then undone), so
+Ctrl+Z reaches them after this session's own. No catalog: exactly as before. **No new UI** — a
+History list was discussed and deferred by the author (snapshots, Before/After and the Now row cover
+much of it; it can be built on the stored data later).
+
+⚠⚠ **THE DECISION THE PLAN ASKED TO BE WRITTEN DOWN: catalog, not sidecar.** The sidecar is the
+photograph's *description* — read by other tools, backups and people, rewritten on every save; a
+history is *working state*. Measured: sidecars are 3.4 KB median, 44 KB max (DSCF7218), and one step
+of DSCF7218's settings is **11.7 KB** (four masks), so 100 steps is **~1.1 MB** (~300 KB typical) —
+fine in a catalog written once per photo switch, wrong in a sidecar. The accepted cost: a folder
+moved outside Rustroom, a forgotten folder (its undo does not restore histories), or a deleted
+catalog loses the history — never the edits. Lightroom makes the same choice. Also recorded in
+`catalog/src/db/history.rs`.
+
+⚠ The Now row counts changes since `History::initial()`, which after a restore is the oldest stored
+step, not the moment of opening. ⚠ A crash loses only the open photo's steps from that session.
+
+Sabotages run: no log seeding (the restart test's Ctrl+Z does nothing); no save on exit (nothing
+restored); no staleness check (the stale history is undone into).
+
 ### 2026-09-27 — M9.6 defringe: purple/green, global and in masks (branch `m9.6-defringe`)
 
 **3,014 tests**, **81 goldens** (+`defringe`; the other 80 unmoved), gate green. Spec
