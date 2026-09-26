@@ -45,6 +45,47 @@ pub struct ToneCurve {
     pub points: Vec<[f32; 2]>,
 }
 
+/// Lightroom's parametric tone curve: four region amounts over three movable splits (M5.1c).
+///
+/// ⚠⚠ **Its own representation, beside the point curve, by the author's decision (2026-09-26).**
+/// A region slider cannot be read back out of hand-placed points, so folding it into
+/// [`ToneCurve`] would leave the sliders unable to show an honest value. The pipeline folds both
+/// into one table: this curve first, then the point curve.
+///
+/// ⚠ Defined on the **display-referred** axis (the curve widget's), so "shadows" is the widget's
+/// left quarter. The point curve's `x` is linear light; the stage converts between the two.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ParametricCurve {
+    /// -100..=100 each.
+    pub shadows: f32,
+    pub darks: f32,
+    pub lights: f32,
+    pub highlights: f32,
+    /// The region boundaries in display-referred `x`, strictly increasing.
+    pub splits: [f32; 3],
+}
+
+impl Default for ParametricCurve {
+    fn default() -> Self {
+        Self {
+            shadows: 0.0,
+            darks: 0.0,
+            lights: 0.0,
+            highlights: 0.0,
+            splits: [0.25, 0.5, 0.75],
+        }
+    }
+}
+
+impl ParametricCurve {
+    /// Whether the curve changes anything. ⚠ The splits alone are modifiers, like Detail and
+    /// Smoothness beside noise reduction's amounts: they insert nothing.
+    pub fn is_active(&self) -> bool {
+        self.shadows != 0.0 || self.darks != 0.0 || self.lights != 0.0 || self.highlights != 0.0
+    }
+}
+
 /// Normalized crop rectangle in [0, 1]; default is the full frame.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -1629,6 +1670,9 @@ pub struct Edits {
     pub tone_curve_green: ToneCurve,
     /// The blue channel's own curve. See [`Self::tone_curve_red`].
     pub tone_curve_blue: ToneCurve,
+    /// The parametric curve (M5.1c), applied before the point curves. In the **`Tone`** group with
+    /// them: one instrument as far as Sync and "Reset adjustments" are concerned.
+    pub tone_curve_parametric: ParametricCurve,
     /// Saturation, ~[-100, 100]. -100 = monochrome, 0 = no change, +100 = 2x chroma.
     pub saturation: f32,
     /// Vibrance, ~[-100, 100]. Like saturation, but weighted toward already-muted colors.
@@ -1729,6 +1773,7 @@ impl Edits {
             tone_curve_red,
             tone_curve_green,
             tone_curve_blue,
+            tone_curve_parametric,
             saturation,
             vibrance,
             hsl,
@@ -1763,6 +1808,7 @@ impl Edits {
             self.tone_curve_red = tone_curve_red.clone();
             self.tone_curve_green = tone_curve_green.clone();
             self.tone_curve_blue = tone_curve_blue.clone();
+            self.tone_curve_parametric = *tone_curve_parametric;
             self.local_contrast = *local_contrast;
             self.dehaze = *dehaze;
         }
@@ -1922,6 +1968,55 @@ mod tests {
     /// `#[serde(default)]` doing its job, with no `version` bump involved. A test rather than a number
     /// is the guard. ⚠ (This used to end "which is why `version` is still 7". It never was: M7.3b
     /// found `version` is never written, so every sidecar on disk carries 0.)
+    /// ⚠ M5.1c. An older sidecar has no `tone_curve_parametric` and must load neutral; the splits
+    /// alone are modifiers and do not activate the curve; and the Tone group carries it.
+    #[test]
+    fn the_parametric_curve_defaults_neutral_and_travels_with_tone() {
+        let e: Edits = serde_json::from_str(r#"{"exposure":0.5}"#).expect("must parse");
+        assert_eq!(e.tone_curve_parametric, ParametricCurve::default());
+        assert!(!e.tone_curve_parametric.is_active());
+        assert_eq!(e.tone_curve_parametric.splits, [0.25, 0.5, 0.75]);
+        let moved = ParametricCurve {
+            splits: [0.1, 0.5, 0.9],
+            ..Default::default()
+        };
+        assert!(
+            !moved.is_active(),
+            "splits alone must not activate the curve"
+        );
+        let lifted = ParametricCurve {
+            shadows: 10.0,
+            ..Default::default()
+        };
+        assert!(lifted.is_active());
+
+        let src = Edits {
+            tone_curve_parametric: lifted,
+            ..Default::default()
+        };
+        let mut dst = Edits::default();
+        dst.merge_from(
+            &src,
+            EditGroups {
+                tone: true,
+                ..EditGroups::NONE
+            },
+        );
+        assert_eq!(
+            dst.tone_curve_parametric, lifted,
+            "the Tone group must carry it"
+        );
+        let mut untouched = Edits::default();
+        untouched.merge_from(
+            &src,
+            EditGroups {
+                tone: false,
+                ..EditGroups::ALL
+            },
+        );
+        assert_eq!(untouched.tone_curve_parametric, ParametricCurve::default());
+    }
+
     #[test]
     fn a_sidecar_without_the_channel_curves_loads_as_identity() {
         let e: Edits = serde_json::from_str(r#"{"version":7,"exposure":0.5}"#).expect("must parse");
@@ -3023,6 +3118,13 @@ mod tests {
             },
             tone_curve_blue: ToneCurve {
                 points: vec![[0.0, 0.0], [1.0, 0.85]],
+            },
+            tone_curve_parametric: ParametricCurve {
+                shadows: 20.0,
+                darks: -10.0,
+                lights: 15.0,
+                highlights: -25.0,
+                splits: [0.2, 0.45, 0.8],
             },
             saturation: 10.0,
             vibrance: 10.0,

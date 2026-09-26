@@ -86,14 +86,10 @@ const REPLACEABLE: &[(&str, Builder)] = &[
     // split the per-pixel head before this milestone.
     // ⚠⚠ `with_channels`, never `new`: the tail is on by default, so passing only the composite would
     // give a preview that disagrees with the export on any photo with a channel curve.
+    // ⚠⚠ Since M5.1c through `from_edits`, the constructor the CPU pipeline uses too, so the
+    // parametric curve (and any later curve field) reaches both or neither.
     ("tone_curve", |e, _, _, _, _, ctx| {
-        Some(Box::new(GpuToneCurveStage::with_channels(
-            &e.tone_curve.points,
-            &e.tone_curve_red.points,
-            &e.tone_curve_green.points,
-            &e.tone_curve_blue.points,
-            ctx,
-        )))
+        Some(Box::new(GpuToneCurveStage::from_edits(e, ctx)))
     }),
     // ⚠⚠ **The last stage that could split a mask's sub-stage chain**, and the last that could
     // take the LEADING position and deny a mask M8.3l's shared upload. Takes the render scale,
@@ -933,6 +929,13 @@ mod tests {
             },
             tone_curve_blue: edit_model::ToneCurve {
                 points: vec![[0.0, 0.0], [1.0, 0.82]],
+            },
+            // ⚠ M5.1c: the parametric curve too, since it is folded into the same composite table
+            // the GPU twin uploads. A construction site that skipped it would disagree here.
+            tone_curve_parametric: edit_model::ParametricCurve {
+                shadows: 40.0,
+                highlights: -40.0,
+                ..Default::default()
             },
             ..Default::default()
         };

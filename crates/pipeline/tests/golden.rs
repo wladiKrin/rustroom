@@ -2503,3 +2503,21 @@ fn golden_spot_perspective() {
     };
     check_golden_with("spot_perspective", &e, spot_chart());
 }
+
+/// ⚠ M5.1c: the parametric curve alone, shadows lifted and highlights pulled down — the shape its
+/// sliders are most often used for. Every other golden has an inactive parametric curve, which is
+/// what `an_inactive_parametric_curve_changes_no_table` pins at the table.
+#[test]
+fn golden_parametric_curve() {
+    check_golden(
+        "parametric_curve",
+        &Edits {
+            tone_curve_parametric: edit_model::ParametricCurve {
+                shadows: 40.0,
+                highlights: -40.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        },
+    );
+}
