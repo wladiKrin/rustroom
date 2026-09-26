@@ -447,6 +447,7 @@ fn main() {
                 max_dim,
                 region: None,
                 display_space: color::OutputSpace::Srgb,
+                intent: color::RenderingIntent::default(),
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: false,
                 // ⚠ The three view modes off: each adds work of its own (the grade range view is
@@ -476,6 +477,7 @@ fn main() {
                 max_dim,
                 region: None,
                 display_space: color::OutputSpace::Srgb,
+                intent: color::RenderingIntent::default(),
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: false,
                 grade_view: None,

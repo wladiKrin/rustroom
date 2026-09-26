@@ -138,6 +138,7 @@ impl Session {
                 max_dim,
                 region,
                 display_space: self.display_space,
+                intent: self.canvas_intent,
                 resampler: self.resampler,
                 gpu_tail: self.gpu_tail,
                 visualize: self.visualize,
@@ -146,6 +147,7 @@ impl Session {
                 // into. Two independent toggles on the session, one value on the wire.
                 soft_proof: self.soft_proof.map(|space| Proof {
                     space,
+                    intent: self.canvas_intent,
                     warn: self.gamut_warning,
                 }),
                 grade_view: self.grade_view,
@@ -537,6 +539,7 @@ impl RustroomApp {
                 display_space: self
                     .settings
                     .effective_display_space(self.os_manages_colour),
+                intent: self.settings.canvas_intent,
                 resampler: self.settings.resampler,
                 gpu_tail: self.settings.gpu_tail,
                 visualize: None,
@@ -554,6 +557,7 @@ impl RustroomApp {
             display_space: self
                 .settings
                 .effective_display_space(self.os_manages_colour),
+            canvas_intent: self.settings.canvas_intent,
             resampler: self.settings.resampler,
             gpu_tail: self.settings.gpu_tail,
             visualize: None,

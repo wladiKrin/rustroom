@@ -900,6 +900,64 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **The intent must reach the GPU's output transform (M6.4c).** `GPU_STAGES` builds it from
+    /// `spec.intent`; a site passing the default instead compiles perfectly and would make the
+    /// preview disagree with the export on every saturated colour. The fixture is saturated and
+    /// shown first to render differently under the two intents on the CPU.
+    #[test]
+    fn the_rendering_intent_reaches_the_gpu_tail() {
+        let Some(ctx) = ctx() else { return };
+        let e = Edits::default();
+        let mut px = Vec::new();
+        for k in 0..16 {
+            let t = k as f32 / 15.0;
+            px.extend_from_slice(&[0.05 + 0.9 * t, 0.85 - 0.8 * t, 0.1]);
+        }
+        let img = core_image::ImageBuf::from_vec(16, 1, px);
+        let tail = |intent| {
+            let spec = RenderSpec {
+                intent,
+                ..RenderSpec::default()
+            };
+            let (_, t) = pipeline::build_pipeline_split_in_region_with_brush(
+                &e,
+                SCALE,
+                None,
+                None,
+                spec,
+                None,
+                ProfileRendering::colorimetric(),
+            );
+            (t, spec)
+        };
+        let run = |intent, gpu: bool| {
+            let (t, spec) = tail(intent);
+            if gpu {
+                accel(t, &e, SCALE, ProfileRendering::colorimetric(), spec, &ctx).run(img.clone())
+            } else {
+                t.run(img.clone())
+            }
+        };
+        let (rel, per) = (
+            color::RenderingIntent::RelativeColorimetric,
+            color::RenderingIntent::Perceptual,
+        );
+        assert!(
+            crate::compare(&run(rel, false), &run(per, false)).worst_levels > 2.0,
+            "the fixture must tell the intents apart"
+        );
+        for intent in [rel, per] {
+            let d = crate::compare(&run(intent, false), &run(intent, true));
+            assert!(
+                d.worst_levels < 0.5,
+                "{intent:?}: worst {} levels over {} of {} samples",
+                d.worst_levels,
+                d.differing,
+                d.total
+            );
+        }
+    }
+
     /// ⚠⚠ **The preview-versus-export guard for the per-channel curves, and it closes a gap I had
     /// written off as "only checkable by use".** `a_colorimetric_frame_renders_the_same_picture_on_the_gpu`
     /// above runs on `Edits::default()`, so it cannot see a construction site in `GPU_STAGES` that passed

@@ -1034,6 +1034,9 @@ pub struct Session {
     /// render goes through — has no access to `RustroomApp`. `apply_display_space` writes it on
     /// the open session so a change takes effect without reopening the photo.
     display_space: color::OutputSpace,
+    /// The canvas's rendering intent, copied from `Settings` when the session opens — held here
+    /// for `display_space`'s reason. `apply_canvas_intent` writes it on the open session.
+    canvas_intent: color::RenderingIntent,
     /// The resampling kernel, copied from `Settings` when the session opens.
     ///
     /// ⚠ Held here for the same reason `display_space` is: `Session::request` is the one funnel

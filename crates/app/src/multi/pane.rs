@@ -27,7 +27,7 @@ pub(crate) struct Pane {
     /// The frame currently on screen, so its size is known without asking the texture.
     shown: Option<RenderedFrame>,
     /// What the last request asked for, so an unchanged view issues none.
-    requested: Option<(usize, u64)>,
+    requested: Option<(usize, u64, u64)>,
     edits: edit_model::Edits,
     /// This pane's own magnification. 1.0 is fit.
     pub zoom: f32,
@@ -126,11 +126,12 @@ impl Pane {
         img: egui::Rect,
         zoom: f32,
         space: color::OutputSpace,
+        intent: color::RenderingIntent,
         ctx: &egui::Context,
     ) {
         let max_dim =
             view_region::tier_max_dim(self.fit_cap(), self.buffer_long, self.fit_ratio(img), zoom);
-        let key = (max_dim, space as u64);
+        let key = (max_dim, space as u64, intent as u64);
         if self.requested != Some(key) {
             self.requested = Some(key);
             self.engine.request(
@@ -139,6 +140,9 @@ impl Pane {
                     max_dim,
                     region: None,
                     display_space: space,
+                    // ⚠ The canvas's intent: a pane is a picture to judge side by side with
+                    // Develop, so it must not render saturated colour differently from it.
+                    intent,
                     resampler: pipeline::Resampler::default(),
                     // ⚠ Never the GPU here, matching the proof reasoning below: Compare and
                     // Survey are for choosing between frames, and a pane renders once per rung

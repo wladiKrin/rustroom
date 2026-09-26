@@ -91,6 +91,8 @@ pub struct Proof {
     /// The space being proofed into. Never `ProPhoto`: the menu is built from
     /// [`color::OutputSpace::DISPLAYS`], and proofing into the working space would show nothing.
     pub space: color::OutputSpace,
+    /// How colour the proof space cannot hold is brought inside it — the canvas's intent.
+    pub intent: color::RenderingIntent,
     /// Whether out-of-gamut pixels are marked.
     ///
     /// ⚠ A separate toggle from the proof itself. Proofing *without* the warning is the common
@@ -111,6 +113,9 @@ pub struct FrameSpec {
     /// ⚠ Applied in `pack`, *after* the pipeline — never as a pipeline stage, or the histogram
     /// becomes display-referred. See the spec.
     pub display_space: color::OutputSpace,
+    /// The canvas's rendering intent (M6.4c). ⚠ Per request, for `resampler`'s reason below; a
+    /// tail-only property, so in no `PrefixStepKey`.
+    pub intent: color::RenderingIntent,
     /// ⚠⚠ Per **request**, not captured at `RenderEngine::new` the way `lens` is — and the
     /// difference is not stylistic. A lens profile cannot vary within one engine's life,
     /// because the engine is rebuilt per photo; the resampler is a global setting the user can
@@ -178,6 +183,7 @@ impl FrameSpec {
             max_dim,
             region: None,
             display_space: color::OutputSpace::Srgb,
+            intent: color::RenderingIntent::default(),
             resampler: pipeline::Resampler::default(),
             // ⚠ The CPU path is the reference, so a test fixture takes it unless it says
             // otherwise. A GPU-by-default fixture would make every unrelated test depend on an
@@ -751,7 +757,9 @@ fn proof_texture(out: &ImageBuf, proof: Proof) -> Vec<u8> {
         if proof.warn && color::is_out_of_gamut(working, proof.space) {
             return GAMUT_WARNING;
         }
-        let conv = proof.space.from_working(working);
+        let conv = proof
+            .space
+            .from_working(color::GamutMap::for_space(proof.space).map(proof.intent, working));
         [
             proof.space.encode(conv[0]),
             proof.space.encode(conv[1]),
@@ -1138,6 +1146,7 @@ fn render_cached_with(
         max_dim,
         region,
         display_space,
+        intent,
         resampler,
         gpu_tail,
         visualize,
@@ -1608,7 +1617,7 @@ fn render_cached_with(
         // space they are rendering into.
         let render_spec = pipeline::RenderSpec {
             space,
-            intent: color::RenderingIntent::default(),
+            intent,
             // ⚠ The tail resamples nothing — every resampling stage is in the prefix — so this
             // is carried for consistency rather than because it changes a pixel here.
             resampler,
@@ -1779,7 +1788,7 @@ fn render_cached_with(
                     Some(&coverage),
                     pipeline::RenderSpec {
                         space: color::OutputSpace::Srgb,
-                        intent: color::RenderingIntent::default(),
+                        intent,
                         resampler,
                         baseline: wb_baseline,
                         airlight: Some(airlight),
@@ -1992,6 +2001,8 @@ pub fn render_once(
     // happens to be lens-less" is a coincidence, not a guarantee, and this is a reference.
     let spec = pipeline::RenderSpec {
         space: color::OutputSpace::Srgb,
+        // ⚠ The default, not the canvas's: this is a reference, and its one production output
+        // (the decode baseline) is never drawn.
         intent: color::RenderingIntent::default(),
         resampler,
         baseline: color::wb::Illuminant::default(),
@@ -2133,6 +2144,7 @@ mod tests {
                     max_dim: 32,
                     region: None,
                     display_space: color::OutputSpace::Srgb,
+                    intent: color::RenderingIntent::default(),
                     resampler: k,
                     gpu_tail: false,
                     visualize: None,
@@ -3257,6 +3269,7 @@ mod tests {
         }
         let (_, ran) = rendered(FrameSpec {
             display_space: color::OutputSpace::DisplayP3,
+            intent: color::RenderingIntent::default(),
             ..byte_spec()
         });
         assert!(!ran.bytes);
@@ -3285,6 +3298,7 @@ mod tests {
         let (_, ran) = rendered(FrameSpec {
             soft_proof: Some(Proof {
                 space: color::OutputSpace::Srgb,
+                intent: color::RenderingIntent::default(),
                 warn: false,
             }),
             ..byte_spec()
@@ -4015,6 +4029,7 @@ mod tests {
                 max_dim: n,
                 region: Some(RegionRect { x, y, w, h }),
                 display_space: color::OutputSpace::Srgb,
+                intent: color::RenderingIntent::default(),
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: false,
                 visualize: None,
@@ -4137,6 +4152,7 @@ mod tests {
                     h: 999,
                 }),
                 display_space: color::OutputSpace::Srgb,
+                intent: color::RenderingIntent::default(),
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: false,
                 visualize: None,
@@ -5107,6 +5123,20 @@ mod tests {
         soft_proof: Option<Proof>,
         visualize: Option<f32>,
     ) -> RenderedFrame {
+        intended(
+            buf,
+            soft_proof,
+            visualize,
+            color::RenderingIntent::default(),
+        )
+    }
+
+    fn intended(
+        buf: &Arc<ImageBuf>,
+        soft_proof: Option<Proof>,
+        visualize: Option<f32>,
+        intent: color::RenderingIntent,
+    ) -> RenderedFrame {
         render_cached(
             buf,
             &Edits::default(),
@@ -5116,6 +5146,7 @@ mod tests {
                 max_dim: 3,
                 region: None,
                 display_space: color::OutputSpace::Srgb,
+                intent,
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: false,
                 visualize,
@@ -5143,7 +5174,53 @@ mod tests {
     }
 
     fn proof(space: color::OutputSpace, warn: bool) -> Option<Proof> {
-        Some(Proof { space, warn })
+        Some(Proof {
+            space,
+            intent: color::RenderingIntent::default(),
+            warn,
+        })
+    }
+
+    /// ⚠⚠ The canvas intent must reach the pixels, on the plain canvas AND through the proof — a
+    /// request field nobody reads compiles perfectly. Grey is asserted unmoved so a render that
+    /// changed everything cannot pass; the P3 green is asserted to move.
+    ///
+    /// ⚠ Not `WIDE_GREEN`: that is ProPhoto's own primary, on the working space's edge, and
+    /// perceptual maps that edge exactly onto the target's — where relative puts it too. Measured
+    /// identical under both intents, correctly. The discriminating colour is saturated but inside.
+    #[test]
+    fn the_canvas_intent_reaches_the_canvas_and_the_proof() {
+        let buf = gamut_fixture();
+        let (rel, per) = (
+            color::RenderingIntent::RelativeColorimetric,
+            color::RenderingIntent::Perceptual,
+        );
+        let p3 = |intent| {
+            Some(Proof {
+                space: color::OutputSpace::DisplayP3,
+                intent,
+                warn: false,
+            })
+        };
+        for (what, a, b) in [
+            (
+                "canvas",
+                intended(&buf, None, None, rel),
+                intended(&buf, None, None, per),
+            ),
+            (
+                "proof",
+                intended(&buf, p3(rel), None, rel),
+                intended(&buf, p3(per), None, per),
+            ),
+        ] {
+            assert_eq!(
+                px(&a, 0),
+                px(&b, 0),
+                "{what}: grey must not depend on the intent"
+            );
+            assert_ne!(px(&a, 1), px(&b, 1), "{what}: the P3 green must");
+        }
     }
 
     #[test]
@@ -5321,15 +5398,22 @@ mod tests {
             *srgb.rgba, *p3.rgba,
             "the two proof spaces produced the same texture"
         );
-        // ⚠ The direction, not merely a difference: P3's primaries are wider, so an in-gamut
-        // colour needs a *smaller* green coordinate there than in sRGB. An inverted conversion
-        // would also differ and would be wrong in exactly the way this feature exists to avoid.
-        assert!(
-            px(&p3, 1)[1] < px(&srgb, 1)[1],
-            "P3 green {:?} should sit below sRGB green {:?}",
-            px(&p3, 1),
-            px(&srgb, 1)
-        );
+        // ⚠ The exact value, not merely a difference: the P3 green is INSIDE P3, so relative
+        // colorimetric leaves it untouched and the texture must be its P3 encoding. An inverted
+        // conversion would also differ, and be wrong in exactly the way this feature exists to
+        // avoid. ⚠ This used to assert "P3's green below sRGB's", which held only because the old
+        // sRGB proof clipped green to 255; gamut-mapped at constant lightness it reads 245 (M6.4c).
+        let sp = color::OutputSpace::DisplayP3;
+        let want = sp
+            .from_working(P3_GREEN)
+            .map(|v| (sp.encode(v) * 255.0).round() as i32);
+        let got = px(&p3, 1);
+        for i in 0..3 {
+            assert!(
+                (got[i] as i32 - want[i]).abs() <= 1,
+                "P3 proof of the P3 green: got {got:?}, want {want:?}"
+            );
+        }
     }
 
     /// ⚠ Visualize Spots and the proof are both view modes applied at the same point in `pack`,
@@ -5360,6 +5444,7 @@ mod tests {
             max_dim: 64,
             region: None,
             display_space: color::OutputSpace::Srgb,
+            intent: color::RenderingIntent::default(),
             resampler: pipeline::Resampler::default(),
             gpu_tail: false,
             visualize: None,
@@ -5441,6 +5526,7 @@ mod tests {
                 max_dim: buf.width().max(buf.height()),
                 region,
                 display_space: color::OutputSpace::Srgb,
+                intent: color::RenderingIntent::default(),
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: false,
                 visualize: None,

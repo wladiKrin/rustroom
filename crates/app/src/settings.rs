@@ -379,6 +379,12 @@ pub struct Settings {
     /// ⚠ No field-level `#[serde(default)]`: the struct carries a container-level one, so a
     /// missing field already falls back to this struct's `Default`.
     pub display_space: color::OutputSpace,
+    /// How the canvas (and the soft proof) brings colour sRGB cannot hold inside it (M6.4c).
+    ///
+    /// ⚠ The canvas only: an export carries its own in `ExportOptions::intent`, and thumbnails
+    /// render with the default, because they are cached on disk and following a view toggle
+    /// would leave a library of mixed thumbnails.
+    pub canvas_intent: color::RenderingIntent,
     /// Which theme to render in. Dark by default: a light surround measurably changes how you
     /// judge exposure, so a photo editor defaults to dark and offers the rest.
     pub theme: ThemeChoice,
@@ -868,6 +874,7 @@ impl Default for Settings {
             resampler: Resampler::default(),
             camera_profiles: std::collections::BTreeMap::new(),
             display_space: color::OutputSpace::default(),
+            canvas_intent: color::RenderingIntent::default(),
             theme: ThemeChoice::default(),
             accent: Accent::default(),
             pan_drag: PanDrag::default(),
@@ -1544,6 +1551,7 @@ mod tests {
             // Non-default, so a field re-defaulted on load cannot pass this round trip.
             resampler: Resampler::Lanczos3,
             display_space: color::OutputSpace::DisplayP3,
+            canvas_intent: color::RenderingIntent::Perceptual,
             camera_profiles: std::collections::BTreeMap::new(),
             theme: ThemeChoice::System,
             accent: Accent::Teal,

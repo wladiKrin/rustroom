@@ -152,6 +152,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // decode cache and the decode worker while the draw closure is holding `app.library`.
     let plan = plan(app, &stored);
     let display_space = app.settings.effective_display_space(app.os_manages_colour);
+    let intent = app.settings.canvas_intent;
     if let Some(p) = &plan {
         app.compare_view
             .sync(&p.want, &mut app.cache, &mut app.decoder, ctx);
@@ -354,7 +355,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 if over {
                     pane.navigate(img_area, zoom_factor, pointer, scroll);
                 }
-                pane.update(img_area, pane.zoom, display_space, ui.ctx());
+                pane.update(img_area, pane.zoom, display_space, intent, ui.ctx());
                 (
                     pane.texture().cloned(),
                     pane.draw_scale(img_area, pane.zoom),

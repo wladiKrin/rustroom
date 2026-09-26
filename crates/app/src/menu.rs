@@ -52,6 +52,11 @@ pub enum Command {
     SoftProof(Option<color::OutputSpace>),
     /// Toggle the marking of pixels the proof space cannot hold.
     GamutWarning,
+    /// How the canvas brings colour sRGB cannot hold inside it (M6.4c).
+    ///
+    /// ⚠ Beside the proof on purpose: flipping the intent while looking at a saturated subject is
+    /// the comparison that decides it, and a Settings dialog would cover the canvas.
+    RenderingIntent(color::RenderingIntent),
 }
 
 /// A keyboard chord, in the model's own terms so neither renderer's types leak in here.
@@ -327,6 +332,14 @@ fn view_items() -> Vec<Item> {
     // ⚠ A separate entry from the proof itself, deliberately: proofing without the warning is the
     // common case, and a warning you cannot switch off is chrome.
     items.push(action("Gamut warning", Command::GamutWarning, None));
+    items.push(Item::Separator);
+    for intent in color::RenderingIntent::ALL {
+        items.push(action(
+            format!("Rendering intent: {}", intent.label()),
+            Command::RenderingIntent(intent),
+            None,
+        ));
+    }
 
     // ⚠ **No shortcuts on any of these.** A bare key is stolen from every text field and a
     // text-editing chord breaks editing inside one — `Shortcut::safe_as_native_accelerator`
@@ -442,6 +455,19 @@ mod tests {
         // user is stuck in until they change photo.
         assert!(cmds.contains(&Command::SoftProof(None)), "no way to stop");
         assert!(cmds.contains(&Command::GamutWarning));
+    }
+
+    /// ⚠ Stated over `RenderingIntent::ALL`, so an intent added there cannot ship unreachable.
+    #[test]
+    fn every_rendering_intent_is_reachable() {
+        let cmds = commands();
+        for i in color::RenderingIntent::ALL {
+            assert!(
+                cmds.contains(&Command::RenderingIntent(i)),
+                "{} has no menu entry",
+                i.label()
+            );
+        }
     }
 
     #[test]
