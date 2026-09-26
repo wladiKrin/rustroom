@@ -178,6 +178,15 @@ almost exactly (39.7 / 34.7 / 47.4 against 40.0 / 34.6 / 49.4), others did not. 
 GPU use explains **part** of the gap, not all of it. The synthetic load leaves out eframe's
 compositing, and that part is inferred, not measured.
 
+**The cheap window-side fix, measured in use (same day).** The preview texture is now updated in place
+(whole frame after whole frame only, since `backdrop` shares the handle) and built premultiplied
+(frames are opaque). Result: **UI-thread conversion 5.5 → 2.0 ms**, and **no change to the drag
+frame** (median 41.7 → 41.4 ms, tail submit 33.9 → 34.6). Zoom-and-pan checked by the author, no
+backdrop artefacts, 37 scoped renders in the log. ⚠ So the per-frame texture ALLOCATION was not what
+competed. What remains is the window's drawing on its own device, which only sharing one device
+(and writing the tail straight into the display texture) could remove. That is its own milestone,
+with an unmeasured payoff.
+
 **The result**: a Straighten drag on DSCF6263 at rung 3200, median of 40 frames, the same probe on
 all three builds:
 
