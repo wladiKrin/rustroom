@@ -66,7 +66,12 @@ fn main() {
                 max_dim: rung,
                 region: None,
                 display_space: color::OutputSpace::Srgb,
-                resampler: pipeline::Resampler::default(),
+                // ⚠ `PROBE_BILINEAR=1` isolates the gather's arithmetic: 2x2 taps against 4x4.
+                resampler: if std::env::var_os("PROBE_BILINEAR").is_some() {
+                    pipeline::Resampler::Bilinear
+                } else {
+                    pipeline::Resampler::default()
+                },
                 gpu_tail: true,
                 grade_view: None,
                 soft_proof: None,
@@ -85,11 +90,15 @@ fn main() {
         frame(a);
     }
     eprintln!("---- drag ----");
-    let mut total = 0.0;
-    let n = 12;
-    for i in 0..n {
-        let ms = frame(0.5 + 0.1 * i as f32);
-        total += ms;
-    }
-    eprintln!("mean wall per drag frame: {:.1} ms", total / n as f64);
+    // ⚠ Median of 40, not a mean of 12: single runs varied 30-41 ms on an idle machine, and a
+    // mean is dragged by the occasional frame a warm-behind render collided with.
+    let n = 40;
+    let mut all: Vec<f64> = (0..n).map(|i| frame(0.5 + 0.05 * i as f32)).collect();
+    all.sort_by(|a, b| a.total_cmp(b));
+    eprintln!(
+        "median wall per drag frame: {:.1} ms  (p10 {:.1}, p90 {:.1}, n {n})",
+        all[n / 2],
+        all[n / 10],
+        all[n * 9 / 10]
+    );
 }
