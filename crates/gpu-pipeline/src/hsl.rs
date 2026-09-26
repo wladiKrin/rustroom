@@ -14,58 +14,44 @@ const CHROMA_FADE: f32 = 0.02;
 
 /// ⚠ The Oklab conversions come from `oklab_wgsl::OKLAB_WGSL`, shared with the grading shader —
 /// including the `cbrt_signed` trap, which is documented there.
-const SHADER: &str = r#"
-struct Params {
-    pixels: u32,
-    row_groups: u32,
+const WGSL: &str = r#"
+struct Params_hsl {
     table_len: u32,
     max_shift_deg: f32,
     chroma_eps: f32,
     chroma_fade: f32,
-    pad0: f32,
-    pad1: f32,
 };
-@group(0) @binding(0) var<storage, read_write> data: array<f32>;
-@group(0) @binding(1) var<uniform> params: Params;
-@group(0) @binding(2) var<storage, read> table: array<f32>;
-
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel = id.y * (params.row_groups * 64u) + id.x;
-    if (pixel >= params.pixels) { return; }
-    let p = pixel * 3u;
-    let r = data[p]; let g = data[p + 1u]; let bl = data[p + 2u];
-
+fn apply_hsl(p: vec3<f32>, x: u32, y: u32, q: Params_hsl, base: u32) -> vec3<f32> {
     // ⚠ The shared prelude, so this shader and the grading one cannot disagree about the
     // matrices. See `oklab_wgsl::OKLAB_WGSL`.
-    let lab = prophoto_to_oklab(r, g, bl);
+    let lab = prophoto_to_oklab(p.x, p.y, p.z);
     let bigL = lab.x; let A = lab.y; let B = lab.z;
 
     let chroma = sqrt(A*A + B*B);
     // ⚠ The early-out is a BRANCH, matching the CPU's `return rgb`. Computing a near-zero
     // adjustment instead would give neutral pixels hue noise, which is what the chroma fade
     // exists to prevent.
-    if (chroma < params.chroma_eps) { return; }
+    if (chroma < q.chroma_eps) { return p; }
 
     var hue = degrees(atan2(B, A));
     if (hue < 0.0) { hue = hue + 360.0; }
 
-    let x = hue * (f32(params.table_len) / 360.0);
-    let i0 = u32(floor(x)) % params.table_len;
-    let i1 = (i0 + 1u) % params.table_len;
-    let t = x - floor(x);
-    var dh  = table[i0*3u]      + (table[i1*3u]      - table[i0*3u])      * t;
-    var sat = table[i0*3u + 1u] + (table[i1*3u + 1u] - table[i0*3u + 1u]) * t;
-    var lum = table[i0*3u + 2u] + (table[i1*3u + 2u] - table[i0*3u + 2u]) * t;
+    let hx = hue * (f32(q.table_len) / 360.0);
+    let i0 = u32(floor(hx)) % q.table_len;
+    let i1 = (i0 + 1u) % q.table_len;
+    let t = hx - floor(hx);
+    var dh  = tables[base + i0*3u]      + (tables[base + i1*3u]      - tables[base + i0*3u])      * t;
+    var sat = tables[base + i0*3u + 1u] + (tables[base + i1*3u + 1u] - tables[base + i0*3u + 1u]) * t;
+    var lum = tables[base + i0*3u + 2u] + (tables[base + i1*3u + 2u] - tables[base + i0*3u + 2u]) * t;
 
-    let ct = min(chroma / params.chroma_fade, 1.0);
+    let ct = min(chroma / q.chroma_fade, 1.0);
     let strength = ct * ct * (3.0 - 2.0 * ct);
     dh = dh * strength; sat = sat * strength; lum = lum * strength;
 
     // ⚠ The same identity the CPU uses: cos(hue) and sin(hue) are already in hand as A/chroma and
     // B/chroma, so the chroma cancels and the rotation costs two small-angle polynomials. A naive
     // atan2-then-cos round trip would be a DIFFERENT stage wearing the same name.
-    let d = radians(dh * params.max_shift_deg / 100.0);
+    let d = radians(dh * q.max_shift_deg / 100.0);
     let d2 = d * d;
     let sd = d * (1.0 - d2 * (1.0/6.0 - d2 * (1.0/120.0)));
     let cd = 1.0 - d2 * (0.5 - d2 * (1.0/24.0 - d2 * (1.0/720.0)));
@@ -75,9 +61,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let B2 = k * (A * sd + B * cd);
 
     let out = oklab_to_prophoto(L2, A2, B2);
-    data[p]      = max(out.x, 0.0);
-    data[p + 1u] = max(out.y, 0.0);
-    data[p + 2u] = max(out.z, 0.0);
+    return vec3<f32>(max(out.x, 0.0), max(out.y, 0.0), max(out.z, 0.0));
 }
 "#;
 
@@ -118,28 +102,29 @@ impl GpuStage for GpuHslStage {
         // of 0 already says so and the chain lends it an empty slice.
         _scratch: &[wgpu::Buffer],
     ) {
-        let pixels = img.pixels();
-        let (row_groups, _) = crate::dispatch::Dispatch::grid(pixels);
+        crate::per_pixel::encode_single(self, ctx, pass, img);
+    }
+
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<crate::per_pixel::Part<'_>> {
         let table_len = (self.table.len() / 3) as u32;
-
-        // ⚠ Two u32 fields then two f32s then two more f32s: laid out to match the WGSL struct
-        // exactly, with explicit padding to 32 bytes. A mismatch here reads garbage rather than
-        // failing, which is why the equivalence test is the guard.
-        let mut params = [0u8; 32];
-        params[0..4].copy_from_slice(&pixels.to_le_bytes());
-        params[4..8].copy_from_slice(&row_groups.to_le_bytes());
-        params[8..12].copy_from_slice(&table_len.to_le_bytes());
-        params[12..16].copy_from_slice(&MAX_HUE_SHIFT_DEG.to_le_bytes());
-        params[16..20].copy_from_slice(&CHROMA_EPS.to_le_bytes());
-        params[20..24].copy_from_slice(&CHROMA_FADE.to_le_bytes());
-
-        crate::dispatch::Dispatch {
-            label: "hsl",
-            shader: format!("{}{}", crate::oklab_wgsl::OKLAB_WGSL, SHADER),
+        // ⚠ One u32 then three f32s: laid out to match the WGSL struct exactly. A mismatch here
+        // reads garbage rather than failing, which is why the equivalence test is the guard.
+        let mut params = [0u8; 16];
+        params[0..4].copy_from_slice(&table_len.to_le_bytes());
+        params[4..8].copy_from_slice(&MAX_HUE_SHIFT_DEG.to_le_bytes());
+        params[8..12].copy_from_slice(&CHROMA_EPS.to_le_bytes());
+        params[12..16].copy_from_slice(&CHROMA_FADE.to_le_bytes());
+        Some(crate::per_pixel::Part {
+            name: "hsl",
+            wgsl: WGSL.to_string(),
             params: params.to_vec(),
-            storages: &[&self.table],
-        }
-        .encode(ctx, pass, img);
+            tables: vec![&self.table],
+            preludes: crate::per_pixel::Preludes {
+                oklab: true,
+                ..Default::default()
+            },
+            needs_position: false,
+        })
     }
 
     fn cpu(&self) -> &dyn PipelineStage {

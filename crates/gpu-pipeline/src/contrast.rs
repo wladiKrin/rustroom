@@ -13,35 +13,25 @@ use std::sync::Arc;
 /// ⚠ `ContrastStage` applies the same expression to every **sample**, so one thread handles all
 /// three channels of its pixel. That keeps the dispatch per-pixel, which is what `Dispatch`
 /// provides, rather than needing a second grid rule that could disagree with it.
-fn shader() -> String {
+fn wgsl() -> String {
     format!(
         r#"
-struct Params {{
-    pixels: u32,
-    row_groups: u32,
-    pad0: u32,
-    pad1: u32,
+struct Params_contrast {{
     slope: f32,
+    pad0: f32,
+    pad1: f32,
     pad2: f32,
-    pad3: f32,
-    pad4: f32,
 }};
-@group(0) @binding(0) var<storage, read_write> data: array<f32>;
-@group(0) @binding(1) var<uniform> params: Params;
-
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
-    let pixel = id.y * (params.row_groups * 64u) + id.x;
-    if (pixel >= params.pixels) {{ return; }}
-    let p = pixel * 3u;
+fn apply_contrast(p: vec3<f32>, x: u32, y: u32, q: Params_contrast, base: u32) -> vec3<f32> {{
     // ⚠ Floored at 0 exactly as the CPU stage does: a sample driven negative by an extreme slope
     // must darken to black, never flip the pixel's sign.
-    data[p] = max({p}f + (data[p] - {p}f) * params.slope, 0.0);
-    data[p + 1u] = max({p}f + (data[p + 1u] - {p}f) * params.slope, 0.0);
-    data[p + 2u] = max({p}f + (data[p + 2u] - {p}f) * params.slope, 0.0);
+    return vec3<f32>(
+        max({pivot}f + (p.x - {pivot}f) * q.slope, 0.0),
+        max({pivot}f + (p.y - {pivot}f) * q.slope, 0.0),
+        max({pivot}f + (p.z - {pivot}f) * q.slope, 0.0));
 }}
 "#,
-        p = pipeline::CONTRAST_PIVOT
+        pivot = pipeline::CONTRAST_PIVOT
     )
 }
 
@@ -86,21 +76,20 @@ impl GpuStage for GpuContrastStage {
         // ⚠ Per-pixel and in-place-safe, so the default `scratch_planes` of 0 covers it.
         _scratch: &[wgpu::Buffer],
     ) {
-        let pixels = img.pixels();
-        let (row_groups, _) = crate::dispatch::Dispatch::grid(pixels);
+        crate::per_pixel::encode_single(self, ctx, pass, img);
+    }
 
-        let mut params = [0u8; 32];
-        params[0..4].copy_from_slice(&pixels.to_le_bytes());
-        params[4..8].copy_from_slice(&row_groups.to_le_bytes());
-        params[16..20].copy_from_slice(&self.slope.to_le_bytes());
-
-        crate::dispatch::Dispatch {
-            label: "contrast",
-            shader: shader(),
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<crate::per_pixel::Part<'_>> {
+        let mut params = [0u8; 16];
+        params[0..4].copy_from_slice(&self.slope.to_le_bytes());
+        Some(crate::per_pixel::Part {
+            name: "contrast",
+            wgsl: wgsl(),
             params: params.to_vec(),
-            storages: &[],
-        }
-        .encode(ctx, pass, img);
+            tables: Vec::new(),
+            preludes: crate::per_pixel::Preludes::default(),
+            needs_position: false,
+        })
     }
 
     fn cpu(&self) -> &dyn PipelineStage {

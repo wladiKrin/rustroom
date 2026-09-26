@@ -1123,20 +1123,28 @@ mod tests {
         // same shader would hit rather than miss, so the delta is 0 either way, while an absolute
         // count would depend on who got there first.
         let Some(ctx) = ctx() else { return };
-        let chain = GpuChain::new(
-            ctx.clone(),
-            vec![Box::new(GpuExposureStage::new(1.0, ctx.clone()))],
-        );
+        // ⚠ The text the cache is keyed on is what the emitter produces for a run of one, at this
+        // image's size — a lone per-pixel twin has no shader of its own any more.
+        let stage = GpuExposureStage::new(1.0, ctx.clone());
+        let (row_groups, _) = crate::dispatch::Dispatch::grid(64 * 64);
+        let shader = crate::per_pixel::emit(
+            &[GpuStage::per_pixel(&stage, 64, 64).expect("exposure is per-pixel")],
+            64 * 64,
+            row_groups,
+            64,
+        )
+        .shader;
+        let chain = GpuChain::new(ctx.clone(), vec![Box::new(stage)]);
         let img = ramp(64, 64);
         let _ = chain.apply(img.clone());
-        let before = ctx.cache.misses_for(crate::exposure::SHADER);
+        let before = ctx.cache.misses_for(&shader);
         assert!(
             before > 0,
             "fixture check: the first run compiled nothing, so this test proves nothing"
         );
         let _ = chain.apply(img);
         assert_eq!(
-            ctx.cache.misses_for(crate::exposure::SHADER),
+            ctx.cache.misses_for(&shader),
             before,
             "the second run of an identical chain recompiled its shader"
         );
