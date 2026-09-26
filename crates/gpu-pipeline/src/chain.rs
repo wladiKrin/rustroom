@@ -42,6 +42,16 @@ pub trait GpuStage: Send + Sync {
         (w, h)
     }
 
+    /// This stage as one per-pixel function for a `w` x `h` image, or `None`.
+    ///
+    /// ⚠⚠ **`None` is the default, so a stage that reads neighbours declines BY CONSTRUCTION** —
+    /// sharpening, local contrast, NR, dehaze, lens, geometry and a mask inherit it and keep their
+    /// own `encode`. The twelve per-pixel twins return a [`crate::per_pixel::Part`], and the
+    /// chain folds a run of them into one dispatch; see that module.
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<crate::per_pixel::Part<'_>> {
+        None
+    }
+
     /// Record this stage's dispatch. The image is bound at group 0, binding 0.
     ///
     /// ⚠ `scratch` holds exactly [`GpuStage::scratch_planes`] buffers — a slice rather than a
