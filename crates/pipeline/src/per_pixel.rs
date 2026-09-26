@@ -276,11 +276,7 @@ mod tests {
     #[test]
     fn degenerate_inputs_do_not_panic() {
         let stages: Vec<Box<dyn PipelineStage>> = vec![Box::new(Plus(1.0))];
-        let out = run_stages_with(
-            stages.iter().map(|b| b.as_ref()),
-            ImageBuf::new(0, 4),
-            true,
-        );
+        let out = run_stages_with(stages.iter().map(|b| b.as_ref()), ImageBuf::new(0, 4), true);
         assert_eq!(out.width(), 0);
         let none: Vec<Box<dyn PipelineStage>> = Vec::new();
         let out = run_stages_with(none.iter().map(|b| b.as_ref()), ramp(3, 3), true);

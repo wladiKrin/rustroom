@@ -105,7 +105,7 @@ pub use local_contrast::GpuLocalContrastStage;
 pub use mask::GpuMaskStage;
 pub use noise_reduction::GpuNoiseReductionStage;
 pub use output_transform::GpuOutputTransformStage;
-pub use per_pixel::{fusion_enabled, Part, Preludes};
+pub use per_pixel::{fused_dispatches, fusion_enabled, Part, Preludes};
 pub use saturation::GpuSaturationStage;
 pub use shared_plane::SharedPlane;
 pub use sharpen::GpuSharpenStage;

@@ -66,6 +66,11 @@ pub(crate) fn emit(parts: &[Part<'_>], pixels: u32, row_groups: u32, w: u32) -> 
     let mut members = String::new();
     let mut bodies = String::new();
     let mut calls = String::new();
+    // ⚠ A stage's struct and function are declared ONCE per run, however often the stage occurs:
+    // a production tail never repeats a name, but a chain of eight exposures is a legitimate test
+    // fixture, and naga rejects a duplicate declaration. Each occurrence still gets its own
+    // parameters and tables.
+    let mut declared: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
     for (k, part) in parts.iter().enumerate() {
         assert!(
             !part.params.is_empty() && part.params.len() % 16 == 0,
@@ -83,8 +88,10 @@ pub(crate) fn emit(parts: &[Part<'_>], pixels: u32, row_groups: u32, w: u32) -> 
         }
         params.extend_from_slice(&part.params);
         members.push_str(&format!("    s{k}: Params_{},\n", part.name));
-        bodies.push_str(&part.wgsl);
-        bodies.push('\n');
+        if declared.insert(part.name) {
+            bodies.push_str(&part.wgsl);
+            bodies.push('\n');
+        }
         calls.push_str(&format!(
             "    p = apply_{}(p, x, y, P.s{k}, {base}u);\n",
             part.name
@@ -148,6 +155,21 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     }
 }
 
+thread_local! {
+    // Fused dispatches encoded on this thread. ⚠ Thread-local for the reason every counter in
+    // this crate is: libtest runs tests in parallel. A counter, not a flag, because a flag cannot
+    // see its own absence.
+    static FUSED_DISPATCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Fused dispatches encoded on this thread so far.
+///
+/// ⚠ The observable for a run INSIDE a mask, which `GpuChain::encode_units` cannot see: the mask
+/// is one single unit to the chain, and its sub-stages fuse within its own `encode`.
+pub fn fused_dispatches() -> usize {
+    FUSED_DISPATCHES.with(|c| c.get())
+}
+
 /// Encode one fused dispatch over `parts`.
 pub(crate) fn encode_parts(
     parts: &[Part<'_>],
@@ -155,6 +177,7 @@ pub(crate) fn encode_parts(
     pass: &mut wgpu::ComputePass,
     img: &GpuImage,
 ) {
+    FUSED_DISPATCHES.with(|c| c.set(c.get() + 1));
     let pixels = img.pixels();
     let (row_groups, _) = Dispatch::grid(pixels);
     let e = emit(parts, pixels, row_groups, img.width() as u32);
@@ -199,11 +222,7 @@ impl Unit<'_> {
     /// The names, joined — what a timed run labels its pass with.
     pub(crate) fn label(&self) -> String {
         match self {
-            Unit::Fused(parts) => parts
-                .iter()
-                .map(|p| p.name)
-                .collect::<Vec<_>>()
-                .join("+"),
+            Unit::Fused(parts) => parts.iter().map(|p| p.name).collect::<Vec<_>>().join("+"),
             Unit::Single(s) => s.name().to_owned(),
         }
     }
@@ -289,7 +308,10 @@ mod tests {
     fn emit_lays_out_params_tables_and_calls_in_order() {
         let ta = [1.0f32, 2.0, 3.0];
         let tb = [7.0f32];
-        let parts = [part("aa", vec![1u8; 16], &ta), part("bb", vec![2u8; 32], &tb)];
+        let parts = [
+            part("aa", vec![1u8; 16], &ta),
+            part("bb", vec![2u8; 32], &tb),
+        ];
         let e = emit(&parts, 100, 2, 10);
         assert_eq!(e.params.len(), 16 + 16 + 32);
         assert_eq!(&e.params[0..4], &100u32.to_le_bytes());
@@ -324,6 +346,20 @@ mod tests {
         let e = emit(std::slice::from_ref(&p), 1, 1, 1);
         assert!(e.shader.contains("let x = pixel % P.hdr.w;"));
         assert_eq!(e.tables, vec![0.0]);
+    }
+
+    /// The same stage twice in one run declares its struct and function once and is called
+    /// twice, each call with its own parameters.
+    #[test]
+    fn emit_declares_a_repeated_stage_once_and_calls_it_twice() {
+        let t: [f32; 0] = [];
+        let parts = [part("ee", vec![1u8; 16], &t), part("ee", vec![2u8; 16], &t)];
+        let e = emit(&parts, 1, 1, 1);
+        assert_eq!(e.shader.matches("struct Params_ee").count(), 1);
+        assert_eq!(e.shader.matches("fn apply_ee(").count(), 1);
+        assert!(e.shader.contains("p = apply_ee(p, x, y, P.s0, 0u);"));
+        assert!(e.shader.contains("p = apply_ee(p, x, y, P.s1, 0u);"));
+        assert_eq!(e.params.len(), 16 + 32);
     }
 
     /// A part whose params are not a multiple of 16 is a bug in that part, caught here.

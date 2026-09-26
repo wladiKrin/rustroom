@@ -5297,7 +5297,11 @@ mod per_pixel_tests {
             "fixture check: the two orders must differ, worst {worst}"
         );
         let fused = per_pixel::run_stages_with(ab.iter().map(|b| b.as_ref()), img, true);
-        assert_eq!(fused.data(), seq_ab.data(), "the fused walk is the list order");
+        assert_eq!(
+            fused.data(),
+            seq_ab.data(),
+            "the fused walk is the list order"
+        );
     }
 
     /// `Pipeline::run` takes one walk for a run of three per-pixel stages.
@@ -5315,5 +5319,51 @@ mod per_pixel_tests {
         let before = per_pixel::fused_walks();
         let _ = p.run(ImageBuf::new(8, 8));
         assert_eq!(per_pixel::fused_walks() - before, 1);
+    }
+}
+
+#[cfg(test)]
+mod per_pixel_mask_tests {
+    use super::*;
+
+    /// The free part of fusion inside a mask: three per-pixel sub-stages are one walk over the
+    /// copy.
+    #[test]
+    fn a_masks_per_pixel_sub_stages_are_one_fused_walk() {
+        if !per_pixel::fusion_enabled() {
+            eprintln!("SKIPPED: RUSTROOM_NO_FUSION is set");
+            return;
+        }
+        let masked = edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Linear(edit_model::LinearGradient::default()),
+            refine: Vec::new(),
+            adjustments: edit_model::LocalAdjustments {
+                exposure: 0.6,
+                contrast: 20.0,
+                saturation: 25.0,
+                ..Default::default()
+            },
+            disabled: false,
+        };
+        let stage = MaskStage::new(&masked, RenderScale::FULL, &edit_model::Geometry::default());
+        let mut img = core_image::ImageBuf::new(32, 24);
+        for y in 0..24 {
+            for x in 0..32 {
+                let t = (x * 5 + y * 3) as f32 / 61.0;
+                img.set_pixel(x, y, [t, 0.5 * t + 0.1, 1.0 - t]);
+            }
+        }
+        let before = per_pixel::fused_walks();
+        let out = stage.apply(img.clone());
+        assert_ne!(
+            out.data(),
+            img.data(),
+            "fixture check: the mask moves pixels"
+        );
+        assert_eq!(
+            per_pixel::fused_walks() - before,
+            1,
+            "three per-pixel sub-stages are one walk over the copy"
+        );
     }
 }
