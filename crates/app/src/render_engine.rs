@@ -222,6 +222,8 @@ pub struct RenderEngine {
     ///
     /// ⚠ Unconditional rather than `#[cfg(test)]`, for `requests_issued`'s reason.
     warmed: Arc<std::sync::atomic::AtomicUsize>,
+    /// How many settles downloaded the resident final instead of rendering. See `warmed`.
+    settle_downloads: Arc<std::sync::atomic::AtomicUsize>,
     /// Where this engine's worker looks for `.cube` files, kept so the **full-resolution
     /// handover** can carry it onto the replacement engine.
     ///
@@ -262,8 +264,11 @@ impl RenderEngine {
         let (res_tx, res_rx) = channel::<RenderedFrame>();
         let warmed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let warmed_worker = Arc::clone(&warmed);
+        let settle_downloads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let settles_worker = Arc::clone(&settle_downloads);
         let handle = thread::spawn(move || {
             let warmed = warmed_worker;
+            let settle_downloads = settles_worker;
             let mut cache = PrefixCache::default();
             // ⚠⚠ **Resolved HERE rather than on the UI thread**, and cached by name: a 64³ cube
             // is 786 KB and this loop runs on every slider frame. One slot is enough — a photo
@@ -358,7 +363,7 @@ impl RenderEngine {
                 );
                 if debug_render {
                     eprintln!(
-                        "render: {:6.1} ms  rung {:5}  frame {}x{} ({:.1} Mpx)  region {}  masks {}  prefix_ran {}  scoped {}  bytes {}  handoff {}",
+                        "render: {:6.1} ms  rung {:5}  frame {}x{} ({:.1} Mpx)  region {}  masks {}  prefix_ran {}  scoped {}  bytes {}  handoff {}  tail_up {}  hit {}",
                         t0.elapsed().as_secs_f64() * 1000.0,
                         req.spec.max_dim,
                         frame.width,
@@ -373,6 +378,8 @@ impl RenderEngine {
                         if ran.region_scoped { "yes" } else { "no " },
                         if ran.bytes { "yes" } else { "no " },
                         if ran.handoff { "yes" } else { "no " },
+                        ran.tail_uploads,
+                        if ran.resident_final_hit { "yes" } else { "no " },
                     );
                 }
                 if res_tx.send(frame).is_err() {
@@ -399,36 +406,54 @@ impl RenderEngine {
                 // a whole-image one nobody asked for — the point is the cache it leaves behind,
                 // and the swap is invisible only because plan 1 made the two paths agree.
                 // ⚠⚠ A HANDOFF frame leaves no final checkpoint either (2026-09-26), so it settles
-                // exactly as a scoped frame does: without this, releasing a Straighten drag and
-                // then moving Exposure would re-run the geometry for the first tail edit.
+                // too: without this, releasing a Straighten drag and then moving Exposure would
+                // re-run the geometry for the first tail edit. ⚠⚠ **But its settle is a DOWNLOAD,
+                // not a render** — its final is already on the GPU as the resident final, and
+                // reading it back (~10 ms) replaces a re-run of the last step and a whole tail
+                // nobody saw (92-108 ms measured). A scoped drag has no whole-frame resident and
+                // renders whole-buffer as it always did.
                 if ran.region_scoped || ran.handoff {
                     match req_rx.recv_timeout(WARM_BEHIND) {
                         Ok(newer) => pending = Some(newer),
                         Err(RecvTimeoutError::Disconnected) => return,
                         Err(RecvTimeoutError::Timeout) => {
                             let t1 = std::time::Instant::now();
-                            let (_, warm) = render_cached(
-                                &buffer,
-                                &edits,
-                                FrameSpec {
-                                    region: None,
-                                    ..req.spec
-                                },
-                                source_scale,
-                                lens.clone(),
-                                wb_baseline,
-                                rendering,
-                                &mut cache,
-                                &mut brush_cache,
-                            );
-                            warmed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            if debug_render {
-                                eprintln!(
-                                    "  warm behind: {:6.1} ms  rung {:5}  prefix_ran {}",
-                                    t1.elapsed().as_secs_f64() * 1000.0,
-                                    req.spec.max_dim,
-                                    warm.prefix_stages,
+                            let settled = ran.handoff
+                                && gpu_pipeline::shared()
+                                    .is_some_and(|ctx| cache.settle_from_resident(ctx));
+                            if settled {
+                                settle_downloads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                if debug_render {
+                                    eprintln!(
+                                        "  settle: {:6.1} ms  rung {:5}  downloaded the resident final",
+                                        t1.elapsed().as_secs_f64() * 1000.0,
+                                        req.spec.max_dim,
+                                    );
+                                }
+                            } else {
+                                let (_, warm) = render_cached(
+                                    &buffer,
+                                    &edits,
+                                    FrameSpec {
+                                        region: None,
+                                        ..req.spec
+                                    },
+                                    source_scale,
+                                    lens.clone(),
+                                    wb_baseline,
+                                    rendering,
+                                    &mut cache,
+                                    &mut brush_cache,
                                 );
+                                warmed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                if debug_render {
+                                    eprintln!(
+                                        "  warm behind: {:6.1} ms  rung {:5}  prefix_ran {}",
+                                        t1.elapsed().as_secs_f64() * 1000.0,
+                                        req.spec.max_dim,
+                                        warm.prefix_stages,
+                                    );
+                                }
                             }
                         }
                     }
@@ -441,6 +466,7 @@ impl RenderEngine {
             _handle: handle,
             requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             warmed,
+            settle_downloads,
             looks_dir: kept_looks_dir,
         }
     }
@@ -473,6 +499,12 @@ impl RenderEngine {
     /// How many warm-behind renders the worker has run. See the field's doc for why it exists.
     pub fn warm_renders(&self) -> usize {
         self.warmed.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// How many settles downloaded the resident final rather than rendering. See `warmed`.
+    pub fn settle_downloads(&self) -> usize {
+        self.settle_downloads
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Return the newest finished frame, if any (drops older ones).
@@ -558,6 +590,12 @@ pub fn scale_from_full(full_long: usize, buffer_long: usize, max_dim: usize) -> 
 pub enum Packed {
     Float(ImageBuf),
     Rgba8 { bytes: Vec<u8>, w: usize, h: usize },
+}
+
+/// An owned copy of a shared checkpoint: the buffer itself when nothing else holds it, a clone
+/// otherwise. The tail's input travels as an `Arc` so the one-chain paths never clone it.
+fn unshare(a: Arc<ImageBuf>) -> ImageBuf {
+    Arc::try_unwrap(a).unwrap_or_else(|a| (*a).clone())
 }
 
 /// The float image, on the paths that need it.
@@ -989,6 +1027,11 @@ pub struct Ran {
     /// Whether the last prefix step handed its output to the tail on the GPU, with no download
     /// and therefore no final checkpoint. See [`render_cached_with`].
     pub handoff: bool,
+    /// How many uploads the TAIL's chain paid. ⚠ The resident final's observable (2026-09-26): a
+    /// tail-slider frame after the first must read 0.
+    pub tail_uploads: usize,
+    /// Whether the tail ran from the resident final rather than from a CPU image.
+    pub resident_final_hit: bool,
 }
 
 /// How long a quiet request channel means the gesture has settled, after a region-scoped render.
@@ -1038,9 +1081,10 @@ const SCOPE_MAX_AREA_PCT: u64 = 50;
 
 #[cfg(test)]
 thread_local! {
-    /// Test-only: discard the handed-off plane before the tail can take it — the run-time failure
-    /// the fallback exists for. Every tail stage has a GPU twin, so no real edit set produces it.
-    static LOSE_THE_PLANE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Test-only: refuse the tail its resident final for one whole render, so a handoff frame
+    /// takes the download fallback. Every tail stage has a GPU twin, so no real edit set produces
+    /// the refusal.
+    static REFUSE_THE_RESIDENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// [`render_cached_with`] with the handoff OFF — every checkpoint cached, as it always was. The
@@ -1150,10 +1194,9 @@ fn render_cached_with(
     // Resume from the deepest checkpoint still held. `n == 0` is the bare downscale.
     let mut gpu_prefix_steps = 0usize;
     let mut gpu_prefix_uploads = 0usize;
-    // ⚠⚠ **When a handoff may even be attempted.** A whole-frame render (no region), sRGB display,
-    // and none of the views that need float pixels (proof, visualize, grade range) — every one of
-    // those needs the CPU image the handoff never makes. Whether the TAIL can take the plane is
-    // decided after the loop, where the tail is built; a tail that cannot falls back.
+    // ⚠⚠ **When the last step may run WITHOUT a download.** A whole-frame render, sRGB display,
+    // and none of the views that need float pixels (proof, visualize, grade range). Its output
+    // then lives only as the resident final; the tail runs from it, and the settle downloads it.
     let handoff_ok = handoff
         && gpu_tail
         && region.is_none()
@@ -1161,12 +1204,8 @@ fn render_cached_with(
         && visualize.is_none()
         && soft_proof.is_none()
         && display_space == color::OutputSpace::Srgb;
-    // The output size of a prefix whose last step handed off, and the checkpoint before that step.
+    // The output size of a prefix whose last step handed off — there is no CPU image to ask.
     let mut handed: Option<(usize, usize)> = None;
-    // ⚠⚠ Whether the prefix left a resident plane for the tail's first chain to take. See the
-    // loop below: it goes **false** the moment a CPU step runs, because the parked plane is then
-    // no longer the tail's input.
-    let mut prefix_offered = false;
     // ⚠ Resolved ONCE, and only when the setting is on. `shared()` acquires an adapter on first
     // call — ~42 s in a debug build — and the `None` arm of the loop below would otherwise ask for
     // it on every CPU step of every render, including renders with the GPU switched off.
@@ -1281,7 +1320,7 @@ fn render_cached_with(
         // ⚠ `gpu_prefix_steps` stays 0 here. Nothing is lost that the seam could have supplied:
         // `accelerate_prefix_stage`'s twins run whole-buffer, so a scoped chain is the CPU's.
         (
-            Some(out),
+            Some(Arc::new(out)),
             Some(RegionRect {
                 x: last.x,
                 y: last.y,
@@ -1345,42 +1384,72 @@ fn render_cached_with(
             } else {
                 None
             };
+            let is_last = i + 1 == steps.len();
             if let Some(g) = accelerated.as_mut() {
                 g.allow_shared_input(gpu_pipeline::Slot::Prefix);
-                g.offer_output(gpu_pipeline::Slot::Prefix);
+                // ⚠ The last step keeps its output for the tail instead of offering it to a next
+                // step there is not: one buffer, one owner.
+                if !is_last {
+                    g.offer_output(gpu_pipeline::Slot::Prefix);
+                }
             }
-            // ⚠⚠ **THE HANDOFF: the last step's output stays on the GPU.** `img` is left as the
-            // checkpoint BEFORE this step, which is what the fallback after the loop renders from
-            // if the tail turns out unable to take the plane. The loop ends here either way.
-            if handoff_ok && i + 1 == steps.len() {
-                if let Some(g) = accelerated.as_ref() {
-                    let dims = if i == start {
-                        gpu_pipeline::shared()
-                            .and_then(|ctx| cache.resident(&key_at(i), &img, ctx))
-                            .and_then(|(r, uploaded)| {
-                                gpu_prefix_uploads += usize::from(uploaded);
-                                g.run_to_plane_from(r)
-                            })
+            // ⚠⚠ **THE LAST STEP KEEPS ITS OUTPUT ON THE GPU — the resident final (2026-09-26).**
+            // With a download it is also the CPU checkpoint, as always; without one (`handoff_ok`)
+            // it is the tail's only input, and `img` is left as the checkpoint before this step.
+            // Any `None` falls through to the ordinary path below.
+            let kept_last = match (is_last, accelerated.as_ref()) {
+                (true, Some(g)) => {
+                    let ctx = gpu_pipeline::shared();
+                    let from_resident = if i == start {
+                        ctx.and_then(|ctx| cache.resident(&key_at(i), &img, ctx))
                     } else {
-                        g.run_to_plane(&img)
+                        None
+                    };
+                    let run = match from_resident {
+                        Some((r, uploaded)) => {
+                            gpu_prefix_uploads += usize::from(uploaded);
+                            g.run_keeping_output(gpu_pipeline::Input::Resident(r), !handoff_ok)
+                        }
+                        None => g.run_keeping_output(gpu_pipeline::Input::Cpu(&img), !handoff_ok),
                     };
                     gpu_prefix_uploads += g.transfer_counts().0;
-                    if let Some(d) = dims {
-                        gpu_prefix_steps += 1;
-                        prefix_offered = true;
-                        handed = Some(d);
+                    run
+                }
+                _ => None,
+            };
+            if let Some((out, kept)) = kept_last {
+                gpu_prefix_steps += 1;
+                let dims = (kept.width(), kept.height());
+                cache.keep_resident_final((key_at(i + 1), None), kept);
+                match out {
+                    Some(out) => {
+                        img = Arc::new(out);
+                        if debug_steps {
+                            eprintln!(
+                                "    [{i}] {:>16} {:8.1} ms   -> {}x{} ({:.1} Mpx) KEPT",
+                                step.stage.name(),
+                                t_step.elapsed().as_secs_f64() * 1000.0,
+                                img.width(),
+                                img.height(),
+                                (img.width() * img.height()) as f64 / 1e6,
+                            );
+                        }
+                        cache.insert(key_at(i + 1), img.clone(), tier_at(i + 1));
+                    }
+                    None => {
+                        handed = Some(dims);
                         if debug_steps {
                             eprintln!(
                                 "    [{i}] {:>16} {:8.1} ms   -> {}x{} HANDED OFF (no download)",
                                 step.stage.name(),
                                 t_step.elapsed().as_secs_f64() * 1000.0,
-                                d.0,
-                                d.1,
+                                dims.0,
+                                dims.1,
                             );
                         }
-                        break;
                     }
                 }
+                break;
             }
             img = Arc::new(match accelerated {
                 Some(g) => {
@@ -1395,7 +1464,6 @@ fn render_cached_with(
                     // ⚠ `Slot::Prefix`, never `Slot::Mask` — see `GpuContext::prefix_plane` for
                     // the guard that separation preserves.
                     gpu_prefix_steps += 1;
-                    prefix_offered = true;
                     // ⚠⚠ **The resident input, for the FIRST step this render runs** — the one a
                     // drag resumes at on every frame. Later steps take the previous step's plane
                     // instead. Any `None` falls back to the ordinary upload.
@@ -1424,12 +1492,9 @@ fn render_cached_with(
                     // happily hand it over. Nothing downstream can tell — it is a picture, not an
                     // error, which is the failure mode this project has recorded more than any
                     // other.
-                    //
-                    // ⚠ `prefix_offered` goes false with it, so the tail does not try either.
                     if let Some(ctx) = &prefix_ctx {
                         ctx.prefix_plane().clear();
                     }
-                    prefix_offered = false;
                     step.stage.apply((*img).clone())
                 }
             });
@@ -1463,11 +1528,15 @@ fn render_cached_with(
         let (pw, ph) = handed.unwrap_or((img.width(), img.height()));
         let rect = region.and_then(|r| r.clamped(pw, ph));
         let t_clone = std::time::Instant::now();
-        // ⚠ No CPU input after a handoff: the tail's input is the deposited plane.
+        // ⚠ No CPU input after a handoff: the tail's input is the resident final.
+        // ⚠⚠ **Shared, not cloned (2026-09-26).** The whole-frame input IS the cached final, and
+        // cloning it cost 2.5 ms at rung 3200 on every tail-slider frame — paid before the tail
+        // could know it would run from the resident and never touch the CPU image. The Arc is
+        // handed down; `unshare` clones only on the paths that must own a buffer.
         let input = match (handed, rect) {
             (Some(_), _) => None,
-            (None, Some(r)) => Some(img.crop(r.x, r.y, r.w, r.h)),
-            (None, None) => Some((*img).clone()),
+            (None, Some(r)) => Some(Arc::new(img.crop(r.x, r.y, r.w, r.h))),
+            (None, None) => Some(Arc::clone(&img)),
         };
         if debug_steps {
             eprintln!(
@@ -1582,8 +1651,6 @@ fn render_cached_with(
                         region,
                         profile,
                         spec: render_spec,
-                        // ⚠ Only the loop above knows this, and only for the step that ran last.
-                        prefix_offered,
                     },
                     ctx,
                 ),
@@ -1610,50 +1677,75 @@ fn render_cached_with(
     // achromatic edge view, so proofing it would mark nothing and show nothing; suppressing it
     // here also means the extra run is never paid for a frame that could not use it. The two are
     // both view modes applied at this point and the diagnostic one wins.
-    // ⚠⚠ **Consume a handoff: the tail runs from the deposited plane, or the step runs on the CPU.**
-    // Only the plain byte path can take it — `handoff_ok` already excluded every view needing
-    // float pixels — and only when the WHOLE tail is one GPU chain (no CPU stage before it, or its
-    // input would not be the plane). Anything else materialises the step's output on the CPU from
-    // the checkpoint before it, caches it, and renders the ordinary way: slower, never wrong.
-    let mut from_plane: Option<Packed> = None;
-    let input: ImageBuf = match input {
+    // ⚠⚠ **The tail's input, and where it lives (2026-09-26).** `tail_key` names it: the final
+    // checkpoint, at this rect. `PrefixCache::resident_final` holds it on the GPU under exactly
+    // that key when a previous frame ran from it, or the last prefix step just kept it. A tail
+    // that is one GPU chain runs FROM it; a tail that cannot (a CPU stage first, a GPU failure)
+    // gets a CPU image — and on a handoff frame that means downloading the resident, which is
+    // the settle's own path and caches the final as a side effect. Nothing else in this function
+    // needs to know which happened.
+    let tail_key = (key_at(steps.len()), rect);
+    let mut tail_uploads = 0usize;
+    let mut resident_final_hit = false;
+    let refused = {
+        #[cfg(test)]
+        {
+            REFUSE_THE_RESIDENT.with(|l| l.get())
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
+    };
+    let mut from_resident: Option<Packed> = None;
+    let input: Arc<ImageBuf> = match input {
         Some(i) => i,
         None => {
-            let t_plane = std::time::Instant::now();
-            let (pipe, chain) = build_tail(color::OutputSpace::Srgb);
-            #[cfg(test)]
-            if LOSE_THE_PLANE.with(|l| l.get()) {
-                if let Some(ctx) = &prefix_ctx {
-                    ctx.prefix_plane().clear();
-                }
-            }
-            let bytes = chain
-                .filter(|_| pipe.stage_names().is_empty())
-                .and_then(|c| c.run_rgba8_from_plane(pw, ph));
-            match bytes {
-                Some(b) => {
-                    if debug_steps {
-                        eprintln!(
-                            "  TIMING tail from plane {:6.1} ms",
-                            t_plane.elapsed().as_secs_f64() * 1000.0
-                        );
-                    }
-                    from_plane = Some(Packed::Rgba8 {
-                        bytes: b,
+            // ⚠ A handoff frame: no CPU image exists. The resident final must serve the tail
+            // directly; if it cannot, it is downloaded and cached as the final.
+            let t_res = std::time::Instant::now();
+            let ctx = gpu_pipeline::shared();
+            let from_gpu = if refused {
+                None
+            } else {
+                ctx.and_then(|_| {
+                    let (pipe, chain) = build_tail(color::OutputSpace::Srgb);
+                    let chain = chain.filter(|_| pipe.stage_names().is_empty())?;
+                    let r = cache.resident_final(&tail_key)?;
+                    let bytes = chain.run_rgba8_from(r)?;
+                    tail_uploads += chain.transfer_counts().0;
+                    Some(Packed::Rgba8 {
+                        bytes,
                         w: pw,
                         h: ph,
-                    });
-                    ImageBuf::new(0, 0)
-                }
-                None => {
-                    if let Some(ctx) = &prefix_ctx {
-                        ctx.prefix_plane().clear();
+                    })
+                })
+            };
+            match from_gpu {
+                Some(p) => {
+                    resident_final_hit = true;
+                    if debug_steps {
+                        eprintln!(
+                            "  TIMING tail from resident {:6.1} ms",
+                            t_res.elapsed().as_secs_f64() * 1000.0
+                        );
                     }
-                    let last = steps.last().expect("a handoff implies a prefix step");
-                    let out = Arc::new(last.stage.apply((*img).clone()));
-                    cache.insert(key_at(steps.len()), out.clone(), Tier::Final);
-                    (*out).clone()
+                    from_resident = Some(p);
+                    Arc::new(ImageBuf::new(0, 0))
                 }
+                None => match ctx {
+                    Some(ctx) if cache.settle_from_resident(ctx) => cache
+                        .get(&key_at(steps.len()))
+                        .expect("settle_from_resident inserted the final"),
+                    // ⚠ The last resort — the GPU refused even a download. The step re-runs on
+                    // the CPU from the checkpoint before it, which `img` still is.
+                    _ => {
+                        let last = steps.last().expect("a handoff implies a prefix step");
+                        let out = Arc::new(last.stage.apply((*img).clone()));
+                        cache.insert(key_at(steps.len()), out.clone(), Tier::Final);
+                        out
+                    }
+                },
             }
         }
     };
@@ -1664,7 +1756,7 @@ fn render_cached_with(
         // ⚠ Rejoined at once: the proof is one of the three things that needs the float, so its
         // tail is never a candidate for the byte path.
         let (pipe, chain) = build_tail(color::OutputSpace::ProPhoto);
-        (gpu_pipeline::rejoin(pipe, chain).run(input.clone()), p)
+        (gpu_pipeline::rejoin(pipe, chain).run((*input).clone()), p)
     });
     // ⚠ The **pipeline** is always sRGB here, whatever the proof does. The display transform is a
     // post-step in `pack`, deliberately outside the pipeline so the histogram stays image-referred.
@@ -1675,8 +1767,7 @@ fn render_cached_with(
     // existed before this — one tail, one run, no clone. `Some` runs the same stages in the same
     // order with one read between two halves, so the frame's pixels are identical too
     // (`the_grade_view_does_not_touch_the_photograph`).
-    let handoff_taken = from_plane.is_some();
-    let (out, plane) = match (from_plane, grade_view) {
+    let (out, plane) = match (from_resident, grade_view) {
         (Some(p), _) => (p, None),
         (None, grade_view) => match grade_view {
             Some(range) => {
@@ -1694,7 +1785,7 @@ fn render_cached_with(
                     None,
                     profile,
                 );
-                let mid = halves.before_grade.run(input);
+                let mid = halves.before_grade.run(unshare(input));
                 // ⚠ Blending and Balance are read from the edits whether or not the grade is
                 // active: the ranges exist before a wheel is turned.
                 let g = &edits.color_grading;
@@ -1709,13 +1800,11 @@ fn render_cached_with(
                 let (pipe, chain) = build_tail(color::OutputSpace::Srgb);
                 if debug_steps {
                     eprintln!(
-                    "  TIMING build_tail {:6.1} ms  cpu stages {:?}  gpu chain {}  takes {:?}  prefix_offered {}",
-                    t_build.elapsed().as_secs_f64() * 1000.0,
-                    pipe.stage_names(),
-                    chain.is_some(),
-                    chain.as_ref().and_then(|c| c.takes_from()),
-                    prefix_offered
-                );
+                        "  TIMING build_tail {:6.1} ms  cpu stages {:?}  gpu chain {}",
+                        t_build.elapsed().as_secs_f64() * 1000.0,
+                        pipe.stage_names(),
+                        chain.is_some(),
+                    );
                 }
                 // ⚠⚠ **M8.3g: the tail's last chain quantizes on the GPU and downloads 27 MB instead
                 // of 82.** Measured at rung 3200: 6.33 ms of copy+map plus a 6.87 ms `to_vec` become
@@ -1723,10 +1812,42 @@ fn render_cached_with(
                 match chain {
                     Some(c) if !float_needed => {
                         let t_cpu = std::time::Instant::now();
-                        let mid = pipe.run(input);
-                        let (w, h) = (mid.width(), mid.height());
+                        // ⚠⚠ **One chain, no clone.** When the tail is one GPU chain its input IS
+                        // the checkpoint: a resident hit borrows nothing, and a miss borrows the
+                        // Arc for its upload. Only a CPU stage before the chain needs an owned
+                        // buffer, and `unshare` clones it there — which is what every frame paid.
+                        let whole = pipe.stage_names().is_empty();
+                        let (src, mid) = if whole {
+                            (Some(input), None)
+                        } else {
+                            (None, Some(pipe.run(unshare(input))))
+                        };
+                        let (w, h) = match (&src, &mid) {
+                            (Some(s), _) => (s.width(), s.height()),
+                            (None, Some(m)) => (m.width(), m.height()),
+                            (None, None) => unreachable!("one of the two is the chain's input"),
+                        };
                         let t_gpu = std::time::Instant::now();
-                        let got = c.run_rgba8(&mid);
+                        // ⚠⚠ **From the resident final when the tail is one chain**, else a
+                        // miss that keeps its upload for the next frame. A tail with a CPU stage
+                        // first has an input that is not the checkpoint, and keeps nothing.
+                        let got = match (&src, &mid) {
+                            (Some(s), _) => {
+                                match cache.resident_final(&tail_key).filter(|_| !refused) {
+                                    Some(r) => {
+                                        resident_final_hit = true;
+                                        c.run_rgba8_from(r)
+                                    }
+                                    None => c.run_rgba8_keeping_input(s).map(|(b, kept)| {
+                                        cache.keep_resident_final(tail_key.clone(), kept);
+                                        b
+                                    }),
+                                }
+                            }
+                            (None, Some(m)) => c.run_rgba8(m),
+                            (None, None) => None,
+                        };
+                        tail_uploads += c.transfer_counts().0;
                         if debug_steps {
                             eprintln!(
                                 "  TIMING cpu tail {:6.1} ms  gpu run_rgba8 {:6.1} ms",
@@ -1742,11 +1863,44 @@ fn render_cached_with(
                             // ⚠ Fully qualified rather than importing `PipelineStage` into this
                             // module: this is the only place that needs it, and the import would sit
                             // in scope for a whole file that deliberately talks in pipelines.
-                            None => (Packed::Float(pipeline::PipelineStage::apply(&c, mid)), None),
+                            None => {
+                                let owned = match (src, mid) {
+                                    (Some(s), _) => unshare(s),
+                                    (None, Some(m)) => m,
+                                    (None, None) => unreachable!("checked above"),
+                                };
+                                (
+                                    Packed::Float(pipeline::PipelineStage::apply(&c, owned)),
+                                    None,
+                                )
+                            }
                         }
                     }
+                    // ⚠ The float path keeps the tail's input too, when the tail is one chain: a
+                    // non-sRGB display, Visualize Spots, or the proof's sRGB run.
+                    Some(c) if pipe.stage_names().is_empty() => {
+                        let hit = match cache.resident_final(&tail_key).filter(|_| !refused) {
+                            Some(r) => {
+                                resident_final_hit = true;
+                                c.apply_from(r)
+                            }
+                            None => None,
+                        };
+                        let out = match hit {
+                            Some(o) => o,
+                            None => {
+                                let (o, kept) = c.apply_keeping_input(unshare(input));
+                                if let Some(k) = kept {
+                                    cache.keep_resident_final(tail_key.clone(), k);
+                                }
+                                o
+                            }
+                        };
+                        tail_uploads += c.transfer_counts().0;
+                        (Packed::Float(out), None)
+                    }
                     other => (
-                        Packed::Float(gpu_pipeline::rejoin(pipe, other).run(input)),
+                        Packed::Float(gpu_pipeline::rejoin(pipe, other).run(unshare(input))),
                         None,
                     ),
                 }
@@ -1796,9 +1950,11 @@ fn render_cached_with(
             prefix_stages,
             gpu_prefix_steps,
             gpu_prefix_uploads,
-            handoff: handoff_taken,
+            handoff: handed.is_some(),
             region_scoped,
             bytes,
+            tail_uploads,
+            resident_final_hit,
         },
     )
 }
@@ -2743,20 +2899,21 @@ mod tests {
         assert_eq!(a.hist, b.hist);
     }
 
-    /// ⚠ A tail that cannot take the plane must fall back, not fail: the step is materialised on
-    /// the CPU from the checkpoint before it, cached, and the frame renders the ordinary way.
-    /// ⚠ Every tail stage has a GPU twin, so no real edit set refuses the plane; the test loses it
-    /// deliberately (`LOSE_THE_PLANE`), which is the run-time failure being guarded.
+    /// ⚠ A handoff frame whose tail cannot run from the resident must fall back, not fail — and
+    /// the fallback is the settle's own path: download the resident, cache it as the final, render
+    /// the ordinary way. ⚠ Every tail stage has a GPU twin, so no real edit set refuses the
+    /// resident; the test refuses it deliberately (`REFUSE_THE_RESIDENT`), which is the run-time
+    /// failure being guarded.
     #[test]
-    fn a_handoff_the_tail_cannot_take_falls_back() {
+    fn a_handoff_whose_tail_cannot_run_from_the_resident_downloads_it() {
         if gpu_pipeline::shared().is_none() {
             eprintln!("SKIPPED: no GPU adapter on this machine");
             return;
         }
         let mut cache = PrefixCache::default();
-        let mut e = Edits::default();
+        let mut e = hsl_edits();
         e.geometry.angle = 3.0;
-        LOSE_THE_PLANE.with(|l| l.set(true));
+        REFUSE_THE_RESIDENT.with(|l| l.set(true));
         let (frame, ran) = render_cached_with(
             &hazy_buffer(),
             &e,
@@ -2772,23 +2929,219 @@ mod tests {
             &mut BrushCache::default(),
             true,
         );
-        LOSE_THE_PLANE.with(|l| l.set(false));
-        assert!(
-            !ran.handoff,
-            "fixture check: the plane was lost, so no handoff was taken"
-        );
+        REFUSE_THE_RESIDENT.with(|l| l.set(false));
+        assert!(ran.handoff, "fixture check: the step handed off");
+        assert!(!ran.resident_final_hit, "the tail was refused the resident");
         assert_eq!(
             cache.final_len(),
             1,
-            "the fallback caches what it materialised"
+            "the fallback downloads the resident and caches it as the final"
         );
-        let (want, _) = render_cached(
+        // ⚠ Against the same edits through the ordinary path (a download, a cached final, the
+        // tail uploading it) — the same GPU twins on the same pixels, so byte-identical. Not
+        // against a CPU tail, which differs by the twins' one-level bound.
+        let (want, _) = handed(3.0, false, &mut PrefixCache::default());
+        assert_eq!(
+            frame.rgba, want.rgba,
+            "the fallback renders the ordinary picture"
+        );
+    }
+
+    /// A tail-slider frame with a fixed prefix, at a rung, with `gpu_tail` on.
+    fn tail_frame(
+        exposure: f32,
+        angle: f32,
+        rung: usize,
+        cache: &mut PrefixCache,
+    ) -> (RenderedFrame, Ran) {
+        let mut e = hsl_edits();
+        e.exposure = exposure;
+        e.geometry.angle = angle;
+        render_cached(
             &hazy_buffer(),
             &e,
             FrameSpec {
-                gpu_tail: false,
-                ..FrameSpec::fit(200)
+                gpu_tail: true,
+                ..FrameSpec::fit(rung)
             },
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            pipeline::ProfileRendering::default(),
+            cache,
+            &mut BrushCache::default(),
+        )
+    }
+
+    /// ⚠⚠ **THE claim (2026-09-26): a tail-slider frame after the first uploads NOTHING.** The first
+    /// frame's tail uploads the final and keeps it; the second copies it GPU-side. Both halves:
+    /// the counter, and a picture byte-identical to the same edits through a fresh cache.
+    #[test]
+    fn a_tail_slider_frame_uploads_once_and_then_hits_the_resident_final() {
+        if gpu_pipeline::shared().is_none() {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        }
+        let mut cache = PrefixCache::default();
+        // ⚠ No prefix step at all: the final IS checkpoint 0, the bare buffer.
+        let (_, first) = tail_frame(0.3, 0.0, 200, &mut cache);
+        assert_eq!(first.prefix_stages, 0, "fixture check: a bare prefix");
+        assert_eq!(first.tail_uploads, 1, "the first tail frame uploads");
+        assert!(!first.resident_final_hit);
+        let (second, ran) = tail_frame(0.6, 0.0, 200, &mut cache);
+        assert_eq!(ran.tail_uploads, 0, "the second must upload nothing");
+        assert!(ran.resident_final_hit);
+        let (fresh, _) = tail_frame(0.6, 0.0, 200, &mut PrefixCache::default());
+        assert_eq!(second.rgba, fresh.rgba, "a hit renders what a miss renders");
+        assert_eq!(second.hist, fresh.hist);
+        // ⚠ A rung change is another checkpoint: it misses and uploads its own input.
+        let (other, ran) = tail_frame(0.6, 0.0, 120, &mut cache);
+        assert_eq!(ran.tail_uploads, 1, "a rung change uploads");
+        let (fresh, _) = tail_frame(0.6, 0.0, 120, &mut PrefixCache::default());
+        assert_eq!(other.rgba, fresh.rgba);
+    }
+
+    /// ⚠⚠ **A prefix edit between two tail frames re-fills the slot from the step's own output**,
+    /// so the tail still uploads nothing — and the picture follows the edit. The sabotage that
+    /// ignores the key serves the old geometry to the new tail and fails the byte comparison.
+    #[test]
+    fn a_prefix_edit_between_two_tail_frames_refills_the_resident_from_the_step() {
+        if gpu_pipeline::shared().is_none() {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        }
+        let mut cache = PrefixCache::default();
+        let (_, a) = tail_frame(0.3, 2.0, 200, &mut cache);
+        assert_eq!(
+            a.gpu_prefix_steps, 1,
+            "fixture check: geometry ran on the GPU"
+        );
+        let (b_frame, b) = tail_frame(0.6, 2.0, 200, &mut cache);
+        assert!(
+            b.resident_final_hit,
+            "fixture check: the tail hits after the step"
+        );
+        assert_eq!(b.tail_uploads, 0);
+        let (c_frame, c) = tail_frame(0.6, 3.0, 200, &mut cache);
+        assert_eq!(c.gpu_prefix_steps, 1, "the geometry re-ran");
+        assert_eq!(
+            c.tail_uploads, 0,
+            "and its output fed the tail without an upload"
+        );
+        assert_ne!(
+            c_frame.rgba, b_frame.rgba,
+            "fixture check: the two angles render different pictures"
+        );
+        let (fresh, _) = tail_frame(0.6, 3.0, 200, &mut PrefixCache::default());
+        assert_eq!(c_frame.rgba, fresh.rgba, "the picture follows the edit");
+    }
+
+    /// At 1:1 the tail's input is a crop, and the key carries the rect: two frames at one rect
+    /// upload once; a pan uploads again, and renders the panned picture.
+    #[test]
+    fn at_one_to_one_the_resident_final_is_keyed_on_the_rect() {
+        if gpu_pipeline::shared().is_none() {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        }
+        let at = |exposure: f32, rect: RegionRect, cache: &mut PrefixCache| {
+            let mut e = hsl_edits();
+            e.exposure = exposure;
+            render_cached(
+                &hazy_buffer(),
+                &e,
+                FrameSpec {
+                    gpu_tail: true,
+                    region: Some(rect),
+                    ..FrameSpec::fit(200)
+                },
+                1.0,
+                None,
+                color::wb::Illuminant::default(),
+                pipeline::ProfileRendering::default(),
+                cache,
+                &mut BrushCache::default(),
+            )
+        };
+        let a = RegionRect {
+            x: 10,
+            y: 10,
+            w: 60,
+            h: 40,
+        };
+        let b = RegionRect {
+            x: 70,
+            y: 50,
+            w: 60,
+            h: 40,
+        };
+        let mut cache = PrefixCache::default();
+        let (_, first) = at(0.3, a, &mut cache);
+        assert_eq!(first.tail_uploads, 1);
+        let (_, second) = at(0.6, a, &mut cache);
+        assert_eq!(second.tail_uploads, 0, "the same rect hits");
+        assert!(second.resident_final_hit);
+        let (panned, ran) = at(0.6, b, &mut cache);
+        assert_eq!(ran.tail_uploads, 1, "a pan is another crop and must upload");
+        let (fresh, _) = at(0.6, b, &mut PrefixCache::default());
+        assert_eq!(panned.rgba, fresh.rgba, "and renders the panned picture");
+    }
+
+    /// A handoff frame's resident, downloaded, IS the final checkpoint the ordinary path caches.
+    #[test]
+    fn a_handed_off_residents_download_equals_the_cached_final() {
+        if gpu_pipeline::shared().is_none() {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        }
+        let ctx = gpu_pipeline::shared().expect("checked");
+        let mut with = PrefixCache::default();
+        let (_, ran) = handed(3.0, true, &mut with);
+        assert!(ran.handoff, "fixture check");
+        assert_eq!(
+            with.final_len(),
+            0,
+            "fixture check: no CPU final after a handoff"
+        );
+        assert!(with.settle_from_resident(ctx), "the settle downloads it");
+        let mut without = PrefixCache::default();
+        let (_, ran) = handed(3.0, false, &mut without);
+        assert!(!ran.handoff);
+        let a = with.finals[0].1.clone();
+        let b = without.finals[0].1.clone();
+        assert_eq!(with.finals[0].0, without.finals[0].0, "the same key");
+        assert_eq!(a.data(), b.data(), "the same checkpoint, sample for sample");
+    }
+
+    /// ⚠⚠ **A handed-off frame is settled by a DOWNLOAD, not a render (2026-09-26).** The
+    /// warm-behind used to re-run the last step and a whole tail nobody saw; now it reads the
+    /// resident final into the CPU cache — `settle_downloads` says so, `warm_renders` stays 0 —
+    /// and the next tail frame renders what a from-scratch render renders.
+    #[test]
+    fn a_handed_off_frame_is_settled_by_a_download() {
+        if gpu_pipeline::shared().is_none() {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        }
+        let engine = chained_engine(&hazy_buffer());
+        let mut e = hsl_edits();
+        e.geometry.angle = 3.0;
+        let spec = FrameSpec {
+            gpu_tail: true,
+            ..FrameSpec::fit(200)
+        };
+        engine.request(e.clone(), spec);
+        let _ = wait_for_frame(&engine);
+        wait_until(|| engine.settle_downloads() == 1, "the settle download");
+        std::thread::sleep(WARM_BEHIND * 3);
+        assert_eq!(engine.warm_renders(), 0, "nothing was re-rendered");
+        e.exposure = 0.7;
+        engine.request(e.clone(), spec);
+        let frame = wait_for_frame(&engine);
+        let (want, _) = render_cached(
+            &hazy_buffer(),
+            &e,
+            spec,
             1.0,
             None,
             color::wb::Illuminant::default(),
@@ -2798,30 +3151,8 @@ mod tests {
         );
         assert_eq!(
             frame.rgba, want.rgba,
-            "the fallback renders the CPU picture"
+            "the settled final feeds the next tail frame"
         );
-    }
-
-    /// ⚠⚠ The engine settles a handed-off frame, or releasing a Straighten drag would leave no
-    /// final checkpoint and the first tail edit afterwards would re-run the geometry.
-    #[test]
-    fn a_handed_off_frame_is_warmed_behind() {
-        if gpu_pipeline::shared().is_none() {
-            eprintln!("SKIPPED: no GPU adapter on this machine");
-            return;
-        }
-        let engine = chained_engine(&hazy_buffer());
-        let mut e = hsl_edits();
-        e.geometry.angle = 3.0;
-        engine.request(
-            e,
-            FrameSpec {
-                gpu_tail: true,
-                ..FrameSpec::fit(200)
-            },
-        );
-        let _ = wait_for_frame(&engine);
-        wait_until(|| engine.warm_renders() == 1, "the warm-behind render");
     }
 
     /// ⚠ The other direction, and it is not symmetry: without it a seam that fired

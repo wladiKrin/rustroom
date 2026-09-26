@@ -133,6 +133,47 @@ impl GpuImage {
     pub(crate) fn bytes(&self) -> u64 {
         (self.width * self.height * 3 * 4) as u64
     }
+
+    /// Read the image back into a CPU buffer: the leading `width × height` pixels, whatever the
+    /// capacity.
+    ///
+    /// ⚠⚠ **Its own submission, ordered after every earlier one on the queue**, so it reads the
+    /// finished pixels of a chain that returned without waiting — which is what a handoff chain
+    /// does, and what makes the resident final downloadable at the settle. `None` on any GPU
+    /// failure, and guarded like every chain run: the caller is the render worker.
+    pub fn download(&self, ctx: &GpuContext) -> Option<core_image::ImageBuf> {
+        crate::guarded(|| self.download_inner(ctx))
+    }
+
+    fn download_inner(&self, ctx: &GpuContext) -> Option<core_image::ImageBuf> {
+        let bytes = self.bytes();
+        let readback = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gpu-image-download"),
+            size: bytes,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = ctx.device.create_command_encoder(&Default::default());
+        enc.copy_buffer_to_buffer(&self.buffer, 0, &readback, 0, bytes);
+        ctx.queue.submit(Some(enc.finish()));
+        let slice = readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = ctx.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        rx.recv().ok()?.ok()?;
+        let data: Vec<f32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
+        readback.unmap();
+        Some(core_image::ImageBuf::from_vec(
+            self.width,
+            self.height,
+            data,
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -196,5 +237,30 @@ mod tests {
         let img = GpuImage::new(ctx, 100, 50).expect("allocatable");
         assert_eq!(img.pixels(), 5000, "pixels, not 15000 floats");
         assert_eq!(img.bytes(), 100 * 50 * 3 * 4);
+    }
+
+    /// The download is the upload's inverse, exactly, and it reads the leading `w × h` pixels
+    /// whatever the buffer's capacity — a relabelled image downloads at its relabelled size.
+    #[test]
+    fn a_download_is_the_uploads_inverse_at_the_relabelled_size() {
+        let Some(ctx) = crate::shared() else {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        };
+        let n = 8 * 6 * 3;
+        let src =
+            core_image::ImageBuf::from_vec(8, 6, (0..n).map(|i| (i % 97) as f32 / 97.0).collect());
+        let mut g = GpuImage::upload(ctx, &src).expect("upload");
+        let back = g.download(ctx).expect("download");
+        assert_eq!((back.width(), back.height()), (8, 6));
+        assert_eq!(back.data(), src.data(), "the round trip must be exact");
+        g.relabel(4, 6);
+        let back = g.download(ctx).expect("download");
+        assert_eq!((back.width(), back.height()), (4, 6));
+        assert_eq!(
+            back.data(),
+            &src.data()[..4 * 6 * 3],
+            "a relabelled image downloads its leading pixels"
+        );
     }
 }

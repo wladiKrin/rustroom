@@ -88,7 +88,7 @@ pub use brush_raster::GpuBrushRaster;
 pub fn max_tile_dabs() -> u32 {
     brush_wgsl::MAX_TILE_DABS
 }
-pub use chain::{GpuChain, GpuStage, Slot};
+pub use chain::{GpuChain, GpuStage, Input, Slot};
 pub use context::{shared, GpuContext};
 pub use contrast::GpuContrastStage;
 pub use creative_look::GpuCreativeLookStage;

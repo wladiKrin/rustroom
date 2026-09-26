@@ -526,7 +526,6 @@ fn main() {
                         profile: pipeline::ProfileRendering::default(),
                         spec: pipeline::RenderSpec::default(),
                         // ⚠ The bench applies its prefix stage by hand, without offering.
-                        prefix_offered: false,
                     },
                     ctx,
                 );
@@ -569,7 +568,6 @@ fn main() {
                         profile: pipeline::ProfileRendering::default(),
                         spec: pipeline::RenderSpec::default(),
                         // ⚠ The bench applies its prefix stage by hand, without offering.
-                        prefix_offered: false,
                     },
                     ctx,
                 );

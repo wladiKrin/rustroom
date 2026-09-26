@@ -20,6 +20,10 @@ use std::sync::Arc;
 /// resolution.
 pub(crate) type CacheKey = (PrefixKey, usize);
 
+/// What the tail ran from: the final checkpoint, and the region rect when the frame was scoped
+/// to one. See [`PrefixCache::resident_final`].
+pub(crate) type TailKey = (CacheKey, Option<pipeline::Rect>);
+
 /// Which tier a checkpoint belongs to. The complete prefix output is a `Final`; every
 /// intermediate is a `Mid`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -62,6 +66,8 @@ pub(crate) struct PrefixCache {
     /// ONE checkpoint held on the GPU, with its key: the input of the last GPU prefix step that
     /// started a render. See [`Self::resident`].
     resident: Option<(CacheKey, gpu_pipeline::GpuImage)>,
+    /// ONE tail input held on the GPU, with its key. See [`Self::resident_final`].
+    resident_final: Option<(TailKey, gpu_pipeline::GpuImage)>,
     /// How many times [`Self::airlight`] actually ran the replay — the observable its tests read.
     #[cfg(test)]
     pub(crate) airlight_replays: usize,
@@ -136,6 +142,7 @@ impl PrefixCache {
             mid_budget,
             airlight: None,
             resident: None,
+            resident_final: None,
             #[cfg(test)]
             airlight_replays: 0,
         }
@@ -163,6 +170,53 @@ impl PrefixCache {
             self.resident = Some((key.clone(), gpu_pipeline::GpuImage::upload(ctx, img)?));
         }
         self.resident.as_ref().map(|(_, r)| (r, !hit))
+    }
+
+    /// The tail's input under `key`, if it is the one held on the GPU.
+    ///
+    /// ⚠⚠ **The resident final (2026-09-26).** After a settle every tail-slider frame used to clone
+    /// the CPU final (2.5 ms), memcpy it into staging (2.3 ms) and copy it up, before the tail ran:
+    /// ~8-10 ms of a ~34 ms frame at rung 3200, on the most common gesture there is. The tail's
+    /// chain copies from this image instead (~1 ms for 82 MB). ⚠ The KEY is the whole mechanism:
+    /// the one-shot plane it replaces was anonymous, so it needed a thread stamp, a dimension
+    /// check and a clear to be safe, and a stale take still rendered a plausible photograph. Here
+    /// a hit under the wrong key is unrepresentable.
+    ///
+    /// ⚠ One slot: a miss replaces it, a rung switch costs one upload. Only ever READ by the tail,
+    /// which copies from it, so it is never written after it is kept.
+    pub(crate) fn resident_final(&self, key: &TailKey) -> Option<&gpu_pipeline::GpuImage> {
+        self.resident_final
+            .as_ref()
+            .filter(|(k, _)| k == key)
+            .map(|(_, r)| r)
+    }
+
+    /// Keep `img` as the tail's input under `key`, replacing whatever was held.
+    pub(crate) fn keep_resident_final(&mut self, key: TailKey, img: gpu_pipeline::GpuImage) {
+        self.resident_final = Some((key, img));
+    }
+
+    /// The settle after a handoff: download a whole-frame resident that has no CPU final into
+    /// the `Final` tier. `true` when it did.
+    ///
+    /// ⚠⚠ **This replaces a whole render.** A handoff frame leaves no CPU checkpoint, and the
+    /// warm-behind used to re-run the last prefix step and a whole tail nobody saw — 92-108 ms
+    /// measured — to leave one. The bytes are the same: the step already ran on the GPU, and this
+    /// reads its output. ⚠ A rect resident is a region crop, never a final: the scoped drag's
+    /// settle renders whole-buffer, as it always did.
+    pub(crate) fn settle_from_resident(&mut self, ctx: &gpu_pipeline::GpuContext) -> bool {
+        let Some(((key, None), r)) = self.resident_final.as_ref() else {
+            return false;
+        };
+        if self.finals.iter().any(|(k, _)| k == key) {
+            return false;
+        }
+        let key = key.clone();
+        let Some(img) = r.download(ctx) else {
+            return false;
+        };
+        self.insert(key, Arc::new(img), Tier::Final);
+        true
     }
 
     /// The frame-global dehaze airlight for `edits`, replayed only when its key changes.
@@ -316,5 +370,121 @@ mod tests {
         let moved = cache.airlight(&e, &img, r, None);
         assert_eq!(cache.airlight_replays, 2, "an upstream edit must replay");
         assert_eq!(moved, pipeline::prefix_airlight(&e, &img, r, None));
+    }
+
+    fn gpu() -> Option<&'static gpu_pipeline::GpuContext> {
+        match gpu_pipeline::shared() {
+            Some(c) => Some(c),
+            None => {
+                eprintln!("SKIPPED: no GPU adapter on this machine");
+                None
+            }
+        }
+    }
+
+    fn small(seed: f32) -> ImageBuf {
+        ImageBuf::from_vec(
+            6,
+            4,
+            (0..6 * 4 * 3)
+                .map(|i| (i as f32 * 0.01 + seed) % 1.0)
+                .collect(),
+        )
+    }
+
+    fn fake_key(tag: usize) -> CacheKey {
+        let e = edit_model::Edits {
+            dehaze: edit_model::Dehaze {
+                amount: 1.0 + tag as f32,
+            },
+            ..Default::default()
+        };
+        (
+            PrefixKey::new(
+                &e,
+                pipeline::RenderScale::FULL,
+                pipeline::Resampler::Bilinear,
+            ),
+            tag,
+        )
+    }
+
+    /// The slot is keyed on the checkpoint AND the rect: a hit needs both, and a miss replaces.
+    #[test]
+    fn the_resident_final_is_keyed_on_the_checkpoint_and_the_rect() {
+        let Some(ctx) = gpu() else { return };
+        let mut cache = PrefixCache::default();
+        let rect = pipeline::Rect {
+            x: 1,
+            y: 1,
+            w: 2,
+            h: 2,
+        };
+        let key = (fake_key(1), None);
+        assert!(cache.resident_final(&key).is_none(), "empty to start");
+        let img = gpu_pipeline::GpuImage::upload(ctx, &small(0.1)).expect("upload");
+        cache.keep_resident_final(key.clone(), img);
+        assert!(
+            cache.resident_final(&key).is_some(),
+            "a hit under its own key"
+        );
+        assert!(
+            cache.resident_final(&(fake_key(2), None)).is_none(),
+            "another checkpoint misses"
+        );
+        assert!(
+            cache.resident_final(&(fake_key(1), Some(rect))).is_none(),
+            "the same checkpoint at a rect misses"
+        );
+        let crop = gpu_pipeline::GpuImage::upload(ctx, &small(0.5)).expect("upload");
+        cache.keep_resident_final((fake_key(1), Some(rect)), crop);
+        assert!(
+            cache.resident_final(&key).is_none(),
+            "one slot: keeping the crop replaced the whole frame"
+        );
+    }
+
+    /// ⚠⚠ **The settle downloads a whole-frame resident that has no CPU final, once.** A second
+    /// settle finds the final and does nothing; a rect resident is never a final.
+    #[test]
+    fn the_settle_downloads_the_resident_final_once_and_never_a_crop() {
+        let Some(ctx) = gpu() else { return };
+        let mut cache = PrefixCache::default();
+        let src = small(0.2);
+        let key = (fake_key(3), None);
+        cache.keep_resident_final(
+            key.clone(),
+            gpu_pipeline::GpuImage::upload(ctx, &src).expect("upload"),
+        );
+        assert!(
+            cache.settle_from_resident(ctx),
+            "the first settle downloads"
+        );
+        let got = cache.get(&fake_key(3)).expect("the download is the final");
+        assert_eq!(got.data(), src.data(), "sample for sample");
+        assert_eq!(cache.final_len(), 1);
+        assert!(
+            !cache.settle_from_resident(ctx),
+            "a second settle has nothing to do"
+        );
+        assert!(
+            cache.resident_final(&key).is_some(),
+            "and the resident survives the settle for the tail frames to come"
+        );
+        let rect = pipeline::Rect {
+            x: 0,
+            y: 0,
+            w: 3,
+            h: 2,
+        };
+        cache.keep_resident_final(
+            (fake_key(4), Some(rect)),
+            gpu_pipeline::GpuImage::upload(ctx, &small(0.3)).expect("upload"),
+        );
+        assert!(
+            !cache.settle_from_resident(ctx),
+            "a region crop is not a final and must never be cached as one"
+        );
+        assert_eq!(cache.final_len(), 1);
     }
 }

@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [The resident final checkpoint: the tail's input stays on the GPU (2026-09-26)](#2026-09-26--the-resident-final-checkpoint-the-tails-input-stays-on-the-gpu-branch-resident-final)
 - [Per-pixel fusion: a run of per-pixel stages as one pass (2026-09-26)](#2026-09-26--per-pixel-fusion-a-run-of-per-pixel-stages-as-one-pass-branch-per-pixel-fusion)
 - [GPU timestamps: per-pass GPU time in the running app (2026-09-26)](#2026-09-26--gpu-timestamps-per-pass-gpu-time-in-the-running-app-branch-gpu-timestamps)
 - [M5.1c — the parametric curve (2026-09-26)](#2026-09-26--m51c-the-parametric-curve-branch-m51c-parametric-curve)
@@ -156,6 +157,105 @@ goldens unmoved.
 - ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
+
+### 2026-09-26 — the resident final checkpoint: the tail's input stays on the GPU (branch `resident-final`)
+
+Stacked on `per-pixel-fusion`. **2,977 tests** (10 added), 79 goldens unmoved (⚠ 79, not the 78
+earlier notes carried: M5.1c's `19a6219` added one), gate green (`FMT=0 CLIPPY=0 TEST=0`, each from
+its own command). Spec `2026-09-26-resident-final-checkpoint-design.md`, plan of the same date.
+✅ **Confirmed by use 2026-09-26** ("everything feels very smooth and responsive") — the whole stack
+`gpu-timestamps` → `per-pixel-fusion` → `resident-final` was used together, so the ~3 ms on the drag
+frame below was not felt. Row 1 of `docs/PIPELINE-REVIEW-2026-09-26.md`'s list (F2).
+
+**What shipped.** `PrefixCache` holds ONE tail input on the GPU under `TailKey = (final CacheKey,
+Option<Rect>)` — the cumulative prefix key, the rung, and the region rect when the frame is scoped.
+It is filled three ways under one rule, *whatever the tail's input is this frame, keep it*: a
+tail-slider miss uploads once and keeps the pristine copy (`run_rgba8_keeping_input`, a GPU-side
+copy before any stage is encoded); the last GPU prefix step keeps its output beside its download
+(`run_keeping_output(.., true)`); a handoff frame keeps it *instead of* a download
+(`run_keeping_output(.., false)`). A tail that is one GPU chain runs from it (`run_rgba8_from`, or
+`apply_from` on the float views). ⚠⚠ **The key is the whole mechanism**: the one-shot
+`Slot::Prefix` plane at the prefix→tail seam needed a thread stamp, a dimension check and a clear to
+be safe, and a stale take still rendered a plausible photograph; here a hit under the wrong key is
+unrepresentable, and the sabotage that ignores it fails three tests (`at_one_to_one_…`,
+`the_resident_final_is_keyed_…`, and the rung-change half of `a_tail_slider_frame_…`).
+**Gone:** `TailFacts::prefix_offered`, `run_rgba8_from_plane`, `run_to_plane[_from]`, `Input::Plane`,
+the `handed`/`from_plane` branch and `LOSE_THE_PLANE`. `Slot::Prefix` stays for **step→step** inside
+the prefix loop, with the clear at the top of that loop.
+
+**The settle is a download.** A handoff frame leaves no CPU final, so the worker used to re-run the
+last prefix step and a whole tail nobody saw after 150 ms of quiet. Now `settle_from_resident`
+reads the resident final into the `Final` tier and stops: **~101–122 → ~21–30 ms** measured (below).
+`RenderEngine::settle_downloads` is its observable beside `warm_renders`. A rect resident is never
+settled (a crop is not a final); a scoped drag renders whole-buffer as before.
+
+**A deviation from the spec, recorded there too.** A handoff frame whose tail cannot run from the
+resident falls back by *downloading* it (the settle's own path, which caches the final) and
+rendering the ordinary way. Only a download that itself fails reaches a three-line last resort that
+re-runs the step on the CPU — a frame with no input at all is not an option. The test hook
+`REFUSE_THE_RESIDENT` refuses the resident for one whole render; a hook that refused only the
+handoff path let the ordinary path hit afterwards, which is what the first version of the test
+found.
+
+**⚠⚠ A second saving the plan did not list, found by the bench: the tail-slider frame CLONED the
+final before the tail could know it would never touch it.** `input = (*img).clone()` cost 2.5 ms at
+rung 3200 (12.9 on a cold first frame). The tail's input now travels as an `Arc`; a one-chain tail
+borrows it (a hit borrows nothing), and `unshare` clones only on the paths that must own a buffer
+(a CPU stage before the chain, the grade view, the float views). The probe's `TIMING input clone`
+reads 0.0 on all 49 frames.
+
+**⚠⚠ Measured against a worktree build of the branch point, NOT against the journal's fusion
+figures — the sidecar changed under them.** `DSCF6263.RAF.json` was edited at 20:33; its tail is
+now ten stages including local contrast and sharpening, so `bench_gpu_tail`'s sidecar rows read
+~3× the fusion-era numbers on *both* builds. ("Before requoting a figure, check which two
+configurations it compares.") `0877bb2` was built in a scratch worktree and the two binaries were
+run interleaved on the same photo and sidecar.
+
+**`probe_straighten_drag`, rung 3200, 40-frame drag → 400 ms release → six tail-slider frames,
+four interleaved pairs (pairs 1–2 before the clone removal at load 7–8, pairs 3–4 after it at load
+9–10):**
+
+| | base | new |
+|---|---|---|
+| drag frame, median | 64.9 · 64.6 · 73.3 · 71.3 | **67.6 · 67.4 · 76.3 · 77.2** (⚠ +2.7 to +5.9) |
+| settle after release | warm behind 100.9 · 102.3 · 121.8 · 111.5 (a render) | **settle 21.1 · 22.0 · 30.1 · 22.1** (a download) |
+| tail-slider frame, median of frames 2–6 | 61.9 · 64.0 · 69.8 · 72.7 | **59.2 · 58.5 · 56.6 · 61.4** |
+
+The first tail frame after the idle reads 94–115 ms on **both** builds and is not attributed
+(likely the GPU's clock ramp after 400 ms idle; on base it also carries the 9.7–12.9 ms cold clone).
+
+**⚠⚠ The drag frame is ~3 ms SLOWER, and that is the copy.** The one-shot plane was *taken* and the
+tail ran in place on it; the resident final must survive for the next frame, so the tail copies it
+into a fresh image — an 82 MB GPU blit, ~2.7 ms at 6.8 Mpx (the XFER line: geometry `-> plane`
+0.3 ms wall, then the tail `took=false memcpy=0.2 submit=63`). Consistent across all four pairs. The
+trade per gesture: −80 ms once at release and −3 to −13 ms per tail frame after it, against +3 ms per
+drag frame. **The fix is known and priced, not built:** let the tail's *first fused unit* read from
+the resident and write to the working image — a fourth binding on the per-pixel emitter (`src`,
+read-only) and `run_with` skipping the copy when the first unit is per-pixel, which every real tail's
+is. ~60–80 lines in `per_pixel.rs` and `chain.rs`, a change to the emitter's contract and therefore
+its own spec. It would make the resident copy free on the drag path and the tail-slider path alike.
+
+**`bench_gpu_tail`** (whole frames through the engine, best of 4–5; base at load 3–5, new at load
+5 before the clone removal and 8–10 after):
+
+| row | base | new | new, no clone |
+|---|---|---|---|
+| unedited, camera rendering, 3200 | 19.20 | 16.40 | 17.51 |
+| the WHOLE tail, 3200 | 21.45 | 19.02 | 19.66 |
+| REAL SIDECAR, 0 masks, 3200 | 57.48 | 56.31 | 55.90 |
+| REAL SIDECAR, global drag, 3200 | 62.01 | 63.21 | **58.69** |
+| the WHOLE tail, 1600 | 8.45 | 6.87 | 6.95 |
+| REAL SIDECAR, global drag, 1600 | 18.99 | 18.62 | 17.06 |
+
+⚠ The bench never lets the engine settle (it requests the next frame at once), so its sidecar rows
+are pure tail-slider frames on this sidecar (no prefix edit): `prefix_ran 0 … tail_up 0 hit yes` on
+every GPU frame under `RUSTROOM_DEBUG_RENDER`.
+
+**Observables.** `Ran::tail_uploads` and `Ran::resident_final_hit` per render; the worker's
+`render:` line prints `tail_up` and `hit`; `RenderEngine::settle_downloads`. `chain.rs` is at
+**796 code lines** (it was 720 before this and over the ~600 mark already).
+
+`grep -n 'resident final' docs/JOURNAL.md`.
 
 ### 2026-09-26 — per-pixel fusion: a run of per-pixel stages as one pass (branch `per-pixel-fusion`)
 

@@ -75,32 +75,43 @@ pub trait GpuStage: Send + Sync {
     fn cpu(&self) -> &dyn PipelineStage;
 }
 
-/// What the chain downloads.
-///
-/// ⚠⚠ The two modes share **one** upload, one compute pass and one submit — the whole point is
-/// that only the *download* differs, so a second code path would be two things that could come to
-/// disagree about how a chain runs.
 /// Where a chain's input comes from.
 #[derive(Clone, Copy)]
-enum Input<'a> {
+pub enum Input<'a> {
     /// Uploaded through staging (or taken from a deposited plane).
     Cpu(&'a ImageBuf),
     /// Already on the GPU: copied GPU-side, no upload. See [`GpuChain::apply_from`].
     Resident(&'a GpuImage),
-    /// ONLY the plane a previous chain deposited, at these dimensions — never an upload. See
-    /// [`GpuChain::run_rgba8_from_plane`].
-    Plane(usize, usize),
 }
 
+/// What the chain downloads.
+///
+/// ⚠⚠ The modes share **one** upload, one compute pass and one submit — the whole point is that
+/// only the *download* differs, so a second code path would be two things that could come to
+/// disagree about how a chain runs.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Download {
-    /// No readback at all: the output stays on the GPU, deposited for the next chain. See
-    /// [`GpuChain::run_to_plane`].
+    /// No readback at all: the output stays on the GPU, handed to the caller or deposited for the
+    /// next chain. See [`GpuChain::run_keeping_output`].
     None,
     /// The resident f32 image: `w * h * 12` bytes.
     Float,
     /// Packed RGBA8, quantized by a final dispatch: `w * h * 4` bytes.
     Rgba8,
+}
+
+/// What a run hands back beside its download.
+///
+/// ⚠⚠ **The resident final (2026-09-26).** The tail's input is kept on the GPU under its key —
+/// either the pristine upload of a tail miss (`Input`) or the last prefix step's result
+/// (`Output`) — so the next tail frame copies it GPU-side instead of uploading 82 MB.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Keep {
+    Nothing,
+    /// A GPU-side copy of the input, taken before any stage is encoded.
+    Input,
+    /// The chain's own image, after every stage; never deposited as well.
+    Output,
 }
 
 /// Which hand-off slot a chain means.
@@ -313,37 +324,71 @@ impl GpuChain {
     /// here. `None` on any GPU failure — the caller then runs the CPU stage, as every seam does.
     pub fn apply_from(&self, resident: &GpuImage) -> Option<ImageBuf> {
         let (w, h) = self.output_dims(resident.width(), resident.height());
-        crate::guarded(|| self.run_with(Input::Resident(resident), Download::Float))
-            .map(|data| ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()))
+        crate::guarded(|| self.run_with(Input::Resident(resident), Download::Float, Keep::Nothing))
+            .map(|(data, _)| ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()))
     }
 
-    /// Run the chain and leave its output ON THE GPU, deposited for the next chain — no download.
+    /// Run the chain and hand its OUTPUT back as a GPU image, downloaded too or not at all.
     ///
-    /// ⚠⚠ **The handoff (2026-09-26).** When the last prefix step and the whole tail run on the
-    /// GPU, the prefix's 82 MB float result never needs to reach the CPU: the tail takes it with
-    /// [`Self::run_rgba8_from_plane`]. Returns the output size; `None` if the chain offers no slot
-    /// or the GPU fails, and the caller then renders the ordinary way.
-    pub fn run_to_plane(&self, image: &ImageBuf) -> Option<(usize, usize)> {
-        crate::guarded(|| self.run_with(Input::Cpu(image), Download::None))?;
-        Some(self.output_dims(image.width(), image.height()))
+    /// ⚠⚠ **The resident final (2026-09-26).** The last prefix step's output is the tail's input;
+    /// kept on the GPU under its key, every later tail frame copies it GPU-side. With `download`
+    /// the float image comes back as well, for the CPU checkpoint cache; without it nothing waits
+    /// for the GPU — the handoff — and the image is read later by [`GpuImage::download`], ordered
+    /// after this submission. `None` on any GPU failure; the caller runs the step the ordinary way.
+    pub fn run_keeping_output(
+        &self,
+        input: Input<'_>,
+        download: bool,
+    ) -> Option<(Option<ImageBuf>, GpuImage)> {
+        let (iw, ih) = match input {
+            Input::Cpu(i) => (i.width(), i.height()),
+            Input::Resident(r) => (r.width(), r.height()),
+        };
+        let (w, h) = self.output_dims(iw, ih);
+        let mode = if download {
+            Download::Float
+        } else {
+            Download::None
+        };
+        let (data, kept) = crate::guarded(|| self.run_with(input, mode, Keep::Output))?;
+        let out = download.then(|| ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()));
+        Some((out, kept?))
     }
 
-    /// [`Self::run_to_plane`] from a GPU-resident input — the resident input and the handoff
-    /// together, which is a Straighten drag's steady state.
-    pub fn run_to_plane_from(&self, resident: &GpuImage) -> Option<(usize, usize)> {
-        crate::guarded(|| self.run_with(Input::Resident(resident), Download::None))?;
-        Some(self.output_dims(resident.width(), resident.height()))
-    }
-
-    /// Run the chain on the plane a previous chain deposited at `w` x `h`, quantised to 8-bit.
-    ///
-    /// ⚠ **Never uploads.** With no plane to take (none deposited, wrong size, another thread's)
-    /// it returns `None` without allocating, and the caller renders the ordinary way.
-    pub fn run_rgba8_from_plane(&self, w: usize, h: usize) -> Option<Vec<u8>> {
+    /// Run the chain on an image already on the GPU, quantised to 8-bit: the tail on a hit.
+    pub fn run_rgba8_from(&self, resident: &GpuImage) -> Option<Vec<u8>> {
         if self.stages.is_empty() {
             return None;
         }
-        crate::guarded(|| self.run_with(Input::Plane(w, h), Download::Rgba8))
+        crate::guarded(|| self.run_with(Input::Resident(resident), Download::Rgba8, Keep::Nothing))
+            .map(|(d, _)| d)
+    }
+
+    /// [`Self::run_rgba8`], also handing back the PRISTINE input as a GPU image: the tail on a
+    /// miss, which keeps what it uploaded for the next frame.
+    pub fn run_rgba8_keeping_input(&self, image: &ImageBuf) -> Option<(Vec<u8>, GpuImage)> {
+        if self.stages.is_empty() {
+            return None;
+        }
+        let (d, kept) =
+            crate::guarded(|| self.run_with(Input::Cpu(image), Download::Rgba8, Keep::Input))?;
+        Some((d, kept?))
+    }
+
+    /// [`PipelineStage::apply`] with the pristine input handed back too: the float tail on a
+    /// miss. Falls back exactly as `apply` does, and then keeps nothing.
+    pub fn apply_keeping_input(&self, image: ImageBuf) -> (ImageBuf, Option<GpuImage>) {
+        if self.stages.is_empty() {
+            return (image, None);
+        }
+        let (w, h) = self.output_dims(image.width(), image.height());
+        match crate::guarded(|| self.run_with(Input::Cpu(&image), Download::Float, Keep::Input)) {
+            Some((data, kept)) => (
+                ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()),
+                kept,
+            ),
+            None => (self.cpu_fallback(image), None),
+        }
     }
 
     /// The chain's output size for an input of `w` x `h`: every stage's `output_dims`, folded.
@@ -373,15 +418,21 @@ impl GpuChain {
         }
         // ⚠ Guarded for the same reason `apply` is — this one's `None` reaches a caller that
         // retries through `apply`, so a panic here would otherwise kill the worker just the same.
-        crate::guarded(|| self.run_with(Input::Cpu(image), Download::Rgba8))
+        crate::guarded(|| self.run_with(Input::Cpu(image), Download::Rgba8, Keep::Nothing))
+            .map(|(d, _)| d)
     }
 
-    /// The GPU path, or `None` on any failure at all.
-    fn run_with(&self, input: Input<'_>, mode: Download) -> Option<Vec<u8>> {
+    /// The GPU path, or `None` on any failure at all. Returns the download (empty in
+    /// [`Download::None`]) and whatever `keep` asked for.
+    fn run_with(
+        &self,
+        input: Input<'_>,
+        mode: Download,
+        keep: Keep,
+    ) -> Option<(Vec<u8>, Option<GpuImage>)> {
         let (iw, ih) = match input {
             Input::Cpu(image) => (image.width(), image.height()),
             Input::Resident(r) => (r.width(), r.height()),
-            Input::Plane(w, h) => (w, h),
         };
         let ctx = &self.ctx;
         let device = &ctx.device;
@@ -408,11 +459,6 @@ impl GpuChain {
             .take_shared
             .and_then(|slot| ctx.plane(slot).take(iw, ih));
         let shared_taken = shared.is_some();
-        // ⚠ A plane-only run that finds no plane has no pixels to work on: refuse, and the caller
-        // falls back to its CPU path. Refusing BEFORE allocating is what makes it cheap.
-        if matches!(input, Input::Plane(..)) && !shared_taken {
-            return None;
-        }
         let mut img = match shared {
             Some(img) => img,
             None => GpuImage::new(ctx, iw, ih)?,
@@ -451,7 +497,7 @@ impl GpuChain {
         // ⚠ Not marked: an encoder timestamp around this copy hangs wgpu 29's Metal backend — see
         // `timing.rs`'s module doc. The copy is inside the block's `copies+latency` instead.
         let staging = match (shared_taken, input) {
-            (true, _) | (false, Input::Plane(..)) => None,
+            (true, _) => None,
             // ⚠⚠ A GPU-resident input is COPIED, never used in place: stages write into `img`, and
             // the resident image must survive for the next frame of the drag. A GPU-side copy
             // costs a fraction of the staging upload it replaces, and counts as no upload.
@@ -470,6 +516,17 @@ impl GpuChain {
                 self.uploads.fetch_add(1, Ordering::Relaxed);
                 Some(staging)
             }
+        };
+        // ⚠⚠ **The kept input is copied BEFORE any stage is encoded**, in the same encoder, so it
+        // is the pristine upload — what the tail's next frame will run from. A GPU-side copy of
+        // 82 MB costs ~1 ms against the 8-10 ms upload it saves on every frame after this one.
+        let kept_input = match keep {
+            Keep::Input => {
+                let k = GpuImage::new(ctx, iw, ih)?;
+                enc.copy_buffer_to_buffer(&img.buffer, 0, &k.buffer, 0, bytes);
+                Some(k)
+            }
+            Keep::Nothing | Keep::Output => None,
         };
 
         // ── every stage, one pass ─────────────────────────────────────────────────────
@@ -577,13 +634,25 @@ impl GpuChain {
         // after this submission, so it reads the finished pixels without this thread waiting.
         // That wait and the 82 MB copy out are what a handoff exists to skip.
         if mode == Download::None {
-            let slot = self.offer_output?;
+            // ⚠ No readback: submit, and either hand the output to the caller or deposit it for
+            // the next chain. One or the other — a buffer cannot be in two places — and a run
+            // that would do neither has nowhere to put its pixels.
+            if keep != Keep::Output && self.offer_output.is_none() {
+                return None;
+            }
             if let Some(r) = rec.as_ref() {
                 r.resolve(&mut enc);
             }
             let t_submit = std::time::Instant::now();
             ctx.queue.submit(Some(enc.finish()));
-            ctx.plane(slot).deposit(ow, oh, img);
+            let kept = if keep == Keep::Output {
+                Some(img)
+            } else {
+                if let Some(slot) = self.offer_output {
+                    ctx.plane(slot).deposit(ow, oh, img);
+                }
+                kept_input
+            };
             // ⚠⚠ **Dropped, NOT returned to the staging cache.** Nothing waited for the GPU, so the
             // copy out of this buffer may still be in flight; handing it back would let the next
             // upload overwrite it mid-copy — a plausible wrong frame. wgpu keeps a dropped buffer
@@ -611,7 +680,7 @@ impl GpuChain {
                     d_memcpy.as_secs_f64() * 1e3,
                 );
             }
-            return Some(Vec::new());
+            return Some((Vec::new(), kept));
         }
         let t_submit = std::time::Instant::now();
         let (src, out_bytes) = match &packed {
@@ -665,9 +734,16 @@ impl GpuChain {
         //
         // ⚠ A deposit nobody takes is cleared by the enclosing mask's `end_mask`, which stops it
         // outliving its frame.
-        if let Some(slot) = self.offer_output {
-            ctx.plane(slot).deposit(ow, oh, img);
-        }
+        //
+        // ⚠ Or KEPT: an output the caller asked for goes to the caller, never to the slot as well.
+        let kept = if keep == Keep::Output {
+            Some(img)
+        } else {
+            if let Some(slot) = self.offer_output {
+                ctx.plane(slot).deposit(ow, oh, img);
+            }
+            kept_input
+        };
         let out: Vec<u8> = slice.get_mapped_range().to_vec();
         readback.unmap();
         self.downloads.fetch_add(1, Ordering::Relaxed);
@@ -695,7 +771,7 @@ impl GpuChain {
         if let Some(st) = staging {
             ctx.cache.put_staging(st);
         }
-        Some(out)
+        Some((out, kept))
     }
 }
 
@@ -711,8 +787,8 @@ impl PipelineStage for GpuChain {
             return image;
         }
         let (w, h) = self.output_dims(image.width(), image.height());
-        match crate::guarded(|| self.run_with(Input::Cpu(&image), Download::Float)) {
-            Some(data) => ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()),
+        match crate::guarded(|| self.run_with(Input::Cpu(&image), Download::Float, Keep::Nothing)) {
+            Some((data, _)) => ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()),
             None => self.cpu_fallback(image),
         }
     }
@@ -1450,17 +1526,114 @@ mod tests {
     fn a_timed_handoff_chain_waits_for_its_readings() {
         let Some(ctx) = timing_ctx() else { return };
         let mut chain = three_stages(&ctx);
-        chain.offer_output(Slot::Prefix);
         chain.set_timing(true);
-        let out = chain.run_to_plane(&ramp(32, 32));
-        // ⚠ Clear whatever was deposited, whether or not the run succeeded: a plane left in the
-        // slot would be found by the next test on this thread.
-        ctx.prefix_plane().clear();
+        let out = chain.run_keeping_output(Input::Cpu(&ramp(32, 32)), false);
         out.expect("the handoff path must be available here");
         let t = chain.last_timings().expect("timed");
         assert!(t.waited_for_timing);
         let names: Vec<&str> = t.entries.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["exposure", "contrast", "exposure"]);
+    }
+
+    /// ⚠⚠ **The kept input is the PRISTINE upload** — copied before any stage touched it — and a
+    /// later run from it produces the bytes an upload would. Asserted both ways: the kept image
+    /// downloads to the input, and `run_rgba8_from` on it equals `run_rgba8` on the input.
+    #[test]
+    fn a_kept_input_is_the_pristine_upload_and_serves_the_next_run() {
+        let Some(ctx) = ctx() else { return };
+        let img = ramp(40, 30);
+        let chain = three_stages(&ctx);
+        let (bytes, kept) = chain.run_rgba8_keeping_input(&img).expect("gpu");
+        assert_eq!(chain.transfer_counts().0, 1, "the miss uploads once");
+        let plain = chain.run_rgba8(&img).expect("gpu");
+        assert_eq!(bytes, plain, "keeping the input must not change a byte");
+        let back = kept.download(&ctx).expect("download");
+        assert_eq!(
+            back.data(),
+            img.data(),
+            "the kept image is the input, untouched"
+        );
+        let again = three_stages(&ctx);
+        let hit = again.run_rgba8_from(&kept).expect("gpu");
+        assert_eq!(
+            again.transfer_counts().0,
+            0,
+            "a run from the resident uploads nothing"
+        );
+        assert_eq!(hit, plain, "and renders the same bytes");
+        // The float twin, for the proof and the other float views.
+        let (out, kept) = three_stages(&ctx).apply_keeping_input(img.clone());
+        let kept = kept.expect("kept on the float path too");
+        assert_eq!(kept.download(&ctx).expect("download").data(), img.data());
+        assert_eq!(
+            out.data(),
+            pipeline::PipelineStage::apply(&three_stages(&ctx), img.clone()).data()
+        );
+    }
+
+    /// ⚠⚠ **The kept output is the chain's result, with and without a download.** The no-download
+    /// form returns before the GPU finishes, so its correctness rests on queue order: the download
+    /// submitted afterwards must read the finished pixels.
+    #[test]
+    fn a_kept_output_is_the_chains_result_with_or_without_a_download() {
+        let Some(ctx) = ctx() else { return };
+        let img = ramp(40, 30);
+        let want = pipeline::PipelineStage::apply(&three_stages(&ctx), img.clone());
+        let (out, kept) = three_stages(&ctx)
+            .run_keeping_output(Input::Cpu(&img), true)
+            .expect("gpu");
+        let out = out.expect("a download was asked for");
+        assert_eq!(out.data(), want.data(), "the downloaded output");
+        assert_eq!(
+            kept.download(&ctx).expect("download").data(),
+            want.data(),
+            "the kept output is the same pixels"
+        );
+        let (out, kept) = three_stages(&ctx)
+            .run_keeping_output(Input::Cpu(&img), false)
+            .expect("gpu");
+        assert!(out.is_none(), "no download was asked for");
+        assert_eq!(
+            kept.download(&ctx).expect("download").data(),
+            want.data(),
+            "the handoff's output, read after the fact"
+        );
+        // And from a resident input: the drag's steady state.
+        let resident = GpuImage::upload(&ctx, &img).expect("upload");
+        let chain = three_stages(&ctx);
+        let (_, kept) = chain
+            .run_keeping_output(Input::Resident(&resident), false)
+            .expect("gpu");
+        assert_eq!(
+            chain.transfer_counts().0,
+            0,
+            "a resident input uploads nothing"
+        );
+        assert_eq!(kept.download(&ctx).expect("download").data(), want.data());
+        assert_eq!(
+            resident.download(&ctx).expect("download").data(),
+            img.data(),
+            "and the resident input survives untouched"
+        );
+    }
+
+    /// A kept output is handed to the caller, never ALSO deposited: one buffer, one owner.
+    #[test]
+    fn a_kept_output_is_not_deposited_as_well() {
+        let Some(ctx) = ctx() else { return };
+        ctx.prefix_plane().clear();
+        let before = ctx.prefix_plane().deposits();
+        let mut chain = three_stages(&ctx);
+        chain.offer_output(Slot::Prefix);
+        let (_, kept) = chain
+            .run_keeping_output(Input::Cpu(&ramp(16, 16)), false)
+            .expect("gpu");
+        assert_eq!((kept.width(), kept.height()), (16, 16));
+        assert_eq!(
+            ctx.prefix_plane().deposits(),
+            before,
+            "the output went to the caller, so nothing was deposited"
+        );
     }
 
     /// Timing off keeps nothing and costs nothing: no query set, no readings.

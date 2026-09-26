@@ -106,7 +106,6 @@ fn main() {
                 profile: ProfileRendering::default(),
                 spec,
                 // ⚠ This probe builds no prefix at all — it asks about a MASK's producer.
-                prefix_offered: false,
             },
             ctx,
         );
@@ -154,7 +153,6 @@ fn main() {
                         region: None,
                         profile: ProfileRendering::default(),
                         spec,
-                        prefix_offered: false,
                     },
                     ctx,
                 );

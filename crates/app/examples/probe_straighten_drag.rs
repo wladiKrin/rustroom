@@ -117,6 +117,45 @@ fn main() {
         all[n / 10],
         all[n * 9 / 10]
     );
+    // ⚠ Release and settle (2026-09-26). The worker settles after 150 ms of quiet — with
+    // `RUSTROOM_DEBUG_RENDER=1` its own line says how — and the first tail-slider frames after
+    // the release are what the settle exists for: a tail with the prefix cached.
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let last_angle = 0.5 + 0.05 * (n - 1) as f32;
+    let tail_frame = |exposure: f32| -> f64 {
+        let mut e = base.clone();
+        e.geometry.angle = last_angle;
+        e.exposure = exposure;
+        let t = Instant::now();
+        engine.request(
+            e,
+            FrameSpec {
+                max_dim: rung,
+                region: None,
+                display_space: color::OutputSpace::Srgb,
+                resampler: pipeline::Resampler::default(),
+                gpu_tail: true,
+                grade_view: None,
+                soft_proof: None,
+                visualize: None,
+            },
+        );
+        loop {
+            if engine.poll_latest().is_some() {
+                return t.elapsed().as_secs_f64() * 1000.0;
+            }
+            std::thread::sleep(std::time::Duration::from_micros(200));
+        }
+    };
+    let after: Vec<f64> = (1..=6).map(|i| tail_frame(0.05 * i as f32)).collect();
+    eprintln!(
+        "tail frames after release: {}",
+        after
+            .iter()
+            .map(|ms| format!("{ms:.1}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
 }
 
 /// A window-like GPU load on its OWN device: one texture of the frame's size rewritten and
