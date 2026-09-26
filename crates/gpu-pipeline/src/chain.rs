@@ -33,6 +33,15 @@ pub trait GpuStage: Send + Sync {
         0
     }
 
+    /// This stage's output size for an input of `w` x `h`. Default: unchanged.
+    ///
+    /// ⚠⚠ **Only GPU geometry overrides it (2026-09-26)**, and it may only shrink or permute —
+    /// the chain writes the output into the same buffer (see `GpuImage::relabel`). It must agree
+    /// with the CPU twin's `PipelineStage::output_dims`; the geometry twin delegates to it.
+    fn output_dims(&self, w: usize, h: usize) -> (usize, usize) {
+        (w, h)
+    }
+
     /// Record this stage's dispatch. The image is bound at group 0, binding 0.
     ///
     /// ⚠ `scratch` holds exactly [`GpuStage::scratch_planes`] buffers — a slice rather than a
@@ -214,6 +223,13 @@ impl GpuChain {
     /// ⚠ [`crate::accelerate`] asks so it can decide whether the tail's output is
     /// display-referred. Asked rather than inferred from "`output_transform` is always last",
     /// which is true of today's pipeline and is an assumption rather than a guarantee.
+    /// The chain's output size for an input of `w` x `h`: every stage's `output_dims`, folded.
+    pub fn output_dims(&self, w: usize, h: usize) -> (usize, usize) {
+        self.stages
+            .iter()
+            .fold((w, h), |(w, h), s| s.output_dims(w, h))
+    }
+
     pub fn last_name(&self) -> Option<&'static str> {
         self.stages.last().map(|s| s.name())
     }
@@ -251,11 +267,14 @@ impl GpuChain {
             .take_shared
             .and_then(|slot| ctx.plane(slot).take(image.width(), image.height()));
         let shared_taken = shared.is_some();
-        let img = match shared {
+        let mut img = match shared {
             Some(img) => img,
             None => GpuImage::new(ctx, image.width(), image.height())?,
         };
         let bytes = img.bytes();
+        // ⚠⚠ The output size, known before anything is encoded. Everything after the pass — the
+        // quantise buffer, the readback, the deposit — is sized from THIS, never from `image`.
+        let (ow, oh) = self.output_dims(image.width(), image.height());
 
         // ── upload, once ──────────────────────────────────────────────────────────────
         // ⚠ A `MAP_WRITE` staging buffer rather than `queue.write_buffer`: measured 1.86 ms
@@ -320,7 +339,7 @@ impl GpuChain {
             Download::Float => None,
             Download::Rgba8 => Some(device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("chain-packed"),
-                size: (image.width() * image.height() * 4) as u64,
+                size: (ow * oh * 4) as u64,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             })),
@@ -329,6 +348,10 @@ impl GpuChain {
             let mut pass = enc.begin_compute_pass(&Default::default());
             for s in &self.stages {
                 s.encode(ctx, &mut pass, &img, &scratch);
+                // ⚠ Relabelled BETWEEN stages, so a stage after a resize dispatches over the new
+                // size. wgpu 29's pass holds no borrow of `img`, which is what makes this legal.
+                let (w, h) = s.output_dims(img.width(), img.height());
+                img.relabel(w, h);
             }
             // ⚠ Inside the **same** pass, so it sees every stage's writes under the in-pass
             // barrier this chain already depends on and measures.
@@ -345,8 +368,8 @@ impl GpuChain {
         let d_memcpy = t_memcpy.elapsed();
         let t_submit = std::time::Instant::now();
         let (src, out_bytes) = match &packed {
-            Some(p) => (p, (image.width() * image.height() * 4) as u64),
-            None => (&img.buffer, bytes),
+            Some(p) => (p, (ow * oh * 4) as u64),
+            None => (&img.buffer, img.bytes()),
         };
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("chain-readback"),
@@ -381,7 +404,7 @@ impl GpuChain {
         // ⚠ A deposit nobody takes is cleared by the enclosing mask's `end_mask`, which stops it
         // outliving its frame.
         if let Some(slot) = self.offer_output {
-            ctx.plane(slot).deposit(image.width(), image.height(), img);
+            ctx.plane(slot).deposit(ow, oh, img);
         }
         let out: Vec<u8> = slice.get_mapped_range().to_vec();
         readback.unmap();
@@ -429,7 +452,7 @@ impl PipelineStage for GpuChain {
         if self.stages.is_empty() {
             return image;
         }
-        let (w, h) = (image.width(), image.height());
+        let (w, h) = self.output_dims(image.width(), image.height());
         match crate::guarded(|| self.run_with(&image, Download::Float)) {
             Some(data) => ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()),
             None => self.cpu_fallback(image),
@@ -983,5 +1006,92 @@ mod tests {
         for (i, (s, o)) in small.data().iter().zip(out.data()).enumerate() {
             assert_eq!(*o, s * 2.0, "sample {i} is wrong after a larger render");
         }
+    }
+
+    /// A stage that keeps the top half of the image. Its output is the leading prefix of the
+    /// buffer, so its GPU encode moves nothing: it tests the chain's SIZE plumbing and nothing else.
+    struct TopHalf(TopHalfCpu);
+    struct TopHalfCpu;
+    impl PipelineStage for TopHalfCpu {
+        fn name(&self) -> &'static str {
+            "top_half"
+        }
+        fn apply(&self, image: ImageBuf) -> ImageBuf {
+            let (w, h) = (image.width(), image.height());
+            image.crop(0, 0, w, h / 2)
+        }
+        fn output_dims(&self, w: usize, h: usize) -> (usize, usize) {
+            (w, h / 2)
+        }
+    }
+    impl GpuStage for TopHalf {
+        fn name(&self) -> &'static str {
+            "top_half"
+        }
+        fn cpu_cost(&self) -> f32 {
+            1000.0
+        }
+        fn output_dims(&self, w: usize, h: usize) -> (usize, usize) {
+            (w, h / 2)
+        }
+        fn encode(
+            &self,
+            _: &GpuContext,
+            _: &mut wgpu::ComputePass,
+            _: &GpuImage,
+            _: &[wgpu::Buffer],
+        ) {
+        }
+        fn cpu(&self) -> &dyn PipelineStage {
+            &self.0
+        }
+    }
+
+    /// ⚠⚠ **A stage may change the image's size (GPU geometry, 2026-09-26)**, and everything after
+    /// it must see the NEW size: a later stage's dispatch, the quantise, the readback, the deposit
+    /// and the image handed back. An exposure AFTER the resize proves the relabel reaches later
+    /// stages; the byte count and the plane's dimensions prove it reaches the ends.
+    #[test]
+    fn a_size_changing_stage_is_honoured_to_the_end_of_the_chain() {
+        let Some(ctx) = ctx() else { return };
+        let src = ramp(32, 20);
+        let chain = || {
+            GpuChain::new(
+                ctx.clone(),
+                vec![
+                    Box::new(TopHalf(TopHalfCpu)),
+                    Box::new(GpuExposureStage::new(1.0, ctx.clone())),
+                ],
+            )
+        };
+        let c = chain();
+        let out = c.apply(src.clone());
+        assert_eq!(
+            c.transfer_counts(),
+            (1, 1),
+            "fixture: the GPU path must have run"
+        );
+        assert_eq!((out.width(), out.height()), (32, 10));
+        let want = src.crop(0, 0, 32, 10);
+        for (i, (w, o)) in want.data().iter().zip(out.data()).enumerate() {
+            assert_eq!(*o, w * 2.0, "sample {i}");
+        }
+        assert_eq!(c.output_dims(32, 20), (32, 10));
+
+        let bytes = chain().run_rgba8(&src).expect("the GPU path");
+        assert_eq!(bytes.len(), 32 * 10 * 4);
+
+        let mut offering = chain();
+        offering.offer_output(Slot::Mask);
+        let _ = offering.apply(src.clone());
+        assert!(
+            ctx.plane(Slot::Mask).take(32, 20).is_none(),
+            "deposited at the INPUT size"
+        );
+        let _ = offering.apply(src);
+        assert!(
+            ctx.plane(Slot::Mask).take(32, 10).is_some(),
+            "not deposited at the output size"
+        );
     }
 }
