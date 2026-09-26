@@ -59,6 +59,9 @@ pub(crate) struct PrefixCache {
     pub(crate) mid_budget: usize,
     /// The last dehaze airlight and the key it was computed under. See [`Self::airlight`].
     airlight: Option<(pipeline::AirlightKey, [f32; 3])>,
+    /// ONE checkpoint held on the GPU, with its key: the input of the last GPU prefix step that
+    /// started a render. See [`Self::resident`].
+    resident: Option<(CacheKey, gpu_pipeline::GpuImage)>,
     /// How many times [`Self::airlight`] actually ran the replay — the observable its tests read.
     #[cfg(test)]
     pub(crate) airlight_replays: usize,
@@ -132,9 +135,34 @@ impl PrefixCache {
             mids: Vec::new(),
             mid_budget,
             airlight: None,
+            resident: None,
             #[cfg(test)]
             airlight_replays: 0,
         }
+    }
+
+    /// The checkpoint under `key` as a GPU-resident image, uploading `img` only if it is not the
+    /// one already held. Returns the image and whether it was uploaded now.
+    ///
+    /// ⚠⚠ **Why one slot is enough (2026-09-26).** A drag of a prefix step resumes from the SAME
+    /// checkpoint on every frame — for a Straighten drag, the one before the geometry — so after
+    /// the first frame this is a hit, and the step's 82 MB upload at rung 3200 disappears. A
+    /// different drag replaces it on its first frame.
+    ///
+    /// ⚠ `key` is the checkpoint's full `CacheKey`, rung included, so a rung change misses rather
+    /// than handing back an image of the wrong size. `None` when the GPU refuses the allocation;
+    /// the caller then uploads through the chain as before.
+    pub(crate) fn resident(
+        &mut self,
+        key: &CacheKey,
+        img: &ImageBuf,
+        ctx: &gpu_pipeline::GpuContext,
+    ) -> Option<(&gpu_pipeline::GpuImage, bool)> {
+        let hit = self.resident.as_ref().is_some_and(|(k, _)| k == key);
+        if !hit {
+            self.resident = Some((key.clone(), gpu_pipeline::GpuImage::upload(ctx, img)?));
+        }
+        self.resident.as_ref().map(|(_, r)| (r, !hit))
     }
 
     /// The frame-global dehaze airlight for `edits`, replayed only when its key changes.

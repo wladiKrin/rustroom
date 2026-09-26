@@ -59,6 +59,17 @@ impl GpuImage {
         })
     }
 
+    /// Upload `image` into a new GPU buffer that outlives any one chain run — the resident input.
+    ///
+    /// ⚠ `write_buffer` stages internally and is ordered before any later submission on the same
+    /// queue, so a chain run submitted after this reads the uploaded pixels.
+    pub fn upload(ctx: &GpuContext, image: &core_image::ImageBuf) -> Option<Self> {
+        let img = Self::new(ctx, image.width(), image.height())?;
+        ctx.queue
+            .write_buffer(&img.buffer, 0, bytemuck::cast_slice(image.data()));
+        Some(img)
+    }
+
     pub fn width(&self) -> usize {
         self.width
     }

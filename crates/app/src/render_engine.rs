@@ -975,6 +975,11 @@ pub struct Ran {
     /// how creative LUTs (W5) shipped fully tested and 100% dead. `prefix_stages`, `bytes` and
     /// `gpu_prefix_steps` all exist for this reason.
     pub region_scoped: bool,
+    /// How many uploads the GPU prefix steps paid, the resident input's included.
+    ///
+    /// ⚠ An observable for the resident input (2026-09-26): a drag frame after the first must
+    /// read 0, and nothing else in the frame can tell a resident hit from an upload.
+    pub gpu_prefix_uploads: usize,
 }
 
 /// How long a quiet request channel means the gesture has settled, after a region-scoped render.
@@ -1094,6 +1099,7 @@ fn render_cached(
 
     // Resume from the deepest checkpoint still held. `n == 0` is the bare downscale.
     let mut gpu_prefix_steps = 0usize;
+    let mut gpu_prefix_uploads = 0usize;
     // ⚠⚠ Whether the prefix left a resident plane for the tail's first chain to take. See the
     // loop below: it goes **false** the moment a CPU step runs, because the parked plane is then
     // no longer the tail's input.
@@ -1292,7 +1298,25 @@ fn render_cached(
                     g.offer_output(gpu_pipeline::Slot::Prefix);
                     gpu_prefix_steps += 1;
                     prefix_offered = true;
-                    g.apply((*img).clone())
+                    // ⚠⚠ **The resident input, for the FIRST step this render runs** — the one a
+                    // drag resumes at on every frame. Later steps take the previous step's plane
+                    // instead. Any `None` falls back to the ordinary upload.
+                    let from_resident = if i == start {
+                        let ctx = gpu_pipeline::shared();
+                        ctx.and_then(|ctx| cache.resident(&key_at(i), &img, ctx))
+                            .and_then(|(r, uploaded)| {
+                                gpu_prefix_uploads += usize::from(uploaded);
+                                g.apply_from(r)
+                            })
+                    } else {
+                        None
+                    };
+                    let out = match from_resident {
+                        Some(out) => out,
+                        None => g.apply((*img).clone()),
+                    };
+                    gpu_prefix_uploads += g.transfer_counts().0;
+                    out
                 }
                 None => {
                     // ⚠⚠ **THE CLEAR, AND WITHOUT IT THIS RENDERS A PLAUSIBLE PHOTOGRAPH.** A CPU
@@ -1620,6 +1644,7 @@ fn render_cached(
         Ran {
             prefix_stages,
             gpu_prefix_steps,
+            gpu_prefix_uploads,
             region_scoped,
             bytes,
         },
@@ -2446,6 +2471,68 @@ mod tests {
             "fixture check: there must be exactly one prefix step to accelerate"
         );
         assert_eq!(ran.gpu_prefix_steps, 1, "dehaze must have run on the GPU");
+    }
+
+    fn straightened(angle: f32, cache: &mut PrefixCache) -> (RenderedFrame, Ran) {
+        straightened_at(angle, 200, cache)
+    }
+
+    fn straightened_at(angle: f32, rung: usize, cache: &mut PrefixCache) -> (RenderedFrame, Ran) {
+        let mut e = Edits::default();
+        e.geometry.angle = angle;
+        render_cached(
+            &hazy_buffer(),
+            &e,
+            FrameSpec {
+                gpu_tail: true,
+                ..FrameSpec::fit(rung)
+            },
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            pipeline::ProfileRendering::default(),
+            cache,
+            &mut BrushCache::default(),
+        )
+    }
+
+    /// ⚠⚠ **The resident input (2026-09-26): a Straighten drag uploads once, not per frame.**
+    /// Both halves: the second frame pays NO upload, and its picture is byte-identical to the
+    /// same angle rendered through a fresh cache (a resident miss), so a hit cannot be serving a
+    /// stale or wrong image.
+    #[test]
+    fn a_straighten_drag_uploads_its_input_once() {
+        if gpu_pipeline::shared().is_none() {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        }
+        let mut cache = PrefixCache::default();
+        let (_, first) = straightened(2.0, &mut cache);
+        assert_eq!(
+            first.gpu_prefix_steps, 1,
+            "fixture check: geometry ran on the GPU"
+        );
+        assert_eq!(first.gpu_prefix_uploads, 1, "the first frame uploads");
+        let (second, ran) = straightened(3.0, &mut cache);
+        assert_eq!(ran.gpu_prefix_steps, 1);
+        assert_eq!(
+            ran.gpu_prefix_uploads, 0,
+            "a later frame of the drag must not upload"
+        );
+        let (fresh, _) = straightened(3.0, &mut PrefixCache::default());
+        assert_eq!(
+            second.rgba, fresh.rgba,
+            "a resident hit must render what a miss renders"
+        );
+        // ⚠ A different rung is a different checkpoint: it must miss, never be served the 200 px
+        // image the slot holds.
+        let (other, ran) = straightened_at(3.0, 120, &mut cache);
+        assert_eq!(
+            ran.gpu_prefix_uploads, 1,
+            "a rung change must upload its own input"
+        );
+        let (fresh, _) = straightened_at(3.0, 120, &mut PrefixCache::default());
+        assert_eq!(other.rgba, fresh.rgba);
     }
 
     /// ⚠ The other direction, and it is not symmetry: without it a seam that fired
