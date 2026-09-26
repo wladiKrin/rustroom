@@ -8,6 +8,9 @@
 //! the same stage, the same cost.
 //!
 //! Run: `RUSTROOM_DEBUG_RENDER=1 cargo run --release -p app --example probe_straighten_drag <raw> [rung]`
+//! With `RUSTROOM_DEBUG_GPU_TIME=1` as well, every chain prints a `GPUTIME` block: the GPU time of
+//! each stage's pass and the quantise, the GPU span, and the wall's remainder as `copies+latency`.
+//! ⚠ A timed run opens one pass per stage, so quote its wall only beside the untimed one.
 
 use rustroom_app::render_engine::{FrameSpec, RenderEngine};
 use std::sync::Arc;

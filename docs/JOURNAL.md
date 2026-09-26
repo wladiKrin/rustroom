@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [GPU timestamps: per-pass GPU time in the running app (2026-09-26)](#2026-09-26--gpu-timestamps-per-pass-gpu-time-in-the-running-app-branch-gpu-timestamps)
 - [M5.1c — the parametric curve (2026-09-26)](#2026-09-26--m51c-the-parametric-curve-branch-m51c-parametric-curve)
 - [GPU geometry, a resident input and a no-download handoff (2026-09-26)](#2026-09-26--gpu-geometry-a-resident-input-and-a-no-download-handoff-branch-gpu-geometry)
 - [A Straighten drag's other half: airlight and histogram (2026-09-26)](#2026-09-26--a-straighten-drags-other-half-airlight-and-histogram-branch-drag-frame-overheads)
@@ -154,6 +155,69 @@ goldens unmoved.
 - ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
+
+### 2026-09-26 — GPU timestamps: per-pass GPU time in the running app (branch `gpu-timestamps`)
+
+**2,950 tests** (10 added), 78 goldens unmoved, gate green (`FMT=0 CLIPPY=0 TEST=0`, each from its
+own command). Spec `2026-09-26-gpu-timestamps-design.md`, plan of the same date. **Not yet
+confirmed by use.** The first row of `docs/PIPELINE-REVIEW-2026-09-26.md`'s list: the instrument
+every GPU item there rests on.
+
+**What shipped.** `RUSTROOM_DEBUG_GPU_TIME=1` makes every `GpuChain::run_with` open **one compute
+pass per stage** with timestamp writes, resolve them beside the readback, and print a `GPUTIME`
+block: each pass's GPU time, the quantise, the GPU span, the wall submit+wait, and the wall's
+remainder as `copies+latency`. Off, the path is byte for byte what shipped. `GpuContext` requests
+`TIMESTAMP_QUERY | TIMESTAMP_QUERY_INSIDE_ENCODERS` when the adapter offers them; a device without
+them prints one line and runs untimed. `crates/gpu-pipeline/src/timing.rs` holds the pure assembly
+(unit-tested with no GPU) and the `Recorder`; `chain.rs` carries the marks and `set_timing` /
+`last_timings` for the tests.
+
+**⚠⚠ The copies are NOT marked, and the spec was amended after the first run.** The approved design
+bracketed the upload and readback copies with encoder timestamps. wgpu 29's Metal backend defers a
+`write_timestamp` outside a pass onto a dummy blit encoder (its own source: "here be dragons"), the
+command buffer never reaches `Completed`, and `wgpu_hal::metal::Device::wait` checks for nothing
+else — so `poll(Wait)` spun forever on the render worker. Found because
+`a_timed_run_produces_the_untimed_bytes` hung for ten minutes on 26 s of CPU; a stack sample put it
+in `Device::wait`'s sleep loop, and removing the two marks made it pass in 0.04 s. Not fixable from
+here. ⚠ Apple silicon also lacks `AtDispatchBoundary` sampling, so a timestamp cannot be written
+between two dispatches inside one pass; that is why the timed path is one pass per stage, which
+M8.3b's sabotage had already shown changes no pixel.
+
+**⚠ The perturbation, stated.** A timed drag frame is **48.6 ms against 38.2 untimed** on the run
+below: the pass boundaries, the resolve, and the handoff chain waiting when it otherwise would not.
+Quote a timed run's per-pass numbers, never its wall.
+
+**Measured, DSCF6263 at rung 3200 (6.8 Mpx), `probe_straighten_drag`, 40 frames, ⚠ load 7–10 from
+the Obsidian RAG indexer and a Julia process, so NOT a quiet machine.** Medians:
+
+| chain | pass | GPU ms |
+|---|---|---|
+| tail `tone_curve+display_rendering+output_transform` | tone_curve | **2.93** |
+| | display_rendering | **2.18** |
+| | output_transform | **2.16** |
+| | quantise (27 MB out) | **1.45** |
+| | gpu span / wall / copies+latency | 8.85 / 12.91 / 3.80 |
+| `geometry` (Catmull-Rom, seed + gather, resident input) | geometry | **15.72** |
+| | gpu span / wall / copies+latency | 15.72 / 28.66 / 11.41 |
+| `lens_correction` (cold, 2 runs) | lens_correction | 37.3 |
+
+**What it settles.**
+- **A full-frame per-pixel pass costs ~2.2 ms at 6.8 Mpx** on this GPU. The review inferred 3–4;
+  the truth is lower but not by enough to change the answer: the fusion spec's stop rule was "under
+  1 ms", and it is above it. Three per-pixel passes are 7.3 ms of this tail; a nine-stage tail
+  would be ~20.
+- **The untimed tail submit+wait (31.1 ms median here) is mostly real GPU work**: the geometry
+  gather it waits behind (15.7) plus its own passes (8.9) is 24.6, leaving ~6.5 ms for the resident
+  copy, the readback and queue latency. The prefix→tail seam is not where the time goes.
+- **The geometry gather is the single largest pass**: seed (three planes) plus a 4×4 gather over
+  6.8 Mpx. Bilinear was measured at ~4.5 ms less in the GPU-geometry entry; the seed's 82 MB read
+  and write is a fixed ~2 ms of it. Its own item, not this one's.
+- The app-versus-probe gap is unmeasured here — this is the probe. The block now prints what it
+  needs: run the app with the flag and compare `copies+latency` there against 3.8 ms here.
+
+**Sabotage run and caught:** keeping the single pass reports `["stages"]` against the four names.
+
+`grep -n 'GPU timestamps' docs/JOURNAL.md`.
 
 ### 2026-09-26 — M5.1c: the parametric curve (branch `m5.1c-parametric-curve`)
 

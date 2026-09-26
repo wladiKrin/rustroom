@@ -55,6 +55,15 @@ pub struct GpuContext {
     /// `max_buffer_size` and `max_storage_buffer_binding_size` both apply — and under
     /// `Limits::default()` they are 256 MiB and **128 MiB**, so the binding is the tighter one.
     max_image_bytes: u64,
+    /// Whether this device granted `TIMESTAMP_QUERY` and `TIMESTAMP_QUERY_INSIDE_ENCODERS`.
+    ///
+    /// ⚠⚠ Both, not either: a pass-boundary timestamp needs the first and an encoder mark around a
+    /// copy needs the second. Apple silicon grants both; it does NOT grant
+    /// `TIMESTAMP_QUERY_INSIDE_PASSES` (wgpu gates that on `AtDispatchBoundary` counter sampling),
+    /// which is why `timing.rs` times one PASS per stage rather than one dispatch.
+    timestamps: bool,
+    /// Nanoseconds per timestamp tick, from the queue.
+    timestamp_period: f32,
 }
 
 impl GpuContext {
@@ -97,11 +106,20 @@ impl GpuContext {
         let max_image_bytes = limits
             .max_buffer_size
             .min(limits.max_storage_buffer_binding_size);
+        // ⚠ Requested only when the adapter offers them, so this cannot make `request_device`
+        // fail where it succeeded before. A device without them runs every chain untimed and
+        // `timing::note_unsupported` says so once.
+        let wanted =
+            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+        let features = adapter.features() & wanted;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: features,
             required_limits: limits,
             ..Default::default()
         }))
         .ok()?;
+        let timestamps = features.contains(wanted);
+        let timestamp_period = queue.get_timestamp_period();
         Some(Self {
             device,
             queue,
@@ -111,6 +129,8 @@ impl GpuContext {
             adapter_name: info.name,
             backend: format!("{:?}", info.backend),
             max_image_bytes,
+            timestamps,
+            timestamp_period,
         })
     }
 
@@ -159,6 +179,16 @@ impl GpuContext {
     /// second rule to keep in step.
     pub fn max_image_bytes(&self) -> u64 {
         self.max_image_bytes
+    }
+
+    /// Whether chains can time themselves on this device. See the field.
+    pub fn timestamps(&self) -> bool {
+        self.timestamps
+    }
+
+    /// Nanoseconds per timestamp tick.
+    pub fn timestamp_period(&self) -> f32 {
+        self.timestamp_period
     }
 }
 
@@ -217,5 +247,20 @@ mod tests {
             std::sync::Arc::ptr_eq(a, b),
             "shared() must hand back the same context, not build another"
         );
+    }
+
+    /// The device reports whether it can time itself, and a device that can has a tick period.
+    #[test]
+    fn timestamp_support_is_reported_with_its_period() {
+        let Some(ctx) = shared() else {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        };
+        if ctx.timestamps() {
+            assert!(
+                ctx.timestamp_period() > 0.0,
+                "a timestamp device has a positive period"
+            );
+        }
     }
 }

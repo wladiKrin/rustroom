@@ -134,6 +134,14 @@ pub struct GpuChain {
     /// push — and nowhere else.
     take_shared: Option<Slot>,
     offer_output: Option<Slot>,
+    /// Whether this chain times itself. See `timing.rs`.
+    ///
+    /// ⚠ Read from `RUSTROOM_DEBUG_GPU_TIME` at construction and settable per chain, so a test can
+    /// turn it on for one chain without touching the process environment — which is shared by
+    /// every test running beside it.
+    timing: bool,
+    /// What the last timed run measured, for the tests and for a probe that wants a table.
+    last_timings: std::sync::Mutex<Option<crate::timing::Timings>>,
 }
 
 impl GpuChain {
@@ -145,6 +153,8 @@ impl GpuChain {
             downloads: AtomicUsize::new(0),
             take_shared: None,
             offer_output: None,
+            timing: std::env::var_os("RUSTROOM_DEBUG_GPU_TIME").is_some(),
+            last_timings: std::sync::Mutex::new(None),
         }
     }
 
@@ -201,6 +211,25 @@ impl GpuChain {
             self.uploads.load(Ordering::Relaxed),
             self.downloads.load(Ordering::Relaxed),
         )
+    }
+
+    /// Turn per-stage GPU timing on or off for this chain. See `timing.rs`.
+    pub fn set_timing(&mut self, on: bool) {
+        self.timing = on;
+    }
+
+    /// What the last timed run measured, or `None` if no run was timed.
+    pub fn last_timings(&self) -> Option<crate::timing::Timings> {
+        self.last_timings.lock().ok()?.clone()
+    }
+
+    /// The chain's stages, joined — the label every debug line uses.
+    fn label(&self) -> String {
+        self.stages
+            .iter()
+            .map(|s| s.name())
+            .collect::<Vec<_>>()
+            .join("+")
     }
 
     /// The widest scratch request among this chain's stages.
@@ -318,6 +347,19 @@ impl GpuChain {
         };
         let ctx = &self.ctx;
         let device = &ctx.device;
+        // ⚠ One recorder per timed run, sized from this chain: one pair per stage and one for
+        // the quantise. `None` keeps the untimed path byte for byte.
+        let mut rec = if !self.timing {
+            None
+        } else if ctx.timestamps() {
+            Some(crate::timing::Recorder::new(
+                ctx,
+                self.stages.len() as u32 + 1,
+            ))
+        } else {
+            crate::timing::note_unsupported();
+            None
+        };
         // ⚠⚠ **The shared upload (M8.3l).** When this chain is a mask's first sub-stage, the
         // plane it is about to upload is the one that mask's auto-mask gate uploaded moments ago —
         // the same bytes, in the same `w*h*3` f32 layout, already resident. Taking it deletes a
@@ -368,6 +410,8 @@ impl GpuChain {
         // `gpu-pipeline` change" — this is that change, and it is a print, not a path.
         let t_memcpy = std::time::Instant::now();
         let mut enc = device.create_command_encoder(&Default::default());
+        // ⚠ Not marked: an encoder timestamp around this copy hangs wgpu 29's Metal backend — see
+        // `timing.rs`'s module doc. The copy is inside the block's `copies+latency` instead.
         let staging = match (shared_taken, input) {
             (true, _) | (false, Input::Plane(..)) => None,
             // ⚠⚠ A GPU-resident input is COPIED, never used in place: stages write into `img`, and
@@ -418,19 +462,47 @@ impl GpuChain {
                 mapped_at_creation: false,
             })),
         };
-        {
-            let mut pass = enc.begin_compute_pass(&Default::default());
-            for s in &self.stages {
-                s.encode(ctx, &mut pass, &img, &scratch);
-                // ⚠ Relabelled BETWEEN stages, so a stage after a resize dispatches over the new
-                // size. wgpu 29's pass holds no borrow of `img`, which is what makes this legal.
-                let (w, h) = s.output_dims(img.width(), img.height());
-                img.relabel(w, h);
+        match rec.as_mut() {
+            None => {
+                let mut pass = enc.begin_compute_pass(&Default::default());
+                for s in &self.stages {
+                    s.encode(ctx, &mut pass, &img, &scratch);
+                    // ⚠ Relabelled BETWEEN stages, so a stage after a resize dispatches over the
+                    // new size. wgpu 29's pass holds no borrow of `img`, which is what makes this
+                    // legal.
+                    let (w, h) = s.output_dims(img.width(), img.height());
+                    img.relabel(w, h);
+                }
+                // ⚠ Inside the **same** pass, so it sees every stage's writes under the in-pass
+                // barrier this chain already depends on and measures.
+                if let Some(p) = &packed {
+                    crate::quantize::encode(ctx, &mut pass, &img, p);
+                }
             }
-            // ⚠ Inside the **same** pass, so it sees every stage's writes under the in-pass
-            // barrier this chain already depends on and measures.
-            if let Some(p) = &packed {
-                crate::quantize::encode(ctx, &mut pass, &img, p);
+            Some(r) => {
+                // ⚠⚠ ONE PASS PER STAGE, timing mode only. Apple silicon writes a timestamp at a
+                // pass boundary and nowhere inside one, so this is the only way to a per-stage
+                // figure. M8.3b's sabotage established that the split changes no pixel; its cost
+                // is what `Timings::print` shows against the untimed wall.
+                for s in &self.stages {
+                    let p = r.pair(s.name());
+                    let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some(s.name()),
+                        timestamp_writes: Some(r.pass_writes(p)),
+                    });
+                    s.encode(ctx, &mut pass, &img, &scratch);
+                    drop(pass);
+                    let (w, h) = s.output_dims(img.width(), img.height());
+                    img.relabel(w, h);
+                }
+                if let Some(pk) = &packed {
+                    let p = r.pair("quantise");
+                    let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("quantise"),
+                        timestamp_writes: Some(r.pass_writes(p)),
+                    });
+                    crate::quantize::encode(ctx, &mut pass, &img, pk);
+                }
             }
         }
 
@@ -445,6 +517,10 @@ impl GpuChain {
         // That wait and the 82 MB copy out are what a handoff exists to skip.
         if mode == Download::None {
             let slot = self.offer_output?;
+            if let Some(r) = rec.as_ref() {
+                r.resolve(&mut enc);
+            }
+            let t_submit = std::time::Instant::now();
             ctx.queue.submit(Some(enc.finish()));
             ctx.plane(slot).deposit(ow, oh, img);
             // ⚠⚠ **Dropped, NOT returned to the staging cache.** Nothing waited for the GPU, so the
@@ -452,14 +528,20 @@ impl GpuChain {
             // upload overwrite it mid-copy — a plausible wrong frame. wgpu keeps a dropped buffer
             // alive until its submission completes, which is exactly the lifetime needed.
             drop(staging);
+            // ⚠ Timed, a handoff chain waits — the one thing it otherwise never does. The block
+            // says so, and the untimed `RUSTROOM_DEBUG_XFER` line is the control.
+            if let Some(r) = rec.take() {
+                if let Some(t) = r.finish(ctx, t_submit, true) {
+                    t.print(&self.label(), iw, ih);
+                    if let Ok(mut g) = self.last_timings.lock() {
+                        *g = Some(t);
+                    }
+                }
+            }
             if std::env::var("RUSTROOM_DEBUG_XFER").is_ok() {
                 eprintln!(
                     "CHAIN {:>26} {}x{} -> plane {}x{} took={} memcpy={:.2} (no download)",
-                    self.stages
-                        .iter()
-                        .map(|s| s.name())
-                        .collect::<Vec<_>>()
-                        .join("+"),
+                    self.label(),
                     iw,
                     ih,
                     ow,
@@ -481,7 +563,12 @@ impl GpuChain {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
+        // ⚠ The readback copy is not marked either (`timing.rs`); the resolve goes in behind it so
+        // the ticks travel in the same submission.
         enc.copy_buffer_to_buffer(src, 0, &readback, 0, out_bytes);
+        if let Some(r) = rec.as_ref() {
+            r.resolve(&mut enc);
+        }
         ctx.queue.submit(Some(enc.finish()));
 
         let slice = readback.slice(..);
@@ -495,6 +582,16 @@ impl GpuChain {
         });
         rx.recv().ok()?.ok()?;
         let d_submit = t_submit.elapsed();
+        // ⚠ After the chain's own wait, so `finish`'s wait returns at once and the wall it records
+        // is this chain's own submit+wait.
+        if let Some(r) = rec.take() {
+            if let Some(t) = r.finish(ctx, t_submit, false) {
+                t.print(&self.label(), iw, ih);
+                if let Ok(mut g) = self.last_timings.lock() {
+                    *g = Some(t);
+                }
+            }
+        }
         let t_read = std::time::Instant::now();
         // ⚠⚠ **Deposited HERE and nowhere earlier**, after `poll(Wait)` has confirmed the
         // submission finished — the GPU writes this buffer during the submit, so offering it any
@@ -517,11 +614,7 @@ impl GpuChain {
             eprintln!(
                 "CHAIN {:>26} {}x{} in={:.1}MB out={:.1}MB took={} memcpy={:.2} submit={:.2} \
                  tovec={:.2}",
-                self.stages
-                    .iter()
-                    .map(|s| s.name())
-                    .collect::<Vec<_>>()
-                    .join("+"),
+                self.label(),
                 iw,
                 ih,
                 bytes as f64 / 1.0e6,
@@ -1197,5 +1290,114 @@ mod tests {
             ctx.plane(Slot::Mask).take(32, 10).is_some(),
             "not deposited at the output size"
         );
+    }
+
+    /// A chain whose stages move pixels, timing OFF whatever the environment says — so a test
+    /// run under `RUSTROOM_DEBUG_GPU_TIME` still tests the untimed path where it means to.
+    fn three_stages(ctx: &Arc<GpuContext>) -> GpuChain {
+        let mut c = GpuChain::new(
+            ctx.clone(),
+            vec![
+                Box::new(GpuExposureStage::new(1.0, ctx.clone())),
+                Box::new(crate::GpuContrastStage::new(25.0, ctx)),
+                Box::new(GpuExposureStage::new(-0.5, ctx.clone())),
+            ],
+        );
+        c.set_timing(false);
+        c
+    }
+
+    fn timing_ctx() -> Option<Arc<GpuContext>> {
+        let ctx = ctx()?;
+        if !ctx.timestamps() {
+            eprintln!("SKIPPED: no timestamp queries on this GPU");
+            return None;
+        }
+        Some(ctx)
+    }
+
+    /// One pass per stage changes no byte: the timed run IS the untimed run, measured.
+    #[test]
+    fn a_timed_run_produces_the_untimed_bytes() {
+        let Some(ctx) = timing_ctx() else { return };
+        let img = ramp(64, 48);
+        let want = three_stages(&ctx).run_rgba8(&img).expect("gpu");
+        assert_ne!(want, img.to_rgba8(), "the fixture must move pixels");
+        let mut timed = three_stages(&ctx);
+        timed.set_timing(true);
+        let got = timed.run_rgba8(&img).expect("gpu");
+        assert_eq!(got, want, "one pass per stage must change no byte");
+    }
+
+    /// ⚠⚠ The observable. A sabotage that keeps the single pass reports one stage entry, not
+    /// three, and fails the name list.
+    #[test]
+    fn a_timed_run_reports_one_entry_per_stage_in_order() {
+        let Some(ctx) = timing_ctx() else { return };
+        let mut chain = three_stages(&ctx);
+        chain.set_timing(true);
+        chain.run_rgba8(&ramp(64, 48)).expect("gpu");
+        let t = chain
+            .last_timings()
+            .expect("a timed run keeps its readings");
+        let names: Vec<&str> = t.entries.iter().map(|(n, _)| n.as_str()).collect();
+        // ⚠ Passes only: the copies cannot be marked on Metal (`timing.rs`).
+        assert_eq!(names, ["exposure", "contrast", "exposure", "quantise"]);
+        for (name, d) in &t.entries {
+            let d = d.unwrap_or_else(|| panic!("{name} was marked and must have a duration"));
+            assert!(
+                d > 0.0 && d <= t.wall_ms,
+                "{name}: {d:.3} ms against a wall of {:.3}",
+                t.wall_ms
+            );
+        }
+        assert!(
+            t.gpu_span_ms > 0.0 && t.gpu_span_ms <= t.wall_ms,
+            "span {}",
+            t.gpu_span_ms
+        );
+        assert!(
+            !t.waited_for_timing,
+            "an ordinary chain waited on its own account"
+        );
+    }
+
+    /// The float path has no quantise.
+    #[test]
+    fn a_timed_float_run_has_no_quantise_entry() {
+        let Some(ctx) = timing_ctx() else { return };
+        let mut chain = three_stages(&ctx);
+        chain.set_timing(true);
+        let _ = chain.apply(ramp(32, 32));
+        let t = chain.last_timings().expect("timed");
+        let names: Vec<&str> = t.entries.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["exposure", "contrast", "exposure"]);
+    }
+
+    /// A handoff chain normally submits and returns; timed, it waits and says so.
+    #[test]
+    fn a_timed_handoff_chain_waits_for_its_readings() {
+        let Some(ctx) = timing_ctx() else { return };
+        let mut chain = three_stages(&ctx);
+        chain.offer_output(Slot::Prefix);
+        chain.set_timing(true);
+        let out = chain.run_to_plane(&ramp(32, 32));
+        // ⚠ Clear whatever was deposited, whether or not the run succeeded: a plane left in the
+        // slot would be found by the next test on this thread.
+        ctx.prefix_plane().clear();
+        out.expect("the handoff path must be available here");
+        let t = chain.last_timings().expect("timed");
+        assert!(t.waited_for_timing);
+        let names: Vec<&str> = t.entries.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["exposure", "contrast", "exposure"]);
+    }
+
+    /// Timing off keeps nothing and costs nothing: no query set, no readings.
+    #[test]
+    fn an_untimed_run_keeps_no_timings() {
+        let Some(ctx) = ctx() else { return };
+        let chain = three_stages(&ctx);
+        chain.run_rgba8(&ramp(16, 16)).expect("gpu");
+        assert!(chain.last_timings().is_none());
     }
 }
