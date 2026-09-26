@@ -439,6 +439,25 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                         }
                                     });
                                 ui.end_row();
+                                ui.label("Rendering intent");
+                                // ⚠ Disabled, not hidden, for ProPhoto: the working space maps
+                                // nothing, and a row that vanishes moves the grid under the pointer.
+                                ui.add_enabled_ui(opts.space != color::OutputSpace::ProPhoto, |ui| {
+                                    egui::ComboBox::from_id_salt("intent_pick")
+                                        .selected_text(opts.intent.label())
+                                        .show_ui(ui, |ui| {
+                                            for i in color::RenderingIntent::ALL {
+                                                ui.selectable_value(&mut opts.intent, i, i.label());
+                                            }
+                                        })
+                                        .response
+                                        .on_hover_text(
+                                            "Perceptual compresses saturated colour to keep its \
+                                             gradation; Relative colorimetric leaves in-gamut colour \
+                                             untouched and cuts the rest at the gamut's edge. Both keep hue.",
+                                        );
+                                });
+                                ui.end_row();
                             });
                         if let Some(msg) = banding_warning(opts.space, opts.format) {
                             theme::hint(ui, msg);
