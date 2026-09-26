@@ -242,7 +242,8 @@ Every planned phase closed except **M7.3b** (since done, 2026-09-25), so the roa
   only as the record of the broken-`ls` check in *Standing lessons* below.
 
 **▶ The order the user set: M7.3b ✅, the drag-frame fixes ✅ and GPU geometry ✅ (all merged and
-confirmed by use 2026-09-26); next is Phase 9's checklist from the top.** A Straighten drag on
+confirmed by use 2026-09-26); Phase 9's checklist from the top — M5.1c (parametric curve) is built on
+`m5.1c-parametric-curve`, awaiting use; M6.4c (rendering intents) is next.** A Straighten drag on
 DSCF6263: **~97 → ~41 ms per frame in the app** (85.0 → 28.8 ms headless). ⚠ The remaining app-vs-probe
 gap (~10–12 ms) is GPU submit+wait, and it is **NOT** the window's per-frame upload: freezing the window
 changed nothing, so the shared-device idea is ⛔ declined on that measurement (`docs/BACKLOG.md`). The
