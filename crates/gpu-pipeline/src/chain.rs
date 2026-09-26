@@ -42,6 +42,16 @@ pub trait GpuStage: Send + Sync {
         (w, h)
     }
 
+    /// This stage as one per-pixel function for a `w` x `h` image, or `None`.
+    ///
+    /// ⚠⚠ **`None` is the default, so a stage that reads neighbours declines BY CONSTRUCTION** —
+    /// sharpening, local contrast, NR, dehaze, lens, geometry and a mask inherit it and keep their
+    /// own `encode`. The twelve per-pixel twins return a [`crate::per_pixel::Part`], and the
+    /// chain folds a run of them into one dispatch; see that module.
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<crate::per_pixel::Part<'_>> {
+        None
+    }
+
     /// Record this stage's dispatch. The image is bound at group 0, binding 0.
     ///
     /// ⚠ `scratch` holds exactly [`GpuStage::scratch_planes`] buffers — a slice rather than a
@@ -142,6 +152,13 @@ pub struct GpuChain {
     timing: bool,
     /// What the last timed run measured, for the tests and for a probe that wants a table.
     last_timings: std::sync::Mutex<Option<crate::timing::Timings>>,
+    /// Whether runs of per-pixel twins fuse. From `RUSTROOM_NO_FUSION` at construction; settable
+    /// per chain for the tests, like `timing`.
+    fusion: bool,
+    /// Fused runs and single stages this chain has encoded — the observable, since a fused chain
+    /// and an unfused one produce the same picture by design.
+    fused_units: AtomicUsize,
+    single_units: AtomicUsize,
 }
 
 impl GpuChain {
@@ -155,6 +172,9 @@ impl GpuChain {
             offer_output: None,
             timing: std::env::var_os("RUSTROOM_DEBUG_GPU_TIME").is_some(),
             last_timings: std::sync::Mutex::new(None),
+            fusion: crate::per_pixel::fusion_enabled(),
+            fused_units: AtomicUsize::new(0),
+            single_units: AtomicUsize::new(0),
         }
     }
 
@@ -218,6 +238,27 @@ impl GpuChain {
         self.timing = on;
     }
 
+    /// Fuse runs of per-pixel twins, or encode each on its own.
+    pub fn set_fusion(&mut self, on: bool) {
+        self.fusion = on;
+    }
+
+    /// `(fused runs, single stages)` this chain has encoded.
+    pub fn encode_units(&self) -> (usize, usize) {
+        (
+            self.fused_units.load(Ordering::Relaxed),
+            self.single_units.load(Ordering::Relaxed),
+        )
+    }
+
+    fn count_unit(&self, unit: &crate::per_pixel::Unit<'_>) {
+        let counter = match unit {
+            crate::per_pixel::Unit::Fused(_) => &self.fused_units,
+            crate::per_pixel::Unit::Single(_) => &self.single_units,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// What the last timed run measured, or `None` if no run was timed.
     pub fn last_timings(&self) -> Option<crate::timing::Timings> {
         self.last_timings.lock().ok()?.clone()
@@ -253,13 +294,10 @@ impl GpuChain {
     }
 
     /// Run every stage's CPU twin, in order.
-    fn cpu_fallback(&self, mut image: ImageBuf) -> ImageBuf {
+    fn cpu_fallback(&self, image: ImageBuf) -> ImageBuf {
         // ⚠ Every stage, not some — a partially-GPU result would be a third rendering path
-        // nobody designed.
-        for s in &self.stages {
-            image = s.cpu().apply(image);
-        }
-        image
+        // nobody designed. Through the fused runner, like every other CPU list.
+        pipeline::run_stages(self.stages.iter().map(|s| s.cpu()), image)
     }
 
     /// The name of the stage this chain ends with, if any.
@@ -465,13 +503,24 @@ impl GpuChain {
         match rec.as_mut() {
             None => {
                 let mut pass = enc.begin_compute_pass(&Default::default());
-                for s in &self.stages {
-                    s.encode(ctx, &mut pass, &img, &scratch);
-                    // ⚠ Relabelled BETWEEN stages, so a stage after a resize dispatches over the
+                let mut i = 0;
+                while i < self.stages.len() {
+                    // ⚠ A run of per-pixel twins is ONE unit and one dispatch — `per_pixel.rs`.
+                    let (unit, next) = crate::per_pixel::next_unit(
+                        &self.stages,
+                        i,
+                        img.width(),
+                        img.height(),
+                        self.fusion,
+                    );
+                    self.count_unit(&unit);
+                    unit.encode(ctx, &mut pass, &img, &scratch);
+                    // ⚠ Relabelled BETWEEN units, so a unit after a resize dispatches over the
                     // new size. wgpu 29's pass holds no borrow of `img`, which is what makes this
                     // legal.
-                    let (w, h) = s.output_dims(img.width(), img.height());
+                    let (w, h) = unit.output_dims(img.width(), img.height());
                     img.relabel(w, h);
+                    i = next;
                 }
                 // ⚠ Inside the **same** pass, so it sees every stage's writes under the in-pass
                 // barrier this chain already depends on and measures.
@@ -480,20 +529,32 @@ impl GpuChain {
                 }
             }
             Some(r) => {
-                // ⚠⚠ ONE PASS PER STAGE, timing mode only. Apple silicon writes a timestamp at a
-                // pass boundary and nowhere inside one, so this is the only way to a per-stage
+                // ⚠⚠ ONE PASS PER UNIT, timing mode only. Apple silicon writes a timestamp at a
+                // pass boundary and nowhere inside one, so this is the only way to a per-unit
                 // figure. M8.3b's sabotage established that the split changes no pixel; its cost
-                // is what `Timings::print` shows against the untimed wall.
-                for s in &self.stages {
-                    let p = r.pair(s.name());
+                // is what `Timings::print` shows against the untimed wall. A fused run is one unit
+                // and reports as one pass under its members' joined names.
+                let mut i = 0;
+                while i < self.stages.len() {
+                    let (unit, next) = crate::per_pixel::next_unit(
+                        &self.stages,
+                        i,
+                        img.width(),
+                        img.height(),
+                        self.fusion,
+                    );
+                    self.count_unit(&unit);
+                    let label = unit.label();
+                    let p = r.pair(&label);
                     let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some(s.name()),
+                        label: Some(&label),
                         timestamp_writes: Some(r.pass_writes(p)),
                     });
-                    s.encode(ctx, &mut pass, &img, &scratch);
+                    unit.encode(ctx, &mut pass, &img, &scratch);
                     drop(pass);
-                    let (w, h) = s.output_dims(img.width(), img.height());
+                    let (w, h) = unit.output_dims(img.width(), img.height());
                     img.relabel(w, h);
+                    i = next;
                 }
                 if let Some(pk) = &packed {
                     let p = r.pair("quantise");
@@ -1116,20 +1177,28 @@ mod tests {
         // same shader would hit rather than miss, so the delta is 0 either way, while an absolute
         // count would depend on who got there first.
         let Some(ctx) = ctx() else { return };
-        let chain = GpuChain::new(
-            ctx.clone(),
-            vec![Box::new(GpuExposureStage::new(1.0, ctx.clone()))],
-        );
+        // ⚠ The text the cache is keyed on is what the emitter produces for a run of one, at this
+        // image's size — a lone per-pixel twin has no shader of its own any more.
+        let stage = GpuExposureStage::new(1.0, ctx.clone());
+        let (row_groups, _) = crate::dispatch::Dispatch::grid(64 * 64);
+        let shader = crate::per_pixel::emit(
+            &[GpuStage::per_pixel(&stage, 64, 64).expect("exposure is per-pixel")],
+            64 * 64,
+            row_groups,
+            64,
+        )
+        .shader;
+        let chain = GpuChain::new(ctx.clone(), vec![Box::new(stage)]);
         let img = ramp(64, 64);
         let _ = chain.apply(img.clone());
-        let before = ctx.cache.misses_for(crate::exposure::SHADER);
+        let before = ctx.cache.misses_for(&shader);
         assert!(
             before > 0,
             "fixture check: the first run compiled nothing, so this test proves nothing"
         );
         let _ = chain.apply(img);
         assert_eq!(
-            ctx.cache.misses_for(crate::exposure::SHADER),
+            ctx.cache.misses_for(&shader),
             before,
             "the second run of an identical chain recompiled its shader"
         );
@@ -1304,6 +1373,8 @@ mod tests {
             ],
         );
         c.set_timing(false);
+        // ⚠ Fusion off too, so the per-stage timing tests keep measuring one pass per stage.
+        c.set_fusion(false);
         c
     }
 
@@ -1399,5 +1470,97 @@ mod tests {
         let chain = three_stages(&ctx);
         chain.run_rgba8(&ramp(16, 16)).expect("gpu");
         assert!(chain.last_timings().is_none());
+    }
+
+    /// Eight per-pixel twins are ONE fused unit, and with fusion off they are eight — through
+    /// the same emitter, so the two agree within the twins' bound.
+    #[test]
+    fn a_run_of_per_pixel_twins_is_one_fused_unit() {
+        let Some(ctx) = ctx() else { return };
+        let stages = |ctx: &Arc<GpuContext>| -> Vec<Box<dyn GpuStage>> {
+            vec![
+                Box::new(crate::GpuWhiteBalanceStage::new([1.05, 0.98, 1.02], ctx)),
+                Box::new(GpuExposureStage::new(0.4, ctx.clone())),
+                Box::new(crate::GpuContrastStage::new(15.0, ctx)),
+                Box::new(crate::GpuToneRegionsStage::new(
+                    &edit_model::Edits {
+                        highlights: -20.0,
+                        shadows: 25.0,
+                        ..Default::default()
+                    },
+                    ctx,
+                )),
+                Box::new(crate::GpuToneCurveStage::new(
+                    &[[0.0, 0.0], [0.4, 0.5], [1.0, 1.0]],
+                    ctx,
+                )),
+                Box::new(crate::GpuSaturationStage::new(20.0, 10.0, ctx)),
+                Box::new(crate::GpuDisplayRenderingStage::new(None, None, ctx)),
+                Box::new(crate::GpuOutputTransformStage::new(
+                    color::OutputSpace::Srgb,
+                    ctx,
+                )),
+            ]
+        };
+        let img = ramp(64, 48);
+        let mut fused = GpuChain::new(ctx.clone(), stages(&ctx));
+        fused.set_fusion(true);
+        let a = fused.apply(img.clone());
+        assert_eq!(fused.encode_units(), (1, 0), "one fused run, no single");
+        let mut apart = GpuChain::new(ctx.clone(), stages(&ctx));
+        apart.set_fusion(false);
+        let b = apart.apply(img.clone());
+        assert_eq!(apart.encode_units(), (8, 0), "eight runs of one");
+        let d = crate::equivalence::compare(&a, &b);
+        assert!(
+            d.worst_levels <= 0.25,
+            "fused and unfused differ by {} levels",
+            d.worst_levels
+        );
+        assert_ne!(
+            a.data(),
+            img.data(),
+            "fixture check: the chain moves pixels"
+        );
+    }
+
+    /// A non-per-pixel stage splits the run: sharpening between two per-pixel twins gives three
+    /// units, two fused and one single.
+    #[test]
+    fn a_spatial_stage_ends_a_fused_run() {
+        let Some(ctx) = ctx() else { return };
+        let mut chain = GpuChain::new(
+            ctx.clone(),
+            vec![
+                Box::new(GpuExposureStage::new(0.3, ctx.clone())),
+                Box::new(crate::GpuSharpenStage::new(
+                    &edit_model::Sharpening {
+                        amount: 40.0,
+                        radius: 1.0,
+                        detail: 50.0,
+                        masking: 0.0,
+                    },
+                    pipeline::RenderScale::FULL,
+                    &ctx,
+                )),
+                Box::new(crate::GpuContrastStage::new(10.0, &ctx)),
+            ],
+        );
+        chain.set_fusion(true);
+        let _ = chain.apply(ramp(32, 32));
+        assert_eq!(chain.encode_units(), (2, 1));
+    }
+
+    /// A timed fused run reports its members as one pass, labelled with all of them.
+    #[test]
+    fn a_timed_fused_run_is_one_pass() {
+        let Some(ctx) = timing_ctx() else { return };
+        let mut chain = three_stages(&ctx);
+        chain.set_fusion(true);
+        chain.set_timing(true);
+        chain.run_rgba8(&ramp(32, 32)).expect("gpu");
+        let t = chain.last_timings().expect("timed");
+        let names: Vec<&str> = t.entries.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["exposure+contrast+exposure", "quantise"]);
     }
 }

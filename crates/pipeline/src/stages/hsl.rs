@@ -73,53 +73,61 @@ impl HslStage {
     }
 }
 
+impl crate::per_pixel::PerPixel for HslStage {
+    fn px(&self, _x: usize, _y: usize, rgb: [f32; 3]) -> [f32; 3] {
+        let table = &self.table;
+        let [l, a, b] = prophoto_to_oklab(rgb);
+        let chroma = (a * a + b * b).sqrt();
+        if chroma < EPS {
+            return rgb; // neutral — nothing to band-match
+        }
+        let hue = {
+            let d = b.atan2(a).to_degrees();
+            if d < 0.0 {
+                d + 360.0
+            } else {
+                d
+            }
+        };
+
+        let [mut dh, mut sat, mut lum] = table.sample(hue);
+
+        // Fade the whole adjustment out as chroma approaches zero, where hue is noise.
+        let t = (chroma / CHROMA_FADE).min(1.0);
+        let strength = t * t * (3.0 - 2.0 * t); // smoothstep
+        dh *= strength;
+        sat *= strength;
+        lum *= strength;
+
+        // ⚠⚠ `cos(hue)` and `sin(hue)` are already in hand — they are `a / chroma` and
+        // `b / chroma`. Expanding `cos(hue + δ)` and multiplying by the new chroma, the
+        // chroma CANCELS, so the rotation costs two small-angle polynomials and four
+        // multiplies instead of two libm calls, and it never performs the division the
+        // naive form of this identity would need. It also drops the `atan2 -> cos` round
+        // trip, so `hue` survives only as an index into the band model.
+        let delta = (dh * MAX_HUE_SHIFT_DEG / 100.0).to_radians();
+        let (cd, sd) = (cos_small(delta), sin_small(delta));
+        // ⚠ Unreachable given the ±100 slider range, which puts `k` in [0, 2]: defence in
+        // depth, and an unreachable guard is an untested one.
+        let k = (1.0 + sat / 100.0).max(0.0);
+        let l2 = (l * (1.0 + lum / 200.0)).max(0.0);
+
+        let out = oklab_to_prophoto([l2, k * (a * cd - b * sd), k * (a * sd + b * cd)]);
+        [out[0].max(0.0), out[1].max(0.0), out[2].max(0.0)]
+    }
+}
+
 impl PipelineStage for HslStage {
     fn name(&self) -> &'static str {
         "hsl"
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
-        let table = &self.table;
-        image.map_pixels(|rgb| {
-            let [l, a, b] = prophoto_to_oklab(rgb);
-            let chroma = (a * a + b * b).sqrt();
-            if chroma < EPS {
-                return rgb; // neutral — nothing to band-match
-            }
-            let hue = {
-                let d = b.atan2(a).to_degrees();
-                if d < 0.0 {
-                    d + 360.0
-                } else {
-                    d
-                }
-            };
+        crate::per_pixel::apply_one(self, image)
+    }
 
-            let [mut dh, mut sat, mut lum] = table.sample(hue);
-
-            // Fade the whole adjustment out as chroma approaches zero, where hue is noise.
-            let t = (chroma / CHROMA_FADE).min(1.0);
-            let strength = t * t * (3.0 - 2.0 * t); // smoothstep
-            dh *= strength;
-            sat *= strength;
-            lum *= strength;
-
-            // ⚠⚠ `cos(hue)` and `sin(hue)` are already in hand — they are `a / chroma` and
-            // `b / chroma`. Expanding `cos(hue + δ)` and multiplying by the new chroma, the
-            // chroma CANCELS, so the rotation costs two small-angle polynomials and four
-            // multiplies instead of two libm calls, and it never performs the division the
-            // naive form of this identity would need. It also drops the `atan2 -> cos` round
-            // trip, so `hue` survives only as an index into the band model.
-            let delta = (dh * MAX_HUE_SHIFT_DEG / 100.0).to_radians();
-            let (cd, sd) = (cos_small(delta), sin_small(delta));
-            // ⚠ Unreachable given the ±100 slider range, which puts `k` in [0, 2]: defence in
-            // depth, and an unreachable guard is an untested one.
-            let k = (1.0 + sat / 100.0).max(0.0);
-            let l2 = (l * (1.0 + lum / 200.0)).max(0.0);
-
-            let out = oklab_to_prophoto([l2, k * (a * cd - b * sd), k * (a * sd + b * cd)]);
-            [out[0].max(0.0), out[1].max(0.0), out[2].max(0.0)]
-        })
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<Box<dyn crate::per_pixel::PerPixel + '_>> {
+        Some(Box::new(self))
     }
 }
 

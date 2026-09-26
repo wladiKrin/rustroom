@@ -16,12 +16,12 @@ const MODE_SRGB: u32 = 0;
 const MODE_ADOBE: u32 = 1;
 const MODE_PROPHOTO: u32 = 2;
 
-const SHADER: &str = r#"
-struct Params {
-    pixels: u32,
-    row_groups: u32,
+const WGSL: &str = r#"
+struct Params_output_transform {
     mode: u32,
     pad0: u32,
+    pad1: u32,
+    pad2: u32,
     // ⚠ Three vec4 rows rather than a mat3x3: a mat3x3 in a uniform is padded to three vec4s
     // anyway, and writing the rows explicitly means the Rust side cannot disagree with WGSL's
     // alignment rules about where each number lives.
@@ -30,11 +30,9 @@ struct Params {
     r2: vec4<f32>,
     adobe_gamma: f32,
     prophoto_toe_end: f32,
-    pad1: f32,
-    pad2: f32,
+    pad3: f32,
+    pad4: f32,
 };
-@group(0) @binding(0) var<storage, read_write> data: array<f32>;
-@group(0) @binding(1) var<uniform> params: Params;
 
 // ⚠⚠ **Clamp FIRST.** Out-of-gamut colour reaches this stage with negative components BY DESIGN
 // -- that is the point of a wide working space, and `OutputSpace::from_working`'s own doc says so.
@@ -52,34 +50,29 @@ struct Params {
 // luminance-range mask cannot come to disagree about the transfer curve -- the failure `color`'s
 // own doc records six copies of. Note it clamps again internally, which is harmless and is what
 // lets the rule live in exactly one place.
-fn encode_channel(v: f32, mode: u32) -> f32 {
+fn encode_channel_output_transform(v: f32, q: Params_output_transform) -> f32 {
     // ⚠ sRGB and Display P3 share this curve. Using gamma 2.2 for P3 is a common error and an
     // invisible one -- it is wrong by a few percent in the shadows, which reads as a contrast
     // preference rather than a bug.
-    if (mode == 0u) { return linear_to_srgb(v); }
+    if (q.mode == 0u) { return linear_to_srgb(v); }
     let c = clamp(v, 0.0, 1.0);
-    if (mode == 1u) { return pow(c, 1.0 / params.adobe_gamma); }
-    if (c < params.prophoto_toe_end) { return c * 16.0; }
+    if (q.mode == 1u) { return pow(c, 1.0 / q.adobe_gamma); }
+    if (c < q.prophoto_toe_end) { return c * 16.0; }
     return pow(c, 1.0 / 1.8);
 }
 
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel = id.y * (params.row_groups * 64u) + id.x;
-    if (pixel >= params.pixels) { return; }
-    let p = pixel * 3u;
-    let c = vec3<f32>(data[p], data[p + 1u], data[p + 2u]);
-
+fn apply_output_transform(p: vec3<f32>, x: u32, y: u32, q: Params_output_transform, base: u32) -> vec3<f32> {
     // ⚠ Primaries first, in linear light, then the transfer. Encoding before converting would
     // apply a matrix to gamma-encoded values, which is meaningless and does not fail loudly.
     let lin = vec3<f32>(
-        dot(params.r0.xyz, c),
-        dot(params.r1.xyz, c),
-        dot(params.r2.xyz, c),
+        dot(q.r0.xyz, p),
+        dot(q.r1.xyz, p),
+        dot(q.r2.xyz, p),
     );
-    data[p]      = encode_channel(lin.x, params.mode);
-    data[p + 1u] = encode_channel(lin.y, params.mode);
-    data[p + 2u] = encode_channel(lin.z, params.mode);
+    return vec3<f32>(
+        encode_channel_output_transform(lin.x, q),
+        encode_channel_output_transform(lin.y, q),
+        encode_channel_output_transform(lin.z, q));
 }
 "#;
 
@@ -135,13 +128,12 @@ impl GpuStage for GpuOutputTransformStage {
         img: &GpuImage,
         _scratch: &[wgpu::Buffer],
     ) {
-        let pixels = img.pixels();
-        let (row_groups, _) = crate::dispatch::Dispatch::grid(pixels);
+        crate::per_pixel::encode_single(self, ctx, pass, img);
+    }
 
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<crate::per_pixel::Part<'_>> {
         let mut params = [0u8; 80];
-        params[0..4].copy_from_slice(&pixels.to_le_bytes());
-        params[4..8].copy_from_slice(&row_groups.to_le_bytes());
-        params[8..12].copy_from_slice(&self.mode.to_le_bytes());
+        params[0..4].copy_from_slice(&self.mode.to_le_bytes());
         for (r, row) in self.rows.iter().enumerate() {
             for (c, v) in row.iter().enumerate() {
                 let at = 16 + r * 16 + c * 4;
@@ -150,17 +142,19 @@ impl GpuStage for GpuOutputTransformStage {
         }
         params[64..68].copy_from_slice(&color::ADOBE_RGB_GAMMA.to_le_bytes());
         params[68..72].copy_from_slice(&color::PROPHOTO_TOE_END.to_le_bytes());
-
-        crate::dispatch::Dispatch {
-            label: "output_transform",
-            // ⚠ The sRGB prelude is concatenated the way `luma_wgsl` and `OKLAB_WGSL` already are
-            // by their consumers, so `encode_channel`'s mode-0 branch calls a function this crate
-            // defines exactly once.
-            shader: format!("{}{}", crate::srgb_wgsl::SRGB_WGSL, SHADER),
+        Some(crate::per_pixel::Part {
+            name: "output_transform",
+            wgsl: WGSL.to_string(),
             params: params.to_vec(),
-            storages: &[],
-        }
-        .encode(ctx, pass, img);
+            tables: Vec::new(),
+            // ⚠ The sRGB prelude, so `encode_channel_output_transform`'s mode-0 branch calls a
+            // function this crate defines exactly once.
+            preludes: crate::per_pixel::Preludes {
+                srgb: true,
+                ..Default::default()
+            },
+            needs_position: false,
+        })
     }
 
     fn cpu(&self) -> &dyn PipelineStage {

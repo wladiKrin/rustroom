@@ -1916,6 +1916,140 @@ mod tests {
         pipeline::build_pipeline_split(e, SCALE, pipeline::ProfileRendering::colorimetric()).1
     }
 
+    fn tail_in_region(e: &Edits, region: Option<Region>) -> Pipeline {
+        pipeline::build_pipeline_split_in_region(
+            e,
+            SCALE,
+            region,
+            pipeline::ProfileRendering::colorimetric(),
+        )
+        .1
+    }
+
+    /// ⚠⚠ Every per-pixel stage active at once — a channel curve, a parametric curve, the camera
+    /// rendering and a region for the vignette — renders on the GPU within a bound of the CPU,
+    /// and the whole tail is ONE fused dispatch. First asserted to move pixels.
+    #[test]
+    fn the_whole_per_pixel_tail_fuses_and_matches_the_cpu() {
+        let Some(ctx) = ctx() else { return };
+        let mut e = graded(with_hsl());
+        e.white_balance = edit_model::WhiteBalance {
+            kelvin: Some(4800.0),
+            tint: -6.0,
+        };
+        e.exposure = 0.5;
+        e.contrast = 20.0;
+        e.highlights = -25.0;
+        e.shadows = 30.0;
+        e.whites = 10.0;
+        e.blacks = -10.0;
+        e.tone_curve.points = vec![[0.0, 0.0], [0.45, 0.5], [1.0, 1.0]];
+        e.tone_curve_red.points = vec![[0.0, 0.0], [0.5, 0.47], [1.0, 1.0]];
+        e.tone_curve_parametric.highlights = 20.0;
+        e.saturation = 15.0;
+        e.vibrance = 10.0;
+        e.vignette = edit_model::Vignette {
+            amount: -35.0,
+            ..Default::default()
+        };
+        e.rendering = Some(edit_model::Rendering::Camera);
+        let region = Some(Region {
+            full_w: 96,
+            full_h: 64,
+            x0: 8,
+            y0: 4,
+        });
+        let want = tail_in_region(&e, region).run(scene_ramp());
+        let neutral = tail_in_region(&Edits::default(), region).run(scene_ramp());
+        assert!(
+            crate::compare(&want, &neutral).worst_levels > 1.0,
+            "fixture check: the edits move pixels"
+        );
+        let (pipe, chain) = accelerate(
+            tail_in_region(&e, region),
+            &e,
+            SCALE,
+            TailFacts {
+                region,
+                profile: ProfileRendering::colorimetric(),
+                spec: RenderSpec::default(),
+                prefix_offered: false,
+            },
+            &ctx,
+        );
+        assert!(
+            pipe.stage_names().is_empty(),
+            "every stage has a twin: {:?}",
+            pipe.stage_names()
+        );
+        let chain = chain.expect("the tail is one chain");
+        let got = chain.apply(scene_ramp());
+        assert_eq!(
+            chain.encode_units(),
+            (1, 0),
+            "one fused dispatch for the whole tail"
+        );
+        let d = crate::compare(&want, &got);
+        assert!(
+            d.worst_levels <= 1.0,
+            "GPU differs from CPU by {} levels over {} of {} samples",
+            d.worst_levels,
+            d.differing,
+            d.total
+        );
+    }
+
+    /// The free part of fusion inside a mask: three per-pixel sub-stages are one fused dispatch
+    /// within the mask's own pass, beside the tail's own fused run after it.
+    #[test]
+    fn a_masks_per_pixel_sub_stages_are_one_fused_dispatch() {
+        let Some(ctx) = ctx() else { return };
+        if !crate::per_pixel::fusion_enabled() {
+            eprintln!("SKIPPED: RUSTROOM_NO_FUSION is set");
+            return;
+        }
+        let e = Edits {
+            masks: vec![mask_carrying(edit_model::LocalAdjustments {
+                exposure: 0.6,
+                contrast: 20.0,
+                saturation: 25.0,
+                ..Default::default()
+            })],
+            ..Edits::default()
+        };
+        let cpu = tail_of(&e).run(scene_ramp());
+        let unmasked = tail_of(&Edits::default()).run(scene_ramp());
+        assert!(
+            crate::compare(&cpu, &unmasked).worst_levels > 1.0,
+            "fixture check: the mask moves pixels"
+        );
+        let (p, c) = accelerate(
+            tail_of(&e),
+            &e,
+            SCALE,
+            TailFacts {
+                region: None,
+                profile: ProfileRendering::colorimetric(),
+                spec: RenderSpec::default(),
+                prefix_offered: false,
+            },
+            &ctx,
+        );
+        let before = crate::per_pixel::fused_dispatches();
+        let gpu = rejoin(p, c).run(scene_ramp());
+        assert_eq!(
+            crate::per_pixel::fused_dispatches() - before,
+            2,
+            "one fused dispatch inside the mask, one for the tail after it"
+        );
+        let d = crate::compare(&cpu, &gpu);
+        assert!(
+            d.worst_levels <= 0.25,
+            "GPU differs from CPU by {} levels",
+            d.worst_levels
+        );
+    }
+
     /// A mask carrying exactly what it is handed, under a full-frame linear gradient.
     fn mask_carrying(a: edit_model::LocalAdjustments) -> edit_model::MaskedAdjustment {
         edit_model::MaskedAdjustment {

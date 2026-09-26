@@ -168,14 +168,21 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-26)
 
-**2950 tests**, **78 goldens**. ✅ **GPU timestamps (2026-09-26, branch `gpu-timestamps`, not yet
-confirmed by use):** `RUSTROOM_DEBUG_GPU_TIME=1` prints a `GPUTIME` block per chain — one compute
-pass per stage, each pass's GPU time, the quantise, and the wall's remainder as `copies+latency`.
-⚠⚠ **The copies are not marked: an encoder timestamp outside a pass deadlocks wgpu 29's Metal
-backend** (the command buffer never completes and `Device::wait` checks for nothing else). ⚠ A
-timed frame is ~10 ms slower than an untimed one; quote per-pass numbers, never a timed wall.
-**Measured: a full-frame per-pixel pass is ~2.2 ms at 6.8 Mpx**, the Catmull-Rom geometry gather
-15.7, so the per-pixel fusion spec proceeds. `grep -n 'GPU timestamps' docs/JOURNAL.md`.
+**2967 tests**, **78 goldens**. ✅ **Per-pixel fusion (2026-09-26, branch `per-pixel-fusion`,
+stacked on `gpu-timestamps`, neither confirmed by use yet).** A run of consecutive per-pixel
+stages is ONE walk on the CPU (`pipeline::per_pixel`, bit-identical) and ONE dispatch on the GPU
+(`gpu_pipeline::per_pixel`, three bindings); grouping is at **run time**, the stage list is
+untouched; `RUSTROOM_NO_FUSION=1` is the A/B. Measured: the GPU whole tail **35.6 → 21.2 ms** at
+rung 3200, the author's sidecar drag 25.0 → 21.6, a Straighten frame ~30 → ~28. ⚠⚠ **The walk
+calls a stage once per ROW** — per pixel it read 200 → 299 ms on the CPU (61 M virtual calls);
+row-wise 177.6 → 172.0. ⚠ Three drag pairs at load 6–11 read fused 2–4 ms slower before the
+row-wise fix, unexplained; use decides. `grep -n 'per-pixel fusion' docs/JOURNAL.md`.
+✅ **GPU timestamps (same day, branch `gpu-timestamps`):** `RUSTROOM_DEBUG_GPU_TIME=1` prints a
+`GPUTIME` block per chain — one compute pass per unit, its GPU time, the quantise, and the wall's
+remainder as `copies+latency`. ⚠⚠ **The copies are not marked: an encoder timestamp outside a
+pass deadlocks wgpu 29's Metal backend.** ⚠ A timed frame is ~10 ms slower; quote per-pass
+numbers, never a timed wall. A full-frame per-pixel pass is ~2.2 ms at 6.8 Mpx, the Catmull-Rom
+geometry gather 15.7. `grep -n 'GPU timestamps' docs/JOURNAL.md`.
 ✅ **M7.3b (2026-09-25, confirmed by use and merged 2026-09-26)**
 fuses perspective into `GeometryStage`, reorders the prefix, and moves spots before perspective.
 `grep -n 'M7.3b' docs/JOURNAL.md`. ⚠⚠ **Its drag speedup applies only when NR or dehaze is on**,

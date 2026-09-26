@@ -29,27 +29,35 @@ impl SaturationStage {
     }
 }
 
+impl crate::per_pixel::PerPixel for SaturationStage {
+    fn px(&self, _x: usize, _y: usize, [r, g, b]: [f32; 3]) -> [f32; 3] {
+        let (f_sat, vib) = (self.f_sat, self.vib);
+        // ⚠ The pivot chroma is scaled around: real luminance in the working space.
+        let luma = color::luminance([r, g, b]);
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        // Current chroma in [0, 1]; 0 for neutrals, 1 for a fully saturated color.
+        let chroma = ((max - min) / max.max(EPS)).clamp(0.0, 1.0);
+        let f = f_sat * (1.0 + vib * (1.0 - chroma));
+        [
+            (luma + (r - luma) * f).max(0.0),
+            (luma + (g - luma) * f).max(0.0),
+            (luma + (b - luma) * f).max(0.0),
+        ]
+    }
+}
+
 impl PipelineStage for SaturationStage {
     fn name(&self) -> &'static str {
         "saturation"
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
-        let (f_sat, vib) = (self.f_sat, self.vib);
-        image.map_pixels(|[r, g, b]| {
-            // ⚠ The pivot chroma is scaled around: real luminance in the working space.
-            let luma = color::luminance([r, g, b]);
-            let max = r.max(g).max(b);
-            let min = r.min(g).min(b);
-            // Current chroma in [0, 1]; 0 for neutrals, 1 for a fully saturated color.
-            let chroma = ((max - min) / max.max(EPS)).clamp(0.0, 1.0);
-            let f = f_sat * (1.0 + vib * (1.0 - chroma));
-            [
-                (luma + (r - luma) * f).max(0.0),
-                (luma + (g - luma) * f).max(0.0),
-                (luma + (b - luma) * f).max(0.0),
-            ]
-        })
+        crate::per_pixel::apply_one(self, image)
+    }
+
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<Box<dyn crate::per_pixel::PerPixel + '_>> {
+        Some(Box::new(self))
     }
 }
 

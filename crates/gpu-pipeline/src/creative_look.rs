@@ -53,27 +53,24 @@ fn m(mat: &[[f32; 3]; 3]) -> String {
 /// ⚠⚠ **The domain remap comes FIRST and the clamp SECOND.** Clamping the raw value to `[0, 1]`
 /// before normalising out of the declared domain is `Cube::lookup`'s own recorded trap wearing a
 /// different hat, and it misplaces every sample while still producing a plausible image.
-fn shader() -> String {
+fn wgsl() -> String {
     format!(
         r#"
-struct Params {{
-    pixels: u32,
-    row_groups: u32,
+struct Params_creative_look {{
     size: u32,
     space: u32,
+    pad0: u32,
+    pad1: u32,
     dmin: vec3<f32>,
     blend: f32,
     dmax: vec3<f32>,
-    pad0: f32,
+    pad2: f32,
 }};
-@group(0) @binding(0) var<storage, read_write> data: array<f32>;
-@group(0) @binding(1) var<uniform> params: Params;
-@group(0) @binding(2) var<storage, read> cube: array<f32>;
 
-const PP_TO_SRGB: mat3x3<f32> = {pp_to_srgb};
-const SRGB_TO_PP: mat3x3<f32> = {srgb_to_pp};
+const PP_TO_SRGB_LOOK: mat3x3<f32> = {pp_to_srgb};
+const SRGB_TO_PP_LOOK: mat3x3<f32> = {srgb_to_pp};
 
-fn encode_c(v: f32, space: u32) -> f32 {{
+fn encode_creative_look(v: f32, space: u32) -> f32 {{
     let c = clamp(v, 0.0, 1.0);
     if (space == {tag_srgb}u) {{
         // sRGB's transfer: a 1/2.4 power with a 12.92 slope below 0.0031308.
@@ -86,7 +83,7 @@ fn encode_c(v: f32, space: u32) -> f32 {{
     return 1.099 * pow(c, 0.45) - 0.099;
 }}
 
-fn decode_c(v: f32, space: u32) -> f32 {{
+fn decode_creative_look(v: f32, space: u32) -> f32 {{
     let c = clamp(v, 0.0, 1.0);
     if (space == {tag_srgb}u) {{
         if (c <= 0.04045) {{ return c / 12.92; }}
@@ -98,17 +95,17 @@ fn decode_c(v: f32, space: u32) -> f32 {{
 
 /// The entry at integer cube coordinates. ⚠ Red varies fastest — the format's own ordering, and
 /// the same index `Cube::at` computes.
-fn cube_at(r: u32, g: u32, b: u32) -> vec3<f32> {{
-    let i = ((b * params.size + g) * params.size + r) * 3u;
-    return vec3<f32>(cube[i], cube[i + 1u], cube[i + 2u]);
+fn cube_at_creative_look(r: u32, g: u32, b: u32, size: u32, base: u32) -> vec3<f32> {{
+    let i = base + ((b * size + g) * size + r) * 3u;
+    return vec3<f32>(tables[i], tables[i + 1u], tables[i + 2u]);
 }}
 
-fn lookup(rgb: vec3<f32>) -> vec3<f32> {{
-    let n = params.size - 1u;
+fn lookup_creative_look(rgb: vec3<f32>, q: Params_creative_look, base: u32) -> vec3<f32> {{
+    let n = q.size - 1u;
     let fn_ = f32(n);
     // ⚠⚠ Normalise out of the declared domain FIRST, then clamp. The other order is the recorded
     // bug.
-    let t = (rgb - params.dmin) / (params.dmax - params.dmin);
+    let t = (rgb - q.dmin) / (q.dmax - q.dmin);
     let x = clamp(t, vec3<f32>(0.0), vec3<f32>(1.0)) * fn_;
     let fl = floor(x);
     // ⚠ `min(.., n - 1)` matches the CPU's `saturating_sub(1)`; `n` is at least 1 because
@@ -117,14 +114,14 @@ fn lookup(rgb: vec3<f32>) -> vec3<f32> {{
     let fr = x - vec3<f32>(lo);
     let hi = min(lo + vec3<u32>(1u), vec3<u32>(n));
 
-    let c000 = cube_at(lo.x, lo.y, lo.z);
-    let c100 = cube_at(hi.x, lo.y, lo.z);
-    let c010 = cube_at(lo.x, hi.y, lo.z);
-    let c110 = cube_at(hi.x, hi.y, lo.z);
-    let c001 = cube_at(lo.x, lo.y, hi.z);
-    let c101 = cube_at(hi.x, lo.y, hi.z);
-    let c011 = cube_at(lo.x, hi.y, hi.z);
-    let c111 = cube_at(hi.x, hi.y, hi.z);
+    let c000 = cube_at_creative_look(lo.x, lo.y, lo.z, q.size, base);
+    let c100 = cube_at_creative_look(hi.x, lo.y, lo.z, q.size, base);
+    let c010 = cube_at_creative_look(lo.x, hi.y, lo.z, q.size, base);
+    let c110 = cube_at_creative_look(hi.x, hi.y, lo.z, q.size, base);
+    let c001 = cube_at_creative_look(lo.x, lo.y, hi.z, q.size, base);
+    let c101 = cube_at_creative_look(hi.x, lo.y, hi.z, q.size, base);
+    let c011 = cube_at_creative_look(lo.x, hi.y, hi.z, q.size, base);
+    let c111 = cube_at_creative_look(hi.x, hi.y, hi.z, q.size, base);
     // ⚠ `a + (b - a) * t` and not `a*(1-t) + b*t`: the first returns `a` exactly at t = 0, which
     // is what makes an identity cube exact at every grid point. The CPU writes it the same way.
     let c00 = c000 + (c100 - c000) * fr.x;
@@ -136,35 +133,30 @@ fn lookup(rgb: vec3<f32>) -> vec3<f32> {{
     return a + (b - a) * fr.z;
 }}
 
-fn look(px: vec3<f32>) -> vec3<f32> {{
+fn look_creative_look(px: vec3<f32>, q: Params_creative_look, base: u32) -> vec3<f32> {{
     // ⚠⚠ **`Linear` takes NO shaper**, and that single branch is what makes a linear LUT a
     // *rendering* rather than a grade: the data here is already scene-linear in the working
     // space, so a LUT authored against linear input wants it untouched. Shaping it would apply a
     // transfer the LUT then applies again — a plausible photograph, not an error.
-    if (params.space == {tag_linear}u) {{ return lookup(px); }}
+    if (q.space == {tag_linear}u) {{ return lookup_creative_look(px, q, base); }}
     // ⚠ The primaries matrix as well as the transfer. Rec.709 shares sRGB's primaries and differs
     // only in transfer, so one matrix serves both — the definition, not an approximation.
-    let lin = PP_TO_SRGB * px;
+    let lin = PP_TO_SRGB_LOOK * px;
     let shaped = vec3<f32>(
-        encode_c(lin.x, params.space),
-        encode_c(lin.y, params.space),
-        encode_c(lin.z, params.space),
+        encode_creative_look(lin.x, q.space),
+        encode_creative_look(lin.y, q.space),
+        encode_creative_look(lin.z, q.space),
     );
-    let out = lookup(shaped);
+    let out = lookup_creative_look(shaped, q, base);
     let back = vec3<f32>(
-        decode_c(out.x, params.space),
-        decode_c(out.y, params.space),
-        decode_c(out.z, params.space),
+        decode_creative_look(out.x, q.space),
+        decode_creative_look(out.y, q.space),
+        decode_creative_look(out.z, q.space),
     );
-    return SRGB_TO_PP * back;
+    return SRGB_TO_PP_LOOK * back;
 }}
 
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
-    let pixel = id.y * (params.row_groups * 64u) + id.x;
-    if (pixel >= params.pixels) {{ return; }}
-    let p = pixel * 3u;
-    let px = vec3<f32>(data[p], data[p + 1u], data[p + 2u]);
+fn apply_creative_look(p: vec3<f32>, x: u32, y: u32, q: Params_creative_look, base: u32) -> vec3<f32> {{
     // ⚠ The short-circuit at 0, mirroring the CPU stage's.
     //
     // ⚠⚠ **Recorded INERT rather than counted: removing it fails nothing, and provably cannot.**
@@ -173,12 +165,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     // other spelling, `a*(1-t) + b*t`. The shaper's `pow` takes a clamped non-negative base, so a
     // non-finite `b` is unreachable here. Kept as defence in depth and because it mirrors the CPU
     // line for line; it becomes load-bearing the moment anything can hand this a NaN.
-    if (params.blend == 0.0) {{ return; }}
-    let out = look(px);
-    let v = px + (out - px) * params.blend;
-    data[p] = v.x;
-    data[p + 1u] = v.y;
-    data[p + 2u] = v.z;
+    if (q.blend == 0.0) {{ return p; }}
+    let out = look_creative_look(p, q, base);
+    return p + (out - p) * q.blend;
 }}
 "#,
         pp_to_srgb = m(&color::spaces::PROPHOTO_TO_SRGB),
@@ -258,16 +247,15 @@ impl GpuStage for GpuCreativeLookStage {
         // ⚠ Per-pixel and in-place-safe, so the default `scratch_planes` of 0 covers it.
         _scratch: &[wgpu::Buffer],
     ) {
-        let pixels = img.pixels();
-        let (row_groups, _) = crate::dispatch::Dispatch::grid(pixels);
+        crate::per_pixel::encode_single(self, ctx, pass, img);
+    }
 
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<crate::per_pixel::Part<'_>> {
         // ⚠ `vec3` in a uniform is 16-byte aligned, so `dmin`/`dmax` each occupy a full block with
         // a scalar tucked into the fourth slot. Laid out to match the WGSL struct exactly.
         let mut params = [0u8; 48];
-        params[0..4].copy_from_slice(&pixels.to_le_bytes());
-        params[4..8].copy_from_slice(&row_groups.to_le_bytes());
-        params[8..12].copy_from_slice(&self.size.to_le_bytes());
-        params[12..16].copy_from_slice(&tag(self.space).to_le_bytes());
+        params[0..4].copy_from_slice(&self.size.to_le_bytes());
+        params[4..8].copy_from_slice(&tag(self.space).to_le_bytes());
         for (i, v) in self.dmin.iter().enumerate() {
             params[16 + i * 4..20 + i * 4].copy_from_slice(&v.to_le_bytes());
         }
@@ -275,14 +263,14 @@ impl GpuStage for GpuCreativeLookStage {
         for (i, v) in self.dmax.iter().enumerate() {
             params[32 + i * 4..36 + i * 4].copy_from_slice(&v.to_le_bytes());
         }
-
-        crate::dispatch::Dispatch {
-            label: "creative_look",
-            shader: shader(),
+        Some(crate::per_pixel::Part {
+            name: "creative_look",
+            wgsl: wgsl(),
             params: params.to_vec(),
-            storages: &[&self.flat],
-        }
-        .encode(ctx, pass, img);
+            tables: vec![&self.flat],
+            preludes: crate::per_pixel::Preludes::default(),
+            needs_position: false,
+        })
     }
 
     fn cpu(&self) -> &dyn PipelineStage {

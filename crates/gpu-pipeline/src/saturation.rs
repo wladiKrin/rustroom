@@ -12,39 +12,28 @@ use std::sync::Arc;
 /// ⚠ Vibrance weights by `1 - chroma`, so it moves muted pixels most and leaves a fully saturated
 /// one alone. A neutral pixel has chroma 0 and is untouched at **any** setting — which is why a
 /// grey fixture cannot see this stage at all.
-fn shader() -> String {
+fn wgsl() -> String {
     format!(
         r#"
-struct Params {{
-    pixels: u32,
-    row_groups: u32,
-    pad0: u32,
-    pad1: u32,
+struct Params_saturation {{
     f_sat: f32,
     vib: f32,
-    pad2: f32,
-    pad3: f32,
+    pad0: f32,
+    pad1: f32,
 }};
-@group(0) @binding(0) var<storage, read_write> data: array<f32>;
-@group(0) @binding(1) var<uniform> params: Params;
-
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
-    let pixel = id.y * (params.row_groups * 64u) + id.x;
-    if (pixel >= params.pixels) {{ return; }}
-    let p = pixel * 3u;
-    let r = data[p]; let g = data[p + 1u]; let b = data[p + 2u];
+fn apply_saturation(p: vec3<f32>, x: u32, y: u32, q: Params_saturation, base: u32) -> vec3<f32> {{
     // ⚠ The pivot chroma is scaled around: real luminance in the working space.
-    let luma = prophoto_luminance(r, g, b);
-    let mx = max(r, max(g, b));
-    let mn = min(r, min(g, b));
+    let luma = prophoto_luminance(p.x, p.y, p.z);
+    let mx = max(p.x, max(p.y, p.z));
+    let mn = min(p.x, min(p.y, p.z));
     let chroma = clamp((mx - mn) / max(mx, {eps}f), 0.0, 1.0);
-    let f = params.f_sat * (1.0 + params.vib * (1.0 - chroma));
+    let f = q.f_sat * (1.0 + q.vib * (1.0 - chroma));
     // ⚠ Floored at 0 exactly as the CPU stage does: an extreme setting must darken to black,
     // never flip a channel's sign.
-    data[p] = max(luma + (r - luma) * f, 0.0);
-    data[p + 1u] = max(luma + (g - luma) * f, 0.0);
-    data[p + 2u] = max(luma + (b - luma) * f, 0.0);
+    return vec3<f32>(
+        max(luma + (p.x - luma) * f, 0.0),
+        max(luma + (p.y - luma) * f, 0.0),
+        max(luma + (p.z - luma) * f, 0.0));
 }}
 "#,
         eps = pipeline::SATURATION_EPS
@@ -91,22 +80,24 @@ impl GpuStage for GpuSaturationStage {
         // ⚠ Per-pixel and in-place-safe, so the default `scratch_planes` of 0 covers it.
         _scratch: &[wgpu::Buffer],
     ) {
-        let pixels = img.pixels();
-        let (row_groups, _) = crate::dispatch::Dispatch::grid(pixels);
+        crate::per_pixel::encode_single(self, ctx, pass, img);
+    }
 
-        let mut params = [0u8; 32];
-        params[0..4].copy_from_slice(&pixels.to_le_bytes());
-        params[4..8].copy_from_slice(&row_groups.to_le_bytes());
-        params[16..20].copy_from_slice(&self.f_sat.to_le_bytes());
-        params[20..24].copy_from_slice(&self.vib.to_le_bytes());
-
-        crate::dispatch::Dispatch {
-            label: "saturation",
-            shader: format!("{}{}", crate::luma_wgsl::luma_wgsl(), shader()),
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<crate::per_pixel::Part<'_>> {
+        let mut params = [0u8; 16];
+        params[0..4].copy_from_slice(&self.f_sat.to_le_bytes());
+        params[4..8].copy_from_slice(&self.vib.to_le_bytes());
+        Some(crate::per_pixel::Part {
+            name: "saturation",
+            wgsl: wgsl(),
             params: params.to_vec(),
-            storages: &[],
-        }
-        .encode(ctx, pass, img);
+            tables: Vec::new(),
+            preludes: crate::per_pixel::Preludes {
+                luma: true,
+                ..Default::default()
+            },
+            needs_position: false,
+        })
     }
 
     fn cpu(&self) -> &dyn PipelineStage {

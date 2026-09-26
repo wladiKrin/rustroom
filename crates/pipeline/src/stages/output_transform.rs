@@ -22,22 +22,34 @@ impl OutputTransform {
     }
 }
 
-impl PipelineStage for OutputTransform {
-    fn name(&self) -> &'static str {
-        "output_transform"
-    }
-
-    fn apply(&self, image: ImageBuf) -> ImageBuf {
+impl crate::per_pixel::PerPixel for OutputTransform {
+    fn px(&self, _x: usize, _y: usize, c: [f32; 3]) -> [f32; 3] {
         // ⚠ Two steps, and the order is not negotiable: primaries first, in linear light, then
         // the transfer curve. Encoding before converting would apply a matrix to gamma-encoded
         // values, which is meaningless and does not fail loudly.
         //
         // ⚠ Out-of-gamut colour arrives here with negative components — that is the point of a
         // wide working space, not a bug. `encode` clamps them.
-        let space = self.space;
-        image
-            .map_pixels(move |c| space.from_working(c))
-            .map_samples(move |v| space.encode(v))
+        let lin = self.space.from_working(c);
+        [
+            self.space.encode(lin[0]),
+            self.space.encode(lin[1]),
+            self.space.encode(lin[2]),
+        ]
+    }
+}
+
+impl PipelineStage for OutputTransform {
+    fn name(&self) -> &'static str {
+        "output_transform"
+    }
+
+    fn apply(&self, image: ImageBuf) -> ImageBuf {
+        crate::per_pixel::apply_one(self, image)
+    }
+
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<Box<dyn crate::per_pixel::PerPixel + '_>> {
+        Some(Box::new(self))
     }
 }
 

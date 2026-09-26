@@ -14,55 +14,49 @@ use crate::{GpuContext, GpuImage, GpuStage};
 use pipeline::PipelineStage;
 use std::sync::Arc;
 
-const SHADER: &str = r#"
-struct Params {
-    pixels: u32,
-    row_groups: u32,
+const WGSL: &str = r#"
+struct Params_display_rendering {
     lut_len: u32,
     pad0: u32,
+    pad1: u32,
+    pad2: u32,
     lut_max: f32,
     chroma_boost: f32,
     shadow_knee: f32,
-    pad1: f32,
+    pad3: f32,
 };
-@group(0) @binding(0) var<storage, read_write> data: array<f32>;
-@group(0) @binding(1) var<uniform> params: Params;
-@group(0) @binding(2) var<storage, read> lut: array<f32>;
-
 // ⚠ Mirrors `DisplayRenderingStage::map` exactly, including both of its total-function edges:
 // a non-positive or non-finite input reads the FIRST entry, and anything past the table's top
 // takes the last, which the curve has already flattened to 1.
-fn curve(x: f32) -> f32 {
-    let n = params.lut_len;
-    if (!(x > 0.0)) { return lut[0]; }          // ⚠ catches NaN too, unlike `x <= 0.0`
-    let pos = min(x / params.lut_max, 1.0) * f32(n - 1u);
+fn curve_display_rendering(x: f32, q: Params_display_rendering, base: u32) -> f32 {
+    let n = q.lut_len;
+    if (!(x > 0.0)) { return tables[base]; }          // ⚠ catches NaN too, unlike `x <= 0.0`
+    let pos = min(x / q.lut_max, 1.0) * f32(n - 1u);
     let i = u32(floor(pos));
-    if (i >= n - 1u) { return lut[n - 1u]; }
-    return lut[i] + (pos - f32(i)) * (lut[i + 1u] - lut[i]);
+    if (i >= n - 1u) { return tables[base + n - 1u]; }
+    return tables[base + i] + (pos - f32(i)) * (tables[base + i + 1u] - tables[base + i]);
 }
-
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel = id.y * (params.row_groups * 64u) + id.x;
-    if (pixel >= params.pixels) { return; }
-    let p = pixel * 3u;
-
-    let o = vec3<f32>(curve(data[p]), curve(data[p + 1u]), curve(data[p + 2u]));
-    let y = prophoto_luminance(o.x, o.y, o.z);
+fn apply_display_rendering(p: vec3<f32>, x: u32, y: u32, q: Params_display_rendering, base: u32) -> vec3<f32> {
+    let o = vec3<f32>(
+        curve_display_rendering(p.x, q, base),
+        curve_display_rendering(p.y, q, base),
+        curve_display_rendering(p.z, q, base));
+    let yl = prophoto_luminance(o.x, o.y, o.z);
 
     // ⚠ `1 - y^4` is flat through the midtones and falls away only as white approaches; the
     // shadow knee is there because what reads as saturation near black is chroma NOISE, which a
     // boost would make worse on any high-ISO file.
-    let yc = clamp(y, 0.0, 1.0);
-    let shadow = min(yc / params.shadow_knee, 1.0);
-    let s = 1.0 + (params.chroma_boost - 1.0) * shadow * (1.0 - yc * yc * yc * yc);
+    let yc = clamp(yl, 0.0, 1.0);
+    let shadow = min(yc / q.shadow_knee, 1.0);
+    let s = 1.0 + (q.chroma_boost - 1.0) * shadow * (1.0 - yc * yc * yc * yc);
 
     // ⚠ Clamped: a bright saturated pixel scaled up can leave [0,1], and letting one channel clip
     // while its neighbours do not would shift the hue — the one thing this stage's per-channel
     // curve is careful to do only where the *curve* says so.
-    data[p]      = clamp(y + (o.x - y) * s, 0.0, 1.0);
-    data[p + 1u] = clamp(y + (o.y - y) * s, 0.0, 1.0);
-    data[p + 2u] = clamp(y + (o.z - y) * s, 0.0, 1.0);
+    return vec3<f32>(
+        clamp(yl + (o.x - yl) * s, 0.0, 1.0),
+        clamp(yl + (o.y - yl) * s, 0.0, 1.0),
+        clamp(yl + (o.z - yl) * s, 0.0, 1.0));
 }
 "#;
 
@@ -111,25 +105,27 @@ impl GpuStage for GpuDisplayRenderingStage {
         img: &GpuImage,
         _scratch: &[wgpu::Buffer],
     ) {
-        let pixels = img.pixels();
-        let (row_groups, _) = crate::dispatch::Dispatch::grid(pixels);
+        crate::per_pixel::encode_single(self, ctx, pass, img);
+    }
 
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<crate::per_pixel::Part<'_>> {
         let mut params = [0u8; 32];
-        params[0..4].copy_from_slice(&pixels.to_le_bytes());
-        params[4..8].copy_from_slice(&row_groups.to_le_bytes());
-        params[8..12].copy_from_slice(&(self.table.len() as u32).to_le_bytes());
+        params[0..4].copy_from_slice(&(self.table.len() as u32).to_le_bytes());
         params[16..20].copy_from_slice(&self.lut_max.to_le_bytes());
         // ⚠ Uploaded from the CPU stage's own constants rather than re-typed into WGSL.
         params[20..24].copy_from_slice(&pipeline::CHROMA_BOOST.to_le_bytes());
         params[24..28].copy_from_slice(&pipeline::SHADOW_KNEE.to_le_bytes());
-
-        crate::dispatch::Dispatch {
-            label: "display_rendering",
-            shader: format!("{}{}", crate::luma_wgsl::luma_wgsl(), SHADER),
+        Some(crate::per_pixel::Part {
+            name: "display_rendering",
+            wgsl: WGSL.to_string(),
             params: params.to_vec(),
-            storages: &[&self.table],
-        }
-        .encode(ctx, pass, img);
+            tables: vec![&self.table],
+            preludes: crate::per_pixel::Preludes {
+                luma: true,
+                ..Default::default()
+            },
+            needs_position: false,
+        })
     }
 
     fn cpu(&self) -> &dyn PipelineStage {

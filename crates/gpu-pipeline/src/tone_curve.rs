@@ -18,38 +18,30 @@ use std::sync::Arc;
 /// ⚠⚠ **Four tables in one buffer**, composite then red, green, blue, indexed by `stride`. The shader
 /// is **unconditional**, so a channel with no curve still has a table — an identity one, built by
 /// `ToneCurveStage::luts`. A branch per channel would cost more than the identity lookup it saves.
-const SHADER: &str = r#"
-struct Params {
-    pixels: u32,
-    row_groups: u32,
+const WGSL: &str = r#"
+struct Params_tone_curve {
     last: u32,
     // ⚠ Entries per table. The four tables — composite, red, green, blue — are one buffer, so a
-    // channel is reached by adding `stride * (channel + 1)` to the index.
+    // channel is reached by adding `stride * (channel + 1)` to the base.
     stride: u32,
+    pad0: u32,
+    pad1: u32,
 };
-@group(0) @binding(0) var<storage, read_write> data: array<f32>;
-@group(0) @binding(1) var<uniform> params: Params;
-@group(0) @binding(2) var<storage, read> lut: array<f32>;
-
-fn curve(v_in: f32, base: u32) -> f32 {
+fn curve_tone_curve(v_in: f32, at: u32, last: u32) -> f32 {
     let v = clamp(v_in, 0.0, 1.0);
-    let pos = v * f32(params.last);
+    let pos = v * f32(last);
     let lo = u32(floor(pos));
-    if (lo >= params.last) { return lut[base + params.last]; }
+    if (lo >= last) { return tables[at + last]; }
     let frac = pos - f32(lo);
-    return lut[base + lo] + frac * (lut[base + lo + 1u] - lut[base + lo]);
+    return tables[at + lo] + frac * (tables[at + lo + 1u] - tables[at + lo]);
 }
-
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel = id.y * (params.row_groups * 64u) + id.x;
-    if (pixel >= params.pixels) { return; }
-    let p = pixel * 3u;
+fn apply_tone_curve(p: vec3<f32>, x: u32, y: u32, q: Params_tone_curve, base: u32) -> vec3<f32> {
     // ⚠⚠ **Composite first, then the channel** — the order `ToneCurveStage::with_channels` documents.
     // Changing it means changing both, and only a fixture where the two orders differ can see it.
-    data[p] = curve(curve(data[p], 0u), params.stride);
-    data[p + 1u] = curve(curve(data[p + 1u], 0u), params.stride * 2u);
-    data[p + 2u] = curve(curve(data[p + 2u], 0u), params.stride * 3u);
+    return vec3<f32>(
+        curve_tone_curve(curve_tone_curve(p.x, base, q.last), base + q.stride, q.last),
+        curve_tone_curve(curve_tone_curve(p.y, base, q.last), base + q.stride * 2u, q.last),
+        curve_tone_curve(curve_tone_curve(p.z, base, q.last), base + q.stride * 3u, q.last));
 }
 "#;
 
@@ -123,25 +115,24 @@ impl GpuStage for GpuToneCurveStage {
         // ⚠ Per-pixel and in-place-safe, so the default `scratch_planes` of 0 covers it.
         _scratch: &[wgpu::Buffer],
     ) {
-        let pixels = img.pixels();
-        let (row_groups, _) = crate::dispatch::Dispatch::grid(pixels);
+        crate::per_pixel::encode_single(self, ctx, pass, img);
+    }
 
-        let mut params = [0u8; 16];
-        params[0..4].copy_from_slice(&pixels.to_le_bytes());
-        params[4..8].copy_from_slice(&row_groups.to_le_bytes());
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<crate::per_pixel::Part<'_>> {
         // ⚠ Passed rather than written as a literal in the shader, so the table's length and the
         // index bound cannot disagree.
         let stride = pipeline::ToneCurveStage::LUT_LEN as u32;
-        params[8..12].copy_from_slice(&(stride - 1).to_le_bytes());
-        params[12..16].copy_from_slice(&stride.to_le_bytes());
-
-        crate::dispatch::Dispatch {
-            label: "tone_curve",
-            shader: SHADER.to_string(),
+        let mut params = [0u8; 16];
+        params[0..4].copy_from_slice(&(stride - 1).to_le_bytes());
+        params[4..8].copy_from_slice(&stride.to_le_bytes());
+        Some(crate::per_pixel::Part {
+            name: "tone_curve",
+            wgsl: WGSL.to_string(),
             params: params.to_vec(),
-            storages: &[&self.luts],
-        }
-        .encode(ctx, pass, img);
+            tables: vec![&self.luts],
+            preludes: crate::per_pixel::Preludes::default(),
+            needs_position: false,
+        })
     }
 
     fn cpu(&self) -> &dyn PipelineStage {

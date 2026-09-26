@@ -263,29 +263,37 @@ fn normalised_log(x: f32) -> f32 {
     ((t - T_MIN) / (T_MAX - T_MIN)).clamp(0.0, 1.0)
 }
 
+impl crate::per_pixel::PerPixel for DisplayRenderingStage {
+    fn px(&self, _x: usize, _y: usize, [r, g, b]: [f32; 3]) -> [f32; 3] {
+        // ⚠⚠ **Per channel, not on luminance with a scalar gain.** Every other tonal stage here
+        // preserves hue deliberately; this one must not. Curving the channels independently is
+        // where a camera rendering's shadow saturation and its roll toward white come from, and
+        // it is what the DNG spec does with `ProfileToneCurve`. A neutral grey still stays
+        // exactly neutral, because all three channels take the same curve.
+        let p = [self.map(r), self.map(g), self.map(b)];
+        // ⚠ The curve alone lands 0.945× the camera's saturation; [`CHROMA_BOOST`] is the
+        // measured remainder. Scaled about the pixel's own luminance, so the *tone* the curve
+        // just decided is left exactly alone and only the colour opens up.
+        let y = color::luminance(p);
+        let s = Self::chroma_scale(y);
+        // ⚠ Clamped: a bright saturated pixel scaled up can leave [0, 1], and letting one
+        // channel clip while its neighbours do not would shift the hue — the one thing this
+        // stage's per-channel curve is careful to do only where the *curve* says so.
+        p.map(|c| (y + (c - y) * s).clamp(0.0, 1.0))
+    }
+}
+
 impl PipelineStage for DisplayRenderingStage {
     fn name(&self) -> &'static str {
         "display_rendering"
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
-        // ⚠⚠ **Per channel, not on luminance with a scalar gain.** Every other tonal stage here
-        // preserves hue deliberately; this one must not. Curving the channels independently is
-        // where a camera rendering's shadow saturation and its roll toward white come from, and
-        // it is what the DNG spec does with `ProfileToneCurve`. A neutral grey still stays
-        // exactly neutral, because all three channels take the same curve.
-        image.map_pixels(|[r, g, b]| {
-            let p = [self.map(r), self.map(g), self.map(b)];
-            // ⚠ The curve alone lands 0.945× the camera's saturation; [`CHROMA_BOOST`] is the
-            // measured remainder. Scaled about the pixel's own luminance, so the *tone* the curve
-            // just decided is left exactly alone and only the colour opens up.
-            let y = color::luminance(p);
-            let s = Self::chroma_scale(y);
-            // ⚠ Clamped: a bright saturated pixel scaled up can leave [0, 1], and letting one
-            // channel clip while its neighbours do not would shift the hue — the one thing this
-            // stage's per-channel curve is careful to do only where the *curve* says so.
-            p.map(|c| (y + (c - y) * s).clamp(0.0, 1.0))
-        })
+        crate::per_pixel::apply_one(self, image)
+    }
+
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<Box<dyn crate::per_pixel::PerPixel + '_>> {
+        Some(Box::new(self))
     }
 }
 

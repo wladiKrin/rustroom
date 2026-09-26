@@ -8,28 +8,15 @@ use std::sync::Arc;
 /// The shader does three multiplies and no colour maths at all — no illuminant, no adaptation
 /// matrix, no Kelvin. That is what makes the result bit-identical and a divergence here mean
 /// *plumbing* rather than float drift, which is `GpuExposureStage`'s reasoning exactly.
-const SHADER: &str = r#"
-struct Params {
-    pixels: u32,
-    row_groups: u32,
-    pad0: u32,
-    pad1: u32,
+const WGSL: &str = r#"
+struct Params_white_balance {
     gr: f32,
     gg: f32,
     gb: f32,
-    pad2: f32,
+    pad0: f32,
 };
-@group(0) @binding(0) var<storage, read_write> data: array<f32>;
-@group(0) @binding(1) var<uniform> params: Params;
-
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pixel = id.y * (params.row_groups * 64u) + id.x;
-    if (pixel >= params.pixels) { return; }
-    let p = pixel * 3u;
-    data[p] = data[p] * params.gr;
-    data[p + 1u] = data[p + 1u] * params.gg;
-    data[p + 2u] = data[p + 2u] * params.gb;
+fn apply_white_balance(p: vec3<f32>, x: u32, y: u32, q: Params_white_balance, base: u32) -> vec3<f32> {
+    return vec3<f32>(p.x * q.gr, p.y * q.gg, p.z * q.gb);
 }
 "#;
 
@@ -70,23 +57,22 @@ impl GpuStage for GpuWhiteBalanceStage {
         // ⚠ Per-pixel and in-place-safe, so the default `scratch_planes` of 0 covers it.
         _scratch: &[wgpu::Buffer],
     ) {
-        let pixels = img.pixels();
-        let (row_groups, _) = crate::dispatch::Dispatch::grid(pixels);
+        crate::per_pixel::encode_single(self, ctx, pass, img);
+    }
 
-        let mut params = [0u8; 32];
-        params[0..4].copy_from_slice(&pixels.to_le_bytes());
-        params[4..8].copy_from_slice(&row_groups.to_le_bytes());
-        params[16..20].copy_from_slice(&self.gains[0].to_le_bytes());
-        params[20..24].copy_from_slice(&self.gains[1].to_le_bytes());
-        params[24..28].copy_from_slice(&self.gains[2].to_le_bytes());
-
-        crate::dispatch::Dispatch {
-            label: "white_balance",
-            shader: SHADER.to_string(),
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<crate::per_pixel::Part<'_>> {
+        let mut params = [0u8; 16];
+        params[0..4].copy_from_slice(&self.gains[0].to_le_bytes());
+        params[4..8].copy_from_slice(&self.gains[1].to_le_bytes());
+        params[8..12].copy_from_slice(&self.gains[2].to_le_bytes());
+        Some(crate::per_pixel::Part {
+            name: "white_balance",
+            wgsl: WGSL.to_string(),
             params: params.to_vec(),
-            storages: &[],
-        }
-        .encode(ctx, pass, img);
+            tables: Vec::new(),
+            preludes: crate::per_pixel::Preludes::default(),
+            needs_position: false,
+        })
     }
 
     fn cpu(&self) -> &dyn PipelineStage {

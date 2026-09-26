@@ -112,17 +112,25 @@ impl ToneRegionsStage {
     }
 }
 
+impl crate::per_pixel::PerPixel for ToneRegionsStage {
+    fn px(&self, _x: usize, _y: usize, [r, g, b]: [f32; 3]) -> [f32; 3] {
+        let l = color::luminance([r, g, b]);
+        let gain = self.gain_for_luma(l).max(0.0);
+        [r * gain, g * gain, b * gain]
+    }
+}
+
 impl PipelineStage for ToneRegionsStage {
     fn name(&self) -> &'static str {
         "tone_regions"
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
-        image.map_pixels(|[r, g, b]| {
-            let l = color::luminance([r, g, b]);
-            let gain = self.gain_for_luma(l).max(0.0);
-            [r * gain, g * gain, b * gain]
-        })
+        crate::per_pixel::apply_one(self, image)
+    }
+
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<Box<dyn crate::per_pixel::PerPixel + '_>> {
+        Some(Box::new(self))
     }
 }
 

@@ -709,13 +709,23 @@ impl GpuStage for GpuMaskStage {
             pass.dispatch_workgroups(row_groups, col_groups, 1);
         }
 
-        // 3. the sub-stages, turning `img` from the base into the adjusted image in place.
+        // 3. the sub-stages, turning `img` from the base into the adjusted image in place — a
+        //    run of per-pixel ones as ONE dispatch, the GPU side of fusion's free part.
         //
         // ⚠⚠ **`&scratch[4..]` is the single most dangerous expression in this stage.** Handing
         // over the whole slice lets a sub-stage write `base_r/g/b` and `cov`, and the result is a
         // plausible photograph blended against the wrong thing rather than an error.
-        for sub in &self.subs {
-            sub.encode(ctx, pass, img, &scratch[4..]);
+        let mut i = 0;
+        while i < self.subs.len() {
+            let (unit, next) = crate::per_pixel::next_unit(
+                &self.subs,
+                i,
+                img.width(),
+                img.height(),
+                crate::per_pixel::fusion_enabled(),
+            );
+            unit.encode(ctx, pass, img, &scratch[4..]);
+            i = next;
         }
 
         // 4. blend.

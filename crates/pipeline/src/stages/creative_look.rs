@@ -106,30 +106,38 @@ impl CreativeLookStage {
     }
 }
 
+impl crate::per_pixel::PerPixel for CreativeLookStage {
+    fn px(&self, _x: usize, _y: usize, px: [f32; 3]) -> [f32; 3] {
+        let t = self.blend;
+        // ⚠⚠ **Short-circuit at 0, and it is a correctness guard rather than a speed one.**
+        // The shaper clamps out-of-gamut values, so running it at strength 0 and then
+        // lerping back would leave a residue on saturated colours — a look dialled to zero
+        // that is not quite no look. `strength_zero_is_bit_exactly_the_input` is the guard.
+        if t == 0.0 {
+            return px;
+        }
+        let out = self.look(px);
+        // ⚠ `a + (b - a) * t`, so `t = 1` returns `b` exactly and `t = 0` returns `a`
+        // exactly. `a*(1-t) + b*t` does neither in f32.
+        [
+            px[0] + (out[0] - px[0]) * t,
+            px[1] + (out[1] - px[1]) * t,
+            px[2] + (out[2] - px[2]) * t,
+        ]
+    }
+}
+
 impl PipelineStage for CreativeLookStage {
     fn name(&self) -> &'static str {
         "creative_look"
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
-        let t = self.blend;
-        image.map_pixels(|px| {
-            // ⚠⚠ **Short-circuit at 0, and it is a correctness guard rather than a speed one.**
-            // The shaper clamps out-of-gamut values, so running it at strength 0 and then
-            // lerping back would leave a residue on saturated colours — a look dialled to zero
-            // that is not quite no look. `strength_zero_is_bit_exactly_the_input` is the guard.
-            if t == 0.0 {
-                return px;
-            }
-            let out = self.look(px);
-            // ⚠ `a + (b - a) * t`, so `t = 1` returns `b` exactly and `t = 0` returns `a`
-            // exactly. `a*(1-t) + b*t` does neither in f32.
-            [
-                px[0] + (out[0] - px[0]) * t,
-                px[1] + (out[1] - px[1]) * t,
-                px[2] + (out[2] - px[2]) * t,
-            ]
-        })
+        crate::per_pixel::apply_one(self, image)
+    }
+
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<Box<dyn crate::per_pixel::PerPixel + '_>> {
+        Some(Box::new(self))
     }
 }
 
