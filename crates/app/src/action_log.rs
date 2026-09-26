@@ -233,6 +233,27 @@ impl ActionLog {
             .position(|e| e.undone && reachable(&e.kind, open))
     }
 
+    /// Give `id` `undo` steps to undo and `redo` steps to redo, **older than anything already
+    /// here** (M9.7).
+    ///
+    /// ⚠⚠ For a history restored from the catalog: its steps predate this session, so they go at
+    /// the FRONT — in force, then undone — and Ctrl+Z reaches them only after this session's own.
+    /// Without it the restored stack would sit unreachable: this log, not the stack, decides what
+    /// an undo pops. Within the photo's subsequence the in-force entries still form a prefix and
+    /// the undone ones a suffix, which is what `redo_index` relies on — the caller seeds only a
+    /// photo with no entries here (`finalize_session` has just forgotten them).
+    pub fn seed(&mut self, id: &PhotoId, undo: usize, redo: usize) {
+        let entry = |undone| Entry {
+            kind: ActionKind::PhotoEdit { id: id.clone() },
+            undone,
+        };
+        let front: Vec<Entry> = (0..undo)
+            .map(|_| entry(false))
+            .chain((0..redo).map(|_| entry(true)))
+            .collect();
+        self.entries.splice(0..0, front);
+    }
+
     /// Drop the edits of one photo, keeping every other photo's and all global actions.
     ///
     /// ⚠ Called only when that photo's `History<Edits>` has actually been discarded — when a
@@ -289,6 +310,37 @@ mod tests {
     fn b() -> Option<&'static PhotoId> {
         static B: std::sync::OnceLock<PhotoId> = std::sync::OnceLock::new();
         Some(B.get_or_init(|| id("/b.RAF")))
+    }
+
+    #[test]
+    fn seeded_steps_come_after_this_sessions_and_redo_reaches_them() {
+        let mut log = ActionLog::default();
+        // This session: a preset deleted, then an edit to `a`.
+        log.push(del("p"), a());
+        log.push(edit("/a.RAF"), a());
+        // `a`'s restored history: two to undo, one to redo.
+        log.seed(&id("/a.RAF"), 2, 1);
+        let order: Vec<_> = std::iter::from_fn(|| log.undo(a())).collect();
+        assert_eq!(
+            order,
+            vec![edit("/a.RAF"), del("p"), edit("/a.RAF"), edit("/a.RAF")],
+            "this session first, then the restored steps"
+        );
+        // Everything undone: redo replays from the oldest step, the restored ones included.
+        assert_eq!(log.redo(a()), Some(edit("/a.RAF")));
+    }
+
+    #[test]
+    fn a_new_edit_clears_a_seeded_redo() {
+        let mut log = ActionLog::default();
+        log.seed(&id("/a.RAF"), 1, 2);
+        assert!(log.can_redo(a()));
+        log.push(edit("/a.RAF"), a());
+        assert!(
+            !log.can_redo(a()),
+            "a new edit invalidates the restored future"
+        );
+        assert!(!log.can_undo(b()), "and another photo cannot reach them");
     }
 
     #[test]
