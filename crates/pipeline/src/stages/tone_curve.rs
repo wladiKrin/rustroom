@@ -504,12 +504,14 @@ mod tests {
     #[test]
     fn opposite_neighbours_cannot_fold_the_table() {
         for (a, b) in [(100.0, -100.0), (-100.0, 100.0)] {
-            let mut e = edit_model::Edits::default();
-            e.tone_curve_parametric = edit_model::ParametricCurve {
-                shadows: a,
-                darks: b,
-                lights: a,
-                highlights: b,
+            let e = edit_model::Edits {
+                tone_curve_parametric: edit_model::ParametricCurve {
+                    shadows: a,
+                    darks: b,
+                    lights: a,
+                    highlights: b,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             let lut = ToneCurveStage::from_edits(&e).luts()[0].clone();

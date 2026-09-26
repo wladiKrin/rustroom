@@ -9,6 +9,7 @@ pub mod mask_adjust;
 pub mod mask_components;
 pub mod mask_glyph;
 pub mod masks;
+pub mod parametric_curve;
 pub mod presets;
 pub mod profile;
 pub mod retouch;
@@ -244,6 +245,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 adjustments::Channels {
                                     hsl: &mut app.hsl_channel,
                                     curve: &mut app.curve_channel,
+                                    parametric_drag: app.settings.parametric_drag,
                                 },
                                 adjustments::GradeUi {
                                     range: &mut app.grade_range,

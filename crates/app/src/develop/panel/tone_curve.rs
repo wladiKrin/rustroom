@@ -57,6 +57,9 @@ const GRID: usize = 4;
 /// red curve" an undoable act and would travel in a preset.
 #[derive(Default, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CurveChannel {
+    /// Lightroom's parametric curve (M5.1c): four region sliders over three splits. Its own view,
+    /// `parametric_curve::show`, since it edits a different field than the four point curves.
+    Parametric,
     #[default]
     Rgb,
     Red,
@@ -65,10 +68,17 @@ pub enum CurveChannel {
 }
 
 impl CurveChannel {
-    pub const ALL: [CurveChannel; 4] = [Self::Rgb, Self::Red, Self::Green, Self::Blue];
+    pub const ALL: [CurveChannel; 5] = [
+        Self::Parametric,
+        Self::Rgb,
+        Self::Red,
+        Self::Green,
+        Self::Blue,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::Parametric => "Parametric",
             Self::Rgb => "RGB",
             Self::Red => "Red",
             Self::Green => "Green",
@@ -79,7 +89,7 @@ impl CurveChannel {
     /// The channel's index into a per-channel histogram, or `None` for the composite.
     fn index(self) -> Option<usize> {
         match self {
-            Self::Rgb => None,
+            Self::Parametric | Self::Rgb => None,
             Self::Red => Some(0),
             Self::Green => Some(1),
             Self::Blue => Some(2),
@@ -91,7 +101,7 @@ impl CurveChannel {
     /// so the curve and the ghost under it read as the same channel.
     fn colour(self, v: &egui::Visuals) -> egui::Color32 {
         match self {
-            Self::Rgb => v.strong_text_color(),
+            Self::Parametric | Self::Rgb => v.strong_text_color(),
             Self::Red => egui::Color32::from_rgb(230, 105, 105),
             Self::Green => egui::Color32::from_rgb(110, 210, 110),
             Self::Blue => egui::Color32::from_rgb(120, 150, 240),
@@ -107,6 +117,9 @@ pub fn show(
     // ⚠ `None` for a **mask's** curve, which has no per-channel curves by decision and therefore no
     // selector — see `build_pipeline`'s mask branch.
     channel: Option<&mut CurveChannel>,
+    // ⚠ M5.1c: the global parametric curve, so the composite view can draw the combined curve.
+    // `None` for a mask, which has none.
+    parametric: Option<&edit_model::ParametricCurve>,
 ) -> egui::Rect {
     // ⚠ Through `sub_label_with`, never a hand-rolled `horizontal` around a sub-label: that
     // nesting is what widened the panel every frame on 2026-09-19 — see `theme::sub_label_with`.
@@ -265,35 +278,19 @@ pub fn show(
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 4.0, v.extreme_bg_color);
-        // The ghost: the tonal distribution under the curve you are shaping, the convention
-        // of every curve editor. The per-bin maximum over the channels, so a saturated
-        // colour is not hidden by its dark siblings.
-        if let Some(h) = hist {
-            // ⚠ The **selected** channel's distribution, so the ghost describes the curve above it.
-            // Both already exist and already share one scale, so nothing new is computed.
-            let bins = match selected.index() {
-                None => rustroom_app::histogram::envelope(h),
-                Some(c) => rustroom_app::histogram::normalised(h)[c],
-            };
-            painter.add(egui::Shape::mesh(super::area_mesh(
-                rect,
-                &bins,
-                v.weak_text_color().linear_multiply(GHOST_OPACITY),
-            )));
+        backdrop(&painter, rect, v, hist, selected);
+        // ⚠ M5.1c: with a parametric curve active, the composite view also draws the COMBINED curve
+        // faintly — the function actually applied — so the points are never read as the whole story.
+        if let Some(p) = parametric.filter(|p| p.is_active() && selected == CurveChannel::Rgb) {
+            let combined: Vec<egui::Pos2> = tool::combined_points(&pts, p, SAMPLES)
+                .into_iter()
+                .map(at)
+                .collect();
+            painter.add(egui::Shape::line(
+                combined,
+                egui::Stroke::new(1.0, v.strong_text_color().gamma_multiply(0.45)),
+            ));
         }
-
-        let faint = v.weak_text_color().gamma_multiply(0.4);
-        for i in 1..GRID {
-            let t = i as f32 / GRID as f32;
-            painter.line_segment([at([t, 0.0]), at([t, 1.0])], egui::Stroke::new(1.0, faint));
-            painter.line_segment([at([0.0, t]), at([1.0, t])], egui::Stroke::new(1.0, faint));
-        }
-        // The identity, so a curve's departure from it is readable at a glance.
-        painter.line_segment(
-            [at([0.0, 0.0]), at([1.0, 1.0])],
-            egui::Stroke::new(1.0, v.weak_text_color().gamma_multiply(0.7)),
-        );
 
         let curve_color = selected.colour(v);
         let plotted: Vec<egui::Pos2> = tool::curve_points(&pts, SAMPLES)
@@ -342,6 +339,52 @@ fn readout(points: &[[f32; 2]], described: Option<usize>) -> String {
         ),
         None => "Click to add a point · right-click to remove".to_string(),
     }
+}
+
+/// The widget's backdrop — background, histogram, grid and the identity diagonal — shared by the
+/// point view and the Parametric view (M5.1c), so the two cannot draw it differently.
+pub(super) fn backdrop(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    v: &egui::Visuals,
+    hist: Option<&[[u32; 256]; 3]>,
+    selected: CurveChannel,
+) {
+    let at = |n: [f32; 2]| {
+        egui::pos2(
+            rect.left() + n[0] * rect.width(),
+            rect.bottom() - n[1] * rect.height(),
+        )
+    };
+    painter.rect_filled(rect, 4.0, v.extreme_bg_color);
+    // The ghost: the tonal distribution under the curve you are shaping, the convention
+    // of every curve editor. The per-bin maximum over the channels, so a saturated
+    // colour is not hidden by its dark siblings.
+    if let Some(h) = hist {
+        // ⚠ The **selected** channel's distribution, so the ghost describes the curve above it.
+        // Both already exist and already share one scale, so nothing new is computed.
+        let bins = match selected.index() {
+            None => rustroom_app::histogram::envelope(h),
+            Some(c) => rustroom_app::histogram::normalised(h)[c],
+        };
+        painter.add(egui::Shape::mesh(super::area_mesh(
+            rect,
+            &bins,
+            v.weak_text_color().linear_multiply(GHOST_OPACITY),
+        )));
+    }
+
+    let faint = v.weak_text_color().gamma_multiply(0.4);
+    for i in 1..GRID {
+        let t = i as f32 / GRID as f32;
+        painter.line_segment([at([t, 0.0]), at([t, 1.0])], egui::Stroke::new(1.0, faint));
+        painter.line_segment([at([0.0, t]), at([1.0, t])], egui::Stroke::new(1.0, faint));
+    }
+    // The identity, so a curve's departure from it is readable at a glance.
+    painter.line_segment(
+        [at([0.0, 0.0]), at([1.0, 1.0])],
+        egui::Stroke::new(1.0, v.weak_text_color().gamma_multiply(0.7)),
+    );
 }
 
 #[cfg(test)]
@@ -408,7 +451,7 @@ mod tests {
             // a test asks is "did *any* frame of this gesture report it", which is what a
             // production caller reads too.
             let _ = ctx.run_ui(input, |ui| {
-                rect = show(ui, &mut curve, &mut ed, None, None);
+                rect = show(ui, &mut curve, &mut ed, None, None, None);
             });
         }
         (curve, ed)
@@ -567,7 +610,7 @@ mod tests {
         };
         let mut ed = Edited::default();
         crate::test_ui::click(&ctx, "Reset", |ui| {
-            show(ui, &mut curve, &mut ed, None, None);
+            show(ui, &mut curve, &mut ed, None, None, None);
         });
         assert!(curve.points.is_empty(), "{:?}", curve.points);
         assert!(ed.settled);
@@ -576,7 +619,7 @@ mod tests {
         // not tell a working Reset from one that clears on every frame.
         let mut ed2 = Edited::default();
         crate::test_ui::click(&ctx, "Reset", |ui| {
-            show(ui, &mut curve, &mut ed2, None, None);
+            show(ui, &mut curve, &mut ed2, None, None, None);
         });
         assert!(!ed2.changed && !ed2.settled, "a neutral curve was 'reset'");
     }
@@ -594,7 +637,7 @@ mod tests {
         let mut ed = Edited::default();
         crate::test_ui::click(&ctx, "Blue", |ui| {
             ed = Edited::default();
-            show(ui, &mut curve, &mut ed, None, Some(&mut channel));
+            show(ui, &mut curve, &mut ed, None, Some(&mut channel), None);
         });
         assert_eq!(
             channel,
@@ -617,10 +660,12 @@ mod tests {
     #[test]
     fn every_channel_is_offered_once_under_a_distinct_label() {
         let mut seen: Vec<&str> = CurveChannel::ALL.iter().map(|c| c.label()).collect();
-        assert_eq!(seen.len(), 4);
+        // ⚠ Five since M5.1c (Parametric). Written out rather than read from `ALL.len()`, so adding a
+        // mode is a deliberate edit here and not a silent pass.
+        assert_eq!(seen.len(), 5);
         seen.sort_unstable();
         seen.dedup();
-        assert_eq!(seen.len(), 4, "two channels share a label");
+        assert_eq!(seen.len(), 5, "two channels share a label");
         assert_eq!(
             CurveChannel::default(),
             CurveChannel::Rgb,
@@ -638,7 +683,7 @@ mod tests {
             points: three_points(),
         };
         let labels = crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
-            show(ui, &mut curve, &mut Edited::default(), None, None);
+            show(ui, &mut curve, &mut Edited::default(), None, None, None);
         });
         for c in CurveChannel::ALL {
             assert!(
