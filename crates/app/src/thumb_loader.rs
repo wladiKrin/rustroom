@@ -234,6 +234,8 @@ fn render_edits(
     let out = pipeline::build_pipeline_rendered(
         edits,
         pipeline::RenderScale::new(1.0),
+        // ⚠ The DEFAULT rendering intent, never the canvas's (M6.4c): thumbnails are cached on
+        // disk, so following a view toggle would leave a library of mixed thumbnails.
         pipeline::RenderSpec {
             resampler,
             ..pipeline::RenderSpec::default()

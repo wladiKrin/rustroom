@@ -182,6 +182,13 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
                 "Gamut warning off".to_string()
             };
         }
+        Command::RenderingIntent(intent) => {
+            // ⚠ Guarded, for `SoftProof`'s reason above: a menu body runs every frame it is open.
+            if app.settings.canvas_intent != intent {
+                app.apply_canvas_intent(intent);
+            }
+            app.status = format!("Rendering intent: {}", intent.label());
+        }
         Command::KeyboardShortcuts => app.modal = Modal::KeyboardShortcuts,
         Command::About => app.modal = Modal::About,
     }

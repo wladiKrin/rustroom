@@ -149,6 +149,7 @@ pub fn export_one(
     let airlight = pipeline::prefix_airlight(edits, &scaled, render.resampler, source.lens.clone());
     let spec = pipeline::RenderSpec {
         space: opts.space,
+        intent: opts.intent,
         resampler: render.resampler,
         baseline: source.baseline,
         airlight: Some(airlight),
@@ -934,6 +935,45 @@ mod tests {
             "no overshoot/undershoot at the edge: {:?} vs {:?}",
             (at(&a, 79), at(&a, 80)),
             (at(&b, 79), at(&b, 80))
+        );
+    }
+
+    /// ⚠⚠ M6.4c: the preset's intent reaches the file. `export_one` building its `RenderSpec`
+    /// with the default instead compiles perfectly. The source is SATURATED — `edged` is grey,
+    /// which no intent moves, so it would pass with the field ignored.
+    ///
+    /// ⚠ Sabotage: `intent: color::RenderingIntent::default()` in `export_one`'s spec.
+    #[test]
+    fn the_rendering_intent_reaches_an_exported_file() {
+        let d = TempDir::new("render_intent");
+        let mut img = ImageBuf::new(64, 8);
+        for y in 0..8 {
+            for x in 0..64 {
+                let t = x as f32 / 63.0;
+                img.set_pixel(x, y, [0.04, 0.25 + 0.6 * t, 0.05]);
+            }
+        }
+        let write = |name: &str, intent| {
+            let mut o = opts(&d, None);
+            o.format = ExportFormat::Tiff8;
+            o.intent = intent;
+            let dest = d.0.join(name);
+            export_one(
+                source(img.clone()),
+                &Edits::default(),
+                &dest,
+                &o,
+                CPU,
+                &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
+                None,
+            )
+            .unwrap();
+            pixels(&std::fs::read(&dest).unwrap())
+        };
+        assert_ne!(
+            write("rel.tif", color::RenderingIntent::RelativeColorimetric),
+            write("per.tif", color::RenderingIntent::Perceptual),
+            "the preset's intent never reached the exported pixels"
         );
     }
 

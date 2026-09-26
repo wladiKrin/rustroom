@@ -119,6 +119,7 @@ fn run(paths: &[String], rendering: Rendering, label: &str) {
             scale,
             RenderSpec {
                 space: color::OutputSpace::Srgb,
+                intent: color::RenderingIntent::default(),
                 ..RenderSpec::default()
             },
             pipeline::ProfileRendering::colorimetric(),
@@ -129,6 +130,7 @@ fn run(paths: &[String], rendering: Rendering, label: &str) {
             scale,
             RenderSpec {
                 space: color::OutputSpace::ProPhoto,
+                intent: color::RenderingIntent::default(),
                 ..RenderSpec::default()
             },
             pipeline::ProfileRendering::colorimetric(),

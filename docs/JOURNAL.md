@@ -158,6 +158,58 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-26 — M6.4c rendering intents: Clip, Relative colorimetric, Perceptual (branch `m6.4c-rendering-intents`)
+
+**2,996 tests**, **80 goldens** (+`gamut_perceptual`; the other 79 are **main's own references**),
+gate green. Spec `2026-09-26-m6.4c-rendering-intents-design.md`, plan of the same date.
+✅ **Confirmed by use and merged 2026-09-26.**
+
+**What shipped.** `color::gamut`: `RenderingIntent { Clip (default), RelativeColorimetric,
+Perceptual }` and `GamutMap::map`, working in the linear working space before `OutputTransform`'s
+matrix. The two hue-preserving intents hold Oklab lightness and hue and move chroma only: relative
+cuts at the boundary (in-gamut colour bit-identical), perceptual leaves chroma below 0.8 of the
+boundary alone and compresses above it with a rational knee (value and slope continuous) that lands
+ProPhoto's edge exactly on the target's. CPU stage, GPU twin (same WGSL, fuses), soft proof,
+Compare's panes. The canvas intent is a Settings value switched from the **View menu**; each export
+preset carries its own (dialog row under Colour space, disabled for ProPhoto). Thumbnails render
+with the default (they are cached on disk).
+
+⚠⚠ **LittleCMS could not have done this.** It is not in the render path, and our four profiles are
+matrix-shaper profiles with no perceptual tables — lcms's "perceptual" on them is the clip.
+
+⚠⚠ **The boundary is an exact per-pixel bisection, NOT a table — the table was built first and was
+wrong.** A bilinear (65 × 256) lightness × hue table desaturated the golden chart's pure sRGB red by
+**49 levels**: the primaries sit exactly ON the gamut's corners, where linear interpolation of the
+boundary underestimates it most, and saturated colour lives at those corners. The bisection's step
+is Oklab → linear (cubes and a matrix) and runs only for pixels that need it; the perceptual knee
+test is one in-gamut check. Measured: channel residue ≤ 4.2e-4, hue drift ≤ 0.0009°, lightness
+float-exact. ⚠ A real finding kept in a test: at Oklab hue ~30° **Display P3 reaches 0.65% more
+chroma than ProPhoto** at every lightness — the working space does not quite hold that sliver of
+P3's red after adaptation; `map` takes the larger boundary.
+
+⚠⚠ **THE DEFAULT WAS REVERSED BY THE CROPS, and the brainstorm's "drop the clip" with it.**
+`probe_gamut_crops` rendered the author's 49 edited photos into ProPhoto: **32 have >9% of their
+pixels outside sRGB, the worst 45.5%**; the old clip shifts their hue 1–7° on average, up to 69°;
+and **0.0% of out-of-gamut pixels reach lightness ≥ 1** in any photo (the camera rendering keeps
+highlights below white, so the goldens' "bright primary turns white" never happens on real photos).
+On the six worst, the clip was the most vivid in every crop; relative, perceptual and an adaptive-L0
+prototype (Ottosson, α = 0.05 — barely lighter than relative, not shipped) read duller, reds
+brown-orange and foliage teal, and nearly identical to one another. The DCPs were tuned under
+Adobe's pipeline, whose export on a matrix profile is this same clip. **The author chose Clip as the
+default**, with the two hue-preserving intents as alternatives. Consequence: the default render is
+main's **bit for bit** — the 25 goldens regenerated under the provisional relative default went back
+to main's bytes and pass.
+
+⚠ Two tests had encoded the clip rather than their intent, found while relative was the default:
+`the_proof_reaches_the_texture` asserted "P3's green below sRGB's", true only because the sRGB proof
+clipped green to 255 — it now asserts the exact P3 encoding; and the canvas-intent test first used
+ProPhoto's own green primary, which BOTH intents map to the same boundary point (perceptual maps
+ProPhoto's edge onto the target's) — the discriminating colour is saturated but inside.
+
+Sabotages run: scaling only `a` in the map (4 colour tests fail); halving the GPU knee (136
+levels); `accelerate` passing the default intent (112 levels); `export_one` ignoring the preset's
+intent (the export test fails).
+
 ### 2026-09-26 — the resident final checkpoint: the tail's input stays on the GPU (branch `resident-final`)
 
 Stacked on `per-pixel-fusion`. **2,977 tests** (10 added), 79 goldens unmoved (⚠ 79, not the 78

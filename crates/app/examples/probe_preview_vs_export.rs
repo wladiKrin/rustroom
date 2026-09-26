@@ -37,6 +37,7 @@ fn main() {
     );
     let spec = RenderSpec {
         space: color::OutputSpace::Srgb,
+        intent: color::RenderingIntent::default(),
         resampler,
         baseline,
         airlight: Some(pipeline::prefix_airlight(&e, &pd.image, resampler, None)),

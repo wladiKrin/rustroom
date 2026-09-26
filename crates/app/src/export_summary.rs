@@ -41,6 +41,11 @@ fn folder(o: &ExportOptions) -> String {
 /// `JPEG · sRGB · 92` — the quality only for a lossy format.
 pub fn file(o: &ExportOptions) -> String {
     let mut s = format!("{} · {}", o.format.label(), o.space.label());
+    // ⚠ Not for ProPhoto: it is the working space and maps nothing, so naming an intent there
+    // would describe a choice that has no effect.
+    if o.space != color::OutputSpace::ProPhoto {
+        s.push_str(&format!(" · {}", o.intent.label()));
+    }
     if o.format.is_lossy() {
         s.push_str(&format!(" · {}", o.quality));
     }

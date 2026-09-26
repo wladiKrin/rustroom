@@ -113,6 +113,24 @@ impl RustroomApp {
         }
     }
 
+    /// Adopt a new canvas rendering intent, persist it, and re-render the open photo.
+    ///
+    /// ⚠ Written on the session first: `Session::request` reads it on the way through. The
+    /// thumbnail loader is **not** rebuilt — thumbnails render with the default intent (they are
+    /// cached on disk; see `Settings::canvas_intent`). Compare's panes key their request on it
+    /// and follow on their own.
+    pub(crate) fn apply_canvas_intent(&mut self, intent: color::RenderingIntent) {
+        self.settings.canvas_intent = intent;
+        self.save_settings();
+        let tool = self.tool;
+        if let Some(s) = self.session.as_mut() {
+            s.canvas_intent = intent;
+            let edits = s.view_edits(tool);
+            let (max_dim, region) = (s.render_max_dim(), s.requested_region);
+            s.request(edits, max_dim, region);
+        }
+    }
+
     pub(crate) fn apply_resampler(&mut self, resampler: pipeline::Resampler) {
         self.settings.resampler = resampler;
         self.save_settings();
@@ -245,6 +263,39 @@ mod tests {
         assert!(
             s.engine.requests_issued() > before,
             "the change must ask for a frame, or it looks inert until an unrelated edit"
+        );
+    }
+
+    /// The same three things for the canvas intent — ⚠ to a NON-default value, or a store that
+    /// never saved would load the default and pass.
+    #[test]
+    fn adopting_a_canvas_intent_persists_it_and_re_renders() {
+        let dir = TestDir::new("apply_canvas_intent");
+        let ctx = egui::Context::default();
+        let mut app = for_test();
+        app.settings_store = SettingsStore::new(dir.0.join("settings.json"));
+        open_test_photo(&mut app, &ctx, 8, 4);
+        let other = color::RenderingIntent::ALL
+            .into_iter()
+            .find(|&i| i != color::RenderingIntent::default())
+            .expect("two intents");
+
+        let before = app.session.as_ref().unwrap().engine.requests_issued();
+        app.apply_canvas_intent(other);
+
+        assert_eq!(app.settings.canvas_intent, other);
+        assert_eq!(
+            SettingsStore::new(dir.0.join("settings.json"))
+                .load()
+                .canvas_intent,
+            other,
+            "the choice must survive a restart"
+        );
+        let s = app.session.as_ref().unwrap();
+        assert_eq!(s.canvas_intent, other, "Session::request reads this");
+        assert!(
+            s.engine.requests_issued() > before,
+            "the change must ask for a frame"
         );
     }
 }

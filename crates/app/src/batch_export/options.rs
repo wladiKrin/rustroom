@@ -64,6 +64,10 @@ pub struct ExportOptions {
     /// carries a *container-level* one, so a missing field already falls back to this struct's
     /// `Default` — adding it per field implies a guarantee it is not the source of.
     pub space: color::OutputSpace,
+    /// How colour `space` cannot hold is brought inside it (M6.4c). Saved in export presets; a
+    /// preset written before it loads the default through the container-level `serde(default)`.
+    /// ⚠ Inert for ProPhoto, which is the working space and maps nothing.
+    pub intent: color::RenderingIntent,
 
     // ─── M6.1: what turns an export into a deliverable ────────────────────────────────────
     //
@@ -257,6 +261,7 @@ impl Default for ExportOptions {
             demosaic: raw_decode::Demosaic::default(),
             format: ExportFormat::default(),
             space: color::OutputSpace::default(),
+            intent: color::RenderingIntent::default(),
             // ⚠ Not `String::default()`. The neutral filename template is `{name}`, which is
             // what reproduces the naming every export had before templating; an empty template
             // would fall back to the stem too, but only by accident rather than by rule.
@@ -307,6 +312,26 @@ mod tests {
         let opts: ExportOptions = serde_json::from_str(json).expect("older options should load");
         assert_eq!(opts.space, color::OutputSpace::Srgb);
         assert_eq!(opts.quality, 90);
+    }
+
+    /// M6.4c: a preset written before the intent existed loads the default, and a non-default
+    /// intent survives the round trip — ⚠ non-default, or a field serde skipped would pass.
+    #[test]
+    fn the_rendering_intent_round_trips_and_an_older_preset_loads_the_default() {
+        let json = r#"{"dest_dir":"/tmp","quality":90,"space":"DisplayP3"}"#;
+        let old: ExportOptions = serde_json::from_str(json).expect("older options should load");
+        assert_eq!(old.intent, color::RenderingIntent::default());
+        let other = color::RenderingIntent::ALL
+            .into_iter()
+            .find(|&i| i != color::RenderingIntent::default())
+            .expect("two intents");
+        let opts = ExportOptions {
+            intent: other,
+            ..ExportOptions::default()
+        };
+        let back: ExportOptions =
+            serde_json::from_str(&serde_json::to_string(&opts).unwrap()).unwrap();
+        assert_eq!(back.intent, other);
     }
 
     #[test]

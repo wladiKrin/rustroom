@@ -266,6 +266,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         // zero here would make every panel-driven render ask for nothing.
         render_rung: w.max(h).min(crate::PREVIEW_MAX_DIM),
         display_space: color::OutputSpace::Srgb,
+        canvas_intent: color::RenderingIntent::default(),
         resampler: pipeline::Resampler::default(),
         gpu_tail: false,
         visualize: None,

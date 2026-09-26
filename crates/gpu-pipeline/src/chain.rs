@@ -873,6 +873,7 @@ mod tests {
                 Box::new(GpuExposureStage::new(0.0, ctx.clone())),
                 Box::new(crate::GpuOutputTransformStage::new(
                     color::OutputSpace::Srgb,
+                    color::RenderingIntent::default(),
                     &ctx,
                 )),
             ],
@@ -903,6 +904,7 @@ mod tests {
             Box::new(crate::GpuDisplayRenderingStage::new(None, None, &ctx)),
             Box::new(crate::GpuOutputTransformStage::new(
                 color::OutputSpace::Srgb,
+                color::RenderingIntent::default(),
                 &ctx,
             )),
         ];
@@ -1671,6 +1673,7 @@ mod tests {
                 Box::new(crate::GpuDisplayRenderingStage::new(None, None, ctx)),
                 Box::new(crate::GpuOutputTransformStage::new(
                     color::OutputSpace::Srgb,
+                    color::RenderingIntent::default(),
                     ctx,
                 )),
             ]

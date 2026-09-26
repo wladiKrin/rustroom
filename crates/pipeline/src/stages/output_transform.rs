@@ -14,11 +14,28 @@ use core_image::ImageBuf;
 /// edited.
 pub struct OutputTransform {
     space: color::OutputSpace,
+    intent: color::RenderingIntent,
+    gamut: color::GamutMap,
 }
 
 impl OutputTransform {
-    pub fn new(space: color::OutputSpace) -> Self {
-        Self { space }
+    /// ⚠ The intent decides what happens to colour `space` cannot hold (M6.4c). The default,
+    /// `Clip`, is the per-channel clamp this stage always did; the other two keep hue and
+    /// lightness and move chroma only. See `color::gamut` for why the clip stayed the default.
+    pub fn new(space: color::OutputSpace, intent: color::RenderingIntent) -> Self {
+        Self {
+            space,
+            intent,
+            gamut: color::GamutMap::for_space(space),
+        }
+    }
+
+    pub fn space(&self) -> color::OutputSpace {
+        self.space
+    }
+
+    pub fn intent(&self) -> color::RenderingIntent {
+        self.intent
     }
 }
 
@@ -29,8 +46,10 @@ impl crate::per_pixel::PerPixel for OutputTransform {
         // values, which is meaningless and does not fail loudly.
         //
         // ⚠ Out-of-gamut colour arrives here with negative components — that is the point of a
-        // wide working space, not a bug. `encode` clamps them.
-        let lin = self.space.from_working(c);
+        // wide working space, not a bug. Under `Clip` the map is the identity and `encode` clamps
+        // each channel; under the other two it brings the colour inside at constant hue first and
+        // `encode`'s clamp is left only float residue (measured under 1e-3).
+        let lin = self.space.from_working(self.gamut.map(self.intent, c));
         [
             self.space.encode(lin[0]),
             self.space.encode(lin[1]),
@@ -68,7 +87,8 @@ mod tests {
         for (x, c) in srgb.iter().enumerate() {
             img.set_pixel(x, 0, color::srgb_to_prophoto(*c));
         }
-        let out = OutputTransform::new(color::OutputSpace::Srgb).apply(img);
+        let out = OutputTransform::new(color::OutputSpace::Srgb, color::RenderingIntent::default())
+            .apply(img);
         for (x, c) in srgb.iter().enumerate() {
             let got = out.pixel(x, 0);
             for i in 0..3 {
@@ -89,7 +109,7 @@ mod tests {
         // doing it earlier would discard the very data the wide space exists to carry.
         let mut img = ImageBuf::new(1, 1);
         img.set_pixel(0, 0, [0.0, 1.0, 0.0]);
-        let got = OutputTransform::new(color::OutputSpace::Srgb)
+        let got = OutputTransform::new(color::OutputSpace::Srgb, color::RenderingIntent::default())
             .apply(img)
             .pixel(0, 0);
         assert!(
@@ -108,9 +128,10 @@ mod tests {
         let mut img = ImageBuf::new(1, 1);
         img.set_pixel(0, 0, color::srgb_to_prophoto([0.1, 0.9, 0.2]));
 
-        let srgb = OutputTransform::new(color::OutputSpace::Srgb)
-            .apply(img.clone())
-            .pixel(0, 0);
+        let srgb =
+            OutputTransform::new(color::OutputSpace::Srgb, color::RenderingIntent::default())
+                .apply(img.clone())
+                .pixel(0, 0);
         for (i, want) in [0.1_f32, 0.9, 0.2].iter().enumerate() {
             let want = color::linear_to_srgb(*want);
             assert!(
@@ -120,9 +141,12 @@ mod tests {
             );
         }
 
-        let p3 = OutputTransform::new(color::OutputSpace::DisplayP3)
-            .apply(img)
-            .pixel(0, 0);
+        let p3 = OutputTransform::new(
+            color::OutputSpace::DisplayP3,
+            color::RenderingIntent::default(),
+        )
+        .apply(img)
+        .pixel(0, 0);
         assert!(
             (p3[1] - srgb[1]).abs() > 1e-3,
             "P3 output should differ from sRGB, got {p3:?} vs {srgb:?}"
@@ -136,9 +160,12 @@ mod tests {
         // channel here means a matrix crept back in.
         let mut img = ImageBuf::new(1, 1);
         img.set_pixel(0, 0, [0.05, 0.8, 0.4]);
-        let got = OutputTransform::new(color::OutputSpace::ProPhoto)
-            .apply(img)
-            .pixel(0, 0);
+        let got = OutputTransform::new(
+            color::OutputSpace::ProPhoto,
+            color::RenderingIntent::default(),
+        )
+        .apply(img)
+        .pixel(0, 0);
         for (i, v) in [0.05_f32, 0.8, 0.4].iter().enumerate() {
             let want = color::OutputSpace::ProPhoto.encode(*v);
             assert!(
