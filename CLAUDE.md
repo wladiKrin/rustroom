@@ -170,7 +170,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 **2977 tests**, **79 goldens** (⚠ 79: M5.1c added one; "78" in older notes is stale).
 ✅ **The resident final checkpoint (2026-09-26, branch `resident-final`, stacked on
-`per-pixel-fusion`; confirmed by use 2026-09-26, the whole stack together — "very smooth").** `PrefixCache` keeps the tail's input on the GPU under
+`per-pixel-fusion`; confirmed by use and merged 2026-09-26, the whole stack together — "very smooth").** `PrefixCache` keeps the tail's input on the GPU under
 `(final key, Option<Rect>)`; a one-chain tail runs from it, a miss keeps its upload, the last GPU
 prefix step keeps its output, and **the settle after a handoff is a download (~101–122 → ~21–30
 ms), not a render**. The tail's input travels as an `Arc` — the 2.5 ms clone per tail frame is gone.
