@@ -444,6 +444,45 @@ impl RustroomApp {
         Some((s.path.clone(), s.copy, s.edits.clone()))
     }
 
+    /// Store `history` in the catalog as `id`'s, or drop its row when it holds nothing to undo or
+    /// redo (M9.7). A catalog error costs only the history, never the edits, so it is logged and
+    /// swallowed.
+    pub(crate) fn persist_history(&self, id: &PhotoId, history: &History<Edits>) {
+        let Some(cat) = self.catalog.as_ref() else {
+            return;
+        };
+        let result = if rustroom_app::history_store::worth_keeping(history) {
+            cat.save_history(
+                &id.path,
+                id.copy,
+                &rustroom_app::history_store::encode(history),
+            )
+        } else {
+            cat.delete_history(&id.path, id.copy)
+        };
+        if let Err(e) = result {
+            eprintln!("history: could not store {}: {e}", id.path.display());
+        }
+    }
+
+    /// `id`'s history from a previous run, if the catalog holds one whose present is exactly
+    /// `on_disk` (M9.7).
+    ///
+    /// ⚠⚠ The `HistoryStash::take_matching` rule, for its reason: a sync, a paste, a preset or
+    /// another tool may have rewritten the sidecar since, and a history ending anywhere else would
+    /// undo into a state the photo never passed through. Such a row is deleted, not kept.
+    pub(crate) fn restored_history(&self, id: &PhotoId, on_disk: &Edits) -> Option<History<Edits>> {
+        let cat = self.catalog.as_ref()?;
+        let text = cat.load_history(&id.path, id.copy).ok().flatten()?;
+        match rustroom_app::history_store::decode(&text) {
+            Some(h) if h.get() == on_disk => Some(h),
+            _ => {
+                let _ = cat.delete_history(&id.path, id.copy);
+                None
+            }
+        }
+    }
+
     /// Build the editing `Session` from a decoded photo (cache hit or worker result).
     pub(crate) fn finalize_session(
         &mut self,
@@ -456,8 +495,11 @@ impl RustroomApp {
         // stash needs: the outgoing history is put away here whether the switch came from a
         // cache hit or from a finished background decode.
         if let Some(old) = self.session.take() {
-            self.histories
-                .stash(PhotoId::new(old.path, old.copy), old.history);
+            let old_id = PhotoId::new(old.path, old.copy);
+            // ⚠ Persisted at the same choke point it is stashed at (M9.7), so the catalog and the
+            // stash cannot disagree about which photos have a history.
+            self.persist_history(&old_id, &old.history);
+            self.histories.stash(old_id, old.history);
         }
         // ⚠ Scanned here, once per photo, rather than in the panel body which runs every frame.
         // Cheap enough per photo; ruinous sixty times a second.
@@ -478,7 +520,15 @@ impl RustroomApp {
                 // longer on disk — a sync or a paste rewrote its sidecar while it was closed.
                 // Any log entry pointing at that stack would now pop steps it does not hold.
                 self.actions.forget_edits_of(&id);
-                History::new(edits.clone())
+                // ⚠ M9.7: a history from a previous run, if the catalog holds one that still
+                // describes the edits on disk — the stash's own rule, applied to it.
+                match self.restored_history(&id, &edits) {
+                    Some(h) => {
+                        self.actions.seed(&id, h.undo_depth(), h.redo_depth());
+                        h
+                    }
+                    None => History::new(edits.clone()),
+                }
             }
         };
 
@@ -1309,6 +1359,189 @@ mod tests {
         assert_eq!(s.name.as_deref(), Some("Warm"), "the name still caches");
         assert_eq!(s.snapshots.len(), 1, "and so do the snapshots");
         assert_eq!(s.snapshots[0].label(), "Before the crop");
+    }
+
+    /// M9.7 — the whole cycle through the REAL open path and a catalog FILE both instances share:
+    /// edit three times, quit, start a new app on the same catalog, reopen, and Ctrl+Z walks back
+    /// through the old edits in order.
+    fn history_run(tag: &str) -> (test_app::TestDir, std::path::PathBuf, std::path::PathBuf) {
+        let dir = test_app::TestDir::new(tag);
+        let photo = dir.0.join("a.RAF");
+        std::fs::write(&photo, b"not a real raw").unwrap();
+        rustroom_app::sidecar::save(&photo, &Edits::default()).unwrap();
+        let db = dir.0.join("catalog.db");
+        let cat = catalog::db::Catalog::open(&db).unwrap();
+        cat.sync_folder(
+            &dir.0,
+            &[catalog::CatalogEntry {
+                path: photo.clone(),
+                file_name: "a.RAF".to_string(),
+                modified: std::time::SystemTime::UNIX_EPOCH,
+                edited: None,
+            }],
+        )
+        .unwrap();
+        (dir, photo, db)
+    }
+
+    fn app_on(db: &std::path::Path) -> crate::RustroomApp {
+        let mut app = test_app::for_test();
+        app.catalog = Some(catalog::db::Catalog::open(db).unwrap());
+        app
+    }
+
+    fn exposure(app: &crate::RustroomApp) -> f32 {
+        app.session.as_ref().unwrap().edits.exposure
+    }
+
+    /// Open `photo`, move exposure through 0.1, 0.2, 0.3 as three history steps, save the sidecar
+    /// and quit.
+    fn edit_and_quit(db: &std::path::Path, photo: &std::path::Path) {
+        let ctx = test_ui::ctx();
+        let mut app = app_on(db);
+        let id = PhotoId::original(photo.to_path_buf());
+        app.finalize_session(&ctx, id.clone(), test_app::fake_decode());
+        for ev in [0.1, 0.2, 0.3] {
+            let s = app.session.as_mut().unwrap();
+            s.edits.exposure = ev;
+            s.history.push(s.edits.clone());
+            app.actions.push(
+                rustroom_app::action_log::ActionKind::PhotoEdit { id: id.clone() },
+                Some(&id),
+            );
+        }
+        rustroom_app::sidecar::save(photo, &app.session.as_ref().unwrap().edits).unwrap();
+        eframe::App::on_exit(&mut app);
+    }
+
+    #[test]
+    fn a_photos_history_survives_a_restart() {
+        let (_dir, photo, db) = history_run("history_restart");
+        edit_and_quit(&db, &photo);
+
+        let ctx = test_ui::ctx();
+        let mut app = app_on(&db);
+        app.finalize_session(
+            &ctx,
+            PhotoId::original(photo.clone()),
+            test_app::fake_decode(),
+        );
+        assert_eq!(
+            exposure(&app),
+            0.3,
+            "the edits come from the sidecar as always"
+        );
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            app.undo_action(&ctx);
+            seen.push(exposure(&app));
+        }
+        assert_eq!(
+            seen,
+            vec![0.2, 0.1, 0.0],
+            "Ctrl+Z walks back through the old edits"
+        );
+        app.undo_action(&ctx);
+        assert_eq!(exposure(&app), 0.0, "and stops at the start of the history");
+        app.redo_action(&ctx);
+        assert_eq!(exposure(&app), 0.1, "redo replays forward");
+    }
+
+    /// Switching photos stores the outgoing history — the stash choke point, not only `on_exit` —
+    /// and a photo left with nothing to undo has no row.
+    #[test]
+    fn switching_photos_stores_the_outgoing_history() {
+        let (dir, photo, db) = history_run("history_switch");
+        let other = dir.0.join("b.RAF");
+        std::fs::write(&other, b"not a real raw").unwrap();
+        let ctx = test_ui::ctx();
+        let mut app = app_on(&db);
+        app.catalog
+            .as_ref()
+            .unwrap()
+            .sync_folder(
+                &dir.0,
+                &[catalog::CatalogEntry {
+                    path: other.clone(),
+                    file_name: "b.RAF".to_string(),
+                    modified: std::time::SystemTime::UNIX_EPOCH,
+                    edited: None,
+                }],
+            )
+            .unwrap();
+        app.finalize_session(
+            &ctx,
+            PhotoId::original(photo.clone()),
+            test_app::fake_decode(),
+        );
+        {
+            let s = app.session.as_mut().unwrap();
+            s.edits.exposure = 0.4;
+            s.history.push(s.edits.clone());
+        }
+        app.finalize_session(
+            &ctx,
+            PhotoId::original(other.clone()),
+            test_app::fake_decode(),
+        );
+        let cat = app.catalog.as_ref().unwrap();
+        assert!(
+            cat.load_history(&photo, 0).unwrap().is_some(),
+            "a's history was stored"
+        );
+        app.finalize_session(
+            &ctx,
+            PhotoId::original(photo.clone()),
+            test_app::fake_decode(),
+        );
+        assert_eq!(
+            app.catalog
+                .as_ref()
+                .unwrap()
+                .load_history(&other, 0)
+                .unwrap(),
+            None,
+            "b had nothing to undo, so it has no row"
+        );
+    }
+
+    /// ⚠⚠ The sidecar changed between the two runs — a sync, a paste, another tool — so the stored
+    /// history no longer ends where the photo is: it must be discarded, never undone into.
+    #[test]
+    fn a_history_that_no_longer_matches_the_sidecar_is_discarded() {
+        let (_dir, photo, db) = history_run("history_stale");
+        edit_and_quit(&db, &photo);
+        rustroom_app::sidecar::save(
+            &photo,
+            &Edits {
+                exposure: 1.5,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let ctx = test_ui::ctx();
+        let mut app = app_on(&db);
+        app.finalize_session(
+            &ctx,
+            PhotoId::original(photo.clone()),
+            test_app::fake_decode(),
+        );
+        app.undo_action(&ctx);
+        assert_eq!(
+            exposure(&app),
+            1.5,
+            "nothing to undo: the stale history was dropped"
+        );
+        assert_eq!(
+            app.catalog
+                .as_ref()
+                .unwrap()
+                .load_history(&photo, 0)
+                .unwrap(),
+            None,
+            "and its row deleted"
+        );
     }
 
     /// ⚠ Snapshots are **per copy**: opening copy 0 must not show copy 1's.
