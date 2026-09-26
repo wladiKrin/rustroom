@@ -592,6 +592,12 @@ pub enum Packed {
     Rgba8 { bytes: Vec<u8>, w: usize, h: usize },
 }
 
+/// An owned copy of a shared checkpoint: the buffer itself when nothing else holds it, a clone
+/// otherwise. The tail's input travels as an `Arc` so the one-chain paths never clone it.
+fn unshare(a: Arc<ImageBuf>) -> ImageBuf {
+    Arc::try_unwrap(a).unwrap_or_else(|a| (*a).clone())
+}
+
 /// The float image, on the paths that need it.
 ///
 /// ⚠ Every caller is on a path [`Packed::Rgba8`] cannot reach, because the gate that builds it
@@ -1314,7 +1320,7 @@ fn render_cached_with(
         // ⚠ `gpu_prefix_steps` stays 0 here. Nothing is lost that the seam could have supplied:
         // `accelerate_prefix_stage`'s twins run whole-buffer, so a scoped chain is the CPU's.
         (
-            Some(out),
+            Some(Arc::new(out)),
             Some(RegionRect {
                 x: last.x,
                 y: last.y,
@@ -1523,10 +1529,14 @@ fn render_cached_with(
         let rect = region.and_then(|r| r.clamped(pw, ph));
         let t_clone = std::time::Instant::now();
         // ⚠ No CPU input after a handoff: the tail's input is the resident final.
+        // ⚠⚠ **Shared, not cloned (2026-09-26).** The whole-frame input IS the cached final, and
+        // cloning it cost 2.5 ms at rung 3200 on every tail-slider frame — paid before the tail
+        // could know it would run from the resident and never touch the CPU image. The Arc is
+        // handed down; `unshare` clones only on the paths that must own a buffer.
         let input = match (handed, rect) {
             (Some(_), _) => None,
-            (None, Some(r)) => Some(img.crop(r.x, r.y, r.w, r.h)),
-            (None, None) => Some((*img).clone()),
+            (None, Some(r)) => Some(Arc::new(img.crop(r.x, r.y, r.w, r.h))),
+            (None, None) => Some(Arc::clone(&img)),
         };
         if debug_steps {
             eprintln!(
@@ -1688,7 +1698,7 @@ fn render_cached_with(
         }
     };
     let mut from_resident: Option<Packed> = None;
-    let input: ImageBuf = match input {
+    let input: Arc<ImageBuf> = match input {
         Some(i) => i,
         None => {
             // ⚠ A handoff frame: no CPU image exists. The resident final must serve the tail
@@ -1721,20 +1731,19 @@ fn render_cached_with(
                         );
                     }
                     from_resident = Some(p);
-                    ImageBuf::new(0, 0)
+                    Arc::new(ImageBuf::new(0, 0))
                 }
                 None => match ctx {
-                    Some(ctx) if cache.settle_from_resident(ctx) => (*cache
+                    Some(ctx) if cache.settle_from_resident(ctx) => cache
                         .get(&key_at(steps.len()))
-                        .expect("settle_from_resident inserted the final"))
-                    .clone(),
+                        .expect("settle_from_resident inserted the final"),
                     // ⚠ The last resort — the GPU refused even a download. The step re-runs on
                     // the CPU from the checkpoint before it, which `img` still is.
                     _ => {
                         let last = steps.last().expect("a handoff implies a prefix step");
                         let out = Arc::new(last.stage.apply((*img).clone()));
                         cache.insert(key_at(steps.len()), out.clone(), Tier::Final);
-                        (*out).clone()
+                        out
                     }
                 },
             }
@@ -1747,7 +1756,7 @@ fn render_cached_with(
         // ⚠ Rejoined at once: the proof is one of the three things that needs the float, so its
         // tail is never a candidate for the byte path.
         let (pipe, chain) = build_tail(color::OutputSpace::ProPhoto);
-        (gpu_pipeline::rejoin(pipe, chain).run(input.clone()), p)
+        (gpu_pipeline::rejoin(pipe, chain).run((*input).clone()), p)
     });
     // ⚠ The **pipeline** is always sRGB here, whatever the proof does. The display transform is a
     // post-step in `pack`, deliberately outside the pipeline so the histogram stays image-referred.
@@ -1776,7 +1785,7 @@ fn render_cached_with(
                     None,
                     profile,
                 );
-                let mid = halves.before_grade.run(input);
+                let mid = halves.before_grade.run(unshare(input));
                 // ⚠ Blending and Balance are read from the edits whether or not the grade is
                 // active: the ranges exist before a wheel is turned.
                 let g = &edits.color_grading;
@@ -1803,28 +1812,40 @@ fn render_cached_with(
                 match chain {
                     Some(c) if !float_needed => {
                         let t_cpu = std::time::Instant::now();
-                        // ⚠ An empty pipeline returns its input, so when the tail is one chain
-                        // `mid` IS the tail's input — the thing worth keeping.
+                        // ⚠⚠ **One chain, no clone.** When the tail is one GPU chain its input IS
+                        // the checkpoint: a resident hit borrows nothing, and a miss borrows the
+                        // Arc for its upload. Only a CPU stage before the chain needs an owned
+                        // buffer, and `unshare` clones it there — which is what every frame paid.
                         let whole = pipe.stage_names().is_empty();
-                        let mid = pipe.run(input);
-                        let (w, h) = (mid.width(), mid.height());
+                        let (src, mid) = if whole {
+                            (Some(input), None)
+                        } else {
+                            (None, Some(pipe.run(unshare(input))))
+                        };
+                        let (w, h) = match (&src, &mid) {
+                            (Some(s), _) => (s.width(), s.height()),
+                            (None, Some(m)) => (m.width(), m.height()),
+                            (None, None) => unreachable!("one of the two is the chain's input"),
+                        };
                         let t_gpu = std::time::Instant::now();
                         // ⚠⚠ **From the resident final when the tail is one chain**, else a
                         // miss that keeps its upload for the next frame. A tail with a CPU stage
                         // first has an input that is not the checkpoint, and keeps nothing.
-                        let got = match cache
-                            .resident_final(&tail_key)
-                            .filter(|_| whole && !refused)
-                        {
-                            Some(r) => {
-                                resident_final_hit = true;
-                                c.run_rgba8_from(r)
+                        let got = match (&src, &mid) {
+                            (Some(s), _) => {
+                                match cache.resident_final(&tail_key).filter(|_| !refused) {
+                                    Some(r) => {
+                                        resident_final_hit = true;
+                                        c.run_rgba8_from(r)
+                                    }
+                                    None => c.run_rgba8_keeping_input(s).map(|(b, kept)| {
+                                        cache.keep_resident_final(tail_key.clone(), kept);
+                                        b
+                                    }),
+                                }
                             }
-                            None if whole => c.run_rgba8_keeping_input(&mid).map(|(b, kept)| {
-                                cache.keep_resident_final(tail_key.clone(), kept);
-                                b
-                            }),
-                            None => c.run_rgba8(&mid),
+                            (None, Some(m)) => c.run_rgba8(m),
+                            (None, None) => None,
                         };
                         tail_uploads += c.transfer_counts().0;
                         if debug_steps {
@@ -1842,7 +1863,17 @@ fn render_cached_with(
                             // ⚠ Fully qualified rather than importing `PipelineStage` into this
                             // module: this is the only place that needs it, and the import would sit
                             // in scope for a whole file that deliberately talks in pipelines.
-                            None => (Packed::Float(pipeline::PipelineStage::apply(&c, mid)), None),
+                            None => {
+                                let owned = match (src, mid) {
+                                    (Some(s), _) => unshare(s),
+                                    (None, Some(m)) => m,
+                                    (None, None) => unreachable!("checked above"),
+                                };
+                                (
+                                    Packed::Float(pipeline::PipelineStage::apply(&c, owned)),
+                                    None,
+                                )
+                            }
                         }
                     }
                     // ⚠ The float path keeps the tail's input too, when the tail is one chain: a
@@ -1858,7 +1889,7 @@ fn render_cached_with(
                         let out = match hit {
                             Some(o) => o,
                             None => {
-                                let (o, kept) = c.apply_keeping_input(input);
+                                let (o, kept) = c.apply_keeping_input(unshare(input));
                                 if let Some(k) = kept {
                                     cache.keep_resident_final(tail_key.clone(), k);
                                 }
@@ -1869,7 +1900,7 @@ fn render_cached_with(
                         (Packed::Float(out), None)
                     }
                     other => (
-                        Packed::Float(gpu_pipeline::rejoin(pipe, other).run(input)),
+                        Packed::Float(gpu_pipeline::rejoin(pipe, other).run(unshare(input))),
                         None,
                     ),
                 }

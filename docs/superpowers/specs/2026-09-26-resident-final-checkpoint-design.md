@@ -62,6 +62,12 @@ ordinary frame, float for a proof). Otherwise the chain uploads the CPU input an
 `render_cached_with` all go. `Slot::Prefix` stays for **step→step** inside the prefix loop, and
 the clear at the top of that loop stays with it.
 
+**Amended at execution (2026-09-26):** a handoff frame whose tail cannot run from the resident
+falls back by *downloading* the resident (the settle's own path, which also caches the final) and
+rendering the ordinary way. Only a download that itself fails — a dead GPU — reaches a three-line
+last resort that re-runs the final step on the CPU from the checkpoint before it; that is the one
+piece of the old fallback kept, because a frame with no input at all is not an option.
+
 ### 4. The settle
 
 The warm-behind, when the wanted whole-frame final key has a resident and no CPU final, **downloads
