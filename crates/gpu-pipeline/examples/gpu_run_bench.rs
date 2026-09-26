@@ -37,7 +37,6 @@ fn accel(
             profile: Default::default(),
             spec: Default::default(),
             // ⚠ This bench builds no prefix, so there is never a plane to take.
-            prefix_offered: false,
         },
         ctx,
     );

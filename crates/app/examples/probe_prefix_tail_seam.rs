@@ -164,7 +164,6 @@ fn main() {
                 // ⚠⚠ **False on purpose, so run A below genuinely uploads.** This probe measures
                 // the seam by running the SAME chain both ways; letting `accelerate` wire the take
                 // would make run A and run B identical and the saving would read as zero.
-                prefix_offered: false,
             },
             ctx,
         );

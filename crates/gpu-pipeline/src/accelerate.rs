@@ -428,15 +428,6 @@ pub struct TailFacts<'a> {
     pub profile: ProfileRendering<'a>,
     /// What the render is producing.
     pub spec: RenderSpec,
-    /// Whether the last GPU **prefix** step deposited its output for this tail to take.
-    ///
-    /// ⚠⚠ **The caller decides this, and only the caller can.** It is true exactly when the final
-    /// prefix step ran on the GPU *and* nothing since has invalidated the plane — which is
-    /// knowledge that lives in `render_cached`'s loop and in `batch_export`'s, where the step
-    /// order is. A default of `true` would be a silent correctness bug rather than a slow path:
-    /// the tail would take a plane that is not its input, at matching dimensions on the same
-    /// thread, and render **a plausible photograph**.
-    pub prefix_offered: bool,
 }
 
 pub fn accelerate(
@@ -450,7 +441,6 @@ pub fn accelerate(
         region,
         profile,
         spec,
-        ..
     } = facts;
     // ⚠⚠ **Depth one, and it is structural rather than a bolted-on limit.** The accelerator handed
     // to the outer walk recurses into a mask; the walk it starts is handed **no** accelerator. That
@@ -493,16 +483,12 @@ pub fn accelerate(
         spec,
         ctx,
         Some(&inner as &pipeline::SubStageAccelerator<'_>),
-        // ⚠⚠ **`Prefix`, never `Mask`, and that distinction is a guard rather than bookkeeping.**
-        // Nothing in the outer tail stands in a mask's relationship to a coverage rasteriser, so
-        // its chain must never take from the mask slot — `the_outer_tails_own_chain_never_takes_a_masks_leftover_plane`
-        // is the sabotage-pinned test that says so. What it *may* take is the plane the last GPU
-        // **prefix** step deposited, which is its input by construction: the prefix loop clears
-        // that slot the moment a CPU step runs.
-        //
-        // ⚠ `None` when the prefix offered nothing — a tail that is not preceded by an accelerated
-        // prefix step, which is every region-scoped render.
-        facts.prefix_offered.then_some(crate::Slot::Prefix),
+        // ⚠⚠ **`None`: the outer tail takes no plane (2026-09-26).** Its input is the resident
+        // final, looked up by KEY in `PrefixCache`, so the anonymous slot is step→step only. The
+        // one thing it must never take is a mask's leftover —
+        // `the_outer_tails_own_chain_never_takes_a_masks_leftover_plane` pins that, and
+        // `the_handed_back_chain_takes_no_plane` pins this arm.
+        None,
     )
 }
 
@@ -598,10 +584,8 @@ fn walk(
         // that is a fact about the current pipeline rather than a guarantee about the next one —
         // and it is the stage that clamps, so it is what makes the output display-referred.
         //
-        // ⚠⚠ `mark_shared` here too (2026-09-26). This arm is the byte path, the ordinary preview
-        // frame, and it was the one arm that never offered the take — so every frame after an
-        // accelerated prefix step re-uploaded the plane the prefix had just left on the GPU.
-        // `the_handed_back_chain_takes_the_prefix_plane` pins it.
+        // ⚠ `mark_shared` here too, for the recursive walk's sake: a mask whose whole sub-list
+        // is one chain lands in this arm.
         Some(mut c) if c.last_name() == Some("output_transform") => {
             mark_shared(&mut c, share_input, out.is_empty());
             (Pipeline::new(out), Some(c))
@@ -1663,10 +1647,6 @@ mod tests {
                 region: None,
                 profile,
                 spec,
-                // ⚠ The helper models a tail with **no** accelerated prefix before it, which is
-                // what every test in this file that predates the resident prefix seam assumed.
-                // A test that wants the take writes its own call.
-                prefix_offered: false,
             },
             ctx,
         );
@@ -1682,33 +1662,34 @@ mod tests {
                 region: None,
                 profile: ProfileRendering::default(),
                 spec: RenderSpec::default(),
-                prefix_offered: false,
             },
             ctx,
         )
     }
 
-    /// ⚠⚠ **The handed-back chain may take the prefix's plane — found missing 2026-09-26.** The
-    /// byte path's chain (the one ending in `output_transform`, returned rather than pushed) was
-    /// built WITHOUT `mark_shared`, so after an accelerated prefix step every ordinary preview
-    /// frame re-uploaded the 82 MB it had just left on the GPU (`took=false` in
-    /// `RUSTROOM_DEBUG_XFER`). The prefix→tail seam only ever worked for float tails.
+    /// ⚠⚠ **The outer tail's chain takes NO plane — since the resident final (2026-09-26).** Its
+    /// input comes from `PrefixCache::resident_final` under a key, which is what makes a stale
+    /// hit unrepresentable; the anonymous prefix slot is step→step only. A tail offered
+    /// `Slot::Prefix` would take a step's leftover at matching dimensions and render a plausible
+    /// photograph — the sabotage this pins is `Some(crate::Slot::Prefix)` in `accelerate`'s
+    /// outer walk.
     #[test]
-    fn the_handed_back_chain_takes_the_prefix_plane() {
+    fn the_handed_back_chain_takes_no_plane() {
         let Some(ctx) = ctx() else { return };
         let e = with_hsl();
-        let facts = |prefix_offered| TailFacts {
-            region: None,
-            profile: ProfileRendering::default(),
-            spec: RenderSpec::default(),
-            prefix_offered,
-        };
-        let (_, chain) = accelerate(tail_of(&e), &e, SCALE, facts(true), &ctx);
+        let (_, chain) = accelerate(
+            tail_of(&e),
+            &e,
+            SCALE,
+            TailFacts {
+                region: None,
+                profile: ProfileRendering::default(),
+                spec: RenderSpec::default(),
+            },
+            &ctx,
+        );
         let chain = chain.expect("fixture check: this tail ends in a chain");
-        assert_eq!(chain.takes_from(), Some(crate::Slot::Prefix));
-        // And not without an offer: a tail after a CPU prefix must upload.
-        let (_, chain) = accelerate(tail_of(&e), &e, SCALE, facts(false), &ctx);
-        assert_eq!(chain.expect("a chain").takes_from(), None);
+        assert_eq!(chain.takes_from(), None);
     }
 
     /// ⚠⚠ The condition M8.3g's whole gate rests on, and it is answered **by construction** here
@@ -1973,7 +1954,6 @@ mod tests {
                 region,
                 profile: ProfileRendering::colorimetric(),
                 spec: RenderSpec::default(),
-                prefix_offered: false,
             },
             &ctx,
         );
@@ -2031,7 +2011,6 @@ mod tests {
                 region: None,
                 profile: ProfileRendering::colorimetric(),
                 spec: RenderSpec::default(),
-                prefix_offered: false,
             },
             &ctx,
         );
@@ -3147,7 +3126,6 @@ mod tests {
                     region: r,
                     profile: ProfileRendering::default(),
                     spec: RenderSpec::default(),
-                    prefix_offered: false,
                 },
                 &ctx,
             );
