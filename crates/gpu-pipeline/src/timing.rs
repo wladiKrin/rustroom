@@ -8,8 +8,19 @@
 //! the timed wall printed here and the untimed `RUSTROOM_DEBUG_XFER` wall, so no figure from a
 //! timed run is ever quoted as a frame time.
 //!
+//! ⚠⚠ **The copies are NOT marked, and that was found by a hang rather than decided.** The spec
+//! asked for encoder timestamps around the upload and readback copies
+//! (`TIMESTAMP_QUERY_INSIDE_ENCODERS`, which the M2 grants). wgpu 29's Metal backend implements a
+//! `write_timestamp` outside a pass by deferring it onto a dummy blit encoder — its own source says
+//! "here be dragons" — and the command buffer then never reaches `Completed`; its `Device::wait`
+//! loop checks for nothing else, so `poll(Wait)` spins forever on the render worker. Measured
+//! 2026-09-26: with the two marks in, `a_timed_run_produces_the_untimed_bytes` hangs; without
+//! them it passes in 0.04 s. So a block lists the passes only, and the summary's `copies+latency`
+//! is the wall's remainder beyond them: the device-side copies and the queue latency together. The
+//! host halves of the copies are on the `RUSTROOM_DEBUG_XFER` line already (`memcpy`, `tovec`).
+//!
 //! ⚠ The assembly is pure and lives apart from the wgpu objects so the arithmetic — order, span,
-//! latency, the untimed entry — is tested with no GPU at all.
+//! remainder — is tested with no GPU at all.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -23,15 +34,17 @@ pub(crate) struct Pair {
 /// What one timed chain run measured.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Timings {
-    /// In mark order: the upload, each stage by name, `quantise` in bytes mode, `readback`.
-    /// `None` where nothing was timed — an upload that never happened because the plane was taken.
+    /// In pass order: each stage by name, then `quantise` in bytes mode. `None` where a pair's
+    /// ticks did not come back, which no shipped path produces.
     pub entries: Vec<(String, Option<f64>)>,
-    /// Earliest begin to latest end on the GPU's clock, in milliseconds.
+    /// The first pass's begin to the last pass's end on the GPU's clock, in milliseconds. ⚠ The
+    /// copies before and after are outside it — see the module doc.
     pub gpu_span_ms: f64,
     /// Submit to completion on the CPU's clock, in milliseconds.
     pub wall_ms: f64,
-    /// `wall_ms - gpu_span_ms`: what the work spent queued or scheduled rather than running.
-    pub latency_ms: f64,
+    /// `wall_ms - gpu_span_ms`: the device-side copies and the queue latency together — what the
+    /// wall holds beyond the passes.
+    pub rest_ms: f64,
     /// Whether this chain waited only because timing asked it to — a handoff chain, which
     /// otherwise submits and returns.
     pub waited_for_timing: bool,
@@ -70,7 +83,7 @@ pub(crate) fn assemble(
         entries,
         gpu_span_ms,
         wall_ms,
-        latency_ms: wall_ms - gpu_span_ms,
+        rest_ms: wall_ms - gpu_span_ms,
         waited_for_timing,
     }
 }
@@ -87,12 +100,12 @@ impl Timings {
         for (name, d) in &self.entries {
             match d {
                 Some(ms) => eprintln!("  {name:<18} {ms:7.2} ms"),
-                None => eprintln!("  {name:<18} (taken)"),
+                None => eprintln!("  {name:<18} (no reading)"),
             }
         }
         eprintln!(
-            "  gpu span {:7.2} ms   wall submit+wait {:7.2} ms   latency {:7.2} ms",
-            self.gpu_span_ms, self.wall_ms, self.latency_ms
+            "  gpu span {:7.2} ms   wall submit+wait {:7.2} ms   copies+latency {:7.2} ms",
+            self.gpu_span_ms, self.wall_ms, self.rest_ms
         );
     }
 }
@@ -163,11 +176,6 @@ impl Recorder {
         p
     }
 
-    /// Record a label with no marks — an upload that never happened.
-    pub(crate) fn skipped(&mut self, label: &str) {
-        self.labels.push((label.to_owned(), None));
-    }
-
     /// A compute pass's timestamp writes for `p`.
     pub(crate) fn pass_writes(&self, p: Pair) -> wgpu::ComputePassTimestampWrites<'_> {
         wgpu::ComputePassTimestampWrites {
@@ -175,11 +183,6 @@ impl Recorder {
             beginning_of_pass_write_index: Some(p.begin),
             end_of_pass_write_index: Some(p.end),
         }
-    }
-
-    /// An encoder mark at `index` — a pair's begin or end — for the copies outside any pass.
-    pub(crate) fn mark(&self, enc: &mut wgpu::CommandEncoder, index: u32) {
-        enc.write_timestamp(&self.set, index);
     }
 
     /// Encode the resolve and the copy into the readable buffer. Called after the last mark and
@@ -286,7 +289,7 @@ mod tests {
             ]
         );
         assert!((t.gpu_span_ms - 3.5).abs() < 1e-9, "span {}", t.gpu_span_ms);
-        assert!((t.latency_ms - 6.5).abs() < 1e-9, "latency {}", t.latency_ms);
+        assert!((t.rest_ms - 6.5).abs() < 1e-9, "rest {}", t.rest_ms);
         assert_eq!(t.wall_ms, 10.0);
         assert!(!t.waited_for_timing);
     }
