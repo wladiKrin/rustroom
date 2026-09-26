@@ -150,6 +150,10 @@ mod tests {
                 amount: 55.0,
                 ..Default::default()
             },
+            defringe: edit_model::Defringe {
+                green_amount: 25.0,
+                ..Default::default()
+            },
             lens_correction: Some(edit_model::LensCorrection {
                 distortion: true,
                 ..Default::default()

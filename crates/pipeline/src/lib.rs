@@ -1524,6 +1524,8 @@ pub fn build_pipeline_split_tapped(
             // that changes as you pan.
             noise_reduction: edit_model::NoiseReduction::default(),
             dehaze: edit_model::Dehaze::default(),
+            // ⚠ Likewise a prefix step (M9.6), after geometry — never a tail stage.
+            defringe: 0.0,
             white_balance: edits.white_balance,
             exposure: edits.exposure,
             contrast: edits.contrast,
@@ -3382,6 +3384,10 @@ mod tests {
                 vignetting: true,
                 scale: 80.0,
             }),
+            defringe: edit_model::Defringe {
+                purple_amount: 30.0,
+                ..Default::default()
+            },
             perspective: edit_model::Perspective {
                 vertical: 30.0,
                 horizontal: -15.0,

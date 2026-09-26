@@ -247,9 +247,10 @@ fn sub_edits(a: &edit_model::LocalAdjustments) -> Edits {
         saturation,
         vibrance,
         local_contrast,
-        // deliberately not carried — these two run in the PREFIX and cannot reach a mask's tail
+        // deliberately not carried — these run in the PREFIX and cannot reach a mask's tail
         noise_reduction: _,
         dehaze: _,
+        defringe: _,
     } = a;
     Edits {
         exposure: *exposure,
