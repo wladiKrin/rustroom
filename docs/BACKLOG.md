@@ -25,7 +25,7 @@ still carries the reasoning that matters — read the entry, then build it under
 | --- | --- |
 | Creative 3-D LUTs | ✅ **M7.5, shipped 2026-09-04** and confirmed by use (after the handover fix). ⚠⚠ Was specced as W5 track A. M5.4b supplied the *seam*, not the answer: the blocker below — a `.cube` does not declare its input space — was still open, and W5-0 settled it. See `specs/2026-09-04-creative-luts-design.md`. |
 | `ProfileToneCurve` / `ProfileLookTable` | **answered by M5.4b** — the same display-rendering question |
-| Soft-proofing · gamut mapping / rendering intents | ✅ **M6.4 soft proofing shipped 2026-09-04**, confirmed by use. 🟡 **Rendering intents: M6.4c, 2026-09-26** — Clip (default, by the author's choice from crops), Relative colorimetric, Perceptual. `specs/2026-09-26-m6.4c-rendering-intents-design.md`. |
+| Soft-proofing · gamut mapping / rendering intents | ✅ **M6.4 soft proofing shipped 2026-09-04**, confirmed by use. ✅ **Rendering intents: M6.4c, 2026-09-26** — Clip (default, by the author's choice from crops), Relative colorimetric, Perceptual. `specs/2026-09-26-m6.4c-rendering-intents-design.md`. |
 | EXIF/IPTC metadata editing | ✅ **M6.2, 2026-09-08** — edited in the catalog, embedded at export, in the sidecar |
 | Export filename templating · output/print sharpening | ✅ **M6.1a** / ✅ **M6.1d**, both 2026-09-01 |
 | Mask intersection and subtraction | ✅ **M7.1c, 2026-09-10** — confirmed by use; Add / Subtract / Intersect between masks, and **M7.1 is complete** |
@@ -174,7 +174,7 @@ Seeded from the recorded follow-ups formerly in `CLAUDE.md`; **the sections are 
 - ✅ **Soft-proofing — shipped as M6.4, 2026-09-04.** As recorded: the preview still cannot show colour outside sRGB even when exporting P3,
   because the pipeline clips to sRGB before the display transform. The macOS colorspace work makes
   this easier: tag the layer P3 and render P3.
-- ~~**Gamut mapping / rendering intents at export.**~~ 🟡 **M6.4c, 2026-09-26.** The per-channel clip
+- ~~**Gamut mapping / rendering intents at export.**~~ ✅ **M6.4c, 2026-09-26.** The per-channel clip
   stays the default by the author's choice; perceptual and relative colorimetric are offered beside it.
 - **`CameraCalibration` is neither parsed nor applied.** A profile carrying one renders as though it
   were the identity. Recorded rather than silently mis-rendered.

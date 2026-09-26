@@ -162,7 +162,7 @@ goldens unmoved.
 
 **2,996 tests**, **80 goldens** (+`gamut_perceptual`; the other 79 are **main's own references**),
 gate green. Spec `2026-09-26-m6.4c-rendering-intents-design.md`, plan of the same date.
-🟡 **Awaiting use.**
+✅ **Confirmed by use and merged 2026-09-26.**
 
 **What shipped.** `color::gamut`: `RenderingIntent { Clip (default), RelativeColorimetric,
 Perceptual }` and `GamutMap::map`, working in the linear working space before `OutputTransform`'s

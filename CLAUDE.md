@@ -169,7 +169,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 ### State (2026-09-26)
 
 **2996 tests**, **80 goldens** (⚠ 80: M6.4c added `gamut_perceptual`; "78"/"79" in older notes are stale).
-🟡 **M6.4c rendering intents (2026-09-26, branch `m6.4c-rendering-intents`, awaiting use).**
+✅ **M6.4c rendering intents (2026-09-26, confirmed by use and merged).**
 `color::gamut`: **Clip (default — the author's call from crops of his own photos)**, Relative
 colorimetric and Perceptual, the last two hue-preserving in Oklab with an **exact per-pixel
 boundary** (a table desaturated pure red by 49 levels at the gamut corners). Canvas intent from the
@@ -274,7 +274,7 @@ Every planned phase closed except **M7.3b** (since done, 2026-09-25), so the roa
 
 **▶ The order the user set: M7.3b ✅, the drag-frame fixes ✅ and GPU geometry ✅ (all merged and
 confirmed by use 2026-09-26); Phase 9's checklist from the top — M5.1c (parametric curve) ✅ merged and confirmed by use
-2026-09-26; M6.4c (rendering intents) 🟡 built, awaiting use; **M9.6 (defringe) is next.** A Straighten drag on
+2026-09-26; M6.4c (rendering intents) ✅ merged and confirmed by use 2026-09-26; **M9.6 (defringe) is next.** A Straighten drag on
 DSCF6263: **~97 → ~41 ms per frame in the app** (85.0 → 28.8 ms headless). ⚠ The remaining app-vs-probe
 gap (~10–12 ms) is GPU submit+wait, and it is **NOT** the window's per-frame upload: freezing the window
 changed nothing, so the shared-device idea is ⛔ declined on that measurement (`docs/BACKLOG.md`). The
