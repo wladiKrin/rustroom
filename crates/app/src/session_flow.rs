@@ -591,6 +591,7 @@ impl RustroomApp {
             baseline_ev: decoded.profile.baseline_ev,
             buffer: decoded.buffer.clone(),
             picking_wb: false,
+            picking_fringe: false,
             zoom: 1.0,
             fit_scale: 1.0,
             pan: egui::Vec2::ZERO,

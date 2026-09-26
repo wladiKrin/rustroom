@@ -158,6 +158,45 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-27 — M9.6 defringe: purple/green, global and in masks (branch `m9.6-defringe`)
+
+**3,014 tests**, **81 goldens** (+`defringe`; the other 80 unmoved), gate green. Spec
+`2026-09-26-m9.6-defringe-design.md`, plan of the same date. ✅ **Confirmed by use and merged 2026-09-27.**
+
+**What shipped.** `Edits.defringe` (purple/green amount 0..100 and an Oklab hue range each; Lens
+group) and `LocalAdjustments.defringe` (−100..+100, Lightroom's meaning — negative protects a mask's
+area from the global defringe, positive adds it with the global hue ranges; a mask's Detail group).
+`DefringeStage`: a Sobel edge map of cube-root luminance, max-filtered over a render-scaled radius
+(6 px at full resolution), a feathered circular hue membership, and chroma scaled by
+`1 − edge · membership · amount/100` at constant Oklab lightness, where the amount at a pixel is the
+global one plus Σ mask coverage × local, clamped. ONE prefix step **after geometry** — in the frame
+the masks live in, so global and local are one computation — keyed on the global settings and each
+local mask's projection (shape, refinements, slider); inserted for a positive local alone, never for
+a negative local alone. Excluded from the airlight replay, so a defringe drag never re-estimates
+haze. `MaskStage::coverage_plane` lifts a mask's coverage out of `apply` (one definition of where a
+mask is; a test recovers `apply`'s blend weight and matches it). UI: a Defringe block in the Edit
+panel's Lens section — **outside** the profile-gated block, since it exists for photos the profile did
+not fix — with two dual-handle hue strips (`defringe_tool`'s rules) and a "Pick a fringe" eyedropper
+(the WB picker's shape: the source buffer's most saturated pixel in a 5×5 patch, a purple- or
+green-family hue centres that range ±20° and lifts a zero amount to 40, anything else says so).
+
+⚠⚠ **The edge band was measured and the first guess was wrong photographically.** At 0.02..0.08
+**76%** of DSCF6263's pixels (fit rung) read as "near an edge" — foliage texture — so green defringe
+would have greyed the leaves everywhere. Shares: >0.05 31%, >0.10 5%, >0.15 1%. The band is now
+0.08..0.16. ⚠ Still to be judged on a photograph with real fringing.
+
+⚠⚠ **Cost: 116 → 62 ms at 3200×2136 on DSCF6263** (70 with one local mask): the first version
+converted and STORED all of Oklab (an 82 MB array) and did the full per-pixel work on 76% of the
+frame. Now a cheap lightness (one `cbrt`) feeds the edge map and Oklab runs only near strong edges;
+the remaining ~60 ms is spread over lightness ~8, Sobel ~8, max filter ~14, apply ~19
+(`RUSTROOM_DEBUG_DEFRINGE=1`). ⚠ **Geometry precedes this step, so with defringe ON a straighten or
+crop drag pays it too** (~35 → ~100 ms at fit), and an active defringe ends the resident GPU
+handoff — a GPU twin is the answer if use says so; not built.
+
+Sabotages run: local amount ignored (the mask test fails); edge proximity ignored (the isolated
+patch's centre loses its colour); the Defringe block drawn inside the profile gate (the panel test's
+picker does not arm).
+
 ### 2026-09-26 — M6.4c rendering intents: Clip, Relative colorimetric, Perceptual (branch `m6.4c-rendering-intents`)
 
 **2,996 tests**, **80 goldens** (+`gamut_perceptual`; the other 79 are **main's own references**),

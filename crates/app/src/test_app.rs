@@ -220,6 +220,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         baseline_ev: None,
         buffer: buf,
         picking_wb: false,
+        picking_fringe: false,
         path: std::path::PathBuf::from("/test/a.RAF"),
         copy: 0,
         name: None,

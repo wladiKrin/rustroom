@@ -121,6 +121,7 @@ pub use resample::Resampler;
 pub use stages::color_grading::ColorGradingStage;
 pub use stages::contrast::{ContrastStage, PIVOT as CONTRAST_PIVOT};
 pub use stages::creative_look::CreativeLookStage;
+pub use stages::defringe::DefringeStage;
 pub use stages::dehaze::DehazeStage;
 // ⚠⚠ Re-exported so `gpu-pipeline` substitutes these into WGSL rather than transcribing them.
 // ⚠ `T_MIN` and `A_MIN` are ALIASED on the way out: they are dehaze's own floors and a bare name
@@ -826,10 +827,16 @@ fn airlight_replay(
         // crop into a hazy sky and one into a clear foreground share one value. That IS what
         // invariance means — and a crop drag is continuous too, so re-estimating there would
         // reintroduce the defect in the gesture most likely to expose it.
+        //
+        // ⚠ Defringe (M9.6) is skipped too — not because it reframes but because a defringe drag
+        // must not re-estimate the haze under a masked dehaze; its chroma-only change is
+        // immaterial to an order statistic of the brightest dark channel.
         .filter(|s| {
             !matches!(
                 s.key,
-                PrefixStepKey::LensCorrection(..) | PrefixStepKey::Geometry(..)
+                PrefixStepKey::LensCorrection(..)
+                    | PrefixStepKey::Geometry(..)
+                    | PrefixStepKey::Defringe(..)
             )
         })
         .collect()
@@ -913,6 +920,11 @@ pub enum PrefixStepKey {
     /// including the zero-sized ones. The same `large_enum_variant` answer `ActionKind::Sync`
     /// already gives.
     MaskedCapture(Box<edit_model::MaskedAdjustment>),
+    /// The one defringe step (M9.6): the global settings and the **projection** of every enabled
+    /// mask carrying a local defringe — its shape, its refinements and its slider, nothing else,
+    /// so a masked-exposure drag does not re-run it. ⚠ Geometry is not here and need not be: the
+    /// key is cumulative and the geometry step precedes this one.
+    Defringe(edit_model::Defringe, Vec<edit_model::MaskedAdjustment>),
 }
 
 /// One prefix stage together with the key identifying its output, so the renderer can cache
@@ -1025,6 +1037,37 @@ pub fn build_prefix_steps(
             stage: Box::new(
                 GeometryStage::new(&edits.geometry, resampler).with_perspective(edits.perspective),
             ),
+        });
+    }
+
+    // ⚠⚠ Defringe (M9.6): ONE step for the global settings and every mask's local slider, AFTER
+    // geometry — in the frame the masks live in, which is what lets a mask at −100 protect its
+    // area from the global amount inside one computation — and so a defringe drag re-runs only
+    // this and the masked captures, never the geometry resample. Inserted for a local slider alone,
+    // since a positive local defringes with the global amount at 0.
+    let locals: Vec<edit_model::MaskedAdjustment> = edits
+        .masks
+        .iter()
+        .filter(|m| !m.disabled && m.adjustments.defringe != 0.0)
+        .map(defringe_projection)
+        .collect();
+    if edits.defringe.is_active() || locals.iter().any(|m| m.adjustments.defringe > 0.0) {
+        let stages = locals
+            .iter()
+            .map(|p| {
+                (
+                    MaskStage::new_capture(p, scale, &edits.geometry, &[], None),
+                    p.adjustments.defringe,
+                )
+            })
+            .collect();
+        steps.push(PrefixStep {
+            key: PrefixStepKey::Defringe(edits.defringe, locals),
+            stage: Box::new(stages::defringe::DefringeStage::new(
+                edits.defringe,
+                stages,
+                scale,
+            )),
         });
     }
 
@@ -1337,6 +1380,19 @@ fn capture_stages(
 /// and re-run a whole-buffer noise reduction — 117 ms at native, for a slider that has nothing to
 /// do with it. `the_prefix_key_follows_a_masks_capture_corrections_and_ignores_the_rest` pins
 /// both directions.
+/// A mask as the defringe step reads it: its shape, its refinements and its local defringe.
+fn defringe_projection(m: &edit_model::MaskedAdjustment) -> edit_model::MaskedAdjustment {
+    edit_model::MaskedAdjustment {
+        mask: m.mask.clone(),
+        refine: m.refine.clone(),
+        adjustments: edit_model::LocalAdjustments {
+            defringe: m.adjustments.defringe,
+            ..Default::default()
+        },
+        disabled: false,
+    }
+}
+
 fn capture_projection(m: &edit_model::MaskedAdjustment) -> edit_model::MaskedAdjustment {
     edit_model::MaskedAdjustment {
         mask: m.mask.clone(),
@@ -1524,6 +1580,8 @@ pub fn build_pipeline_split_tapped(
             // that changes as you pan.
             noise_reduction: edit_model::NoiseReduction::default(),
             dehaze: edit_model::Dehaze::default(),
+            // ⚠ Likewise a prefix step (M9.6), after geometry — never a tail stage.
+            defringe: 0.0,
             white_balance: edits.white_balance,
             exposure: edits.exposure,
             contrast: edits.contrast,
@@ -3382,6 +3440,10 @@ mod tests {
                 vignetting: true,
                 scale: 80.0,
             }),
+            defringe: edit_model::Defringe {
+                purple_amount: 30.0,
+                ..Default::default()
+            },
             perspective: edit_model::Perspective {
                 vertical: 30.0,
                 horizontal: -15.0,
@@ -3746,10 +3808,10 @@ mod tests {
         b.masks[0].adjustments.noise_reduction.luminance = 95.0;
         let steps_a = build_prefix_steps(&a, RenderScale::FULL, None, Resampler::default(), None);
         let steps_b = build_prefix_steps(&b, RenderScale::FULL, None, Resampler::default(), None);
-        assert_eq!(steps_a.len(), 5);
+        assert_eq!(steps_a.len(), 6);
 
-        // Same up to and including the geometry...
-        for n in 0..=4 {
+        // Same up to and including the geometry and the defringe (M9.6)...
+        for n in 0..=5 {
             assert_eq!(
                 PrefixKey::upto(&steps_a, n, RenderScale::FULL),
                 PrefixKey::upto(&steps_b, n, RenderScale::FULL),
@@ -3758,8 +3820,8 @@ mod tests {
         }
         // ...and different once the masked capture correction has run.
         assert_ne!(
-            PrefixKey::upto(&steps_a, 5, RenderScale::FULL),
-            PrefixKey::upto(&steps_b, 5, RenderScale::FULL)
+            PrefixKey::upto(&steps_a, 6, RenderScale::FULL),
+            PrefixKey::upto(&steps_b, 6, RenderScale::FULL)
         );
 
         // The full key is the deepest truncation, so `new` and `upto` cannot disagree.
@@ -3866,6 +3928,8 @@ mod tests {
                 "dehaze",
                 "spot_removal",
                 "geometry",
+                // ⚠ M9.6: after geometry, in the frame the masks live in.
+                "defringe",
                 // ⚠ The fixture's mask carries capture corrections, so it contributes a
                 // whole-buffer `MaskStage` here — after the global pair, mirroring the tail's
                 // rule that a mask acts on the global look.
@@ -3980,6 +4044,51 @@ mod tests {
         assert!(a.dehaze.is_active(), "and a real dehaze");
     }
 
+    /// M9.6: when the defringe step exists. ⚠ Both directions for each case: a hue range alone and
+    /// a negative local alone (nothing to protect against) insert nothing; a global amount, or a
+    /// positive local with the global at 0, insert it; a switched-off mask contributes nothing.
+    #[test]
+    fn the_defringe_step_appears_exactly_when_it_can_change_a_pixel() {
+        let has = |e: &Edits| {
+            build_prefix_steps(e, RenderScale::FULL, None, Resampler::default(), None)
+                .iter()
+                .any(|s| matches!(s.key, PrefixStepKey::Defringe(..)))
+        };
+        let with_local = |amount: f32, disabled: bool| Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Radial(edit_model::RadialGradient::default()),
+                refine: Vec::new(),
+                adjustments: edit_model::LocalAdjustments {
+                    defringe: amount,
+                    ..Default::default()
+                },
+                disabled,
+            }],
+            ..Edits::default()
+        };
+        assert!(!has(&Edits::default()));
+        assert!(!has(&Edits {
+            defringe: edit_model::Defringe {
+                purple_hue: [250.0, 300.0],
+                ..Default::default()
+            },
+            ..Edits::default()
+        }));
+        assert!(has(&Edits {
+            defringe: edit_model::Defringe {
+                green_amount: 5.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        }));
+        assert!(has(&with_local(50.0, false)));
+        assert!(
+            !has(&with_local(-50.0, false)),
+            "nothing to protect against"
+        );
+        assert!(!has(&with_local(50.0, true)), "a switched-off mask");
+    }
+
     #[test]
     fn every_prefix_step_has_its_own_key() {
         // Each step's key must move with that step's parameters and with nothing else. If two
@@ -3994,9 +4103,10 @@ mod tests {
         let base_keys = keys(&base);
         assert_eq!(
             base_keys.len(),
-            5,
-            "all five prefix steps should be active — NR, dehaze, spots, the geometry (with the \
-             keystone fused in since M7.3b) and the fixture's masked capture correction"
+            6,
+            "all six prefix steps should be active — NR, dehaze, spots, the geometry (with the \
+             keystone fused in since M7.3b), the defringe (M9.6) and the fixture's masked capture \
+             correction"
         );
 
         let variants = [
@@ -4055,15 +4165,32 @@ mod tests {
             // ⚠ The masked capture correction is a prefix step like any other, and its key must
             // move with its own parameters and nothing else — the same property the five above
             // assert, extended to the step this milestone added.
-            (4, {
+            (5, {
                 let mut e = base.clone();
                 e.masks[0].adjustments.noise_reduction.luminance = 90.0;
+                e
+            }),
+            // ⚠ M9.6: the defringe step moves with the global settings AND with a mask's local
+            // slider — and a mask's local slider moves nothing else, not its capture step.
+            (
+                4,
+                Edits {
+                    defringe: edit_model::Defringe {
+                        purple_amount: 70.0,
+                        ..Default::default()
+                    },
+                    ..base.clone()
+                },
+            ),
+            (4, {
+                let mut e = base.clone();
+                e.masks[0].adjustments.defringe = -40.0;
                 e
             }),
         ];
         for (moved, e) in variants {
             let ks = keys(&e);
-            for i in 0..5 {
+            for i in 0..6 {
                 if i == moved {
                     assert_ne!(ks[i], base_keys[i], "step {i} should have changed");
                 } else {

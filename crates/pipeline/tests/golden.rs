@@ -589,6 +589,63 @@ fn golden_gamut_perceptual() {
     compare_or_update("gamut_perceptual", per);
 }
 
+/// M9.6: a purple and a green fringe beside hard edges, defringed. Every other golden has no
+/// defringe, so a regression in the edge map, the hue ranges or the chroma scale would otherwise be
+/// invisible. ⚠ Asserted to differ from the undefringed chart first.
+#[test]
+fn golden_defringe() {
+    let mut img = ImageBuf::new(W, H);
+    let purple = color::srgb_to_prophoto([0.35, 0.12, 0.55]);
+    let green = color::srgb_to_prophoto([0.15, 0.5, 0.2]);
+    for y in 0..H {
+        for x in 0..W {
+            let band = x * 6 / W;
+            let c = match band {
+                0 | 3 => [0.02; 3],
+                1 => purple,
+                4 => green,
+                _ => [0.6; 3],
+            };
+            // Hard edges with the fringe only a few pixels wide beside the dark band.
+            let near = x % (W / 6) < 3;
+            let c = if band == 1 || band == 4 {
+                if near {
+                    c
+                } else {
+                    [0.6; 3]
+                }
+            } else {
+                c
+            };
+            img.set_pixel(x, y, c);
+        }
+    }
+    let edits = Edits {
+        defringe: edit_model::Defringe {
+            purple_amount: 80.0,
+            green_amount: 80.0,
+            ..Default::default()
+        },
+        ..Edits::default()
+    };
+    let render = |e: &Edits| {
+        pipeline::build_pipeline_spec(
+            e,
+            RenderScale::FULL,
+            pipeline::RenderSpec::default(),
+            pipeline::ProfileRendering::colorimetric(),
+        )
+        .run(img.clone())
+    };
+    let out = render(&edits);
+    assert_ne!(
+        to_rgb8(&out),
+        to_rgb8(&render(&Edits::default())),
+        "the fixture's fringes must be touched"
+    );
+    compare_or_update("defringe", out);
+}
+
 #[test]
 fn golden_saturation_plus50() {
     check_golden(

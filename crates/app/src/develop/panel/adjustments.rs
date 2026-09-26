@@ -397,15 +397,31 @@ pub struct GradeUi<'a> {
     pub view: &'a mut Option<rustroom_app::grade_view::GradeRangeView>,
 }
 
+/// The two canvas eyedroppers the Edit panel can arm. `None` draws no picker — how a test says
+/// "no session" rather than handing in a scratch flag that quietly does nothing.
+///
+/// ⚠ A struct because `show` sits at clippy's argument limit — this project's standing answer to
+/// that lint, the `CurveUi` / `GradeUi` precedent.
+#[derive(Default)]
+pub struct Pickers<'a> {
+    pub wb: Option<&'a mut bool>,
+    /// The defringe eyedropper (M9.6).
+    pub fringe: Option<&'a mut bool>,
+}
+
 pub fn show(
     ui: &mut egui::Ui,
     edits: &mut edit_model::Edits,
     channels: Channels<'_>,
     grade: GradeUi<'_>,
     source: SourceInfo<'_>,
-    picking: Option<&mut bool>,
+    pickers: Pickers<'_>,
     ed: &mut Edited,
 ) {
+    let Pickers {
+        wb: picking,
+        fringe: picking_fringe,
+    } = pickers;
     let Channels {
         hsl: hsl_channel,
         curve: curve_channel,
@@ -607,6 +623,10 @@ pub fn show(
                 ed.discrete();
             }
         });
+        // ⚠ OUTSIDE the profile-gated block: a defringe needs no lens profile — it exists for
+        // exactly the photos whose profile did not fix the fringe (M9.6).
+        ui.separator();
+        super::defringe::show(ui, &mut edits.defringe, picking_fringe, ed);
     });
 
     section(ui, SECTIONS[5], false, edits, ed, |ui, edits, ed| {
@@ -919,7 +939,7 @@ mod tests {
                     buffer: &buf,
                     hist: None,
                 },
-                None,
+                Pickers::default(),
                 &mut ed,
             );
         };
@@ -931,6 +951,63 @@ mod tests {
             "the last untick collapsed to undecided"
         );
         assert!(ed.settled, "one click, one history entry");
+    }
+
+    /// M9.6: the Lens section's Defringe block works with NO lens profile — the photos it exists
+    /// for — and its picker arms the canvas eyedropper. ⚠ `lens_profile_found: false`, or a block
+    /// drawn inside the profile-gated `add_enabled_ui` would pass.
+    #[test]
+    fn the_defringe_block_works_without_a_lens_profile() {
+        let ctx = crate::test_ui::ctx();
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            ctx.style_mut_of(theme, |s| s.animation_time = 0.0);
+        }
+        let buf = tone_fixture();
+        let mut edits = edit_model::Edits::default();
+        let mut channel = HslChannel::default();
+        let mut grade = color_wheel::GradeRange::default();
+        let (mut show_range, mut view) = (false, None);
+        let mut ed = Edited::default();
+        let mut picking = false;
+        let mut body = |ui: &mut egui::Ui| {
+            ed = Edited::default();
+            show(
+                ui,
+                &mut edits,
+                Channels {
+                    hsl: &mut channel,
+                    curve: &mut tone_curve::CurveChannel::default(),
+                    parametric_drag: Default::default(),
+                },
+                GradeUi {
+                    range: &mut grade,
+                    show_range: &mut show_range,
+                    view: &mut view,
+                },
+                SourceInfo {
+                    lens: None,
+                    lens_profile_found: false,
+                    wb_baseline: color::wb::Illuminant::default(),
+                    baseline_ev: None,
+                    buffer: &buf,
+                    hist: None,
+                },
+                Pickers {
+                    wb: None,
+                    fringe: Some(&mut picking),
+                },
+                &mut ed,
+            );
+        };
+        crate::test_ui::click(&ctx, "Lens", &mut body);
+        let labels = crate::test_ui::slider_labels(&ctx, &mut body);
+        assert!(
+            labels.iter().any(|l| l == "Purple amount")
+                && labels.iter().any(|l| l == "Green amount"),
+            "{labels:?}"
+        );
+        crate::test_ui::click(&ctx, "Pick a fringe", &mut body);
+        assert!(picking, "the picker did not arm");
     }
 
     /// The Edit panel with the state the range view reads and writes, held together so a
@@ -997,7 +1074,7 @@ mod tests {
                         buffer: buf,
                         hist: None,
                     },
-                    None,
+                    Pickers::default(),
                     ed,
                 );
             })
@@ -1037,7 +1114,7 @@ mod tests {
                         buffer: buf,
                         hist: None,
                     },
-                    None,
+                    Pickers::default(),
                     ed,
                 );
             });
@@ -1077,7 +1154,7 @@ mod tests {
                         buffer: buf,
                         hist: None,
                     },
-                    None,
+                    Pickers::default(),
                     ed,
                 );
             });

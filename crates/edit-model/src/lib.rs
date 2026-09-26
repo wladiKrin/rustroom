@@ -262,6 +262,41 @@ pub const HSL_BAND_NAMES: [&str; 8] = [
     "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta",
 ];
 
+/// Manual defringe (M9.6): removes the purple and green halos longitudinal chromatic aberration
+/// leaves beside high-contrast edges, which a lens profile's lateral (TCA) correction cannot touch.
+///
+/// Amounts are 0..100 and default to 0 (off). The hue ranges are **Oklab hue in degrees**,
+/// `[lo, hi]` with `lo < hi`, and are modifiers: moving one on its own inserts nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Defringe {
+    pub purple_amount: f32,
+    pub purple_hue: [f32; 2],
+    pub green_amount: f32,
+    pub green_hue: [f32; 2],
+}
+
+impl Defringe {
+    pub const DEFAULT_PURPLE_HUE: [f32; 2] = [280.0, 340.0];
+    pub const DEFAULT_GREEN_HUE: [f32; 2] = [110.0, 170.0];
+
+    /// True when an amount is non-zero. ⚠ Not `!= default()`: the ranges alone do nothing.
+    pub fn is_active(&self) -> bool {
+        self.purple_amount > 0.0 || self.green_amount > 0.0
+    }
+}
+
+impl Default for Defringe {
+    fn default() -> Self {
+        Self {
+            purple_amount: 0.0,
+            purple_hue: Self::DEFAULT_PURPLE_HUE,
+            green_amount: 0.0,
+            green_hue: Self::DEFAULT_GREEN_HUE,
+        }
+    }
+}
+
 /// Noise reduction. The two strengths are 0..100 and default to 0 (off); `detail` and
 /// `smoothness` are quality modifiers that default to 50 and do nothing on their own.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -1405,6 +1440,11 @@ pub struct LocalAdjustments {
     pub tone_curve: ToneCurve,
     pub saturation: f32,
     pub vibrance: f32,
+    /// Local defringe, −100..=100 (M9.6), Lightroom's meaning: **negative protects** the masked
+    /// area from the global defringe, positive adds defringe there with the global hue ranges.
+    /// ⚠ Runs in the PREFIX, in the one defringe step after geometry, not with this mask's other
+    /// adjustments — global and local are one computation.
+    pub defringe: f32,
     /// Fine and coarse local contrast, carried by the mask.
     ///
     /// ⚠ Negative `texture` is what makes skin softening reachable without masked noise
@@ -1692,6 +1732,8 @@ pub struct Edits {
     /// that was never asked writes the same bytes it always did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lens_correction: Option<LensCorrection>,
+    /// Manual defringe (M9.6). In the **Lens** group, beside the profile corrections.
+    pub defringe: Defringe,
     pub perspective: Perspective,
     pub geometry: Geometry,
     /// Local adjustments, each confined to a mask. Applied in order, after the global
@@ -1783,6 +1825,7 @@ impl Edits {
             noise_reduction,
             sharpening,
             lens_correction,
+            defringe,
             perspective,
             vignette,
             geometry,
@@ -1824,6 +1867,7 @@ impl Edits {
         }
         if groups.lens {
             self.lens_correction = *lens_correction;
+            self.defringe = *defringe;
         }
         if groups.vignette {
             self.vignette = *vignette;
@@ -3164,6 +3208,12 @@ mod tests {
                 vignetting: false,
                 scale: 60.0,
             }),
+            defringe: Defringe {
+                purple_amount: 30.0,
+                purple_hue: [270.0, 330.0],
+                green_amount: 10.0,
+                green_hue: [120.0, 160.0],
+            },
             perspective: Perspective {
                 vertical: 40.0,
                 horizontal: -20.0,
@@ -4308,6 +4358,41 @@ mod tests {
         ] {
             assert!(l.is_active(), "{l:?} should be active");
         }
+    }
+
+    /// M9.6: a sidecar from before defringe loads it off, the hue ranges alone insert nothing, and
+    /// it rides the Lens group — ⚠ both directions, so a group that always or never carried it fails.
+    #[test]
+    fn defringe_loads_neutral_is_active_on_amounts_and_rides_the_lens_group() {
+        let e: Edits = serde_json::from_str("{}").unwrap();
+        assert_eq!(e.defringe, Defringe::default());
+        assert!(!e.defringe.is_active());
+        let ranged = Defringe {
+            purple_hue: [250.0, 300.0],
+            ..Default::default()
+        };
+        assert!(!ranged.is_active(), "a hue range alone must insert nothing");
+        assert!(Defringe {
+            green_amount: 1.0,
+            ..Default::default()
+        }
+        .is_active());
+        let src = Edits {
+            defringe: Defringe {
+                purple_amount: 40.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let lens_group = EDIT_GROUP_NAMES.iter().position(|n| *n == "Lens").unwrap();
+        let mut lens = Edits::default();
+        lens.merge_from(&src, EditGroups::only(lens_group));
+        assert_eq!(lens.defringe, src.defringe);
+        let mut rest = Edits::default();
+        let mut all_but = EditGroups::ALL;
+        all_but.lens = false;
+        rest.merge_from(&src, all_but);
+        assert_eq!(rest.defringe, Defringe::default());
     }
 
     #[test]

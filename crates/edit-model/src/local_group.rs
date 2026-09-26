@@ -77,6 +77,7 @@ impl LocalAdjustments {
             sharpening,
             hsl,
             color_grading,
+            defringe,
         } = self;
         match group {
             LocalGroup::WhiteBalance => {
@@ -102,6 +103,9 @@ impl LocalAdjustments {
             LocalGroup::Detail => {
                 *noise_reduction = from.noise_reduction;
                 *sharpening = from.sharpening;
+                // ⚠ Shown under Detail, like the global defringe's neighbours there; it runs in
+                // the prefix's defringe step, not with the mask's tail adjustments.
+                *defringe = from.defringe;
             }
         }
     }

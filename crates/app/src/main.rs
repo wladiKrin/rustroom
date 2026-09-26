@@ -845,6 +845,9 @@ pub struct Session {
     /// photograph's description, so it must not reach the sidecar or travel with a paste. The
     /// rule `selected_mask` and `show_guides` already follow.
     picking_wb: bool,
+    /// The defringe eyedropper is armed: the next click on the canvas sets a fringe's hue range
+    /// (M9.6). View state, `picking_wb`'s rule.
+    picking_fringe: bool,
     /// The illuminant the decode left this photo balanced to — the Kelvin slider's zero point.
     ///
     /// ⚠⚠ Kept on the session for the same reason `lens` is: it is a fact about the file that
