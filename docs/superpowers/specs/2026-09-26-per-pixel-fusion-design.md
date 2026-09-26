@@ -55,9 +55,18 @@ which is the same operations on the same values.
 
 `per_pixel::run_stages(stages: &[Box<dyn PipelineStage>], image: ImageBuf) -> ImageBuf` walks the
 list. A run of consecutive stages answering `Some` is executed as one in-place pass over
-`data_mut()`: rows in parallel through rayon, pixels in order within a row, `x` counted rather than
-divided, each pixel folded through the run's functions. A stage answering `None` is applied on its
-own through `apply`, as today. `Pipeline::run`, `MaskStage::apply`'s sub-stage loop and
+`data_mut()`: rows in parallel through rayon, and within a row each member's function over the
+whole row before the next member's. A stage answering `None` is applied on its own through
+`apply`, as today.
+
+**Amended after measurement (2026-09-26): the walk calls a member once per ROW, not once per
+pixel.** The first version folded each pixel through the run's functions with one virtual call
+per pixel per member; `bench_gpu_tail`'s CPU column read **200 → 299 ms** for the whole tail
+against the sequential stages, because none of those 61 million calls could inline or vectorise.
+`PerPixel` therefore carries a defaulted `row` method, instantiated per implementing type so its
+loop inlines, and the walk pays one virtual call per row per member while the row stays in cache
+between members. The per-pixel arithmetic is unchanged, so the bit-identity argument is too; the
+same bench then reads **177.6 → 172.0 ms**. `Pipeline::run`, `MaskStage::apply`'s sub-stage loop and
 `GpuChain::cpu_fallback` call it, which is how a mask's own per-pixel sub-stages fuse (the "free
 part"); the mask's copy and blend stay as they are.
 

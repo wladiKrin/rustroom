@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [Per-pixel fusion: a run of per-pixel stages as one pass (2026-09-26)](#2026-09-26--per-pixel-fusion-a-run-of-per-pixel-stages-as-one-pass-branch-per-pixel-fusion)
 - [GPU timestamps: per-pass GPU time in the running app (2026-09-26)](#2026-09-26--gpu-timestamps-per-pass-gpu-time-in-the-running-app-branch-gpu-timestamps)
 - [M5.1c — the parametric curve (2026-09-26)](#2026-09-26--m51c-the-parametric-curve-branch-m51c-parametric-curve)
 - [GPU geometry, a resident input and a no-download handoff (2026-09-26)](#2026-09-26--gpu-geometry-a-resident-input-and-a-no-download-handoff-branch-gpu-geometry)
@@ -155,6 +156,76 @@ goldens unmoved.
 - ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
+
+### 2026-09-26 — per-pixel fusion: a run of per-pixel stages as one pass (branch `per-pixel-fusion`)
+
+Stacked on `gpu-timestamps`. **2,967 tests**, 78 goldens unmoved, gate green (`FMT=0 CLIPPY=0
+TEST=0`, each from its own command). Spec `2026-09-26-per-pixel-fusion-design.md`, plan of the
+same date. **Not yet confirmed by use.** Row 5 of `docs/PIPELINE-REVIEW-2026-09-26.md`'s list.
+
+**What shipped.** Twelve tail stages are pixel-in, pixel-out (white balance, exposure, contrast,
+tone regions, tone curve, saturation, HSL, grading, vignette, display rendering, creative look,
+output transform). On the CPU each implements `pipeline::PerPixel` and `Pipeline::run`,
+`MaskStage` and `GpuChain::cpu_fallback` go through `per_pixel::run_stages`, which folds a run of
+consecutive per-pixel stages into **one in-place walk** — bit-identical, the goldens are the
+check, and `a_fused_run_equals_the_sequential_application` pins it over all twelve at once. On the
+GPU each twin describes itself as a `Part` (its WGSL function, parameters and tables) and
+`gpu_pipeline::per_pixel` emits a run as **one dispatch with three bindings** — the image, one
+uniform, one table buffer; a lone twin is a run of one through the same emitter, so no twin keeps
+a standalone shader. `GpuChain::run_with` and `GpuMaskStage::encode` walk **units**.
+⚠⚠ **Grouping happens at run time; the stage list is untouched** — the 84 uses of
+`stage_names()`, `accelerate`'s name matching, the keys, none of it moved. `RUSTROOM_NO_FUSION=1`
+switches fusion off on both backends, which is the A/B in one binary.
+
+**⚠⚠ A CPU regression, found by the bench and fixed before merge.** The first walk called each
+stage through the trait object **once per pixel**: `bench_gpu_tail`'s CPU column read **200 →
+299 ms** for the whole tail against the sequential `map_pixels` stages, because 61 million
+virtual calls at 6.8 Mpx cannot inline or vectorise. `PerPixel` now carries a defaulted `row`
+method, instantiated per implementing type, so the walk pays one virtual call per row per member
+and each member's loop inlines as the closure it replaced did. Same bench after: **177.6 →
+172.0**. The per-pixel arithmetic never changed, so neither did the bit-identity.
+
+**⚠ A second thing the plan missed:** a run that repeats a stage (a test's eight exposures)
+emitted the same struct and function twice and naga refused it. Each distinct stage is declared
+once per run and called per occurrence; `emit_declares_a_repeated_stage_once_and_calls_it_twice`.
+
+**Measured, DSCF6263, `bench_gpu_tail` (whole frames through the real engine, prefix cached),
+fusion off → on, ⚠ load 4.3–6.9:**
+
+| frame | GPU tail, off → on | CPU tail, off → on |
+|---|---|---|
+| the WHOLE tail, rung 3200 | **35.57 → 21.18 ms** | 177.6 → 172.0 |
+| the WHOLE tail, rung 1600 | **10.38 → 6.42** | 47.5 → 45.1 |
+| REAL SIDECAR, global drag | **24.98 → 21.62** | 60.5 → 58.2 |
+| REAL SIDECAR, 0 masks | 21.98 → 18.56 | 58.9 → 57.4 |
+| vignette −60 | 20.13 → 19.27 | 40.8 → 39.3 |
+| creative look (sRGB) | 21.36 → 18.84 | 133.0 → 131.2 |
+
+**The GPU passes themselves** (`RUSTROOM_DEBUG_GPU_TIME`, rung 3200, ⚠ load ~10): the drag's tail
+`tone_curve + display_rendering + output_transform` as three passes **2.62 + 1.87 + 1.87 = 6.36 ms**,
+as one fused pass **3.39**; GPU span with the quantise **7.83 → 4.84**.
+
+**The Straighten drag** (`probe_straighten_drag`, rung 3200, 40 frames, fusion off → on, two
+interleaved pairs, load 4.7–5.9): frame median **29.9 / 30.5 → 28.1 / 27.8 ms**, p10 29.0 / 29.2 →
+26.9 / 26.2; the tail chain's submit+wait **25.2 / 25.6 → 23.2 / 22.6**, p10 24.1 → 21.1.
+⚠⚠ **Stated rather than hidden: three earlier pairs at load 6–11, before the row-wise fix, read
+the other way** — fused 2–4 ms slower at the median with equal p10 and a heavier p90 — while the
+per-pass GPU times read lower for fusion in every run. The row-wise fix cannot touch the GPU
+path, and the cause of those readings is not identified; the later pairs at lower load are the
+ones consistent with the pass times and the bench. **Confirmation by use is what settles it**, as
+with every drag change here.
+
+**Observables and sabotages.** The CPU walk counter and the chain's `encode_units()` say what
+fused; `fused_dispatches()` sees a run inside a mask (three per-pixel sub-stages are one dispatch
+in the mask's own pass, and one walk on the CPU). Reversing the fold order fails the whole-tail
+test and the mask test. Timing with fusion on reports one pass labelled
+`exposure+contrast+exposure`.
+
+**What did not change.** The quantise is its own dispatch; the mask's copy and blend stay
+(the second spec); the cost gate sees the same sums; export's CPU tail gets the fused walk for
+free.
+
+`grep -n 'per-pixel fusion' docs/JOURNAL.md`.
 
 ### 2026-09-26 — GPU timestamps: per-pass GPU time in the running app (branch `gpu-timestamps`)
 
