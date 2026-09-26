@@ -57,6 +57,11 @@ pub(crate) struct PrefixCache {
     pub(crate) finals: Vec<(CacheKey, Arc<ImageBuf>)>,
     pub(crate) mids: Vec<(CacheKey, Arc<ImageBuf>)>,
     pub(crate) mid_budget: usize,
+    /// The last dehaze airlight and the key it was computed under. See [`Self::airlight`].
+    airlight: Option<(pipeline::AirlightKey, [f32; 3])>,
+    /// How many times [`Self::airlight`] actually ran the replay — the observable its tests read.
+    #[cfg(test)]
+    pub(crate) airlight_replays: usize,
 }
 
 /// ⚠ A zero budget would evict every intermediate on insert, leaving the whole checkpoint chain
@@ -126,7 +131,41 @@ impl PrefixCache {
             finals: Vec::new(),
             mids: Vec::new(),
             mid_budget,
+            airlight: None,
+            #[cfg(test)]
+            airlight_replays: 0,
         }
+    }
+
+    /// The frame-global dehaze airlight for `edits`, replayed only when its key changes.
+    ///
+    /// ⚠⚠ **Measured before it was cached (2026-09-26): 12.1 ms of an 84.5 ms Straighten frame**
+    /// on a 26 Mpx source, paid on every render, dehaze or not. A geometry drag never changes the
+    /// key, so it now costs one key comparison.
+    ///
+    /// ⚠ One slot, not a map: renders alternate between a handful of edit states at most, and a
+    /// miss costs one replay. ⚠ The source buffer is not in the key because this cache lives on
+    /// one render worker, which owns exactly one buffer for its whole life.
+    pub(crate) fn airlight(
+        &mut self,
+        edits: &edit_model::Edits,
+        buffer: &ImageBuf,
+        resampler: pipeline::Resampler,
+        lens: Option<lens_profile::LensShot>,
+    ) -> [f32; 3] {
+        let key = pipeline::prefix_airlight_key(edits, resampler, lens.clone());
+        if let Some((k, a)) = &self.airlight {
+            if *k == key {
+                return *a;
+            }
+        }
+        let a = pipeline::prefix_airlight(edits, buffer, resampler, lens);
+        self.airlight = Some((key, a));
+        #[cfg(test)]
+        {
+            self.airlight_replays += 1;
+        }
+        a
     }
 
     /// Only the tests ask how full a tier is — production code never does.
@@ -203,5 +242,51 @@ impl PrefixCache {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ⚠⚠ The memo's contract, both halves: a Straighten drag reuses the airlight (the 12 ms it
+    /// exists to save) and an upstream edit replays it, and what it returns is exactly what a
+    /// fresh `prefix_airlight` returns.
+    #[test]
+    fn the_airlight_is_replayed_only_when_its_key_moves() {
+        let mut img = ImageBuf::new(96, 64);
+        for y in 0..64 {
+            for x in 0..96 {
+                let v = ((x * 7 + y * 3) % 23) as f32 / 23.0;
+                img.set_pixel(x, y, [v, 0.5 * v + 0.2, 1.0 - v]);
+            }
+        }
+        let r = pipeline::Resampler::CatmullRom;
+        let mut cache = PrefixCache::default();
+        let mut e = edit_model::Edits {
+            dehaze: edit_model::Dehaze { amount: 50.0 },
+            ..Default::default()
+        };
+        let first = cache.airlight(&e, &img, r, None);
+        assert_eq!(first, pipeline::prefix_airlight(&e, &img, r, None));
+        assert_eq!(cache.airlight_replays, 1);
+
+        for angle in [1.0, 2.0, 3.0] {
+            e.geometry.angle = angle;
+            assert_eq!(cache.airlight(&e, &img, r, None), first);
+        }
+        assert_eq!(
+            cache.airlight_replays, 1,
+            "a Straighten drag must not replay"
+        );
+
+        e.noise_reduction = edit_model::NoiseReduction {
+            luminance: 80.0,
+            color: 80.0,
+            ..Default::default()
+        };
+        let moved = cache.airlight(&e, &img, r, None);
+        assert_eq!(cache.airlight_replays, 2, "an upstream edit must replay");
+        assert_eq!(moved, pipeline::prefix_airlight(&e, &img, r, None));
     }
 }
