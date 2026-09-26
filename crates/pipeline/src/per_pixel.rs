@@ -30,12 +30,34 @@ use std::cell::Cell;
 /// ignore it. `(x, y)` are the buffer's own coordinates, never the frame's.
 pub trait PerPixel: Send + Sync {
     fn px(&self, x: usize, y: usize, p: [f32; 3]) -> [f32; 3];
+
+    /// One row of pixels through [`Self::px`], `pixels[i]` being the pixel at `(x0 + i, y)`.
+    ///
+    /// ⚠⚠ **This is where the walk calls a stage, and a per-pixel call was MEASURED and rejected.**
+    /// A first version called `px` through the trait object once per pixel: 61 million virtual
+    /// calls for a nine-stage tail at 6.8 Mpx, none of them inlinable, and `bench_gpu_tail`'s CPU
+    /// column read **200 → 299 ms** for the whole tail against the sequential `map_pixels`
+    /// stages. A default method is instantiated per implementing type, so inside it `self.px` is
+    /// a static, inlinable call and the loop vectorises as the closure it replaced did; the walk
+    /// then pays one virtual call per row per stage. The arithmetic per pixel is unchanged, so the
+    /// bit-identity argument is too.
+    fn row(&self, y: usize, x0: usize, pixels: &mut [[f32; 3]]) {
+        for (i, p) in pixels.iter_mut().enumerate() {
+            *p = self.px(x0 + i, y, *p);
+        }
+    }
 }
 
 /// A borrowed stage is one too, which is what lets `per_pixel` hand back `Box::new(self)`.
 impl<T: PerPixel + ?Sized> PerPixel for &T {
     fn px(&self, x: usize, y: usize, p: [f32; 3]) -> [f32; 3] {
         (**self).px(x, y, p)
+    }
+
+    /// ⚠ Forwarded, so the borrow's row is the concrete type's inlined loop rather than the
+    /// default one calling `px` through a second indirection.
+    fn row(&self, y: usize, x0: usize, pixels: &mut [[f32; 3]]) {
+        (**self).row(y, x0, pixels)
     }
 }
 
@@ -56,11 +78,13 @@ pub fn fusion_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("RUSTROOM_NO_FUSION").is_none())
 }
 
-/// One in-place walk: every pixel through every member of `run`, in order.
+/// One in-place walk: every row through every member of `run`, in order.
 ///
-/// ⚠ Rows in parallel through rayon, pixels in order within a row, `x` counted rather than
-/// divided. Bit-identical to `map_pixels` applied per stage: the per-pixel values are the same
-/// however the pixels are split between threads.
+/// ⚠ Rows in parallel through rayon; within a row each member runs its own inlined loop over
+/// the whole row before the next member starts ([`PerPixel::row`]), so a row stays in cache
+/// between members and the walk pays one virtual call per row per member. Bit-identical to
+/// `map_pixels` applied per stage: the per-pixel values are the same however the pixels are
+/// split between threads or between members.
 fn walk(run: &[Box<dyn PerPixel + '_>], mut image: ImageBuf) -> ImageBuf {
     let w = image.width();
     let row = w * ImageBuf::CHANNELS;
@@ -72,17 +96,9 @@ fn walk(run: &[Box<dyn PerPixel + '_>], mut image: ImageBuf) -> ImageBuf {
         .par_chunks_exact_mut(row)
         .enumerate()
         .for_each(|(y, orow)| {
-            for (x, px) in orow
-                .as_chunks_mut::<{ ImageBuf::CHANNELS }>()
-                .0
-                .iter_mut()
-                .enumerate()
-            {
-                let mut p = *px;
-                for s in run {
-                    p = s.px(x, y, p);
-                }
-                *px = p;
+            let pixels = orow.as_chunks_mut::<{ ImageBuf::CHANNELS }>().0;
+            for s in run {
+                s.row(y, 0, pixels);
             }
         });
     image
