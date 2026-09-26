@@ -187,6 +187,14 @@ competed. What remains is the window's drawing on its own device, which only sha
 (and writing the tail straight into the display texture) could remove. That is its own milestone,
 with an unmeasured payoff.
 
+⛔ **Then measured, and declined.** `RUSTROOM_DEBUG_NO_UPLOAD` freezes the window's picture (no new
+frame reaches the window's GPU). Result in the author's drag: tail submit+wait **36.8 ms median at
+rung 3200 (n=150)**, unchanged from normal use and ~10 ms over the probe. So the window's per-frame
+upload path is **not** the cost, and a shared device, whose value was removing exactly that, is
+declined (`docs/BACKLOG.md`). ⚠ **The gap's cause remains unidentified**, and that is stated here
+rather than guessed. Candidates: the window's baseline drawing, or the app's render thread being
+scheduled (QoS) differently from a CLI process.
+
 **The result**: a Straighten drag on DSCF6263 at rung 3200, median of 40 frames, the same probe on
 all three builds:
 
