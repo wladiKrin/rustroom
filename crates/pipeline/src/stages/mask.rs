@@ -211,11 +211,7 @@ impl MaskStage {
                 // take: `render_engine`'s `BrushCache` declines to prebuild a map for a brush
                 // whose `needs_base()` is true, which is what stops a gated brush ever rendering
                 // positionally while the canvas tint shows it stopping at an edge.
-                let view = BaseView {
-                    image: image,
-                    x0,
-                    y0,
-                };
+                let view = BaseView { image, x0, y0 };
                 // ⚠⚠ **Planned ONCE and offered to both.** `plan_dabs` does the `SPACING`
                 // interpolation, the per-dab gate reference, the clip rejection and the box; the
                 // GPU and the CPU then consume the same plan, so they cannot disagree about which
