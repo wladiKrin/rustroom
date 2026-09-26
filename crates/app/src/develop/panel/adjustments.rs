@@ -274,9 +274,13 @@ pub(crate) fn tone(
     // ⚠ Its own parameter rather than reached through the app, for the same reason `hsl_channel` is:
     // the caller holds `&mut app.session` at the same time, and two separate `&mut` parameters are
     // legal where a closure capturing `app` twice is `E0499`.
-    curve_channel: &mut tone_curve::CurveChannel,
+    curves: CurveUi<'_>,
     ed: &mut Edited,
 ) {
+    let CurveUi {
+        channel: curve_channel,
+        parametric_drag,
+    } = curves;
     // ⚠⚠ **The analysis runs on the click only.** This body runs sixty times a second, and a
     // percentile sort of the buffer per frame is the `apply_view_demosaic` mistake in its most
     // expensive costume yet.
@@ -309,13 +313,30 @@ pub(crate) fn tone(
     // and reading the selection *by value* first is what keeps `edits` and `curve_channel` from being
     // borrowed at once.
     let selected = *curve_channel;
+    // ⚠ M5.1c: the Parametric view edits a different field, so it is its own widget. The point views
+    // get the parametric curve read-only, to draw the combined curve.
+    let param = edits.tone_curve_parametric;
     let curve = match selected {
-        tone_curve::CurveChannel::Rgb => &mut edits.tone_curve,
-        tone_curve::CurveChannel::Red => &mut edits.tone_curve_red,
-        tone_curve::CurveChannel::Green => &mut edits.tone_curve_green,
-        tone_curve::CurveChannel::Blue => &mut edits.tone_curve_blue,
+        tone_curve::CurveChannel::Parametric => {
+            let _ = super::parametric_curve::show(
+                ui,
+                &mut edits.tone_curve_parametric,
+                &edits.tone_curve.points,
+                ed,
+                hist,
+                curve_channel,
+                parametric_drag,
+            );
+            None
+        }
+        tone_curve::CurveChannel::Rgb => Some(&mut edits.tone_curve),
+        tone_curve::CurveChannel::Red => Some(&mut edits.tone_curve_red),
+        tone_curve::CurveChannel::Green => Some(&mut edits.tone_curve_green),
+        tone_curve::CurveChannel::Blue => Some(&mut edits.tone_curve_blue),
     };
-    tone_curve::show(ui, curve, ed, hist, Some(curve_channel));
+    if let Some(curve) = curve {
+        tone_curve::show(ui, curve, ed, hist, Some(curve_channel), Some(&param));
+    }
     // ⚠ A sub-label, not a header. These are Lightroom's "Presence" block and they are
     // local-contrast tools rather than tonal ones — a different kind of decision, which is why
     // they close the section — but they belong to the `Tone` edit group, and a header here would
@@ -353,9 +374,19 @@ pub(crate) fn tone(
 /// ⚠⚠ Both are **view state**, never `Edits`: switching a selector must not push a history entry or
 /// travel in a preset. That is why they arrive as their own `&mut`s rather than being reached through
 /// the app — the caller holds `&mut app.session` at the same time.
+/// The tone curve's two UI inputs: which view is selected, and what a drag does in the Parametric
+/// view. Grouped when the second arrived (M5.1c), because `too_many_arguments` fired at eight.
+pub(crate) struct CurveUi<'a> {
+    pub channel: &'a mut tone_curve::CurveChannel,
+    pub parametric_drag: rustroom_app::settings::ParametricDrag,
+}
+
 pub struct Channels<'a> {
     pub hsl: &'a mut HslChannel,
     pub curve: &'a mut tone_curve::CurveChannel,
+    /// What a drag does in the curve's Parametric view — a `Settings` binding, carried with the
+    /// channel selections because it is read in the same place.
+    pub parametric_drag: rustroom_app::settings::ParametricDrag,
 }
 
 pub struct GradeUi<'a> {
@@ -378,6 +409,7 @@ pub fn show(
     let Channels {
         hsl: hsl_channel,
         curve: curve_channel,
+        parametric_drag,
     } = channels;
     let GradeUi {
         range: grade_range,
@@ -399,7 +431,18 @@ pub fn show(
     });
 
     section(ui, SECTIONS[1], true, edits, ed, |ui, edits, ed| {
-        tone(ui, edits, buffer, baseline_ev, hist, curve_channel, ed);
+        tone(
+            ui,
+            edits,
+            buffer,
+            baseline_ev,
+            hist,
+            CurveUi {
+                channel: curve_channel,
+                parametric_drag,
+            },
+            ed,
+        );
     });
 
     section(ui, SECTIONS[2], false, edits, ed, |ui, edits, ed| {
@@ -810,7 +853,10 @@ mod tests {
                 &buf,
                 None,
                 None,
-                &mut tone_curve::CurveChannel::default(),
+                CurveUi {
+                    channel: &mut tone_curve::CurveChannel::default(),
+                    parametric_drag: Default::default(),
+                },
                 &mut ed,
             );
         });
@@ -858,6 +904,7 @@ mod tests {
                 Channels {
                     hsl: &mut channel,
                     curve: &mut tone_curve::CurveChannel::default(),
+                    parametric_drag: Default::default(),
                 },
                 GradeUi {
                     range: &mut grade,
@@ -935,6 +982,7 @@ mod tests {
                     Channels {
                         hsl: channel,
                         curve: &mut tone_curve::CurveChannel::default(),
+                        parametric_drag: Default::default(),
                     },
                     GradeUi {
                         range: grade,
@@ -974,6 +1022,7 @@ mod tests {
                     Channels {
                         hsl: channel,
                         curve: &mut tone_curve::CurveChannel::default(),
+                        parametric_drag: Default::default(),
                     },
                     GradeUi {
                         range: grade,
@@ -1013,6 +1062,7 @@ mod tests {
                     Channels {
                         hsl: channel,
                         curve: &mut tone_curve::CurveChannel::default(),
+                        parametric_drag: Default::default(),
                     },
                     GradeUi {
                         range: grade,
@@ -1185,7 +1235,10 @@ mod tests {
                     &buf,
                     baseline,
                     None,
-                    &mut tone_curve::CurveChannel::default(),
+                    CurveUi {
+                        channel: &mut tone_curve::CurveChannel::default(),
+                        parametric_drag: Default::default(),
+                    },
                     &mut ed,
                 );
             });
@@ -1219,7 +1272,10 @@ mod tests {
                         &buf,
                         None,
                         None,
-                        &mut tone_curve::CurveChannel::default(),
+                        CurveUi {
+                            channel: &mut tone_curve::CurveChannel::default(),
+                            parametric_drag: Default::default(),
+                        },
                         &mut ed,
                     );
                     assert!(!ed.changed, "drawing the panel reported an edit");

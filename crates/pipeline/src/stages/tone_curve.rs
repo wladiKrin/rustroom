@@ -40,7 +40,61 @@ fn build_lut(points: &[[f32; 2]]) -> Vec<f32> {
         .collect()
 }
 
+/// The composite table: the parametric curve (display-referred), then the point curve (linear).
+///
+/// ⚠⚠ **An inactive parametric curve builds EXACTLY [`build_lut`]'s table** — same function, same
+/// floats — which is why an untouched parametric curve cannot move a golden.
+///
+/// ⚠ Made monotone non-decreasing at the end: `parametric::eval` keeps each region from folding,
+/// but two neighbours at opposite extremes can still add slopes, and a folded tone curve inverts
+/// tones rather than merely looking wrong.
+fn build_composite(points: &[[f32; 2]], p: &edit_model::ParametricCurve) -> Vec<f32> {
+    if !p.is_active() {
+        return build_lut(points);
+    }
+    let spline = Spline::new(points);
+    let mut out: Vec<f32> = (0..LUT_SIZE)
+        .map(|i| {
+            let x = i as f32 / (LUT_SIZE - 1) as f32;
+            let u = crate::parametric::eval(p, color::linear_to_srgb(x));
+            spline.eval(color::srgb_to_linear(u))
+        })
+        .collect();
+    for i in 1..out.len() {
+        out[i] = out[i].max(out[i - 1]);
+    }
+    out
+}
+
 impl ToneCurveStage {
+    /// The whole tone curve an [`edit_model::Edits`] describes: the parametric curve and the
+    /// composite point curve in one table, then the three channel curves.
+    ///
+    /// ⚠⚠ **THE constructor for a render.** The pipeline builder and the GPU twin's construction
+    /// both go through this, so a curve field added later is added in one place — the "guard that
+    /// enumerates a list" lesson, applied before it could bite a fifth time.
+    pub fn from_edits(e: &edit_model::Edits) -> Self {
+        Self {
+            lut: build_composite(&e.tone_curve.points, &e.tone_curve_parametric),
+            channels: None,
+        }
+        .with_channels(
+            &e.tone_curve_red.points,
+            &e.tone_curve_green.points,
+            &e.tone_curve_blue.points,
+        )
+    }
+
+    /// Whether an [`edit_model::Edits`] needs a tone curve stage at all — the one predicate both
+    /// the pipeline and the panel read. See [`Self::from_edits`].
+    pub fn is_needed(e: &edit_model::Edits) -> bool {
+        !e.tone_curve.points.is_empty()
+            || !e.tone_curve_red.points.is_empty()
+            || !e.tone_curve_green.points.is_empty()
+            || !e.tone_curve_blue.points.is_empty()
+            || e.tone_curve_parametric.is_active()
+    }
+
     /// Build from control points. Fewer than 2 points => identity.
     pub fn new(points: &[[f32; 2]]) -> Self {
         Self {
@@ -400,6 +454,68 @@ mod tests {
         for i in 0..=100 {
             let x = i as f32 / 100.0;
             assert!((sp.eval(x) - (0.2 + 0.6 * x)).abs() < 1e-6, "at x={x}");
+        }
+    }
+
+    /// ⚠⚠ M5.1c's no-golden-moves guarantee, at the table: an inactive parametric curve (splits
+    /// moved or not) builds exactly what the four point curves built before it existed.
+    #[test]
+    fn an_inactive_parametric_curve_changes_no_table() {
+        let mut e = edit_model::Edits {
+            tone_curve: edit_model::ToneCurve {
+                points: vec![[0.0, 0.0], [0.4, 0.5], [1.0, 1.0]],
+            },
+            tone_curve_red: edit_model::ToneCurve {
+                points: vec![[0.0, 0.1], [1.0, 1.0]],
+            },
+            ..Default::default()
+        };
+        e.tone_curve_parametric.splits = [0.1, 0.4, 0.9];
+        let old = ToneCurveStage::new(&e.tone_curve.points).with_channels(
+            &e.tone_curve_red.points,
+            &[],
+            &[],
+        );
+        assert_eq!(ToneCurveStage::from_edits(&e).luts(), old.luts());
+    }
+
+    /// An active parametric curve changes the composite table only, and is needed on its own.
+    #[test]
+    fn an_active_parametric_curve_changes_the_composite_only() {
+        let mut e = edit_model::Edits::default();
+        assert!(!ToneCurveStage::is_needed(&e));
+        e.tone_curve_parametric.shadows = 60.0;
+        assert!(
+            ToneCurveStage::is_needed(&e),
+            "the parametric curve alone needs the stage"
+        );
+        let luts = ToneCurveStage::from_edits(&e).luts();
+        let identity = ToneCurveStage::new(&[]).luts();
+        assert_ne!(luts[0], identity[0], "the composite must move");
+        assert_eq!(&luts[1..], &identity[1..], "the channels must not");
+        // Shadows lift the low end: a dark working value comes out brighter.
+        let dark = 0.02f32;
+        let i = (dark * (LUT_SIZE - 1) as f32) as usize;
+        assert!(luts[0][i] > dark * 1.05, "{} vs {dark}", luts[0][i]);
+    }
+
+    /// ⚠ The table is monotone even where two neighbours at opposite extremes add their slopes —
+    /// the case `parametric::eval`'s per-region cap cannot cover alone.
+    #[test]
+    fn opposite_neighbours_cannot_fold_the_table() {
+        for (a, b) in [(100.0, -100.0), (-100.0, 100.0)] {
+            let e = edit_model::Edits {
+                tone_curve_parametric: edit_model::ParametricCurve {
+                    shadows: a,
+                    darks: b,
+                    lights: a,
+                    highlights: b,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let lut = ToneCurveStage::from_edits(&e).luts()[0].clone();
+            assert!(lut.windows(2).all(|w| w[1] >= w[0]), "folded for {a}/{b}");
         }
     }
 }

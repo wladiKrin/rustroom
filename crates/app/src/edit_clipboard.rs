@@ -117,6 +117,13 @@ mod tests {
             tone_curve_blue: edit_model::ToneCurve {
                 points: vec![[0.0, 0.0], [1.0, 0.85]],
             },
+            tone_curve_parametric: edit_model::ParametricCurve {
+                shadows: 20.0,
+                darks: -10.0,
+                lights: 15.0,
+                highlights: -25.0,
+                splits: [0.2, 0.45, 0.8],
+            },
             saturation: 12.0,
             vibrance: 8.0,
             hsl,

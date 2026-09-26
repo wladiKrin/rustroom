@@ -64,7 +64,7 @@ pub fn show(
                 // a mask's curve acts on a region no histogram describes.
                 // ⚠ `None`: a mask's curve is composite-only by decision, so it gets no channel
                 // selector — see `build_pipeline`'s mask branch, which is the other half of that.
-                curve_rect = tone_curve::show(ui, &mut a.tone_curve, ed, None, None);
+                curve_rect = tone_curve::show(ui, &mut a.tone_curve, ed, None, None, None);
                 theme::sub_label(ui, "Presence");
                 ed.slider(ui, &mut a.local_contrast.texture, -100.0..=100.0, "Texture");
                 ed.slider(ui, &mut a.local_contrast.clarity, -100.0..=100.0, "Clarity");

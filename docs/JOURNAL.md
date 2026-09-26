@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M5.1c — the parametric curve (2026-09-26)](#2026-09-26--m51c-the-parametric-curve-branch-m51c-parametric-curve)
 - [GPU geometry, a resident input and a no-download handoff (2026-09-26)](#2026-09-26--gpu-geometry-a-resident-input-and-a-no-download-handoff-branch-gpu-geometry)
 - [A Straighten drag's other half: airlight and histogram (2026-09-26)](#2026-09-26--a-straighten-drags-other-half-airlight-and-histogram-branch-drag-frame-overheads)
 - [M7.3b — one geometric resample, and a prefix reordered around it (2026-09-25)](#2026-09-25--m73b-one-geometric-resample-and-a-prefix-reordered-around-it)
@@ -153,6 +154,45 @@ goldens unmoved.
 - ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
+
+### 2026-09-26 — M5.1c: the parametric curve (branch `m5.1c-parametric-curve`)
+
+**2,940 tests**, **79 goldens** (78 unmoved + `parametric_curve`), gate green. Spec and plan
+`2026-09-26-m5.1c-parametric-curve-*`. ✅ **Confirmed by use and merged 2026-09-26** ("works"); the
+slider strength was accepted as is.
+
+**Decisions (the author's):** a **separate representation**, like Lightroom's (`Edits.tone_curve_parametric`:
+four amounts and three splits), NOT sliders rewriting the point curve. A slider cannot be read back
+from hand-placed points, so the plan's "without a second representation" was amended. **On-curve drag**
+in the Parametric view, behind `Settings.parametric_drag` (`Left` | `Off`). **Global only**: masks
+keep their composite point curve.
+
+**How it works.** `pipeline::parametric::eval` is display-referred (the widget's axis): raised-cosine
+bumps, one per region, peaking at the region's centre and reaching half-way into each neighbour, with
+the ends pinned. ⚠⚠ **Each amplitude is capped at `0.9 · 2r/π`** (and at most 0.15) so no single
+region can fold the curve. **The cost:** with default splits, Shadows and Highlights reach ±0.072 of
+display value, Darks and Lights ±0.143. Whether that is strong enough is the author's call on a real
+photo. The curve is folded into `ToneCurveStage`'s **composite table** (parametric, then the points,
+then a running max), so there is **no new stage and no new GPU code**. ⚠⚠ Both construction sites
+(the pipeline builder and `accelerate`'s `REPLACEABLE`) now go through
+`ToneCurveStage::from_edits` / `GpuToneCurveStage::from_edits`, and the insertion condition through
+`ToneCurveStage::is_needed`: a fifth curve field enumerated in two places is the lesson this
+project has paid for four times.
+
+**Evidence.** An inactive parametric curve builds exactly the old table (`luts()` equal), so the 78
+goldens cannot move. The GPU whole-chain parity test's fixture carries a parametric curve. Sabotages,
+all caught: removing the fold cap (fold test), removing the running max (opposite neighbours DO fold
+without it, so it is load-bearing), building the GPU twin without the parametric curve (parity test),
+flipping the drag direction, and ignoring the `Off` binding (both panel tests, via a real five-pass
+egui drag).
+
+**Placement.** `parametric.rs` (pipeline, pure) · `tone_curve_tool` (lib: regions, split drag,
+amount drag, the combined curve through the render's constructor) · `develop/panel/parametric_curve.rs`
+(bin, new) · the widget backdrop extracted from `tone_curve.rs` so both views draw it identically ·
+`adjustments::CurveUi` (grouped when `too_many_arguments` fired at eight). ⚠ `adjustments.rs` is
+**653** code lines, over the ~600 mark.
+
+`grep -n 'M5.1c' docs/JOURNAL.md`.
 
 ### 2026-09-26 — GPU geometry, a resident input and a no-download handoff (branch `gpu-geometry`)
 

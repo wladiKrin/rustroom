@@ -143,6 +143,33 @@ pub enum EraseDrag {
     Off,
 }
 
+/// What a drag inside the tone curve widget does in its **Parametric** mode (M5.1c).
+///
+/// ⚠ The widget is in the panel, not on the canvas, so no pan binding competes with it — which is
+/// why this is two values and not `EraseDrag`'s three. `Off` is for someone who finds an accidental
+/// drag over the curve destructive: the four sliders remain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ParametricDrag {
+    /// A vertical left-drag adjusts the region under the pointer, as Lightroom's does.
+    #[default]
+    Left,
+    /// No drag gesture; the sliders are the only route.
+    Off,
+}
+
+impl ParametricDrag {
+    /// Every variant, for the settings dropdown and for table-driven tests.
+    pub const ALL: [ParametricDrag; 2] = [ParametricDrag::Left, ParametricDrag::Off];
+
+    /// How to describe this binding in the UI. See [`PanDrag::label`] for why it is named here.
+    pub fn label(self) -> &'static str {
+        match self {
+            ParametricDrag::Left => "drag on the curve",
+            ParametricDrag::Off => "off",
+        }
+    }
+}
+
 /// A mouse button, named here so this module needs no `egui` dependency.
 ///
 /// ⚠ `crates/app/src/lib.rs` has no egui by rule — that separation is what keeps these types
@@ -363,6 +390,8 @@ pub struct Settings {
     ///
     /// ⚠ Whichever button [`Self::pan_drag`] uses always wins; see [`EraseDrag::button`].
     pub erase_drag: EraseDrag,
+    /// What a drag in the tone curve's Parametric mode does. See [`ParametricDrag`].
+    pub parametric_drag: ParametricDrag,
     /// Turn lens corrections on for photos that have no sidecar yet.
     ///
     /// ⚠ A **preference**, not an op-list default. `Edits::default()` stays strictly neutral so
@@ -843,6 +872,7 @@ impl Default for Settings {
             accent: Accent::default(),
             pan_drag: PanDrag::default(),
             erase_drag: EraseDrag::default(),
+            parametric_drag: ParametricDrag::default(),
             auto_lens_correction: true,
             default_rendering: edit_model::Rendering::Camera,
             library_sort: catalog::SortOrder::default(),
@@ -1144,6 +1174,15 @@ mod tests {
     /// ⚠⚠ **`SettingsStore::load` is infallible**, so a field that fails to parse silently reverts
     /// **every** setting to its default — not just this one. A settings file written before this
     /// field existed must still load.
+    /// ⚠ M5.1c's binding, the same guard: an older file has no `parametric_drag`.
+    #[test]
+    fn a_settings_file_from_before_the_parametric_binding_still_loads() {
+        let json = r#"{"pan_drag":"Secondary","erase_drag":"Middle"}"#;
+        let s: Settings = serde_json::from_str(json).expect("an older settings file must load");
+        assert_eq!(s.erase_drag, EraseDrag::Middle, "the stored value survived");
+        assert_eq!(s.parametric_drag, ParametricDrag::Left);
+    }
+
     #[test]
     fn a_settings_file_from_before_the_erase_binding_still_loads() {
         let json = r#"{"pan_drag":"Secondary","theme":"Light"}"#;
@@ -1512,6 +1551,7 @@ mod tests {
             // rather than being re-defaulted on load.
             pan_drag: PanDrag::Secondary,
             erase_drag: EraseDrag::Middle,
+            parametric_drag: ParametricDrag::Off,
             // Both non-default, for the same reason: a field re-defaulted on load would look
             // like it round-tripped.
             library_sort: catalog::SortOrder::ModifiedDesc,

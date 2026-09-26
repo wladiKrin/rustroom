@@ -94,6 +94,7 @@ pub mod auto_tone;
 /// on disk and no working-space assumptions to get wrong.
 pub mod lens_grid;
 pub mod lut;
+pub mod parametric;
 pub mod perspective;
 /// ⚠ Its own module rather than a section of [`spatial`]: that one holds *separable blur*
 /// primitives (box, Gaussian, guided) and is already 889 lines. A resampling kernel reads at a
@@ -1532,18 +1533,10 @@ pub fn build_pipeline_split_tapped(
     // ⚠⚠ **All four curves, not just the composite.** An `is_empty` guard naming one field of four
     // would render a channel-only edit unchanged, with nothing failing — the regression this feature
     // invites, and it has its own test.
-    if !edits.tone_curve.points.is_empty()
-        || !edits.tone_curve_red.points.is_empty()
-        || !edits.tone_curve_green.points.is_empty()
-        || !edits.tone_curve_blue.points.is_empty()
-    {
-        tail.push(Box::new(
-            ToneCurveStage::new(&edits.tone_curve.points).with_channels(
-                &edits.tone_curve_red.points,
-                &edits.tone_curve_green.points,
-                &edits.tone_curve_blue.points,
-            ),
-        ));
+    // ⚠ Through `is_needed`/`from_edits`, never the fields directly: the parametric curve (M5.1c)
+    // is the fifth field, and a guard naming four would render it unchanged.
+    if ToneCurveStage::is_needed(edits) {
+        tail.push(Box::new(ToneCurveStage::from_edits(edits)));
     }
 
     // Local contrast, in two bands. After the tone curve is mandatory: a local contrast
@@ -3315,6 +3308,13 @@ mod tests {
             },
             tone_curve_blue: edit_model::ToneCurve {
                 points: vec![[0.0, 0.0], [1.0, 0.85]],
+            },
+            tone_curve_parametric: edit_model::ParametricCurve {
+                shadows: 20.0,
+                darks: -10.0,
+                lights: 15.0,
+                highlights: -25.0,
+                splits: [0.2, 0.45, 0.8],
             },
             saturation: 10.0,
             vibrance: 10.0,

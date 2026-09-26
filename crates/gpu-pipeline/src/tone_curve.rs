@@ -83,6 +83,15 @@ impl GpuToneCurveStage {
         Self::from_cpu(pipeline::ToneCurveStage::new(points).with_channels(red, green, blue))
     }
 
+    /// Every curve an [`edit_model::Edits`] carries — the one a render builds.
+    ///
+    /// ⚠⚠ `accelerate` calls this, mirroring `pipeline::ToneCurveStage::from_edits`, so the GPU
+    /// table and the CPU table come from one constructor and a new curve field cannot reach one
+    /// and not the other.
+    pub fn from_edits(e: &edit_model::Edits, _ctx: &Arc<GpuContext>) -> Self {
+        Self::from_cpu(pipeline::ToneCurveStage::from_edits(e))
+    }
+
     /// ⚠ One place builds the buffer, so `new` and `with_channels` cannot lay it out differently —
     /// and `cpu` carries the channels too, which is what makes the **decline path** correct.
     fn from_cpu(cpu: pipeline::ToneCurveStage) -> Self {
