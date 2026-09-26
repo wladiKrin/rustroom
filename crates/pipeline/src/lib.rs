@@ -474,11 +474,11 @@ impl Pipeline {
     }
 
     /// Run all stages in order.
-    pub fn run(&self, mut image: ImageBuf) -> ImageBuf {
-        for stage in &self.stages {
-            image = stage.apply(image);
-        }
-        image
+    ///
+    /// ⚠ Through [`per_pixel::run_stages`], so a run of per-pixel stages is one walk. The list
+    /// itself is untouched; see that module.
+    pub fn run(&self, image: ImageBuf) -> ImageBuf {
+        per_pixel::run_stages(self.stages.iter().map(|s| s.as_ref()), image)
     }
 }
 
@@ -5175,5 +5175,145 @@ mod tests {
             "the spot must actually alter the cropped window"
         );
         assert_eq!(window.data(), part.data());
+    }
+}
+
+#[cfg(test)]
+mod per_pixel_tests {
+    use super::*;
+    use core_image::ImageBuf;
+
+    fn field() -> ImageBuf {
+        let mut img = ImageBuf::new(64, 48);
+        for y in 0..48 {
+            for x in 0..64 {
+                let t = (x * 7 + y * 3) as f32 / 97.0;
+                img.set_pixel(x, y, [t * 0.9, (1.0 - t) * 0.7 + 0.05, (t * t) * 1.3]);
+            }
+        }
+        img
+    }
+
+    /// ⚠⚠ Every per-pixel stage at once, fused against sequential, sample for sample. A stage
+    /// whose `px` drifts from the closure it replaced fails here even if no golden carries it.
+    #[test]
+    fn a_fused_run_equals_the_sequential_application() {
+        use edit_model::{ColorGrading, GradeWheel, Hsl, HslBand, Vignette};
+        let cube = std::sync::Arc::new(
+            crate::lut::Cube::parse(
+                "LUT_3D_SIZE 2\n0 0 0\n1 0 0.1\n0 1 0\n1 1 0.2\n0 0.1 1\n1 0 1\n0 1 1\n0.9 1 1\n",
+            )
+            .expect("a 2^3 cube"),
+        );
+        let mut hsl = Hsl::default();
+        hsl.bands[0] = HslBand {
+            hue: 20.0,
+            saturation: 30.0,
+            luminance: -10.0,
+        };
+        let grading = ColorGrading {
+            shadows: GradeWheel {
+                hue: 200.0,
+                saturation: 40.0,
+                ..Default::default()
+            },
+            highlights: GradeWheel {
+                hue: 40.0,
+                saturation: 30.0,
+                ..Default::default()
+            },
+            ..ColorGrading::default()
+        };
+        let stages: Vec<Box<dyn PipelineStage>> = vec![
+            Box::new(WhiteBalanceStage::new([1.1, 0.95, 1.05])),
+            Box::new(ExposureStage::new(0.7)),
+            Box::new(ContrastStage::new(25.0)),
+            Box::new(ToneRegionsStage::new(-20.0, 30.0, 10.0, -15.0)),
+            Box::new(
+                ToneCurveStage::new(&[[0.0, 0.0], [0.4, 0.5], [1.0, 1.0]]).with_channels(
+                    &[[0.0, 0.0], [0.5, 0.45], [1.0, 1.0]],
+                    &[],
+                    &[[0.0, 0.05], [1.0, 1.0]],
+                ),
+            ),
+            Box::new(SaturationStage::new(20.0, 15.0)),
+            Box::new(HslStage::new(&hsl)),
+            Box::new(ColorGradingStage::new(&grading)),
+            Box::new(VignetteStage::new(&Vignette {
+                amount: -40.0,
+                ..Vignette::default()
+            })),
+            Box::new(DisplayRenderingStage::new(None, None)),
+            Box::new(CreativeLookStage::new(
+                cube,
+                edit_model::LutSpace::SrgbDisplay,
+                60.0,
+            )),
+            Box::new(OutputTransform::new(color::OutputSpace::Srgb)),
+        ];
+        for s in &stages {
+            assert!(
+                s.per_pixel(8, 8).is_some(),
+                "{} must be per-pixel for this test to mean anything",
+                s.name()
+            );
+        }
+        let img = field();
+        let want = stages.iter().fold(img.clone(), |i, s| s.apply(i));
+        assert_ne!(
+            want.data(),
+            img.data(),
+            "fixture check: the stages move pixels"
+        );
+        let got = per_pixel::run_stages_with(stages.iter().map(|b| b.as_ref()), img, true);
+        let bad = got
+            .data()
+            .iter()
+            .zip(want.data())
+            .position(|(a, b)| a.to_bits() != b.to_bits());
+        assert_eq!(bad, None, "the fused run diverged at sample {bad:?}");
+    }
+
+    /// Exposure then a curve is not a curve then exposure — asserted first — and the fused walk
+    /// of `[exposure, curve]` is the list order, sample for sample.
+    #[test]
+    fn a_fused_run_of_real_stages_applies_them_in_list_order() {
+        let curve = || ToneCurveStage::new(&[[0.0, 0.0], [0.3, 0.9], [1.0, 1.0]]);
+        let ab: Vec<Box<dyn PipelineStage>> =
+            vec![Box::new(ExposureStage::new(2.0)), Box::new(curve())];
+        let ba: Vec<Box<dyn PipelineStage>> =
+            vec![Box::new(curve()), Box::new(ExposureStage::new(2.0))];
+        let img = field();
+        let seq_ab = ab.iter().fold(img.clone(), |i, s| s.apply(i));
+        let seq_ba = ba.iter().fold(img.clone(), |i, s| s.apply(i));
+        let worst = seq_ab
+            .data()
+            .iter()
+            .zip(seq_ba.data())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst > 0.05,
+            "fixture check: the two orders must differ, worst {worst}"
+        );
+        let fused = per_pixel::run_stages_with(ab.iter().map(|b| b.as_ref()), img, true);
+        assert_eq!(fused.data(), seq_ab.data(), "the fused walk is the list order");
+    }
+
+    /// `Pipeline::run` takes one walk for a run of three per-pixel stages.
+    #[test]
+    fn a_pipeline_of_per_pixel_stages_takes_one_fused_walk() {
+        if !per_pixel::fusion_enabled() {
+            eprintln!("SKIPPED: RUSTROOM_NO_FUSION is set");
+            return;
+        }
+        let p = Pipeline::new(vec![
+            Box::new(ExposureStage::new(0.5)),
+            Box::new(ContrastStage::new(10.0)),
+            Box::new(SaturationStage::new(10.0, 0.0)),
+        ]);
+        let before = per_pixel::fused_walks();
+        let _ = p.run(ImageBuf::new(8, 8));
+        assert_eq!(per_pixel::fused_walks() - before, 1);
     }
 }

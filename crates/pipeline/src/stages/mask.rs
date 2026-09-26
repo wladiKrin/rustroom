@@ -455,9 +455,9 @@ impl PipelineStage for MaskStage {
         let mut adjusted = image.clone();
         let d_clone = t_clone.elapsed();
         let t_sub = std::time::Instant::now();
-        for stage in &self.stages {
-            adjusted = stage.apply(adjusted);
-        }
+        // ⚠ Through the fused runner, so a mask's own per-pixel sub-stages are one walk over the
+        // copy — the free part of fusion. The copy and the blend are unchanged.
+        adjusted = crate::per_pixel::run_stages(self.stages.iter().map(|s| s.as_ref()), adjusted);
         let d_sub = t_sub.elapsed();
         let t_blend = std::time::Instant::now();
 

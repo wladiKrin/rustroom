@@ -253,13 +253,10 @@ impl GpuChain {
     }
 
     /// Run every stage's CPU twin, in order.
-    fn cpu_fallback(&self, mut image: ImageBuf) -> ImageBuf {
+    fn cpu_fallback(&self, image: ImageBuf) -> ImageBuf {
         // ⚠ Every stage, not some — a partially-GPU result would be a third rendering path
-        // nobody designed.
-        for s in &self.stages {
-            image = s.cpu().apply(image);
-        }
-        image
+        // nobody designed. Through the fused runner, like every other CPU list.
+        pipeline::run_stages(self.stages.iter().map(|s| s.cpu()), image)
     }
 
     /// The name of the stage this chain ends with, if any.
