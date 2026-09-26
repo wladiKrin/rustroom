@@ -1,14 +1,38 @@
 //! Histogram of a display (sRGB, 8-bit RGBA) frame.
 
 /// Per-channel 256-bin counts [R, G, B] from an interleaved RGBA byte buffer.
+///
+/// ⚠⚠ **Parallel since 2026-09-26, and EXACT rather than approximate.** It is built on every
+/// render, and one thread over a 6.8 Mpx drag frame cost **12.4 ms of an 84.5 ms Straighten
+/// frame**, the third-largest item in it. Each chunk counts into its own table and the tables are
+/// summed; integer addition does not care how the frame was split, so the result is bit-identical
+/// to the one-thread count, which `the_parallel_histogram_equals_the_serial_one` pins.
 pub fn histogram_rgba(rgba: &[u8]) -> [[u32; 256]; 3] {
-    let mut h = [[0u32; 256]; 3];
-    for px in rgba.as_chunks::<4>().0 {
-        h[0][px[0] as usize] += 1;
-        h[1][px[1] as usize] += 1;
-        h[2][px[2] as usize] += 1;
-    }
-    h
+    use rayon::prelude::*;
+    // ⚠ Big enough that the per-chunk 3 KB table and the final sum are noise; small enough that
+    // a 1.7 Mpx fit frame still splits across every core.
+    const CHUNK_PX: usize = 1 << 16;
+    let count = |mut h: [[u32; 256]; 3], chunk: &[u8]| {
+        for px in chunk.as_chunks::<4>().0 {
+            h[0][px[0] as usize] += 1;
+            h[1][px[1] as usize] += 1;
+            h[2][px[2] as usize] += 1;
+        }
+        h
+    };
+    rgba.par_chunks(CHUNK_PX * 4)
+        .fold(|| [[0u32; 256]; 3], count)
+        .reduce(
+            || [[0u32; 256]; 3],
+            |mut a, b| {
+                for (ac, bc) in a.iter_mut().zip(&b) {
+                    for (x, y) in ac.iter_mut().zip(bc) {
+                        *x += y;
+                    }
+                }
+                a
+            },
+        )
 }
 
 /// The bins left out of the scale: pure black and pure white.
@@ -91,6 +115,38 @@ pub fn clipped_edges(hist: &[[u32; 256]; 3]) -> (bool, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The one-thread count, kept as the reference the parallel version must equal exactly.
+    fn serial(rgba: &[u8]) -> [[u32; 256]; 3] {
+        let mut h = [[0u32; 256]; 3];
+        for px in rgba.as_chunks::<4>().0 {
+            h[0][px[0] as usize] += 1;
+            h[1][px[1] as usize] += 1;
+            h[2][px[2] as usize] += 1;
+        }
+        h
+    }
+
+    /// ⚠⚠ **Equal, not close**: counting is integer addition, so however the frame is split
+    /// across threads the sums are the same. A frame large enough to be split into many chunks,
+    /// with a length that is NOT a multiple of the chunk size, so the ragged last chunk is counted.
+    #[test]
+    fn the_parallel_histogram_equals_the_serial_one() {
+        let n = 1_000_003usize;
+        let mut state: u32 = 0x1234_5678;
+        let mut rgba = Vec::with_capacity(n * 4);
+        for _ in 0..n {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            rgba.extend_from_slice(&state.to_le_bytes());
+        }
+        let want = serial(&rgba);
+        // ⚠ The fixture must fill every bin, or a dropped chunk could hide in an empty one.
+        assert!(want.iter().all(|c| c.iter().all(|&v| v > 0)));
+        assert_eq!(histogram_rgba(&rgba), want);
+        assert_eq!(histogram_rgba(&[]), [[0u32; 256]; 3]);
+    }
 
     #[test]
     fn the_clipping_marker_needs_more_than_a_single_pixel() {
