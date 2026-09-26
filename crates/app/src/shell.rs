@@ -93,12 +93,33 @@ impl eframe::App for RustroomApp {
                 // cannot see what the UI thread spends turning a frame into a texture, and the
                 // in-app drag ran ~11 ms slower than the headless probe with no line saying where.
                 let t_tex = std::time::Instant::now();
-                let img = egui::ColorImage::from_rgba_unmultiplied(
+                // ⚠ PREMULTIPLIED, because every frame is opaque (the GPU quantiser ORs in
+                // 0xff000000; `to_rgba8` is pinned opaque by `to_rgba8_is_to_rgb8_with_an_opaque_alpha`),
+                // and at alpha 255 the two are the same pixels — without the per-pixel conversion
+                // that cost 5.5 ms of the UI thread per 6.5 Mpx drag frame.
+                let img = egui::ColorImage::from_rgba_premultiplied(
                     [frame.width, frame.height],
                     &frame.rgba,
                 );
                 let t_load = std::time::Instant::now();
-                s.texture = Some(ctx.load_texture("preview", img, egui::TextureOptions::LINEAR));
+                // ⚠⚠ **Updated in place when a whole frame follows a whole frame of the same size**
+                // (2026-09-26): a NEW 27 MB texture per drag frame is an allocation plus an upload
+                // on the window's own GPU device, competing with the render pipeline's. ⚠ Only
+                // whole-after-whole: `backdrop` is a clone of this very handle, and a region frame
+                // written into it would turn the backdrop into the slice it exists to surround — so
+                // a region frame (or the first whole frame after one) still gets a fresh texture.
+                let reuse = frame.region.is_none()
+                    && s.rendered_region.is_none()
+                    && s.texture
+                        .as_ref()
+                        .is_some_and(|t| t.size() == [frame.width, frame.height]);
+                match (&mut s.texture, reuse) {
+                    (Some(t), true) => t.set(img, egui::TextureOptions::LINEAR),
+                    _ => {
+                        s.texture =
+                            Some(ctx.load_texture("preview", img, egui::TextureOptions::LINEAR));
+                    }
+                }
                 if std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some() {
                     eprintln!(
                         "  UI texture: convert {:5.1} ms  load {:5.1} ms  {}x{}",
