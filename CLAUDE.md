@@ -166,9 +166,17 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 94 dated sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-09-25)
+### State (2026-09-26)
 
-**2907 tests**, **78 goldens**. ✅ **M7.3b (2026-09-25, confirmed by use and merged 2026-09-26)**
+**2950 tests**, **78 goldens**. ✅ **GPU timestamps (2026-09-26, branch `gpu-timestamps`, not yet
+confirmed by use):** `RUSTROOM_DEBUG_GPU_TIME=1` prints a `GPUTIME` block per chain — one compute
+pass per stage, each pass's GPU time, the quantise, and the wall's remainder as `copies+latency`.
+⚠⚠ **The copies are not marked: an encoder timestamp outside a pass deadlocks wgpu 29's Metal
+backend** (the command buffer never completes and `Device::wait` checks for nothing else). ⚠ A
+timed frame is ~10 ms slower than an untimed one; quote per-pass numbers, never a timed wall.
+**Measured: a full-frame per-pixel pass is ~2.2 ms at 6.8 Mpx**, the Catmull-Rom geometry gather
+15.7, so the per-pixel fusion spec proceeds. `grep -n 'GPU timestamps' docs/JOURNAL.md`.
+✅ **M7.3b (2026-09-25, confirmed by use and merged 2026-09-26)**
 fuses perspective into `GeometryStage`, reorders the prefix, and moves spots before perspective.
 `grep -n 'M7.3b' docs/JOURNAL.md`. ⚠⚠ **Its drag speedup applies only when NR or dehaze is on**,
 which is 2 and 1 of the author's 49 edited photos. Quoting "4x faster geometric drags" without that
