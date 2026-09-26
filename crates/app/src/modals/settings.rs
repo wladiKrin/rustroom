@@ -16,7 +16,9 @@ use super::{dialog, Footer};
 use crate::decode::view_quality_hint;
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
-use rustroom_app::settings::{Accent, DragQuality, EraseDrag, PanDrag, Settings, ThemeChoice};
+use rustroom_app::settings::{
+    Accent, DragQuality, EraseDrag, PanDrag, ParametricDrag, Settings, ThemeChoice,
+};
 
 /// Air between two settings on a tab.
 const GAP: f32 = 8.0;
@@ -37,6 +39,7 @@ pub struct SettingsDraft {
     accent: Accent,
     pan_drag: PanDrag,
     erase_drag: EraseDrag,
+    parametric_drag: ParametricDrag,
     drag_quality: DragQuality,
     display_space: color::OutputSpace,
     stacking: rustroom_app::stack::Stacking,
@@ -94,6 +97,7 @@ impl SettingsDraft {
             accent: s.accent,
             pan_drag: s.pan_drag,
             erase_drag: s.erase_drag,
+            parametric_drag: s.parametric_drag,
             drag_quality: s.drag_quality,
             display_space: s.display_space,
             stacking: s.stacking.clone(),
@@ -141,6 +145,10 @@ impl SettingsDraft {
         }
         if self.erase_drag != app.settings.erase_drag {
             app.settings.erase_drag = self.erase_drag;
+            plain = true;
+        }
+        if self.parametric_drag != app.settings.parametric_drag {
+            app.settings.parametric_drag = self.parametric_drag;
             plain = true;
         }
         if self.drag_quality != app.settings.drag_quality {
@@ -557,6 +565,20 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             ),
                         );
                     }
+
+                    theme::sub_label(ui, "Parametric curve");
+                    egui::ComboBox::from_id_salt("parametric_drag_pick")
+                        .selected_text(d.parametric_drag.label())
+                        .show_ui(ui, |ui| {
+                            for b in ParametricDrag::ALL {
+                                ui.selectable_value(&mut d.parametric_drag, b, b.label());
+                            }
+                        })
+                        .response
+                        .on_hover_text(
+                            "In the tone curve's Parametric mode, dragging up or down on the curve \
+                             adjusts the region under the pointer. Off leaves the four sliders.",
+                        );
 
                     theme::sub_label(ui, "Preview while dragging");
                     egui::ComboBox::from_id_salt("drag_quality_pick")
