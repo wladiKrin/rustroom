@@ -1,14 +1,16 @@
 //! Spot removal — clone and heal patches, each a disc of pixels copied from elsewhere in the
 //! frame at a whole-pixel offset.
 //!
-//! ⚠ Runs in the **prefix**, between `PerspectiveStage` and `GeometryStage` — on
-//! `GeometryStage`'s *input*, which is the space brush strokes are anchored in. A spot is
-//! content-referred (a dust spot is on the sensor, a blemish on the subject), so it must not slide
-//! when the crop changes; normalising against this frame makes *"the patch survives a crop"* free,
-//! and `FrameMap::inverse_point` already maps a canvas click into it. Before noise reduction and
-//! dehaze, so a healed patch is denoised with its surroundings rather than showing a different
-//! grain. ⚠ It inherits the brush's caveat: toggling lens correction or perspective after placing
-//! a spot shifts it.
+//! ⚠⚠ Runs in the **prefix**, after lens correction and dehaze and BEFORE the geometry — which
+//! since M7.3b includes the perspective keystone. So a spot lives in **post-lens,
+//! pre-perspective** space, NOT the brush's anchor space (post-perspective). It moved there
+//! because fusing perspective into `GeometryStage` removed the buffer it used to run on, and a
+//! pixel edit cannot live inside a coordinate map. `pipeline::brush::SpotMap` maps it to the
+//! canvas. A spot is content-referred (a dust spot is on the sensor, a blemish on the subject), so
+//! it must not slide when the crop, the angle **or the keystone** changes; normalising against this
+//! frame gives all three for free. After noise reduction, so the patch copies denoised texture into
+//! denoised surroundings and the grain matches. ⚠ It still inherits the brush's caveat for lens
+//! correction: toggling that after placing a spot shifts it.
 //!
 //! ⚠ Being in the prefix it always runs whole-buffer — no `Region`, no kernel margin, no
 //! `tail_kernel_radius` change. Being normalised it takes no `RenderScale`: preview and export

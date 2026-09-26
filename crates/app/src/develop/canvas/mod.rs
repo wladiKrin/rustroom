@@ -1591,6 +1591,66 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **Spots live BEFORE the perspective since M7.3b**, so a click on a keystoned photo must
+    /// store the homography's *source* of the clicked point — `SpotMap::inverse_point` — and not
+    /// `FrameMap`'s answer, which is the post-perspective point the brush would use.
+    ///
+    /// ⚠ The crop moves the clicked point off the frame centre, where a keystone might leave it
+    /// in place, and the fixture check below proves the two answers differ before comparing.
+    #[test]
+    fn a_click_on_a_keystoned_photo_lands_in_pre_perspective_space() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let crop = edit_model::CropRect {
+            left: 0.5,
+            top: 0.3,
+            right: 1.0,
+            bottom: 1.0,
+        };
+        let persp = edit_model::Perspective {
+            vertical: 50.0,
+            horizontal: 50.0,
+            scale: 0.0,
+            ..Default::default()
+        };
+        {
+            let s = app.session.as_mut().expect("a session");
+            s.edits.geometry.crop = crop;
+            s.edits.perspective = persp;
+            // ⚠⚠ A frame that has already LANDED at the cropped size. No render runs in this
+            // harness, so `fit_image_size` would otherwise still be the uncropped 80x60 and the
+            // canvas frame would carry the wrong aspect. A crop alone cannot see that (the
+            // cropped-photo test above passes either way); a keystone can, because the homography
+            // is defined in half-height units. The straighten test's `shown_geo` does the same.
+            s.fit_image_size = egui::vec2(40.0, 42.0);
+        }
+        // The 80x60 test photo cropped to its right half and lower 70%: a 40x42 frame. Only the
+        // aspect matters to the normalised answer, so native pixels are as good as screen ones.
+        let geometry = edit_model::Geometry {
+            crop,
+            ..Default::default()
+        };
+        let (fw, fh) = (40usize, 42usize);
+        let want = pipeline::brush::SpotMap::new(&geometry, persp, fw, fh)
+            .inverse_point(fw as f32 / 2.0, fh as f32 / 2.0);
+        let brush = pipeline::brush::FrameMap::new(&geometry, fw, fh)
+            .inverse_point(fw as f32 / 2.0, fh as f32 / 2.0);
+        assert!(
+            (want[0] - brush[0]).abs() + (want[1] - brush[1]).abs() > 0.02,
+            "fixture check: the keystone must move the point ({want:?} vs {brush:?})"
+        );
+
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::click_through(&mut app, &ctx, centre);
+        let placed = spots(&app);
+        assert_eq!(placed.len(), 1, "the click placed nothing");
+        let got = placed[0].centre;
+        assert!(
+            (got[0] - want[0]).abs() < 0.02 && (got[1] - want[1]).abs() < 0.02,
+            "stored {got:?}, pre-perspective {want:?}, post-perspective (the old answer) {brush:?}"
+        );
+    }
+
     /// ⚠⚠ **A spot must land where you clicked on a CROPPED photo**, which is what
     /// `FrameMap::inverse_point` buys and what nothing else here can see. Spots are stored in
     /// pre-geometry source coordinates while the canvas shows the cropped frame, so treating a

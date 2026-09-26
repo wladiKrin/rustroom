@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M7.3b — one geometric resample, and a prefix reordered around it (2026-09-25)](#2026-09-25--m73b-one-geometric-resample-and-a-prefix-reordered-around-it)
 - [The Export dialog: presets beside summarised sections (2026-09-22)](#the-export-dialog-presets-beside-summarised-sections-2026-09-22)
 - [The dialogs in one language (2026-09-22)](#the-dialogs-in-one-language-2026-09-22)
 - [CI ran out of disk (2026-09-21)](#ci-ran-out-of-disk-2026-09-21)
@@ -150,6 +151,78 @@ goldens unmoved.
 - ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
+
+### 2026-09-25 — M7.3b: one geometric resample, and a prefix reordered around it
+
+Branch `m7.3b-geometry-fusion`, **2,907 tests**, **78 goldens** (75 unmoved + 3 new), gate green with
+each exit code read from its own command (`FMT=0 CLIPPY=0 TEST=0`). Spec
+`2026-09-25-m7.3b-geometry-fusion-design.md`, plan of the same date. **Not yet confirmed by use.**
+
+**What shipped.**
+- `PerspectiveStage` is gone. **`GeometryStage::with_perspective`** does orientation, keystone,
+  straighten and crop in ONE gather (`stages/geometry/fused.rs`). ⚠ An inactive perspective runs
+  the original code byte for byte, which is why the other goldens could not move.
+- **Prefix order: lens → NR → dehaze → spots → geometry → masked capture** (was lens → perspective →
+  spots → geometry → NR → dehaze).
+- **Spots moved to post-lens, PRE-perspective space.** Fusion deleted the buffer they ran on. New lib
+  type **`pipeline::brush::SpotMap`** (= `FrameMap` ∘ homography, plus `radius_scale_at` for a
+  keystone's local scale) drives the overlay, hit-test, placement and auto-pick sampler. Side gain: a
+  spot now stays on its blemish when the keystone changes. **Brushes did not move**: their anchor
+  space survives as coordinates inside the fused map, and `FrameMap` is untouched.
+
+**Measured (DSCF6291, X-T4; `persp_sharpness`, `probe_prefix_order`, both builds via a `main` worktree).**
+- Acutance, straighten + keystone: **0.00700 → 0.00823 (+17.6%)**, equal to keystone alone (0.00821).
+  The second resample is gone completely, and every other row is identical to 5 digits.
+- Drag cost, fit rung, GPU path (ms, `main` → shipped): straighten **137 → 35**, crop 134 → 35,
+  keystone **170 → 36**, NR **102 → 161**, dehaze **54 → 106**. At native, straighten 594 → ~143.
+
+⚠⚠ **RETRACTED IN THE SAME SESSION: "NR ahead of the resamplers sees cleaner noise".** The brainstorm
+argued that interpolation correlates noise, so NR should run first. The branch first shipped
+**NR → lens → …** on that basis. Measured on DSCF6708 (ISO 3200, NR 50/40 + 3°, 400 px crops,
+residual std after a 5×5 high-pass):
+
+| Order | Grain (corner / centre) | Lag-1 corr. | NR drag | Dehaze drag |
+|---|---|---|---|---|
+| `main` | 1.943 / 2.698 | +0.356 / +0.374 | 102 | 54 |
+| A: NR → lens → dehaze → spots → geo | **+8% / +4%** | +0.364 / +0.374 | 253 | 113 |
+| B: fusion only (NR/dehaze after geo) | identical to `main` | identical | 103 | 55 |
+| **C (shipped): lens → NR → dehaze → spots → geo** | +2% / +1% | +0.357 / +0.374 | 161 | 106 |
+
+The correlation did not change in any order, and NR first left MORE grain: the resample's own
+softening had been helping. **The reorder is a speed trade, not an image-quality win.** The author
+chose C: geometric drags ~4× faster, NR/dehaze drags ~1.6–2× slower, grain within 1–2%.
+
+**Golden prediction, written before the first run: zero existing goldens move. It held.** ⚠ An
+accidental `UPDATE_GOLDEN=1` with a broad filter regenerated all 75, which became the stronger check:
+**74 came back byte-identical** (not merely within `TOL`). The 75th, **`mask_dehaze.png`, is stale on
+`main` too**: `main` regenerates it to exactly the branch's bytes, so the committed reference has
+drifted within `TOL = 2` at some earlier point. It was left as it is. The three new goldens
+(`perspective_straighten`, `nr_straighten`, `spot_perspective`) **fail on `main` by 72, 20 and 187
+levels**, so each detects its change.
+
+**Sabotages run, all caught:** the rotation sign in the fused map (0.67), the mirror term (0.49),
+`SpotMap`'s homography direction swapped both ways (round trip stays green, and only the
+dot-against-the-real-stage test catches it), and the overlay fed a neutral perspective (the
+keystoned-click app test).
+
+**Things found on the way.**
+- ⚠⚠ **`Edits::version` is never written.** It is a derived `Default` (0), every sidecar on disk says
+  `"version": 0`, and the only `7` is one test fixture. `CLAUDE.md`'s "which is why `version` is
+  still 7" was wrong. No bump was made.
+- The fused-vs-chain test first failed by 0.36 at a pixel whose source sat 0.015 px from the frame
+  edge. That was a border effect of the fit keystone's empty region, not a map error. The comparison
+  now runs only where both passes read ≥4 px inside.
+- The keystoned-click app test needed `fit_image_size` set to the landed (cropped) size. No render
+  runs in the harness, and a keystone, unlike a crop, is sensitive to the frame's aspect.
+- ⚠ **A new approximation:** the spot auto-pick sampler now scores on pixels without NR/dehaze,
+  which run ahead of spots. Unmeasured, and stated as such in `sampler_for`.
+- ⚠ **Region scoping:** spot removal declines `apply_region`, and NR/dehaze now sit above it. So on a
+  photo **with spots**, a cold 1:1 render of an NR or dehaze change can no longer scope those two.
+  Photos without spots are unaffected.
+- ⚠ **The masked NR/dehaze stay after the geometry** (their coverage is rasterised in frame space), a
+  recorded asymmetry with the global pair.
+
+`grep -n 'M7.3b' docs/JOURNAL.md`.
 
 ### 2026-09-23 — the GPU port's agreed order, moved out of `CLAUDE.md` (verbatim)
 

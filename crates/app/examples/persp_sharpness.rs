@@ -4,6 +4,10 @@
 //! through lens → perspective → straighten, three bilinear resamples where it used to be two.
 //! Fusing perspective into `GeometryStage` would recover one, at the cost of teaching `FrameMap`
 //! to invert a homography. This says whether that is worth doing.
+//!
+//! ⚠⚠ **The fusion shipped as M7.3b (2026-09-25).** Every row now renders through the fused path,
+//! so "straighten + perspective" is ONE resample; compare against `main` before M7.3b to see the
+//! two-resample figure it replaced. The row labels describe what the edits ask for.
 use edit_model::{Edits, Geometry, Perspective};
 use std::time::Instant;
 
@@ -62,7 +66,7 @@ fn main() {
         },
     );
     run(
-        "straighten + perspective (2)",
+        "straighten + perspective (1 since M7.3b)",
         &Edits {
             geometry: straight,
             perspective: Perspective {

@@ -1,6 +1,6 @@
 //! **M7.3a — MEASURE THREE RESAMPLING KERNELS. THIS ADOPTS NONE OF THEM.**
 //!
-//! `GeometryStage`'s straighten and `PerspectiveStage` both resample through
+//! `GeometryStage`'s straighten and keystone (one pass since M7.3b) resample through
 //! [`sample_bilinear`](../../pipeline/src/stages/geometry.rs), and a single bilinear pass costs
 //! roughly half the frame's acutance. This harness answers *what a better kernel would buy and
 //! what it would cost*, on the user's own photographs, so the choice is made against numbers

@@ -1560,7 +1560,10 @@ impl Perspective {
 /// because [`SpotMode`]'s `Default` says what an unstated mode means.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Spot {
-    /// Destination centre, normalised per axis over the pre-geometry frame.
+    /// Destination centre, normalised per axis over the **post-lens, pre-perspective** frame —
+    /// since M7.3b, when perspective was fused into the geometry resample. Before that it was the
+    /// post-perspective frame the brush still uses; no sidecar with both spots and an active
+    /// perspective existed when it changed.
     pub centre: [f32; 2],
     /// Source centre, same space.
     pub source: [f32; 2],
@@ -1917,7 +1920,8 @@ mod tests {
 
     /// ⚠⚠ A sidecar written before these fields existed must load as **identity** — the container's
     /// `#[serde(default)]` doing its job, with no `version` bump involved. A test rather than a number
-    /// is the guard, which is why `version` is still 7.
+    /// is the guard. ⚠ (This used to end "which is why `version` is still 7". It never was: M7.3b
+    /// found `version` is never written, so every sidecar on disk carries 0.)
     #[test]
     fn a_sidecar_without_the_channel_curves_loads_as_identity() {
         let e: Edits = serde_json::from_str(r#"{"version":7,"exposure":0.5}"#).expect("must parse");
