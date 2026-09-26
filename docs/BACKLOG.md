@@ -715,6 +715,16 @@ met with a measurement rather than a search.
 
 ### 🟡 A GPU buffer resident across the prefix→tail seam — UPLOAD HALF DONE (M8.14, 2026-09-18), DOWNLOAD HALF DECLINED
 
+> ⚠⚠ **CORRECTION 2026-09-26: the step→tail half did NOT work on the byte path — the ordinary preview
+> frame — from M8.14 until 2026-09-26.** `accelerate`'s arm that hands back the `output_transform`
+> chain never called `mark_shared`, so the tail re-uploaded after every GPU prefix step
+> (`took=false` in `RUSTROOM_DEBUG_XFER`). The M8.14 figure below was real for the path its probe
+> took, which was not the one a user sees. Fixed with `the_handed_back_chain_takes_the_prefix_plane`
+> (63 → 48.7 ms on a Straighten frame at rung 3200). ⚠ And **the download half is now BUILT for the
+> LAST prefix step** (the `gpu-geometry` branch, the author's call as "scope C"): one resident slot
+> and a no-download handoff, with the warm-behind filling the final checkpoint. That is not the
+> general `PrefixCache`-of-`GpuImage` priced below. `grep -n 'GPU geometry' docs/JOURNAL.md`.
+>
 > **✅ THE UPLOAD HALF SHIPPED 2026-09-18 as M8.14.** Consecutive GPU prefix steps, and the last one
 > and the tail's first chain, hand the device buffer over. Measured at rung 6246 on a quiet machine:
 > step→step **14.8–18.8 ms**, step→tail **28.5–30.6**, together **43.3–49.4 ms ≈ 5.6–6.3%** of a

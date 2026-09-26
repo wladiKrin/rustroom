@@ -1295,13 +1295,13 @@ mod tests {
 
     /// ⚠⚠ **A FORCING FUNCTION, not a coverage test.** Naming the prefix stages with no GPU twin
     /// is what makes adding one a deliberate act: this test breaks, and whoever breaks it has to
-    /// say why. It broke for noise reduction, and it broke again for lens correction.
+    /// say why. It broke for noise reduction, for lens correction, and (2026-09-26) for geometry.
     ///
-    /// ⚠ What is left are the two **analytic** resamplers, and they are not a third instance of
-    /// this mechanism: perspective is a homography and geometry a rotation, a few arithmetic
-    /// operations per pixel wanting no field and no lattice at all — and M8.5 took both from
-    /// ~160 ms to ~34 by giving them eight cores rather than a GPU. The older note that called the
-    /// three resamplers "ONE mechanism" was wrong about that and is corrected here.
+    /// ⚠ Geometry was left out on the argument that eight cores had made it cheap (M8.5: ~160 ms
+    /// to ~34). That was true of its COMPUTE and missed its TRANSFERS: on a fitted rung of 6.8 Mpx
+    /// a Straighten frame was 63 ms, and the win came from keeping the pixels on the GPU — the
+    /// resident input and the no-download handoff — which only a twin makes possible. See
+    /// `docs/superpowers/specs/2026-09-26-gpu-geometry-design.md`.
     #[test]
     fn every_other_prefix_stage_is_left_alone() {
         let Some(ctx) = ctx() else { return };

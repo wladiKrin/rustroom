@@ -241,9 +241,10 @@ Every planned phase closed except **M7.3b** (since done, 2026-09-25), so the roa
   `license = "GPL-3.0-or-later"` all along. ⚠⚠ **Do not re-open it from a list**; it exists in the plan
   only as the record of the broken-`ls` check in *Standing lessons* below.
 
-**▶ The order the user set: M7.3b is ✅ done; next are the drag-frame fixes (threaded histogram,
-remembered airlight), then GPU geometry (being brainstormed 2026-09-26), then Phase 9's checklist
-from the top.** ⚠ **Proposed and not yet scheduled:** masks' *scene* sliders (WB, exposure,
+**▶ The order the user set: M7.3b ✅; the drag-frame fixes and GPU geometry are built on branches
+`drag-frame-overheads` → `gpu-geometry` (stacked, awaiting use and merge); then Phase 9's checklist
+from the top.** A Straighten drag on DSCF6263 at the author's fitted rung: **85.0 → 62.8 → 28.8 ms**
+(median of 40, `probe_straighten_drag`). ⚠ **Proposed and not yet scheduled:** masks' *scene* sliders (WB, exposure,
 contrast, tone regions) run after the global tone curve today, where Lightroom applies them as
 offsets at the global slider's position. It was raised in M7.3b's brainstorm and split off as its
 own milestone. It is the author's call.
@@ -276,7 +277,8 @@ the user's call, not a deferral. Do not re-propose it from a list**; the table i
 4. Move `PrefixCache`'s tests into `prefix_cache.rs`.
 
 ⛔ **Declined with numbers, and the numbers are in `docs/BACKLOG.md` — do not re-propose from the
-list alone:** the prefix seams' *download* half (11–13%, needs `PrefixCache` to hold a `GpuImage`),
+list alone:** the prefix seams' *download* half in general (11–13%, needs `PrefixCache` to hold a
+`GpuImage`; ⚠ built for the LAST step only on `gpu-geometry`, the author's call),
 spot removal on the GPU (0.05–0.4 ms against a ~1.6 ms floor), `MIN_GPU_BOX_PX` (user's call, on
 use), the GPU-side coverage cache (re-priced downward).
 
@@ -284,14 +286,17 @@ use), the GPU-side coverage cache (re-priced downward).
 question (1024 is the largest capacity keeping 3 workgroups on a 16 KB device) that no M2 run
 settles.
 
-### The GPU port — closed
+### The GPU port — closed (reopened once, for geometry, 2026-09-26)
 
-⚠⚠ **Finished.** **18 of the 21 stages that `impl PipelineStage`** have GPU twins; `geometry`,
-`perspective` and `spot_removal` are **deliberate** omissions, not pending — region scoping (M8.8)
-answered the first two and spot removal was measured and closed unbuilt. ⚠ **Do not re-propose from a
-list alone**; the order with each row's cost is in `docs/JOURNAL.md` (`grep -n "agreed order"`) and the
-declines with their numbers in `docs/BACKLOG.md`. ⚠ Count by `impl PipelineStage for`, never by
-filename — two stages are helpers and two twins renamed, so filenames undercount.
+⚠⚠ **19 of the 20 stages that `impl PipelineStage`** have GPU twins; only `spot_removal` is a
+deliberate omission (measured and closed unbuilt). ⚠⚠ **Geometry was declined too, and that decline
+was WRONG for one reason worth remembering: it priced the COMPUTE and missed the TRANSFERS.** On a
+fitted rung of 6.8 Mpx a Straighten frame was 63 ms, and the twin's value was that it let the pixels
+stay on the GPU: a resident input and a no-download handoff to the tail. ⚠ **Do not re-propose from a
+list alone**; the order with each row's cost is in `docs/JOURNAL.md` (`grep -n "agreed order"`) and
+the declines with their numbers in `docs/BACKLOG.md`. ⚠ Count by `impl PipelineStage for` and
+`impl (crate::)?GpuStage for` — exposure writes the `crate::` form, and a grep without it undercounts
+by one (it did, 2026-09-26).
 
 ### Open items
 

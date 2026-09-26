@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [GPU geometry, a resident input and a no-download handoff (2026-09-26)](#2026-09-26--gpu-geometry-a-resident-input-and-a-no-download-handoff-branch-gpu-geometry)
 - [A Straighten drag's other half: airlight and histogram (2026-09-26)](#2026-09-26--a-straighten-drags-other-half-airlight-and-histogram-branch-drag-frame-overheads)
 - [M7.3b — one geometric resample, and a prefix reordered around it (2026-09-25)](#2026-09-25--m73b-one-geometric-resample-and-a-prefix-reordered-around-it)
 - [The Export dialog: presets beside summarised sections (2026-09-22)](#the-export-dialog-presets-beside-summarised-sections-2026-09-22)
@@ -152,6 +153,61 @@ goldens unmoved.
 - ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
+
+### 2026-09-26 — GPU geometry, a resident input and a no-download handoff (branch `gpu-geometry`)
+
+Stacked on `drag-frame-overheads`. **2,920 tests**, 78 goldens unmoved, gate green (`FMT=0 CLIPPY=0
+TEST=0`, the suite run twice). Spec and plan `2026-09-26-gpu-geometry-*`. **Not yet confirmed by use.**
+
+**The result**: a Straighten drag on DSCF6263 at rung 3200, median of 40 frames, the same probe on
+all three builds:
+
+| Build | Frame |
+|---|---|
+| `main` | **85.0 ms** |
+| `drag-frame-overheads` (histogram, airlight) | **62.8 ms** |
+| `gpu-geometry` | **28.8 ms** (bilinear **24.5**) |
+
+⚠ **The spec's 20–25 ms target is met with bilinear and missed by ~4 ms with the default
+Catmull-Rom.** The 4×4 gather costs ~4.5 ms of GPU time over bilinear's 2×2, and the rest is copies
+and fixed overhead. Stopped and reported rather than tuned blind; the next step would be GPU
+timestamp queries, not guesses.
+
+**How it got there, each step measured.**
+1. **`GpuStage::output_dims` + `GpuImage::relabel`**: the chain can shrink or permute the image in
+   place. A toy "top half" stage pins deposit, readback and returned dims at the final size.
+2. **`GpuGeometryStage`**: one gather, with the map's constants exported by the CPU
+   (`GeometryStage::map_params` → `MapParams`, `Homography::inverse_matrix`). **Plain twin = CPU
+   parity (36 vs 37 ms)**, as predicted: the transfers, not the resample, were the cost.
+3. ⚠⚠ **A pre-existing bug, found by the `took=false` in `RUSTROOM_DEBUG_XFER`: the byte-path
+   tail chain never took the prefix plane.** `accelerate`'s arm returning the `output_transform`
+   chain skipped `mark_shared`, so every ordinary frame after a GPU prefix step re-uploaded the
+   82 MB just left on the GPU. The prefix→tail seam had only ever worked for float tails. **Fixing
+   it alone: 63 → 48.7 ms.** `the_handed_back_chain_takes_the_prefix_plane`.
+4. **The resident input** (`PrefixCache::resident`, `GpuChain::apply_from`): one GPU-held checkpoint,
+   keyed by its full `CacheKey`, rung included. A drag's first frame uploads it and later frames copy
+   it GPU-side. Sabotaged twice (always miss; ignore the key), both caught. The second needed a rung
+   change added to the test first; the original test passed it.
+5. **The handoff** (`render_cached_with(.., handoff)`, `GpuChain::run_to_plane[_from]`,
+   `run_rgba8_from_plane`): the last prefix step's output is never downloaded, and the tail takes
+   the plane. No final checkpoint is cached, so `ran.handoff` triggers the warm-behind like a scoped
+   frame. Byte-identical to the non-handoff frame. ⚠ The no-download path **drops** its staging
+   buffer rather than recycling it, because the copy out of it may still be in flight.
+6. ⚠⚠ **`SharedPlane` is one deposit PER THREAD now.** The handoff's warm-behind test passed alone
+   and failed in the parallel suite: another thread's `clear`/`deposit` evicted this thread's plane
+   between deposit and take. `take` already refused cross-thread planes, so no picture was ever
+   wrong, but in production a **batch export** would have made every live frame silently fall back
+   (slower than before, since the fallback runs geometry on the CPU). Bounded at 16 threads.
+   `another_threads_traffic_leaves_my_deposit_alone`, sabotaged.
+
+**Equivalence bounds, measured rather than borrowed.** The lens twin's 0.01 levels failed at 0.0114.
+Measured over 8 cases × 3 kernels: orientation/crop exactly 0 (Lanczos 1.5e-5); bilinear resampled
+≤ 0.0114; **table kernels ≤ 0.198**. The cause of the last is that the GPU compiler fuses
+multiply-adds, so a coordinate moves by an ulp and a 1024-phase table picks the neighbouring phase.
+Bounds 1e-4 / 0.25. Three shader sabotages (the `scx`/`scy` slip I caught by eye before the first
+run, the rotation sign, the mirror) each fail at ~253 levels.
+
+`grep -n 'GPU geometry' docs/JOURNAL.md`.
 
 ### 2026-09-26 — a Straighten drag's other half: airlight and histogram (branch `drag-frame-overheads`)
 
