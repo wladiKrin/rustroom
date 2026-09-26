@@ -74,6 +74,33 @@ impl<T: Clone + PartialEq> History<T> {
         self.undo.first().unwrap_or(&self.current)
     }
 
+    /// The undo side, oldest first — for persisting (M9.7).
+    pub fn undo_steps(&self) -> &[T] {
+        &self.undo
+    }
+
+    /// The redo side, the next redo LAST — for persisting (M9.7).
+    pub fn redo_steps(&self) -> &[T] {
+        &self.redo
+    }
+
+    /// How many steps the redo side holds.
+    pub fn redo_depth(&self) -> usize {
+        self.redo.len()
+    }
+
+    /// Rebuild a history from its parts, in [`Self::undo_steps`] / [`Self::redo_steps`] order.
+    ///
+    /// ⚠ No `PartialEq` pruning: the parts are taken as recorded, which is what a restored history
+    /// must be — a step that happened stays a step, even one that set a value back.
+    pub fn from_parts(undo: Vec<T>, current: T, redo: Vec<T>) -> Self {
+        Self {
+            current,
+            undo,
+            redo,
+        }
+    }
+
     /// Step forward. Returns true if something changed.
     pub fn redo(&mut self) -> bool {
         if let Some(next) = self.redo.pop() {
