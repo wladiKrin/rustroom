@@ -5,6 +5,7 @@ use edit_model::{CropRect, Geometry, Orientation, Perspective, Quarter};
 use rayon::prelude::*;
 
 mod fused;
+pub use fused::MapParams;
 
 /// Orient (quarter turns and mirroring), correct the keystone, straighten (a resampled rotation
 /// about the centre), then crop to a normalized rectangle.
@@ -57,6 +58,24 @@ impl GeometryStage {
                 &self.crop,
                 &self.perspective,
             )
+        })
+    }
+
+    /// The whole geometric map for a source of `(w, h)`, as constants for a GPU twin.
+    ///
+    /// ⚠ Built by the same `FusedMap::new` the CPU's fused path uses, so the twin cannot drift from
+    /// it. `None` for a frame too small to resample, which the CPU passes through untouched.
+    pub fn map_params(&self, w: usize, h: usize) -> Option<MapParams> {
+        (w >= 2 && h >= 2).then(|| {
+            fused::FusedMap::new(
+                w,
+                h,
+                self.orientation,
+                self.angle_rad,
+                &self.crop,
+                &self.perspective,
+            )
+            .params(self.perspective.is_active())
         })
     }
 

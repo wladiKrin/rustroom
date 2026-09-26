@@ -131,7 +131,7 @@ pub use stages::display_rendering::DisplayRenderingStage;
 /// come to disagree about a number nobody re-derives.
 pub use stages::display_rendering::{CHROMA_BOOST, SHADOW_KNEE};
 pub use stages::exposure::ExposureStage;
-pub use stages::geometry::GeometryStage;
+pub use stages::geometry::{GeometryStage, MapParams};
 pub use stages::hsl::HslStage;
 pub use stages::lens_correction::LensCorrectionStage;
 pub use stages::local_contrast::LocalContrastStage;

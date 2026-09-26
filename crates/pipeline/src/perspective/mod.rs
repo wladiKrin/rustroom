@@ -209,6 +209,14 @@ impl Homography {
         apply(&self.fwd, p)
     }
 
+    /// The inverse matrix [`Self::source_of`] applies, for a GPU twin to upload.
+    ///
+    /// ⚠ Substituted, never transcribed: a shader that rebuilt the homography from the sliders
+    /// would be a second definition of the keystone that could disagree with this one.
+    pub fn inverse_matrix(&self) -> [[f32; 3]; 3] {
+        self.inv
+    }
+
     /// The scale that just **fills** the frame with real image data — no black, but content is
     /// lost off the edges. Always `>= 1`.
     ///

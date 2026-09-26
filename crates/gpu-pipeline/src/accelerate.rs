@@ -364,6 +364,14 @@ pub fn accelerate_prefix_stage(
                 image,
             )?)
         }
+        // ⚠ Since 2026-09-26. Declines on a frame too small to resample, where the CPU stage
+        // passes the image through untouched.
+        "geometry" => Box::new(crate::GpuGeometryStage::new(
+            &edits.geometry,
+            edits.perspective,
+            resampler,
+            image,
+        )?),
         _ => return None,
     };
     // ⚠ The same question the tail asks, and it fails toward the CPU for the same reason: a wrong
@@ -1290,9 +1298,10 @@ mod tests {
     fn every_other_prefix_stage_is_left_alone() {
         let Some(ctx) = ctx() else { return };
         let img = hazy(64, 64);
-        // ⚠ No "perspective" since M7.3b: the keystone is part of the geometry step. Spot removal
-        // is here because it was measured and closed unported (`docs/BACKLOG.md`).
-        for name in ["geometry", "spot_removal"] {
+        // ⚠ Geometry has a twin since 2026-09-26. Spot removal is here because it was measured
+        // and closed unported (`docs/BACKLOG.md`), and a name nothing implements must fall through
+        // too.
+        for name in ["spot_removal", "no_such_stage"] {
             assert!(
                 accelerate_prefix_stage(
                     name,
