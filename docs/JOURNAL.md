@@ -161,7 +161,7 @@ goldens unmoved.
 ### 2026-09-27 — M9.11 red eye and pet eye (branch `m9.11-red-eye`)
 
 **3,100 tests** (+29), **82 goldens** (+1, `red_eye`; the other 81 unmoved), gate green. Spec
-`2026-09-27-m9.11-red-eye-design.md`, plan of the same date. 🟡 **Built; awaiting use.**
+`2026-09-27-m9.11-red-eye-design.md`, plan of the same date. ✅ **Confirmed by use and merged 2026-09-27** (after the halo fix below).
 
 **What shipped.** `Edits.eyes: Vec<Eye>` on the Retouch group — a stored circle (`centre`,
 `radius` in spot space), `kind` Red | Pet, `pupil_size`, `darken`, and a pet eye's `catchlight`
