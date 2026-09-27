@@ -382,10 +382,19 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     "Keywords",
                                     &n,
                                     |ui| {
+                                        // ⚠⚠ The parent is the keyword last CLICKED — no dropdown (the
+                                        // author's call, 2026-09-27): click one, type, and the new
+                                        // keyword goes under it; a click anywhere else clears it, and
+                                        // the next one goes to the top level. The hint says which.
+                                        let hint = app
+                                            .new_keyword_parent
+                                            .and_then(|id| kws.iter().find(|k| k.id == id))
+                                            .map(|k| format!("New keyword under {}", k.name))
+                                            .unwrap_or_else(|| "New keyword".to_string());
                                         ui.horizontal(|ui| {
                                             let field = ui.add(
                                                 egui::TextEdit::singleline(&mut app.new_keyword)
-                                                    .hint_text("New keyword")
+                                                    .hint_text(hint)
                                                     .desired_width(ui.available_width() - 30.0),
                                             );
                                             let named = !app.new_keyword.trim().is_empty();
@@ -395,28 +404,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                 action = Action::CreateKeyword;
                                             }
                                         });
-                                        let parent_name = app
-                                            .new_keyword_parent
-                                            .and_then(|id| kws.iter().find(|k| k.id == id))
-                                            .map(|k| k.name.clone())
-                                            .unwrap_or_else(|| "(top level)".to_string());
-                                        egui::ComboBox::from_id_salt("kw_parent")
-                                            .selected_text(format!("under {parent_name}"))
-                                            .show_ui(ui, |ui| {
-                                                ui.selectable_value(
-                                                    &mut app.new_keyword_parent,
-                                                    None,
-                                                    "(top level)",
-                                                );
-                                                for k in &kws {
-                                                    ui.selectable_value(
-                                                        &mut app.new_keyword_parent,
-                                                        Some(k.id),
-                                                        format!("{}{}", "  ".repeat(k.depth), k.name),
-                                                    );
-                                                }
-                                            });
-
                                         if kws.is_empty() {
                                             crate::theme::hint(ui, "No keywords yet.");
                                         }
@@ -431,6 +418,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             &mut app.keyword_rename,
                                         ) {
                                             Some(crate::keyword_rows::Out::Open(id, name)) => {
+                                                app.new_keyword_parent = Some(id);
                                                 action = Action::OpenKeyword(id, name)
                                             }
                                             Some(crate::keyword_rows::Out::Delete(id, name)) => {
@@ -449,6 +437,20 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                 action = Action::MoveKeyword(id, parent)
                                             }
                                             None => {}
+                                        }
+                                        // A click anywhere outside this list — the field, the rows
+                                        // and the drop row — clears the parent. ⚠ Read from the
+                                        // context's input, so a click on the grid or another panel
+                                        // counts, not only one inside this section.
+                                        let list = ui.min_rect();
+                                        let outside = ui.input(|i| {
+                                            i.pointer.primary_clicked()
+                                                && i.pointer
+                                                    .interact_pos()
+                                                    .is_some_and(|p| !list.contains(p))
+                                        });
+                                        if outside {
+                                            app.new_keyword_parent = None;
                                         }
                                     },
                                 )
@@ -959,6 +961,34 @@ mod tests {
     ///
     /// ⚠ Both halves: present when configured, absent when off. An absence alone would pass against
     /// a panel that drew nothing.
+    /// The new keyword's parent is the keyword last clicked, and a click anywhere else clears it —
+    /// the author's replacement for the parent dropdown. ⚠ Both halves, and the clear is asserted
+    /// from a click OUTSIDE the panel's list, which is the case the rule is about.
+    #[test]
+    fn clicking_a_keyword_makes_it_the_parent_and_clicking_elsewhere_clears_it() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        app.settings.panel_sections.keywords = true;
+        let europe = app
+            .catalog
+            .as_ref()
+            .unwrap()
+            .create_keyword("Europe", None)
+            .unwrap();
+        crate::test_ui::click(&ctx, "Europe", |ui| super::show(&mut app, ui, &ctx));
+        assert_eq!(
+            app.new_keyword_parent,
+            Some(europe),
+            "the click must set the parent"
+        );
+        let far = egui::pos2(390.0, 1390.0);
+        crate::test_ui::click_at(&ctx, far, false, |ui| super::show(&mut app, ui, &ctx));
+        assert_eq!(
+            app.new_keyword_parent, None,
+            "a click elsewhere must clear it"
+        );
+    }
+
     #[test]
     fn the_immich_section_appears_only_when_the_integration_is_on() {
         let labels = |enabled: bool| -> Vec<String> {
