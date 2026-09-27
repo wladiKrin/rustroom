@@ -28,6 +28,31 @@ pub fn sanitize(name: &str) -> String {
         .to_string()
 }
 
+/// Map `name` to a single folder name that cannot escape its parent — the import's subfolder.
+///
+/// ⚠ Gentler than [`sanitize`] on purpose, and beside it so the two guards are read together: a
+/// folder the user sees every day may be called "Köln 2026", which `sanitize` would turn into
+/// `K_ln 2026`. What makes a name *escape* is a separator, a drive colon, a control character, or
+/// being `.`/`..` — those are what this removes. Empty means "no subfolder".
+pub fn folder_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':') || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let t = cleaned.trim().trim_end_matches('.').trim();
+    if t.chars().all(|c| c == '.') {
+        String::new()
+    } else {
+        t.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,5 +99,27 @@ mod tests {
         assert_eq!(sanitize("///"), "___");
         assert_eq!(sanitize("\t\n"), "__");
         assert_eq!(sanitize("\n \t "), "_ _");
+    }
+
+    #[test]
+    fn a_folder_name_keeps_letters_and_cannot_escape() {
+        assert_eq!(folder_name("Köln 2026"), "Köln 2026");
+        assert_eq!(folder_name("  Hamburg trip "), "Hamburg trip");
+        assert_eq!(folder_name("../../etc"), ".._.._etc");
+        assert_eq!(folder_name("a/b\\c:d"), "a_b_c_d");
+        assert_eq!(folder_name(".."), "");
+        assert_eq!(folder_name("."), "");
+        assert_eq!(folder_name("   "), "");
+        // A trailing dot is dropped: Windows strips it anyway, so two names would meet there.
+        assert_eq!(folder_name("Trip."), "Trip");
+        for hostile in ["../x", "a/../../b", "..\\..\\y", "C:\\z"] {
+            let n = folder_name(hostile);
+            assert!(
+                std::path::Path::new(&n).components().count() <= 1
+                    && !n.contains('/')
+                    && !n.contains('\\'),
+                "{hostile:?} → {n:?} is more than one component"
+            );
+        }
     }
 }

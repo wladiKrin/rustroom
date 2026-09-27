@@ -312,7 +312,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         let immich_present = &app.immich_present;
         let Some(lib) = &mut app.library else {
             ui.centered_and_justified(|ui| {
-                crate::theme::empty_state(ui, "Open a folder to browse (Open folder… button).");
+                // ⚠ Names the menu items: there has been no "Open folder…" button since the menus took
+                // the toolbar's place, and the old text still pointed at one.
+                crate::theme::empty_state(
+                    ui,
+                    "Open a folder to browse (File → Open folder…), or import from a card \
+                     (File → Import…).",
+                );
             });
             return;
         };

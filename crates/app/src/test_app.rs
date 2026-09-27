@@ -176,6 +176,7 @@ pub fn for_test() -> RustroomApp {
         sync_groups: EditGroups::default(),
         export_draft: ExportOptions::default(),
         exporter: None,
+        import: None,
         export_progress: String::new(),
         export_collision: None,
         export_apply_all: false,

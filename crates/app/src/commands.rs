@@ -27,6 +27,7 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
     match cmd {
         Command::OpenFile => app.open_dialog(ctx),
         Command::OpenFolder => app.open_folder(ctx),
+        Command::Import => app.open_import(),
         Command::Export => {
             if !app.export_jobs().is_empty() {
                 // Reset the working copy from the committed value, so a previously cancelled

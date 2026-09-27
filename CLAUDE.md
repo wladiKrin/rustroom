@@ -168,7 +168,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-27)
 
-**3100 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
+**3129 tests**, **82 goldens**, gate green on branch `m9.12-import` (unmerged — awaiting use). ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -189,6 +189,7 @@ that had grown to ~170 lines by appending.)
 | M9.9 | Folder tree + move tracking | `scan_and_relink` shared by open and Reindex; strict name+size+mtime match, a surviving original is a copy |
 | M9.10 | DNG export: the finished picture as a linear DNG | `export::lj92` + `export::dng`; darktable workflow "none" renders it intact (0.00 mean), its default adds +0.66 EV; ⚠ `ColorMatrix1` at D65 (libraw ignores the illuminant tag) |
 | M9.11 | Red eye + pet eye, one click each | detected ONCE at the click, stored as a circle; `RedEyeStage` after spots corrects by `pipeline::redness` = `(R−max(G,B))/R` plus a fringe pass within 0.3 r of the red core (the reported halo); real cores measure 0.44–0.57; Retouch modes Heal·Clone·Red eye·Pet eye. ⚠ Also fixed: a placed/moved spot now pushes ONE undo step |
+| M9.12 | Import from a card (🟡 built, awaiting use): File → Import… ⇧⌘I | `ingest::{source,plan,copy,options,worker,entry}` (no egui) + `import_flow`/`modals::import`; cards = volumes with `DCIM`; already-imported = catalog size + capture time; layout `YYYY/YYYY-MM-DD` (default) · `YYYY/MM/DD` · `YYYY-MM-DD` · one folder; metadata merged only when non-empty; ⚠ the survey reads only the EXIF block (`image_decode::quick_look`, 0.5 ms / ≤70 KB vs 113 ms / 31 MB a RAF) |
 
 **Earlier, still worth knowing** (all merged, all confirmed by use):
 - **The GPU stack** (2026-09-26): timestamps (`RUSTROOM_DEBUG_GPU_TIME=1`; ⚠ an encoder timestamp
@@ -210,10 +211,9 @@ that had grown to ~170 lines by appending.)
 
 ### ▶ Next action
 
-**M9.12 — import/ingest** is next: *copy from a card to a chosen folder with a filename template,
-a metadata preset (copyright included) and a develop preset on entry, plus a backup copy* (Obsidian
-`03-plan-of-action.md`). Then **M9.13** AI subject/sky
-masks — the end of Phase 9. **Phase 10** (was 9) is integration and release: M10.2
+**M9.12 — import** is built on `m9.12-import`, awaiting the author's use with a real card. Then
+**M9.13** AI subject/sky masks (⚠ ask first whether it earns an ML runtime) — the end of Phase 9.
+**Phase 10** (was 9) is integration and release: M10.2
 Windows + the Linux GUI (never run), M10.3 contributor docs, M10.4 `v0.1`, M10.5 plugins. ⛔ **M10.1 was
 WITHDRAWN — it was never real** (the licence has been committed since `e71330d`); do not re-open it.
 ⚠ M5.1c and M6.4c keep their own ids; Phase 9's new items start at M9.6 because M9.1–M9.5 are retired.

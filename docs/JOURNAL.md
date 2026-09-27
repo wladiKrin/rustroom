@@ -158,6 +158,67 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-27 — M9.12 import from a card (branch `m9.12-import`)
+
+**3,129 tests** (+29), 82 goldens unmoved, gate green. Spec `2026-09-27-m9.12-import-design.md`,
+plan of the same date. 🟡 **Built; awaiting use.**
+
+**What shipped.** File → *Import…* (⇧⌘I). The author's choices: the **full dialog**; **dated
+subfolders** `Destination/YYYY/YYYY-MM-DD/`; a **ticked grid, new only**; **remembered fields**
+(Copyright, Creator, Keywords) rather than named metadata presets; architecture **A** — a no-egui
+`ingest` module group (`source`, `plan`, `copy`, `options`, `worker`, `entry`) plus `import_flow.rs`
+and `modals/import.rs` in the bin, one `app.import: Option<ImportState>` field.
+- **Cards** are volumes with a `DCIM` folder (any case) under `/Volumes`, `/media/$USER`,
+  `/run/media/$USER` or drive letters; any folder works as a source too. Hidden entries are skipped
+  — that covers macOS `._` AppleDouble twins, which carry a photo's extension.
+- **Already imported** = the catalog holds a photo of the same **size and capture time**
+  (`Catalog::import_fingerprints`, new `db/imported.rs`); with no capture time, name and size. The
+  survey can only turn "new" into "known", never back, and never re-ticks a user's untick.
+- **Copy**: `.partial-<pid>` sibling → size check → rename, the partial removed on any error; the
+  card is only read. A backup failure is reported per file and does not stop the import. Names are
+  planned on the UI thread with a running `planned` list, so two photos of one import cannot collide.
+- **On entry** (UI thread, after the day folders are scanned into the catalog): `set_capture` at
+  once (so the next import's check sees it), Copyright/Creator merged **only when non-empty**,
+  keywords created and assigned, the develop preset through `sync::apply`; then `write_xmp_for`
+  (the one funnel for the setting and the RAW-only rule), then the folder opens — the deepest one
+  holding every import (`plan::common_dir`). Preset sidecars are written **before** the folder opens,
+  so no thumbnail renders without them.
+- `raw_decode::survey` reads a RAW **once** for both the capture and the embedded thumbnail; the
+  two separate calls would read every RAW on the card twice.
+
+**⚠⚠ The author's first use: "the thumbnail loading is really slow" over hundreds of files.**
+The survey read every RAW **whole** through libraw (26.6 MB an X-T4 RAF) — and libraw cannot open a
+truncated file, which is why a prefix read was rejected in 2026-09. Fixed without libraw:
+`image_decode::quick_look` reads a camera JPEG's — or a RAF's **embedded** JPEG's — `APP1 Exif`
+block only (the RAF header points to it at 0x54; on the author's files it starts at byte 148 and is
+65,448 bytes). Measured by the new `examples/import_survey_probe.rs` on 200 RAFs + 200 JPEGs from
+`~/Pictures/fuji_new_new`: **every file answered, capture time agrees with the full read 200/200,
+thumbnails 160×120 (portraits turned upright), 0.5 ms and ≤70 KB a file against 113 ms / 31 MB
+(RAF) and 299 ms / 12 MB (JPEG)**. Other formats fall through to the full read. `read_capture`'s
+EXIF→`Capture` became one shared `capture_of`, so the two cannot disagree about a date.
+⚠ **A slip caught by the COUNT, not by a failure:** the Python edit that swapped `survey_one`
+replaced from that function **to the end of the file**, deleting the worker's five tests — the gate
+stayed green at 3,121 where 3,126 was due. Restored from `HEAD`. ⚠ **Compare the total against the
+expected total after every scripted edit**, not just the exit code — standing lesson (b) again.
+
+**The folder layout became a choice** (the author, after first use: "whether the import happens
+into a dated folder should be an option"). He chose dated layouts plus one folder:
+`ImportOptions.layout` = `YYYY/YYYY-MM-DD` (default) · `YYYY/MM/DD` · `YYYY-MM-DD` · **Into one
+folder** (the destination, or a named subfolder). ⚠ The subfolder is cleaned by a new
+`safe_name::folder_name`, not `sanitize`: `sanitize` turns every non-ASCII letter into `_`, so
+"Köln 2026" would have become `K_ln 2026`. `folder_name` keeps letters and removes only what lets a
+name escape — separators, `:`, control characters, `.`/`..`, a trailing dot.
+
+**Found by the suite on the way:** `shell::egui_key` and `native_menu::accelerator` had no `I` —
+⇧⌘I would have silently done nothing (`every_shortcut_maps_to_an_egui_key` caught the first; the
+native table has no such test and was checked by hand). The ☑ / ☐ / 💾 glyphs were replaced by a
+painted tick box before shipping — `icons.rs`'s cmap lesson.
+
+⚠ **Unmeasured:** no card was mounted while this was built, so survey and copy speed from a real
+card, and the first-import behaviour on thousands of files, are the author's first use. The whole
+flow is covered headless by `an_import_copies_the_ticked_photos_catalogues_them_and_applies_the_metadata`,
+which fails when the on-entry step is removed.
+
 ### 2026-09-27 — M9.11 red eye and pet eye (branch `m9.11-red-eye`)
 
 **3,100 tests** (+29), **82 goldens** (+1, `red_eye`; the other 81 unmoved), gate green. Spec

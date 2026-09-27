@@ -14,6 +14,7 @@ use crate::tool::Tool;
 pub enum Command {
     OpenFile,
     OpenFolder,
+    Import,
     Export,
     Settings,
     Undo,
@@ -179,6 +180,7 @@ pub fn model() -> Vec<Section> {
                     Some(Shortcut::cmd_shift('O')),
                 ),
                 Item::Separator,
+                action("Import…", Command::Import, Some(Shortcut::cmd_shift('I'))),
                 action("Export…", Command::Export, Some(Shortcut::cmd('E'))),
                 Item::Separator,
                 action("Settings…", Command::Settings, Some(Shortcut::cmd(','))),

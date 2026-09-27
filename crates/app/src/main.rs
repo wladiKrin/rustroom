@@ -60,6 +60,7 @@ mod filmstrip;
 mod folder_rows;
 mod immich_flow;
 mod immich_panel;
+mod import_flow;
 mod interaction;
 mod keyword_ops;
 mod keyword_rows;
@@ -492,6 +493,8 @@ struct RustroomApp {
     exporter: Option<ExportWorker>,
     /// Progress line for the running export.
     export_progress: String,
+    /// The Import dialog and any import it is running (M9.12); `None` when neither is open.
+    import: Option<import_flow::ImportState>,
     /// The destination awaiting a collision answer; `Some` means the worker is blocked.
     export_collision: Option<PathBuf>,
     /// Scratch state for the collision dialog's "apply to all" tick.
@@ -751,6 +754,7 @@ impl RustroomApp {
             sync_groups: EditGroups::default(),
             export_draft: settings.export.clone(),
             exporter: None,
+            import: None,
             export_progress: String::new(),
             export_collision: None,
             export_apply_all: false,

@@ -98,6 +98,18 @@ pub fn extract_thumbnail(path: &Path) -> Result<Thumbnail, DecodeError> {
     backend_rsraw::extract_thumbnail(&bytes)
 }
 
+/// The capture facts and the embedded thumbnail from **one** read of the file (M9.12's import
+/// survey). ⚠ Reading dominates both — ~11–15 ms for a 29 MB RAF from an SSD, far more from a
+/// card — so calling [`read_capture`] then [`extract_thumbnail`] would read every RAW twice.
+/// Each half fails on its own: a file with no thumbnail still has a capture time.
+pub fn survey(path: &Path) -> std::io::Result<(Option<core_image::Capture>, Option<Thumbnail>)> {
+    let bytes = std::fs::read(path)?;
+    Ok((
+        backend_rsraw::read_capture(&bytes).ok(),
+        backend_rsraw::extract_thumbnail(&bytes).ok(),
+    ))
+}
+
 /// Which demosaic algorithm libraw should use, as a **speed/quality tier**.
 ///
 /// ⚠ Labelled by tier rather than by algorithm on purpose. libraw's `user_qual` names

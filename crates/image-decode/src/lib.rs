@@ -5,6 +5,9 @@
 //! the pipeline's linear ProPhoto working space so the
 //! result lives in the same linear-light space as a decoded RAW.
 
+mod quick_look;
+pub use quick_look::{quick_look, QuickLook};
+
 use core_image::Capture;
 use core_image::{ImageBuf, Thumbnail};
 use image::{DynamicImage, ImageDecoder, ImageReader};
@@ -322,19 +325,25 @@ pub fn read_capture(path: &Path) -> Result<Capture, ImageDecodeError> {
         // on every folder open forever.
         return Ok(Capture::default());
     };
-    let make = string_of(&ex, exif::Tag::Make).unwrap_or_default();
-    let model = string_of(&ex, exif::Tag::Model).unwrap_or_default();
-    Ok(Capture {
-        taken: capture_seconds(&ex),
+    Ok(capture_of(&ex))
+}
+
+/// A parsed EXIF block as a [`Capture`] — shared by [`read_capture`] and [`quick_look`], so the
+/// import's fast path and the catalog's scan cannot disagree about a date.
+pub(crate) fn capture_of(ex: &exif::Exif) -> Capture {
+    let make = string_of(ex, exif::Tag::Make).unwrap_or_default();
+    let model = string_of(ex, exif::Tag::Model).unwrap_or_default();
+    Capture {
+        taken: capture_seconds(ex),
         camera: Capture::camera_name(&make, &model),
-        lens: string_of(&ex, exif::Tag::LensModel),
+        lens: string_of(ex, exif::Tag::LensModel),
         iso: ex
             .get_field(exif::Tag::PhotographicSensitivity, exif::In::PRIMARY)
             .and_then(|f| f.value.get_uint(0)),
-        shutter: rational_of(&ex, exif::Tag::ExposureTime),
-        aperture: rational_of(&ex, exif::Tag::FNumber),
-        focal_len: rational_of(&ex, exif::Tag::FocalLength),
-    })
+        shutter: rational_of(ex, exif::Tag::ExposureTime),
+        aperture: rational_of(ex, exif::Tag::FNumber),
+        focal_len: rational_of(ex, exif::Tag::FocalLength),
+    }
 }
 
 /// ⚠⚠ Reads `Field::value`, **never `display_value()`**. EXIF string fields are arrays, and a real
