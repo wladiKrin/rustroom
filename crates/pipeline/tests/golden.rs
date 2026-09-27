@@ -2177,7 +2177,7 @@ fn the_spot_goldens_do_not_clip_and_differ() {
     );
 }
 
-/// M9.11: pale skin with a red pupil on the left and a green eyeshine on the right, both radius 5.
+/// M9.11: pale skin, and two eyes — iris rings of radius 10 around a red pupil on the left and a green eyeshine on the right, both radius 5.
 fn red_eye_chart() -> ImageBuf {
     let (sw, sh) = (SPOT_W, SPOT_H);
     let mut img = ImageBuf::new(sw, sh);
@@ -2191,6 +2191,11 @@ fn red_eye_chart() -> ImageBuf {
                 [0.32, 0.01, 0.01]
             } else if d(44.0) <= 5.0 {
                 [0.55, 0.95, 0.45]
+            } else if d(20.0) <= 10.0 || d(44.0) <= 10.0 {
+                // ⚠ An iris ring, as in a real eye: the red stage's fringe pass corrects any
+                // faintly red pixel near the pupil, so skin placed directly against it (this
+                // chart's first version) was greyed into a pale ring — pinned by the golden.
+                [0.10, 0.10, 0.11]
             } else {
                 [0.78, 0.57, 0.44]
             };

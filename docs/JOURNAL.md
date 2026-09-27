@@ -160,7 +160,7 @@ goldens unmoved.
 
 ### 2026-09-27 — M9.11 red eye and pet eye (branch `m9.11-red-eye`)
 
-**3,098 tests** (+27), **82 goldens** (+1, `red_eye`; the other 81 unmoved), gate green. Spec
+**3,100 tests** (+29), **82 goldens** (+1, `red_eye`; the other 81 unmoved), gate green. Spec
 `2026-09-27-m9.11-red-eye-design.md`, plan of the same date. 🟡 **Built; awaiting use.**
 
 **What shipped.** `Edits.eyes: Vec<Eye>` on the Retouch group — a stored circle (`centre`,
@@ -190,6 +190,26 @@ circle and says so in the status bar. A pet eye's catchlight is stored as an off
   pupil's G and B differ in ProPhoto.
 - ⚠ `golden.rs`'s `set_srgb` takes **linear** values: `[0.60, 0.10, 0.10]` there is a pale pink the
   stage rightly corrects only partly. The chart uses `[0.32, 0.01, 0.01]`.
+
+**⚠⚠ The author's first use found a RED HALO round the corrected pupil** (an Immich JPEG,
+`cc99cf73…`, 3008×2000; pupil ~10 px, circle 13.2 px). Measured with the new
+`examples/red_eye_probe.rs` (per-1-px-ring redness before and after, and ×8 crops):
+- **The rim:** a pupil's edge is part red, part iris — redness **0.17–0.44** at 10–12 px, the
+  range skin also occupies, and **57–64 pixels per ring stayed red**. No threshold that spares skin
+  can reach it. Fixed with a second pass: the red **core** (threshold as before), then a **fringe**
+  — within `0.3 r` of the core, any red excess at all (`smoothstep(0.05, 0.20, ρ)`). The iris
+  (≈0.01) and skin further out are spared by distance, not colour. The same pass cleans a
+  catchlight's pink edge.
+- **The calibration:** a real core read **0.44–0.57**, not the 0.56–0.78 of synthetic pure reds, so
+  the default threshold of 0.50 left half of it red. Now `t0 = lerp(0.45, 0.30, size)`; detection's
+  floor is 0.42, fill minimum 0.38.
+- **The circle's own feather** (30) faded the correction from 0.7 r — exactly over the rim — so it
+  is **10** now; and detection pads by **1.35** (was 1.2), because its blob stops inside the rim.
+- After: every ring at 0 px still red at the default sliders. ⚠ An eye placed before the fix keeps
+  its 1.2-padded circle; widen it a little.
+- ⚠ Fixtures changed with it: skin placed directly against a pupil is now corrected **by design**
+  (it is within the fringe band), so the unit fixture and the golden chart gained an **iris ring**
+  — a real pupil is never bordered by skin. The golden without one pinned a pale ring.
 
 **⚠⚠ A bug fixed on the way: placing or moving a spot recorded no undo step.** `spot_overlay`
 changed the edits and returned `true`, so `develop::body` logged an `ActionKind::PhotoEdit` — but

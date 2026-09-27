@@ -15,11 +15,20 @@ use core_image::ImageBuf;
 use edit_model::{Eye, EyeKind};
 
 /// Feather of the circle's own edge, on `Spot::feather`'s 0..=100 scale.
-const EDGE_FEATHER: f32 = 30.0;
+///
+/// ⚠ Narrow on purpose: the circle BOUNDS the correction, the per-pixel redness already makes it
+/// gradual. A feather of 30 faded it from 0.7 r and left the pupil's rim — where the halo is —
+/// with 10–60% of its correction on the author's photo.
+const EDGE_FEATHER: f32 = 10.0;
 /// Width of the redness / brightness ramp above its threshold.
 const RAMP: f32 = 0.12;
 /// Catchlight disc radius, in eye radii.
 const CATCHLIGHT_R: f32 = 0.18;
+/// How far the fringe pass reaches beyond the red core, in eye radii (at least 1.5 px).
+const FRINGE_GROW: f32 = 0.3;
+/// The fringe's redness ramp: an iris reads ≈0.01, a pupil rim 0.17–0.44 (measured).
+const FRINGE_LO: f32 = 0.05;
+const FRINGE_HI: f32 = 0.20;
 
 /// How red a linear ProPhoto pixel is: `(R − max(G,B)) / R`, in `[0, 1]`.
 ///
@@ -38,6 +47,25 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
+}
+
+/// A square max filter of half-width `g` over a `w`×`h` map, as two 1-D passes.
+fn dilate(m: &[f32], w: usize, h: usize, g: usize) -> Vec<f32> {
+    let mut rows = vec![0.0f32; m.len()];
+    for y in 0..h {
+        for x in 0..w {
+            let (a, b) = (x.saturating_sub(g), (x + g).min(w - 1));
+            rows[y * w + x] = m[y * w + a..=y * w + b].iter().copied().fold(0.0, f32::max);
+        }
+    }
+    let mut out = vec![0.0f32; m.len()];
+    for x in 0..w {
+        for y in 0..h {
+            let (a, b) = (y.saturating_sub(g), (y + g).min(h - 1));
+            out[y * w + x] = (a..=b).map(|yy| rows[yy * w + x]).fold(0.0, f32::max);
+        }
+    }
+    out
 }
 
 /// Correct every eye, in order, on the working buffer.
@@ -95,10 +123,31 @@ fn apply_eye(image: &mut ImageBuf, e: &Eye) {
 
     match e.kind {
         EyeKind::Red => {
-            // ⚠ Pupil Size is SENSITIVITY: it lowers the redness threshold, reaching the pinkish
-            // rim of a pupil; the circle still bounds it. Even at 100, `t0` stays above flushed
-            // skin's 0.37.
-            let t0 = lerp(0.60, 0.40, size);
+            // ⚠⚠ Two passes, because a threshold alone leaves a HALO (the author's report,
+            // 2026-09-27, on a flash JPEG). A pupil's rim is part red, part iris: measured at
+            // redness 0.17–0.44 there, the range skin also occupies, so no threshold that spares
+            // skin can reach it — 57–64 pixels per 1-px ring stayed red at 10–12 px out.
+            //
+            // 1. The CORE: pixels confidently red. ⚠ Pupil Size is SENSITIVITY — it lowers this
+            //    threshold; the circle still bounds it. ⚠ Calibrated on that photo: its core read
+            //    0.44–0.57, not the 0.56–0.78 of synthetic pure reds the first draft assumed, and
+            //    a threshold of 0.50 left half of it red at the default.
+            let t0 = lerp(0.45, 0.30, size);
+            let (bw, bh) = (x1 - x0 + 1, y1 - y0 + 1);
+            let mut core = vec![0.0f32; bw * bh];
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    if dist(x, y) <= r {
+                        core[(y - y0) * bw + (x - x0)] =
+                            smoothstep(t0, t0 + RAMP, redness(image.pixel(x, y)));
+                    }
+                }
+            }
+            // 2. The FRINGE: within `grow` px of the core, any red excess at all — the pupil's rim
+            //    and a catchlight's pink edge. The iris (≈0.01) and skin further out are spared by
+            //    distance, not by colour. A separable square max filter: O(n · grow).
+            let grow = (FRINGE_GROW * r).max(1.5).ceil() as usize;
+            let near = dilate(&core, bw, bh, grow);
             let k = lerp(1.0, 0.25, dark);
             for y in y0..=y1 {
                 for x in x0..=x1 {
@@ -107,7 +156,9 @@ fn apply_eye(image: &mut ImageBuf, e: &Eye) {
                         continue;
                     }
                     let p = image.pixel(x, y);
-                    let wgt = c * smoothstep(t0, t0 + RAMP, redness(p));
+                    let at = (y - y0) * bw + (x - x0);
+                    let fringe = near[at] * smoothstep(FRINGE_LO, FRINGE_HI, redness(p));
+                    let wgt = c * core[at].max(fringe);
                     if wgt <= 0.0 {
                         continue;
                     }
@@ -182,14 +233,25 @@ mod tests {
         color::srgb_to_prophoto(srgb.map(color::srgb_to_linear))
     }
 
-    /// 41×41 mid skin with a pupil of radius 6 at the centre and one white catchlight pixel.
+    /// 41×41: a pupil of radius 6 (sRGB `pupil`), a grey iris out to 12, mid skin beyond, and one
+    /// white catchlight pixel.
+    ///
+    /// ⚠ The iris ring is anatomy, not decoration: the fringe pass corrects any faintly red pixel
+    /// within 0.3 r of the red core, so skin placed directly against the pupil — the first
+    /// version of this fixture — would be corrected by design. A real pupil is ringed by iris.
     fn face(pupil: [f32; 3]) -> ImageBuf {
+        face_linear(pp(pupil))
+    }
+
+    fn face_linear(pupil: [f32; 3]) -> ImageBuf {
         let mut img = ImageBuf::new(41, 41);
         for y in 0..41 {
             for x in 0..41 {
                 let d = (x as f32 - 20.0).hypot(y as f32 - 20.0);
                 let px = if d <= 6.0 {
-                    pp(pupil)
+                    pupil
+                } else if d <= 12.0 {
+                    [0.10, 0.10, 0.11]
                 } else {
                     pp([0.78, 0.57, 0.44])
                 };
@@ -242,11 +304,12 @@ mod tests {
         );
         assert!(redness(p) < 0.15, "the pupil is still red: {p:?}");
         assert!(color::luminance(p) < color::luminance(img.pixel(22, 21)));
-        // Skin INSIDE the circle (d = 8 < r = 9) is untouched: its redness is below t0.
+        // The iris INSIDE the circle (d = 8 < r = 9), within the fringe band, is untouched: it
+        // carries no red excess.
         assert_eq!(
             out.pixel(28, 20),
             img.pixel(28, 20),
-            "skin inside the circle changed"
+            "the iris inside the circle changed"
         );
         assert_eq!(
             out.pixel(18, 18),
@@ -260,9 +323,12 @@ mod tests {
         );
     }
 
+    /// ⚠ Redness 0.40, linear ProPhoto: below the core threshold at Pupil Size 0 (0.45), inside it
+    /// at 100 (0.30). The pink of the first version (0.565) is corrected at every size since the
+    /// recalibration on a real photo.
     #[test]
     fn pupil_size_reaches_a_pinker_pupil() {
-        let img = face([0.75, 0.35, 0.40]);
+        let img = face_linear([0.30, 0.18, 0.17]);
         let small = RedEyeStage::new(&[Eye {
             pupil_size: 0.0,
             ..eye(EyeKind::Red)
@@ -305,6 +371,95 @@ mod tests {
         assert!(color::luminance(none.pixel(16, 16)) < color::luminance(cl));
         // Skin is darker than the eyeshine's threshold, so it survives inside the circle.
         assert_eq!(out.pixel(28, 20), face([0.55, 0.95, 0.45]).pixel(28, 20));
+    }
+
+    /// A REAL pupil, as measured on a flash JPEG (2026-09-27, the author's report of a red halo):
+    /// a core at redness ~0.5 — not the 0.8 of a synthetic pure red — fading over 3 px into a grey
+    /// iris, with a white catchlight whose edge is pink. Linear ProPhoto, built directly.
+    fn soft_eye() -> ImageBuf {
+        let core = [0.30f32, 0.13, 0.12]; // redness ≈ 0.57
+        let iris = [0.10f32, 0.10, 0.11];
+        let skin = pp([0.78, 0.57, 0.44]);
+        let mut img = ImageBuf::new(61, 61);
+        for y in 0..61 {
+            for x in 0..61 {
+                let d = (x as f32 - 30.0).hypot(y as f32 - 30.0);
+                let px = if d <= 16.0 {
+                    // 0..=8 core, 8..=11 a linear blend into the iris, iris beyond.
+                    let t = ((d - 8.0) / 3.0).clamp(0.0, 1.0);
+                    std::array::from_fn(|i| core[i] * (1.0 - t) + iris[i] * t)
+                } else {
+                    skin
+                };
+                img.set_pixel(x, y, px);
+            }
+        }
+        // A catchlight of radius 2 at (26, 26) with a one-pixel pink blend around it.
+        for y in 22..31 {
+            for x in 22..31 {
+                let d = (x as f32 - 26.0).hypot(y as f32 - 26.0);
+                let t = (3.0 - d).clamp(0.0, 1.0);
+                if t > 0.0 {
+                    let p = img.pixel(x, y);
+                    img.set_pixel(x, y, std::array::from_fn(|i| p[i] * (1.0 - t) + 0.9 * t));
+                }
+            }
+        }
+        img
+    }
+
+    /// ⚠⚠ The reported halo. A redness threshold alone cannot reach a pupil's soft rim: those
+    /// pixels are part red, part iris, and score 0.17–0.44 — the range skin also occupies. On the
+    /// real photo 57–64 pixels per 1-px ring stayed red at distances 10–12 px.
+    #[test]
+    fn a_soft_pupil_rim_and_a_pink_catchlight_edge_leave_no_red_behind() {
+        let img = soft_eye();
+        let e = Eye {
+            centre: [0.5, 0.5],
+            radius: 13.0 / 61.0,
+            ..eye(EyeKind::Red)
+        };
+        let out = RedEyeStage::new(&[e]).apply(img.clone());
+        let mut left = Vec::new();
+        for y in 17..44 {
+            for x in 17..44 {
+                if (x as f32 - 30.0).hypot(y as f32 - 30.0) <= 12.0 {
+                    let r = redness(out.pixel(x, y));
+                    if r > 0.10 {
+                        left.push((x, y, r, redness(img.pixel(x, y))));
+                    }
+                }
+            }
+        }
+        assert!(
+            redness(img.pixel(30, 20)) > 0.15,
+            "fixture check: the rim is reddish before"
+        );
+        assert!(
+            left.is_empty(),
+            "red left behind (x, y, after, before): {left:?}"
+        );
+        // The iris beyond the rim is not red and must not be touched.
+        assert_eq!(out.pixel(30, 17), img.pixel(30, 17), "the iris changed");
+        // The catchlight's white centre survives.
+        assert!(
+            color::luminance(out.pixel(26, 26)) > 0.5,
+            "the catchlight was darkened"
+        );
+    }
+
+    /// And at the DEFAULT Pupil Size, a real-strength core (redness ~0.5) is fully corrected —
+    /// the first calibration's threshold of 0.50 left half of it red.
+    #[test]
+    fn a_real_strength_core_is_corrected_at_the_default_pupil_size() {
+        let img = soft_eye();
+        let e = Eye {
+            centre: [0.5, 0.5],
+            radius: 13.0 / 61.0,
+            ..eye(EyeKind::Red)
+        };
+        let out = RedEyeStage::new(&[e]).apply(img);
+        assert!(redness(out.pixel(33, 31)) < 0.05, "{:?}", out.pixel(33, 31));
     }
 
     #[test]

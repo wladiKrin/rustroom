@@ -23,9 +23,13 @@ pub const RED_FLOOR: f32 = 0.50;
 pub const RED_FILL_MIN: f32 = 0.42;
 /// A blob whose bounding box is longer than this against its width is not a pupil (a lip).
 pub const MAX_ELONGATION: f32 = 2.5;
-/// Padding from the blob's equal-area radius to the stored circle. Small on purpose: for a pet
-/// eye the circle is the only thing bounding the correction (`RedEyeStage`'s note).
-pub const PAD: f32 = 1.2;
+/// Padding from the blob's equal-area radius to the stored circle.
+///
+/// ⚠ The blob stops at redness ~0.42, INSIDE a real pupil's soft rim (measured 0.17–0.44 at 10–12
+/// px on a 10 px pupil), so 1.2 left the rim at the circle's edge. Padding into the iris is
+/// harmless for a red eye — it carries no red — and for a pet eye the circle is still what bounds
+/// the correction, so this stays well short of the iris' own edge.
+pub const PAD: f32 = 1.35;
 
 /// What a click found.
 #[derive(Debug, Clone, Copy, PartialEq)]
