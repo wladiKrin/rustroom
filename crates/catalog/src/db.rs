@@ -203,10 +203,13 @@ pub struct DayRow {
 /// A photo's undo history (M9.7) — its own file, because this one is already the largest in the
 /// crate. A child module, so it reaches the private connection.
 mod history;
+/// What an import compares a card against (M9.12).
+mod imported;
 /// Renaming, re-parenting and merging keywords (M9.8) — its own file for `history`'s reason.
 mod keywords;
 /// Recognising a photo moved on disk between known folders (M9.9).
 mod moves;
+pub use imported::Fingerprint;
 pub use keywords::{Change as KeywordChange, KeywordMerge};
 
 pub struct Catalog {
