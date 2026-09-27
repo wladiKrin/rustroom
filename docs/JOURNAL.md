@@ -158,6 +158,40 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-27 — M9.10 DNG export: the finished picture as a linear DNG (branch `m9.10-dng-export`)
+
+**3,071 tests**, 81 goldens unmoved, gate green. Spec `2026-09-27-m9.10-dng-export-design.md`, plan of
+the same date. 🟡 **Awaiting use.**
+
+**What shipped.** `ExportFormat::Dng` — "DNG (linear, rendered)", option A of three the author chose
+from (the finished picture; not a cleaned-up raw, not a mosaic conversion). The render, every edit
+baked in, in **linear ProPhoto**, 16-bit, `LinearRaw`, 256×256 tiles of **lossless JPEG** written
+by `export::lj92` (T.81 process 14; no Rust crate encodes it). IFD0 is an 8-bit preview carrying the
+DNG tags; the SubIFD is the image. Tags for an "intact" open: `UniqueCameraModel` "Rustroom
+Rendered" (deliberately not the X-T4), `AsShotNeutral` 1,1,1, `BaselineExposure` 0, an identity
+`ProfileToneCurve`, `DefaultBlackRender` none. The export renders DNG into ProPhoto whatever the
+dialog's space (`ExportFormat::fixed_space`); XMP through the TIFF post-pass; `--format dng` / `.dng`
+in the CLI.
+
+**Measured on DSCF6523 with its edits (4170×6246), against Rustroom's own 16-bit sRGB TIFF:**
+- **darktable, workflow "none": mean |Δ| 0.00 levels, p99 0.0, max 4 — intact.**
+- darktable, default scene-referred workflow: **+0.66 EV** and its tone mapping on top, mean |Δ| 18
+  levels. ⚠ darktable ignores the profile tone curve; the dialog says so and names the setting.
+- libraw (Rustroom's own decoder), in the test suite: within **5.7e-5** (≈4/65535).
+- Size: **97.7 MB** against 156.3 MB uncompressed (0.625).
+- ⚠ RawTherapee could not be measured: its `rawtherapee-cli` crashes on launch here (exit 133,
+  SIGTRAP), even for `-v`. ⚠ No Lightroom on this machine; the plan's done-when is judged in darktable.
+
+⚠⚠ **Two libraw facts found by the round-trip test, both now in comments where they bite:**
+(1) libraw reads a DNG colour matrix as **D65** whatever `CalibrationIlluminant1` says — tagged D50
+it shifted reds by up to 3.4%, so `ColorMatrix1` is calibrated at D65 (through the Bradford-adapted
+`PROPHOTO_TO_XYZ`) while `ForwardMatrix1` goes to D50 as the spec requires. (2) its `adjust_maximum`
+treats the data's own maximum as white above 75% of `WhiteLevel` — a picture with no white read
+1.275× too bright (exactly 1/0.784, its brightest sample); a real render contains white. And libraw
+refuses any image under **22 px** on a side (`identify.cpp`), which is why two every-format fixtures
+grew to 32×24. ⚠ One `-p export` test run reported those two passing when they did not — the
+mode-switch rule in CLAUDE.md, broken once and not trusted.
+
 ### 2026-09-27 — M9.9 folder tree and move tracking (branch `m9.9-folder-tree`)
 
 **3,063 tests**, 81 goldens unmoved, gate green. Spec `2026-09-27-m9.9-folder-tree-design.md`, plan of

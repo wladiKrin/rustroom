@@ -59,6 +59,8 @@ fn infer_from_extension(path: &Path) -> Option<ExportFormat> {
         "jpg" | "jpeg" => Some(ExportFormat::Jpeg),
         "png" => Some(ExportFormat::Png8),
         "tif" | "tiff" => Some(ExportFormat::Tiff8),
+        // ⚠ M9.10: a DNG has one form, so the extension names it fully.
+        "dng" => Some(ExportFormat::Dng),
         _ => None,
     }
 }
@@ -214,5 +216,14 @@ mod tests {
             resolve(p("out.jpeg"), Some("jpeg")).unwrap(),
             ExportFormat::Jpeg
         );
+    }
+
+    #[test]
+    fn a_dng_extension_infers_dng() {
+        assert_eq!(
+            infer_from_extension(std::path::Path::new("out/x.DNG")),
+            Some(ExportFormat::Dng)
+        );
+        assert_eq!(parse_format("dng").unwrap(), ExportFormat::Dng);
     }
 }

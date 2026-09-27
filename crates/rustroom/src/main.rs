@@ -34,7 +34,7 @@ enum Command {
         /// Optional edits sidecar (JSON). Omitted = no edits.
         #[arg(long)]
         edits: Option<PathBuf>,
-        /// Output format: jpeg, png8, png16, tiff8, tiff16. Omitted = inferred from the
+        /// Output format: jpeg, png8, png16, tiff8, tiff16, dng. Omitted = inferred from the
         /// output extension, at 8 bits.
         #[arg(long)]
         format: Option<String>,
