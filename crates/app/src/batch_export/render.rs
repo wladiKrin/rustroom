@@ -148,7 +148,8 @@ pub fn export_one(
     // photograph than the one being exported.
     let airlight = pipeline::prefix_airlight(edits, &scaled, render.resampler, source.lens.clone());
     let spec = pipeline::RenderSpec {
-        space: opts.space,
+        // ⚠ DNG renders into its fixed space (linear ProPhoto) whatever the dialog says.
+        space: opts.format.fixed_space().unwrap_or(opts.space),
         intent: opts.intent,
         resampler: render.resampler,
         baseline: source.baseline,
@@ -975,6 +976,35 @@ mod tests {
             write("per.tif", color::RenderingIntent::Perceptual),
             "the preset's intent never reached the exported pixels"
         );
+    }
+
+    /// ⚠⚠ M9.10 through the real export: a DNG with metadata opens in libraw at the photo's size,
+    /// and the XMP post-pass — which rewrites IFD0 — has left the image's SubIFD readable.
+    #[test]
+    fn a_dng_export_opens_in_libraw_and_carries_its_metadata() {
+        let d = TempDir::new("render_dng");
+        let mut o = opts(&d, None);
+        o.format = ExportFormat::Dng;
+        o.metadata.copyright = "(c) 2026 Rustroom".into();
+        let dest = d.0.join("x.dng");
+        export_one(
+            source(edged(160, 120)),
+            &Edits::default(),
+            &dest,
+            &o,
+            CPU,
+            &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
+            None,
+        )
+        .unwrap();
+        let bytes = std::fs::read(&dest).unwrap();
+        assert!(
+            bytes.windows(17).any(|w| w == b"(c) 2026 Rustroom"),
+            "the XMP was not embedded"
+        );
+        let decoded = raw_decode::decode_raw(&dest, &raw_decode::DecodeOptions::linear_scene())
+            .expect("libraw must open the exported DNG");
+        assert_eq!((decoded.image.width(), decoded.image.height()), (160, 120));
     }
 
     #[test]

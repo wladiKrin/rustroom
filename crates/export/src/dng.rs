@@ -178,6 +178,25 @@ fn inverse(m: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
     out
 }
 
+/// `encoded` — display-encoded in `space`, as the pipeline hands it over — as linear ProPhoto: the
+/// transfer curve undone, and for a space other than ProPhoto its primaries converted back.
+pub fn linear_working(encoded: &ImageBuf, space: color::OutputSpace) -> ImageBuf {
+    let col = |e: [f32; 3]| space.from_working(e);
+    let (x, y, z) = (
+        col([1.0, 0.0, 0.0]),
+        col([0.0, 1.0, 0.0]),
+        col([0.0, 0.0, 1.0]),
+    );
+    let back = inverse([[x[0], y[0], z[0]], [x[1], y[1], z[1]], [x[2], y[2], z[2]]]);
+    encoded.map_pixels(|c| {
+        let lin = c.map(|v| space.decode(v));
+        if space == color::OutputSpace::ProPhoto {
+            return lin;
+        }
+        [0, 1, 2].map(|r| back[r][0] * lin[0] + back[r][1] * lin[1] + back[r][2] * lin[2])
+    })
+}
+
 /// Write `linear` — the render in **linear ProPhoto**, display-referred, nominally `[0, 1]` — as a
 /// linear DNG at `path`.
 pub fn save(linear: &ImageBuf, path: &Path) -> Result<(), ExportError> {

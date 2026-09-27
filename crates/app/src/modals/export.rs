@@ -431,13 +431,16 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                     });
                                 ui.end_row();
                                 ui.label("Colour space");
-                                egui::ComboBox::from_id_salt("space_pick")
+                                // ⚠ Disabled for DNG, which is always linear ProPhoto — the
+                                // opening application converts (`ExportFormat::fixed_space`).
+                                let fixed = opts.format.fixed_space().is_some();
+                                ui.add_enabled_ui(!fixed, |ui| egui::ComboBox::from_id_salt("space_pick")
                                     .selected_text(opts.space.label())
                                     .show_ui(ui, |ui| {
                                         for s in color::OutputSpace::ALL {
                                             ui.selectable_value(&mut opts.space, s, s.label());
                                         }
-                                    });
+                                    }));
                                 ui.end_row();
                                 ui.label("Rendering intent");
                                 // ⚠ Disabled, not hidden, for ProPhoto: the working space maps
@@ -463,6 +466,15 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                             });
                         if let Some(msg) = banding_warning(opts.space, opts.format) {
                             theme::hint(ui, msg);
+                        }
+                        if opts.format.fixed_space().is_some() {
+                            theme::hint(
+                                ui,
+                                "A DNG holds the finished picture as linear ProPhoto, 16-bit, \
+                                 losslessly compressed; the application that opens it converts. \
+                                 ⚠ darktable adds its own exposure and tone mapping to raw files \
+                                 unless its workflow is set to \"none\".",
+                            );
                         }
                         ui.add_enabled(
                             opts.format.is_lossy(),

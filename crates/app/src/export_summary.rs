@@ -40,6 +40,10 @@ fn folder(o: &ExportOptions) -> String {
 
 /// `JPEG · sRGB · 92` — the quality only for a lossy format.
 pub fn file(o: &ExportOptions) -> String {
+    // ⚠ DNG names its own fixed space: the dialog's choice does not apply to it.
+    if let Some(fixed) = o.format.fixed_space() {
+        return format!("{} · linear {}", o.format.label(), fixed.label());
+    }
     let mut s = format!("{} · {}", o.format.label(), o.space.label());
     // ⚠ Not for ProPhoto: it is the working space and maps nothing, so naming an intent there
     // would describe a choice that has no effect.

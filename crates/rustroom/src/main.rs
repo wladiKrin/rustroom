@@ -137,7 +137,7 @@ fn render(
     if space.warns_in_8_bit()
         && !matches!(
             format,
-            export::ExportFormat::Png16 | export::ExportFormat::Tiff16
+            export::ExportFormat::Png16 | export::ExportFormat::Tiff16 | export::ExportFormat::Dng
         )
     {
         eprintln!(
