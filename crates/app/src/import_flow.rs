@@ -348,3 +348,112 @@ impl RustroomApp {
         self.status = parts.join(", ");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let p = std::env::temp_dir().join(format!(
+            "rustroom_import_flow_{tag}_{}_{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    /// Pump until the import dialog's state is gone, i.e. `finish_import` has run.
+    fn run_to_end(app: &mut RustroomApp, ctx: &egui::Context) {
+        for _ in 0..500 {
+            app.pump_import(ctx);
+            if app.import.is_none() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the import never finished");
+    }
+
+    /// ⚠⚠ The whole wiring, headless: source → survey → plan → copy → catalogue → metadata →
+    /// open. Every piece has its own unit test; this is the one that sees them joined, which is
+    /// where this project's GUI defects have lived.
+    #[test]
+    fn an_import_copies_the_ticked_photos_catalogues_them_and_applies_the_metadata() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        let d = temp_dir("e2e");
+        let card = d.join("SD/DCIM/100");
+        std::fs::create_dir_all(&card).unwrap();
+        std::fs::write(card.join("A.JPG"), b"not really a jpeg").unwrap();
+        std::fs::write(card.join("B.JPG"), b"nor this").unwrap();
+
+        app.open_import();
+        app.set_import_source(d.join("SD"));
+        {
+            let st = app.import.as_mut().unwrap();
+            assert_eq!(st.items.len(), 2, "fixture check: both photos found");
+            st.items[1].ticked = false;
+            st.draft.destination = d.join("Photos");
+            st.draft.backup_on = true;
+            st.draft.backup = d.join("Backup");
+            st.draft.copyright = "© 2026 W".into();
+            st.draft.keywords = "card".into();
+        }
+        app.start_import();
+        run_to_end(&mut app, &ctx);
+
+        // No EXIF in these files, so the day folder comes from the mtime — find it, don't assume.
+        let copied: Vec<PathBuf> = walk(&d.join("Photos"));
+        assert_eq!(
+            copied.len(),
+            1,
+            "only the ticked photo is copied: {copied:?}"
+        );
+        assert_eq!(copied[0].file_name().unwrap(), "A.JPG");
+        assert_eq!(walk(&d.join("Backup")).len(), 1, "and backed up");
+        let cat = app.catalog.as_ref().unwrap();
+        let desc = cat.description_of(&copied[0]).unwrap().unwrap();
+        assert_eq!(desc.copyright, "© 2026 W");
+        assert_eq!(cat.keywords().unwrap()[0].count, 1);
+        assert!(app.status.starts_with("Imported 1"), "{}", app.status);
+        assert_eq!(
+            std::fs::read(card.join("A.JPG")).unwrap(),
+            b"not really a jpeg",
+            "the card was touched"
+        );
+        assert_eq!(
+            app.settings.import.copyright, "© 2026 W",
+            "the options were not remembered"
+        );
+
+        // A second import of the same card marks A as already imported.
+        app.open_import();
+        app.set_import_source(d.join("SD"));
+        let st = app.import.as_ref().unwrap();
+        let a = st
+            .items
+            .iter()
+            .find(|i| i.cand.path.ends_with("A.JPG"))
+            .unwrap();
+        assert!(a.known && !a.ticked, "a re-inserted card offered A again");
+    }
+
+    fn walk(dir: &std::path::Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return out;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(walk(&p));
+            } else {
+                out.push(p);
+            }
+        }
+        out
+    }
+}
