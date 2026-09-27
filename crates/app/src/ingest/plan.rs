@@ -56,7 +56,7 @@ pub fn day_dir(taken: Option<i64>, mtime: i64) -> PathBuf {
         None => chrono::Local
             .timestamp_opt(mtime, 0)
             .single()
-            .map_or_else(|| chrono::NaiveDate::default(), |d| d.date_naive()),
+            .map_or_else(chrono::NaiveDate::default, |d| d.date_naive()),
     };
     PathBuf::from(date.format("%Y").to_string()).join(date.format("%Y-%m-%d").to_string())
 }
