@@ -158,6 +158,52 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-27 — M9.11 red eye and pet eye (branch `m9.11-red-eye`)
+
+**3,098 tests** (+27), **82 goldens** (+1, `red_eye`; the other 81 unmoved), gate green. Spec
+`2026-09-27-m9.11-red-eye-design.md`, plan of the same date. 🟡 **Built; awaiting use.**
+
+**What shipped.** `Edits.eyes: Vec<Eye>` on the Retouch group — a stored circle (`centre`,
+`radius` in spot space), `kind` Red | Pet, `pupil_size`, `darken`, and a pet eye's `catchlight`
+offset. **Approach A, the author's choice:** detection runs once, at the click
+(`app::eye_detect`, over `spot_overlay::sampler_for`), and `pipeline::RedEyeStage` — a prefix step
+right after spot removal, no GPU twin — only corrects inside the circle, per pixel, by redness (pet:
+brightness against the circle's 95th-percentile luminance). The Retouch tool grew **Red eye** and
+**Pet eye** modes beside Heal/Clone (the mode is `EyeTool::active`, not a stored enum); an Eyes list
+and Pupil Size / Darken / Catchlight sit in `develop/panel/retouch_eyes.rs`. Pupil Size is
+**sensitivity**, not size — the circle already is the size. A click that finds nothing still places a
+circle and says so in the status bar. A pet eye's catchlight is stored as an offset computed from
+"10 pt up-left on screen", because the stage's frame is pre-orientation.
+
+**Measured, and three first drafts that the measurements retracted:**
+- ⚠⚠ **Redness is `(R − max(G,B)) / R`, not `(R − (G+B)/2) / R`.** Through `srgb_to_prophoto`, the
+  spec's first metric put skin at 0.27–0.47 — overlapping flash pupils. The shipped one: skin
+  light/mid/dark/flushed **0.16 / 0.26 / 0.32 / 0.37**, lip **0.56**, pupils **0.57 (pink) – 0.78**.
+  One public `pipeline::redness`, used by the detector too; `redness_separates_skin_from_flash_pupils`
+  guards the gap.
+- ⚠ **Pet threshold `lerp(0.80, 0.40, size)`**, not `0.70 → 0.20`: mid skin sits at **0.44–0.48** of
+  a green/yellow/white eyeshine's level and the first draft darkened it. ⚠⚠ Luminance cannot separate
+  a *pale* surround from a *dim* eyeshine (light skin reaches **1.28×** a dim green) — there only the
+  circle bounds the correction, which is why detection pads by just 1.2.
+- ⚠ **A red pupil is replaced by a NEUTRAL grey** at `(G+B)/2 × k`. The first `[(G+B)/2, G, B]` left
+  it **brown** once encoded to sRGB — seen on the golden, not in any unit test, because a flash
+  pupil's G and B differ in ProPhoto.
+- ⚠ `golden.rs`'s `set_srgb` takes **linear** values: `[0.60, 0.10, 0.10]` there is a pale pink the
+  stage rightly corrects only partly. The chart uses `[0.32, 0.01, 0.01]`.
+
+**⚠⚠ A bug fixed on the way: placing or moving a spot recorded no undo step.** `spot_overlay`
+changed the edits and returned `true`, so `develop::body` logged an `ActionKind::PhotoEdit` — but
+nothing pushed `s.history`, so Ctrl+Z after a placement popped the step *before* it too. A move
+returned `true` on **every drag frame**, logging one action per frame. The overlay now pushes its own
+step and reports an edit only when the push recorded one (`changed && s.history.push(..)`), the rule
+the eye overlay follows too. Found by reading the code while mapping spots for this milestone; both
+new tests failed before the fix, and a sabotage of the eye overlay's push fails both of its tests.
+
+⚠ Sizes by code: `retouch.rs` 309 → **360**, `canvas/mod.rs` 886 → **907** (over ~600 before this);
+`edit-model/src/lib.rs` **2,019**, `pipeline/src/lib.rs` **1,967**. ⚠ The awk metric stops at the
+FIRST `#[cfg(test)]`: `retouch.rs` now has a test-only `show` shim at line 80 and `canvas/mod.rs` an
+early `test_support` module, so measure those two up to `mod tests`.
+
 ### 2026-09-27 — M9.10 DNG export: the finished picture as a linear DNG (branch `m9.10-dng-export`)
 
 **3,071 tests**, 81 goldens unmoved, gate green. Spec `2026-09-27-m9.10-dng-export-design.md`, plan of
