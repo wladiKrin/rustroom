@@ -67,6 +67,7 @@ impl eframe::App for RustroomApp {
             commands::execute(self, &ctx, cmd);
         }
         self.pump_export(&ctx);
+        self.pump_import(&ctx);
         // ⚠ Beside the other pumps, so an album list or a finished download lands on the next
         // frame rather than waiting for whatever the user does next.
         self.pump_immich(&ctx);
@@ -552,6 +553,7 @@ fn pressed_command(ctx: &egui::Context) -> Option<Command> {
 fn egui_key(c: char) -> Option<egui::Key> {
     Some(match c {
         'O' => egui::Key::O,
+        'I' => egui::Key::I,
         'E' => egui::Key::E,
         'Z' => egui::Key::Z,
         // ⚠ Mapped even though `pressed_command` skips ⌘C / ⌘V. This table is a *total*

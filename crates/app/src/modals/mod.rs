@@ -31,6 +31,7 @@
 
 pub mod edits;
 pub mod export;
+pub mod import;
 pub mod info;
 pub mod presets;
 pub mod rule_edit;
@@ -59,6 +60,8 @@ pub enum Modal {
     SyncSettings,
     /// Choosing where and how to export the selection.
     ExportSettings,
+    /// Importing from a card or a folder (M9.12). Its state lives in `RustroomApp::import`.
+    Import,
     /// An upload did not confirm, and the file is at `at`. Raised for the **first** one in a run.
     ///
     /// ⚠ A notice, not a question: there is nothing to decide, and the export is still running.
@@ -170,6 +173,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Paste,
         Sync,
         Export,
+        Import,
         SaveExport,
         ConfirmDeleteExport,
         ConfirmDelete,
@@ -189,6 +193,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::PasteSettings => Which::Paste,
         Modal::SyncSettings => Which::Sync,
         Modal::ExportSettings => Which::Export,
+        Modal::Import => Which::Import,
         Modal::UploadUnconfirmed { .. } => Which::UploadUnconfirmed,
         Modal::SaveExportPreset { .. } => Which::SaveExport,
         Modal::ConfirmDeleteExportPreset { .. } => Which::ConfirmDeleteExport,
@@ -212,6 +217,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::Paste => edits::paste(app, ctx),
         Which::Sync => edits::sync(app, ctx),
         Which::Export => export::settings(app, ctx),
+        Which::Import => import::show(app, ctx),
         Which::SaveExport => export::save_preset(app, ctx),
         Which::ConfirmDeleteExport => export::confirm_delete(app, ctx),
         Which::ConfirmDelete => presets::confirm_delete(app, ctx),
@@ -526,12 +532,13 @@ mod tests {
     /// `egui::Resize` state.
     #[test]
     fn every_dialog_has_a_class_and_the_ids_are_unique() {
-        let dialogs: [(&str, DialogSize); 15] = [
+        let dialogs: [(&str, DialogSize); 16] = [
             ("save_preset", DialogSize::Standard),
             ("confirm_delete", DialogSize::Compact),
             ("paste_settings", DialogSize::Standard),
             ("sync_settings", DialogSize::Standard),
             ("export_settings", DialogSize::Standard),
+            ("import", DialogSize::Wide),
             ("save_export_preset", DialogSize::Standard),
             ("confirm_delete_export", DialogSize::Compact),
             ("export_collision", DialogSize::Standard),

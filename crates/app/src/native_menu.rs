@@ -193,6 +193,7 @@ fn accelerator(sc: menu::Shortcut) -> Option<muda::accelerator::Accelerator> {
     use muda::accelerator::{Accelerator, Code, Modifiers, CMD_OR_CTRL};
     let code = match sc.key {
         'O' => Code::KeyO,
+        'I' => Code::KeyI,
         'E' => Code::KeyE,
         ',' => Code::Comma,
         '[' => Code::BracketLeft,

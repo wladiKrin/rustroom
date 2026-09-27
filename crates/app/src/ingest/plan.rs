@@ -105,6 +105,21 @@ pub fn destination(
         .expect("an unbounded search always ends")
 }
 
+/// The deepest folder holding every one of `files` — what to open after an import: the day folder
+/// when everything landed on one day, their year or the destination otherwise.
+pub fn common_dir(files: &[PathBuf]) -> Option<PathBuf> {
+    let mut dirs = files.iter().filter_map(|f| f.parent());
+    let mut common = dirs.next()?.to_path_buf();
+    for d in dirs {
+        while !d.starts_with(&common) {
+            if !common.pop() {
+                return None;
+            }
+        }
+    }
+    Some(common)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +185,33 @@ mod tests {
         std::fs::write(&a, b"x").unwrap();
         let c2 = destination(&root, &c, t, None, &tpl, 1, &[]);
         assert_eq!(c2, root.join("2026/2026-09-27/2026-09-27_0001-1.RAF"));
+    }
+
+    #[test]
+    fn the_folder_to_open_is_the_deepest_one_holding_every_import() {
+        let p = |s: &str| PathBuf::from(s);
+        assert_eq!(common_dir(&[]), None);
+        assert_eq!(
+            common_dir(&[
+                p("/ph/2026/2026-09-27/A.RAF"),
+                p("/ph/2026/2026-09-27/B.RAF")
+            ]),
+            Some(p("/ph/2026/2026-09-27"))
+        );
+        assert_eq!(
+            common_dir(&[
+                p("/ph/2026/2026-09-27/A.RAF"),
+                p("/ph/2026/2026-09-28/B.RAF")
+            ]),
+            Some(p("/ph/2026"))
+        );
+        assert_eq!(
+            common_dir(&[
+                p("/ph/2025/2025-12-31/A.RAF"),
+                p("/ph/2026/2026-01-01/B.RAF")
+            ]),
+            Some(p("/ph"))
+        );
     }
 
     #[test]
