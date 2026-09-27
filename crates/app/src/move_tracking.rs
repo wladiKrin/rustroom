@@ -7,6 +7,16 @@
 
 use std::path::Path;
 
+/// The status-line note for `n` recognised moves — " · Recognised 3 moved photos", or nothing.
+/// One wording for opening a folder and Reindex.
+pub fn recognised(n: usize) -> String {
+    match n {
+        0 => String::new(),
+        1 => " · Recognised 1 moved photo".to_string(),
+        n => format!(" · Recognised {n} moved photos"),
+    }
+}
+
 /// Move `from`'s left-behind sidecars — Rustroom's edits (`.RAF.json`) and the XMP (`stem.xmp`) —
 /// beside `to`. Returns how many moved. An error moving one is skipped: the photo's catalog data
 /// has already followed it, and a failed rename leaves the sidecar where it was, intact.

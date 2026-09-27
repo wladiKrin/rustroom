@@ -183,6 +183,11 @@ the relink list left the test GREEN: the assertion meant to guard it had never b
 edit script's anchor no longer existed after `cargo fmt`, and the replace failed silently. Every
 later scripted edit asserts its anchor. Each of the four tables is now sabotaged-and-caught.
 
+⚠ **Reindex recognises moves too** (the author's request after use): opening a folder and Reindex
+share `scan_and_relink`, so Reindex also scans the whole tree, relinks and carries sidecars; a photo
+open during Reindex that moved is reopened at its new path (tested, and sabotaged: reopening the old
+path fails it).
+
 ⚠ The end-to-end test first asserted the VIEW had two entries after the move — true whether or not
 the catalog relinked, since the view is built from the disk. It asserts the catalog's photo count.
 
