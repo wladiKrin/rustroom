@@ -1671,6 +1671,57 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ A placed spot must be ONE history step. Before M9.11 the overlay changed the edits and
+    /// reported the change, but never pushed — so the action log recorded a step the history did
+    /// not have, and Ctrl+Z popped the step *before* the spot too.
+    #[test]
+    fn placing_a_spot_is_one_history_step() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let depth = app.session.as_ref().unwrap().history.undo_depth();
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::click_through(&mut app, &ctx, centre);
+        let s = app.session.as_ref().unwrap();
+        assert_eq!(
+            s.edits.spots.len(),
+            1,
+            "fixture check: the click placed a spot"
+        );
+        assert_eq!(
+            s.history.undo_depth(),
+            depth + 1,
+            "the placement was not recorded"
+        );
+        assert_eq!(
+            s.history.get(),
+            &s.edits,
+            "history's present is not the edits"
+        );
+    }
+
+    /// And a move is one step for the whole gesture, not one per drag frame.
+    #[test]
+    fn moving_a_spot_is_one_history_step() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::click_through(&mut app, &ctx, centre);
+        let depth = app.session.as_ref().unwrap().history.undo_depth();
+        let before = spots(&app)[0].centre;
+        super::test_support::drag_through(&mut app, &ctx, centre, centre + egui::vec2(30.0, 0.0));
+        let s = app.session.as_ref().unwrap();
+        assert_ne!(
+            s.edits.spots[0].centre, before,
+            "fixture check: the drag moved the spot"
+        );
+        assert_eq!(
+            s.history.undo_depth(),
+            depth + 1,
+            "a move was not exactly one step"
+        );
+        assert_eq!(s.history.get(), &s.edits);
+    }
+
     /// ⚠⚠ The render is sampled **on the drag frame itself** (`DRAG_PASS`), not after the
     /// gesture. A later frame issues one anyway, and in the real app that frame never comes
     /// because egui idles after a drag — which is exactly how the M3.1a mask bug hid.
