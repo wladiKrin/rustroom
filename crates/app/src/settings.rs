@@ -288,6 +288,9 @@ pub struct Settings {
     /// The options the last export actually *used* — not what was last typed. See
     /// `RustroomApp::start_export`.
     pub export: ExportOptions,
+    /// The options the last **import** actually used (M9.12) — written only when an import starts,
+    /// `export`'s rule, so a cancelled dialog leaves them alone.
+    pub import: crate::ingest::options::ImportOptions,
     /// Ask before deleting an **export** preset.
     ///
     /// ⚠ A separate flag from `confirm_preset_delete`, not a shared one. A develop preset
@@ -868,6 +871,7 @@ impl Default for Settings {
             immich_thumb_budget_mb: 5120,
             confirm_preset_delete: true,
             export: ExportOptions::default(),
+            import: Default::default(),
             confirm_export_preset_delete: true,
             view_demosaic: Demosaic::default(),
             gpu_tail: true,
@@ -1614,6 +1618,17 @@ mod tests {
                 quality: 71,
                 max_edge: Some(2048),
                 ..ExportOptions::default()
+            },
+            // Every field non-default, so a re-defaulted one cannot pass.
+            import: crate::ingest::options::ImportOptions {
+                destination: std::path::PathBuf::from("/photos"),
+                backup_on: true,
+                backup: std::path::PathBuf::from("/backup"),
+                template: "{date}_{seq:4}".into(),
+                copyright: "© Test".into(),
+                creator: "Tester".into(),
+                keywords: "a, b".into(),
+                preset: Some("Punchy".into()),
             },
         };
         store.save(&s).unwrap();
