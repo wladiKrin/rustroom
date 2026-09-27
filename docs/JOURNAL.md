@@ -161,7 +161,7 @@ goldens unmoved.
 ### 2026-09-27 — M9.9 folder tree and move tracking (branch `m9.9-folder-tree`)
 
 **3,063 tests**, 81 goldens unmoved, gate green. Spec `2026-09-27-m9.9-folder-tree-design.md`, plan of
-the same date. 🟡 **Awaiting use.**
+the same date. ✅ **Confirmed by use and merged 2026-09-27.**
 
 **What shipped.** Opening a folder scans its whole tree (`catalog::scan_tree`; hidden and symlinked
 folders skipped — a symlink to an ancestor would never end) and shows it with everything beneath.
