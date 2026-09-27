@@ -1,5 +1,6 @@
 //! Deciding, before anything is copied: which photos are already imported, and where each one goes.
 
+use super::options::Layout;
 use super::source::Candidate;
 use crate::filename_template::{NameFacts, Template};
 use catalog::db::Fingerprint;
@@ -44,13 +45,17 @@ impl KnownSet {
     }
 }
 
-/// `YYYY/YYYY-MM-DD` for a photo taken at `taken`, else modified at `mtime`.
+/// The folder, relative to the destination, for a photo taken at `taken` (else modified at `mtime`)
+/// under `layout`. `subfolder` is used by [`Layout::OneFolder`] only, cleaned so it stays one folder.
 ///
 /// ⚠ `taken` is naive wall-clock seconds (the catalog's convention), so it is read as UTC to get
 /// the camera's own date back — `filename_template`'s `{date}` route. `mtime` is a true instant,
 /// so it is shown in this machine's zone.
-pub fn day_dir(taken: Option<i64>, mtime: i64) -> PathBuf {
+pub fn folder(layout: Layout, subfolder: &str, taken: Option<i64>, mtime: i64) -> PathBuf {
     use chrono::TimeZone;
+    if layout == Layout::OneFolder {
+        return PathBuf::from(crate::safe_name::folder_name(subfolder));
+    }
     let date = match taken.and_then(|t| chrono::DateTime::from_timestamp(t, 0)) {
         Some(d) => d.date_naive(),
         None => chrono::Local
@@ -58,14 +63,23 @@ pub fn day_dir(taken: Option<i64>, mtime: i64) -> PathBuf {
             .single()
             .map_or_else(chrono::NaiveDate::default, |d| d.date_naive()),
     };
-    PathBuf::from(date.format("%Y").to_string()).join(date.format("%Y-%m-%d").to_string())
+    let f = |fmt: &str| date.format(fmt).to_string();
+    match layout {
+        Layout::YearDay => PathBuf::from(f("%Y")).join(f("%Y-%m-%d")),
+        Layout::YearMonthDay => PathBuf::from(f("%Y")).join(f("%m")).join(f("%d")),
+        Layout::Day => PathBuf::from(f("%Y-%m-%d")),
+        Layout::OneFolder => unreachable!("returned above"),
+    }
 }
 
 /// Where `c` lands under `root`: its day folder, the template's name, the source's extension kept
 /// verbatim — with `-N` added while the path exists on disk **or** is already `planned` by an
 /// earlier photo of the same import. Nothing is ever overwritten.
+#[allow(clippy::too_many_arguments)]
 pub fn destination(
     root: &Path,
+    layout: Layout,
+    subfolder: &str,
     c: &Candidate,
     taken: Option<i64>,
     camera: Option<&str>,
@@ -87,7 +101,7 @@ pub fn destination(
         camera,
     });
     let ext = c.path.extension().map(|e| e.to_string_lossy().into_owned());
-    let dir = root.join(day_dir(taken, c.mtime));
+    let dir = root.join(folder(layout, subfolder, taken, c.mtime));
     let named = |n: usize| {
         let b = if n == 0 {
             base.clone()
@@ -165,8 +179,34 @@ mod tests {
 
     #[test]
     fn the_day_folder_comes_from_the_capture_time_else_the_mtime() {
-        assert_eq!(day_dir(Some(NOON), 0), PathBuf::from("2026/2026-09-27"));
-        assert_eq!(day_dir(None, NOON), PathBuf::from("2026/2026-09-27"));
+        let yd = Layout::YearDay;
+        assert_eq!(
+            folder(yd, "", Some(NOON), 0),
+            PathBuf::from("2026/2026-09-27")
+        );
+        assert_eq!(folder(yd, "", None, NOON), PathBuf::from("2026/2026-09-27"));
+    }
+
+    #[test]
+    fn every_layout_names_its_folder() {
+        let t = Some(NOON);
+        assert_eq!(
+            folder(Layout::YearMonthDay, "x", t, 0),
+            PathBuf::from("2026/09/27")
+        );
+        assert_eq!(folder(Layout::Day, "x", t, 0), PathBuf::from("2026-09-27"));
+        assert_eq!(
+            folder(Layout::OneFolder, "Hamburg 2026", t, 0),
+            PathBuf::from("Hamburg 2026")
+        );
+        assert_eq!(folder(Layout::OneFolder, "", t, 0), PathBuf::new());
+        // A hostile name stays one folder inside the destination.
+        assert_eq!(
+            folder(Layout::OneFolder, "../../elsewhere", t, 0)
+                .components()
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -175,15 +215,25 @@ mod tests {
         let tpl = Template::parse("{date}_{seq:4}").unwrap();
         let c = cand("DSCF0001.RAF", 5);
         let t = Some(NOON);
-        let a = destination(&root, &c, t, None, &tpl, 1, &[]);
+        let a = destination(&root, Layout::YearDay, "", &c, t, None, &tpl, 1, &[]);
         assert_eq!(a, root.join("2026/2026-09-27/2026-09-27_0001.RAF"));
         // Planned by an earlier photo of the same import → -1, before anything is written.
-        let b = destination(&root, &c, t, None, &tpl, 1, std::slice::from_ref(&a));
+        let b = destination(
+            &root,
+            Layout::YearDay,
+            "",
+            &c,
+            t,
+            None,
+            &tpl,
+            1,
+            std::slice::from_ref(&a),
+        );
         assert_eq!(b, root.join("2026/2026-09-27/2026-09-27_0001-1.RAF"));
         // And a file already on disk is never overwritten.
         std::fs::create_dir_all(a.parent().unwrap()).unwrap();
         std::fs::write(&a, b"x").unwrap();
-        let c2 = destination(&root, &c, t, None, &tpl, 1, &[]);
+        let c2 = destination(&root, Layout::YearDay, "", &c, t, None, &tpl, 1, &[]);
         assert_eq!(c2, root.join("2026/2026-09-27/2026-09-27_0001-1.RAF"));
     }
 
@@ -215,11 +265,44 @@ mod tests {
     }
 
     #[test]
+    fn one_folder_lands_directly_in_the_destination_or_its_subfolder() {
+        let root = temp_dir("one");
+        let tpl = Template::parse("{name}").unwrap();
+        let c = cand("DSCF0001.RAF", 5);
+        let flat = destination(
+            &root,
+            Layout::OneFolder,
+            "",
+            &c,
+            Some(NOON),
+            None,
+            &tpl,
+            1,
+            &[],
+        );
+        assert_eq!(flat, root.join("DSCF0001.RAF"));
+        let sub = destination(
+            &root,
+            Layout::OneFolder,
+            "Köln",
+            &c,
+            Some(NOON),
+            None,
+            &tpl,
+            1,
+            &[],
+        );
+        assert_eq!(sub, root.join("Köln/DSCF0001.RAF"));
+    }
+
+    #[test]
     fn the_default_template_keeps_the_cards_name() {
         let root = temp_dir("keep");
         let tpl = Template::parse("{name}").unwrap();
         let d = destination(
             &root,
+            Layout::YearDay,
+            "",
             &cand("DSCF0001.RAF", 5),
             Some(NOON),
             None,

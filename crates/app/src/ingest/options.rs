@@ -16,6 +16,11 @@ pub struct ImportOptions {
     /// Whether a second copy is made. The folder is remembered even while this is off.
     pub backup_on: bool,
     pub backup: PathBuf,
+    /// How the destination is organised (the author's request after first use).
+    pub layout: Layout,
+    /// With [`Layout::OneFolder`], a folder inside the destination; empty means the destination
+    /// itself. Cleaned by `safe_name::folder_name` where it is used.
+    pub subfolder: String,
     /// A `filename_template`; `{name}` keeps the card's names.
     pub template: String,
     /// Applied on entry only when non-empty — an empty field erases nothing.
@@ -34,11 +39,46 @@ impl Default for ImportOptions {
             destination: PathBuf::new(),
             backup_on: false,
             backup: PathBuf::new(),
+            layout: Layout::default(),
+            subfolder: String::new(),
             template: "{name}".to_string(),
             copyright: String::new(),
             creator: String::new(),
             keywords: String::new(),
             preset: None,
+        }
+    }
+}
+
+/// Where in the destination a photo lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Layout {
+    /// `YYYY/YYYY-MM-DD` — one folder per day, grouped by year.
+    #[default]
+    YearDay,
+    /// `YYYY/MM/DD`.
+    YearMonthDay,
+    /// `YYYY-MM-DD`, no year level.
+    Day,
+    /// Everything into one folder: the destination, or the named subfolder inside it.
+    OneFolder,
+}
+
+impl Layout {
+    pub const ALL: [Layout; 4] = [
+        Self::YearDay,
+        Self::YearMonthDay,
+        Self::Day,
+        Self::OneFolder,
+    ];
+
+    /// The dialog's label for this choice.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::YearDay => "YYYY / YYYY-MM-DD",
+            Self::YearMonthDay => "YYYY / MM / DD",
+            Self::Day => "YYYY-MM-DD",
+            Self::OneFolder => "Into one folder",
         }
     }
 }

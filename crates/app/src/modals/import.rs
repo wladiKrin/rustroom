@@ -9,6 +9,7 @@ use crate::theme;
 use crate::RustroomApp;
 use eframe::egui;
 use rustroom_app::filename_template::{token_help, Template};
+use rustroom_app::ingest::options::Layout;
 use std::path::PathBuf;
 
 /// The source column's width; the settings column takes the rest.
@@ -127,7 +128,25 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 },
                             );
                         });
-                        theme::hint(ui, "Into dated folders: YYYY / YYYY-MM-DD");
+                        ui.horizontal(|ui| {
+                            ui.label("Organise");
+                            egui::ComboBox::from_id_salt("import_layout")
+                                .selected_text(d.layout.label())
+                                .show_ui(ui, |ui| {
+                                    for l in Layout::ALL {
+                                        ui.selectable_value(&mut d.layout, l, l.label());
+                                    }
+                                });
+                        });
+                        if d.layout == Layout::OneFolder {
+                            ui.horizontal(|ui| {
+                                ui.label("Subfolder");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut d.subfolder)
+                                        .hint_text("none — straight into the destination"),
+                                );
+                            });
+                        }
                         ui.add_space(6.0);
                         theme::sub_label(ui, "File names");
                         ui.add(

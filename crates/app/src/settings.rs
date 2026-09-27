@@ -1622,6 +1622,8 @@ mod tests {
             // Every field non-default, so a re-defaulted one cannot pass.
             import: crate::ingest::options::ImportOptions {
                 destination: std::path::PathBuf::from("/photos"),
+                layout: crate::ingest::options::Layout::YearMonthDay,
+                subfolder: "Trip".into(),
                 backup_on: true,
                 backup: std::path::PathBuf::from("/backup"),
                 template: "{date}_{seq:4}".into(),

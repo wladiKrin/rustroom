@@ -68,7 +68,17 @@ impl ImportState {
         let first = self.items.iter().find(|i| i.ticked)?;
         let root = PathBuf::new();
         let (taken, camera) = facts(first);
-        let p = plan::destination(&root, &first.cand, taken, camera, &tpl, 1, &[]);
+        let p = plan::destination(
+            &root,
+            self.draft.layout,
+            &self.draft.subfolder,
+            &first.cand,
+            taken,
+            camera,
+            &tpl,
+            1,
+            &[],
+        );
         Some(p.display().to_string())
     }
 
@@ -195,6 +205,8 @@ impl RustroomApp {
             let seq = items.len() + 1;
             let dest = plan::destination(
                 &draft.destination,
+                draft.layout,
+                &draft.subfolder,
                 &it.cand,
                 taken,
                 camera,
@@ -206,6 +218,8 @@ impl RustroomApp {
             let backup = draft.backup_on.then(|| {
                 let b = plan::destination(
                     &draft.backup,
+                    draft.layout,
+                    &draft.subfolder,
                     &it.cand,
                     taken,
                     camera,

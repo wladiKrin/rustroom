@@ -160,7 +160,7 @@ goldens unmoved.
 
 ### 2026-09-27 — M9.12 import from a card (branch `m9.12-import`)
 
-**3,126 tests** (+26), 82 goldens unmoved, gate green. Spec `2026-09-27-m9.12-import-design.md`,
+**3,129 tests** (+29), 82 goldens unmoved, gate green. Spec `2026-09-27-m9.12-import-design.md`,
 plan of the same date. 🟡 **Built; awaiting use.**
 
 **What shipped.** File → *Import…* (⇧⌘I). The author's choices: the **full dialog**; **dated
@@ -200,6 +200,14 @@ EXIF→`Capture` became one shared `capture_of`, so the two cannot disagree abou
 replaced from that function **to the end of the file**, deleting the worker's five tests — the gate
 stayed green at 3,121 where 3,126 was due. Restored from `HEAD`. ⚠ **Compare the total against the
 expected total after every scripted edit**, not just the exit code — standing lesson (b) again.
+
+**The folder layout became a choice** (the author, after first use: "whether the import happens
+into a dated folder should be an option"). He chose dated layouts plus one folder:
+`ImportOptions.layout` = `YYYY/YYYY-MM-DD` (default) · `YYYY/MM/DD` · `YYYY-MM-DD` · **Into one
+folder** (the destination, or a named subfolder). ⚠ The subfolder is cleaned by a new
+`safe_name::folder_name`, not `sanitize`: `sanitize` turns every non-ASCII letter into `_`, so
+"Köln 2026" would have become `K_ln 2026`. `folder_name` keeps letters and removes only what lets a
+name escape — separators, `:`, control characters, `.`/`..`, a trailing dot.
 
 **Found by the suite on the way:** `shell::egui_key` and `native_menu::accelerator` had no `I` —
 ⇧⌘I would have silently done nothing (`every_shortcut_maps_to_an_egui_key` caught the first; the
