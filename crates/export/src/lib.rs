@@ -1,5 +1,6 @@
 //! Encode a display-referred (sRGB, 0..=1) `ImageBuf` to an image file.
 
+pub mod lj92;
 pub mod metadata;
 pub mod output_sharpen;
 pub mod watermark;
