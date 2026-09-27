@@ -181,7 +181,20 @@ impl Drop for ImportWorker {
     }
 }
 
+/// A file's capture and thumbnail for the grid.
+///
+/// ⚠⚠ **The EXIF block first, the whole file only when that fails.** The first version read every
+/// RAW whole through libraw — "really slow" over hundreds of files, the author's report. Measured on
+/// 200 X-T4 RAFs and 200 JPEGs: the fast path answered **every one**, its capture time agreed with
+/// the full read **200/200**, and it cost **0.5 ms and ≤70 KB** a file against **113 ms / 31 MB**
+/// (RAF) and **299 ms / 12 MB** (JPEG) — `examples/import_survey_probe.rs`. A format it does not
+/// read (TIFF-based raws, PNG) falls through to the old path, so nothing is ever lost.
 fn survey_one(path: &std::path::Path) -> (Option<Capture>, Option<Thumbnail>) {
+    if let Ok(Some(q)) = image_decode::quick_look(path) {
+        if q.thumb.is_some() {
+            return (Some(q.capture), q.thumb);
+        }
+    }
     if catalog::is_raw(path) {
         raw_decode::survey(path).unwrap_or((None, None))
     } else {
@@ -193,6 +206,9 @@ fn survey_one(path: &std::path::Path) -> (Option<Capture>, Option<Thumbnail>) {
 }
 
 fn read_capture(path: &std::path::Path) -> Option<Capture> {
+    if let Ok(Some(q)) = image_decode::quick_look(path) {
+        return Some(q.capture);
+    }
     if catalog::is_raw(path) {
         raw_decode::read_capture(path).ok()
     } else {

@@ -160,7 +160,7 @@ goldens unmoved.
 
 ### 2026-09-27 — M9.12 import from a card (branch `m9.12-import`)
 
-**3,123 tests** (+23), 82 goldens unmoved, gate green. Spec `2026-09-27-m9.12-import-design.md`,
+**3,126 tests** (+26), 82 goldens unmoved, gate green. Spec `2026-09-27-m9.12-import-design.md`,
 plan of the same date. 🟡 **Built; awaiting use.**
 
 **What shipped.** File → *Import…* (⇧⌘I). The author's choices: the **full dialog**; **dated
@@ -185,6 +185,21 @@ and `modals/import.rs` in the bin, one `app.import: Option<ImportState>` field.
   so no thumbnail renders without them.
 - `raw_decode::survey` reads a RAW **once** for both the capture and the embedded thumbnail; the
   two separate calls would read every RAW on the card twice.
+
+**⚠⚠ The author's first use: "the thumbnail loading is really slow" over hundreds of files.**
+The survey read every RAW **whole** through libraw (26.6 MB an X-T4 RAF) — and libraw cannot open a
+truncated file, which is why a prefix read was rejected in 2026-09. Fixed without libraw:
+`image_decode::quick_look` reads a camera JPEG's — or a RAF's **embedded** JPEG's — `APP1 Exif`
+block only (the RAF header points to it at 0x54; on the author's files it starts at byte 148 and is
+65,448 bytes). Measured by the new `examples/import_survey_probe.rs` on 200 RAFs + 200 JPEGs from
+`~/Pictures/fuji_new_new`: **every file answered, capture time agrees with the full read 200/200,
+thumbnails 160×120 (portraits turned upright), 0.5 ms and ≤70 KB a file against 113 ms / 31 MB
+(RAF) and 299 ms / 12 MB (JPEG)**. Other formats fall through to the full read. `read_capture`'s
+EXIF→`Capture` became one shared `capture_of`, so the two cannot disagree about a date.
+⚠ **A slip caught by the COUNT, not by a failure:** the Python edit that swapped `survey_one`
+replaced from that function **to the end of the file**, deleting the worker's five tests — the gate
+stayed green at 3,121 where 3,126 was due. Restored from `HEAD`. ⚠ **Compare the total against the
+expected total after every scripted edit**, not just the exit code — standing lesson (b) again.
 
 **Found by the suite on the way:** `shell::egui_key` and `native_menu::accelerator` had no `I` —
 ⇧⌘I would have silently done nothing (`every_shortcut_maps_to_an_egui_key` caught the first; the
