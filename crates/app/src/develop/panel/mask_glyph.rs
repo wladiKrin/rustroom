@@ -111,6 +111,28 @@ pub fn paint_spot(
     }
 }
 
+/// A red-eye row's glyph (M9.11): an iris ring round a pupil; a pet eye adds its catchlight.
+/// ⚠ Not [`paint_eye`], which is the row's visibility toggle.
+pub fn paint_pupil(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    kind: edit_model::EyeKind,
+    colour: egui::Color32,
+) {
+    let r = rect.shrink(rect.width() * 0.12);
+    let c = r.center();
+    let w = r.width();
+    painter.circle_stroke(c, w * 0.38, egui::Stroke::new((w / 9.0).max(1.0), colour));
+    painter.circle_filled(c, w * 0.16, colour);
+    if kind == edit_model::EyeKind::Pet {
+        painter.circle_filled(
+            egui::pos2(c.x - w * 0.16, c.y - w * 0.16),
+            w * 0.07,
+            colour.gamma_multiply(0.55),
+        );
+    }
+}
+
 /// A preset's star.
 pub fn paint_star(painter: &egui::Painter, rect: egui::Rect, colour: egui::Color32) {
     let r = rect.shrink(rect.width() * 0.1);

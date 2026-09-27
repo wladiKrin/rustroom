@@ -14,6 +14,7 @@ pub mod parametric_curve;
 pub mod presets;
 pub mod profile;
 pub mod retouch;
+mod retouch_eyes;
 pub mod section;
 pub mod slider;
 pub mod snapshots;
@@ -324,7 +325,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                             },
                             &mut ed,
                         ),
-                        Tool::Retouch => retouch::show(ui, s, &mut app.spot_tool, &mut ed),
+                        Tool::Retouch => retouch::show_with(
+                            ui,
+                            s,
+                            &mut app.spot_tool,
+                            &mut app.eye_tool,
+                            &mut ed,
+                        ),
                         // Drawn above, outside the session borrow — see the comment there.
                         Tool::Presets => {}
                     }
