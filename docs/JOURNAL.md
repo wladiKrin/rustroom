@@ -161,7 +161,7 @@ goldens unmoved.
 ### 2026-09-27 — M9.10 DNG export: the finished picture as a linear DNG (branch `m9.10-dng-export`)
 
 **3,071 tests**, 81 goldens unmoved, gate green. Spec `2026-09-27-m9.10-dng-export-design.md`, plan of
-the same date. 🟡 **Awaiting use.**
+the same date. ✅ **Confirmed by use and merged 2026-09-27.**
 
 **What shipped.** `ExportFormat::Dng` — "DNG (linear, rendered)", option A of three the author chose
 from (the finished picture; not a cleaned-up raw, not a mosaic conversion). The render, every edit
