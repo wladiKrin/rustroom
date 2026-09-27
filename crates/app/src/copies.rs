@@ -373,16 +373,26 @@ impl RustroomApp {
 
         // ⚠ Re-scanning is what picks up files added or removed outside the app; the ordering
         // itself is re-applied by `rebuild_entries`, from the chosen sort order.
-        let Ok(scan) = catalog::scan_folder(&dir) else {
-            self.status = "Could not read the folder".into();
+        //
+        // ⚠⚠ Through `scan_and_relink`, the function opening a folder uses (M9.9, at the author's
+        // request): the whole tree, and a photo moved on disk relinked with its sidecars — so
+        // Reindex and opening cannot disagree about what is there.
+        let Some((scan, moved)) = self.scan_and_relink(&dir) else {
             return;
         };
 
         let renumbered = self.compact_copy_numbering(&scan);
 
         // ⚠ The open photo may itself have been renumbered, so it is reopened by *path* at copy
-        // 0 rather than by an id that might no longer exist.
-        let reopen = self.session.as_ref().map(|s| s.path.clone());
+        // 0 rather than by an id that might no longer exist. ⚠ And it may have MOVED, in which
+        // case it is reopened where it is now — its old path no longer exists.
+        let reopen = self.session.as_ref().map(|s| {
+            moved
+                .iter()
+                .find(|(from, _)| *from == s.path)
+                .map(|(_, to)| to.clone())
+                .unwrap_or_else(|| s.path.clone())
+        });
         if let Some(lib) = self.library.as_mut() {
             lib.scan = scan;
         }
@@ -394,11 +404,13 @@ impl RustroomApp {
             self.session = None;
             self.open_path(ctx, id);
         }
-        self.status = if renumbered == 0 {
+        let mut status = if renumbered == 0 {
             "Reindexed — the copy numbering was already tidy".to_string()
         } else {
             format!("Reindexed — renumbered {renumbered} copies")
         };
+        status.push_str(&rustroom_app::move_tracking::recognised(moved.len()));
+        self.status = status;
     }
 }
 

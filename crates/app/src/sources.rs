@@ -17,6 +17,9 @@ use rustroom_app::sidecar;
 use rustroom_app::thumb_loader::ThumbLoader;
 use std::path::PathBuf;
 
+/// A tree scan and the `(from, to)` moves it recognised — what `scan_and_relink` returns.
+type Scanned = (Vec<catalog::CatalogEntry>, Vec<(PathBuf, PathBuf)>);
+
 impl RustroomApp {
     pub(crate) fn open_folder(&mut self, ctx: &egui::Context) {
         let Some(dir) = rfd::FileDialog::new().pick_folder() else {
@@ -25,35 +28,78 @@ impl RustroomApp {
         self.open_folder_at(ctx, dir);
     }
 
-    /// Scan `dir` and show it. The half of `open_folder` that is not the file dialog.
-    pub(crate) fn open_folder_at(&mut self, ctx: &egui::Context, dir: PathBuf) {
-        match catalog::scan_folder(&dir) {
-            Ok(mut scan) => {
-                // ⚠ Ordered **before** expanding into entries. Sorting the scan is what keeps a
-                // file's copies adjacent to it and ascending under every ordering — sorting
-                // `entries` instead would scatter them.
-                if self.settings.library_sort.needs_edited() {
-                    for e in scan.iter_mut() {
-                        e.edited = sidecar::edited_at(&e.path);
+    /// Scan `dir`'s tree into the catalog, relinking photos moved on disk — shared by opening a
+    /// folder and Reindex, so the two cannot disagree about what is there (M9.9; Reindex joined it
+    /// at the author's request). Returns the scan and the `(from, to)` moves, or `None` — with the
+    /// status set — when `dir` cannot be read.
+    ///
+    /// Per folder, BEFORE its new rows are added: a file new to it that is a photo moved from
+    /// another known folder is relinked (`Catalog::relink_moved`), its left-behind sidecars
+    /// following it (`move_tracking::carry_sidecars`).
+    pub(crate) fn scan_and_relink(&mut self, dir: &std::path::Path) -> Option<Scanned> {
+        let tree = match catalog::scan_tree(dir) {
+            Ok(t) => t,
+            Err(e) => {
+                self.status = format!("Could not read folder: {e}");
+                return None;
+            }
+        };
+        let mut all_moved = Vec::new();
+        let mut scan = Vec::new();
+        for (folder, entries) in tree {
+            if let Some(cat) = &self.catalog {
+                // ⚠ `gone` is the filesystem's answer: a surviving original makes the new file a
+                // copy, and the catalog itself checks no files.
+                match cat.relink_moved(&folder, &entries, |p| !p.exists()) {
+                    Ok(moved) => {
+                        for (from, to) in &moved {
+                            rustroom_app::move_tracking::carry_sidecars(from, to);
+                        }
+                        all_moved.extend(moved);
                     }
+                    Err(e) => eprintln!("catalog: {e}"),
                 }
-                catalog::sort(&mut scan, self.settings.library_sort);
                 // ⚠ The catalog records the *files*; copies are added when they are created
                 // rather than scanned, because they live in the sidecar and not on disk.
-                if let Some(cat) = &self.catalog {
-                    if let Err(e) = cat.sync_folder(&dir, &scan) {
-                        eprintln!("catalog: {e}");
-                    }
+                if let Err(e) = cat.sync_folder(&folder, &entries) {
+                    eprintln!("catalog: {e}");
                 }
-                let n = self.open_scan(ctx, LibrarySource::Folder(dir.clone()), scan);
-                self.status = if n == 0 {
-                    "No supported images in this folder.".into()
-                } else {
-                    format!("{n} photos")
-                };
             }
-            Err(e) => self.status = format!("Could not read folder: {e}"),
+            scan.extend(entries);
         }
+        Some((scan, all_moved))
+    }
+
+    /// Scan `dir` and everything beneath it, and show it all. The half of `open_folder` that is not
+    /// the file dialog.
+    ///
+    /// ⚠⚠ M9.9: **the whole tree** (`catalog::scan_tree`) — each subfolder holding images becomes a
+    /// catalog folder, and the view shows `dir` with everything beneath (the author's choice,
+    /// Lightroom's default). And per folder, BEFORE its new rows are added, a file new to it that
+    /// is a photo moved from another known folder is relinked (`Catalog::relink_moved`), its
+    /// left-behind sidecars following it (`move_tracking::carry_sidecars`).
+    pub(crate) fn open_folder_at(&mut self, ctx: &egui::Context, dir: PathBuf) {
+        let Some((mut scan, moved)) = self.scan_and_relink(&dir) else {
+            return;
+        };
+        let relinked = moved.len();
+        // ⚠ Ordered **before** expanding into entries. Sorting the scan is what keeps a file's
+        // copies adjacent to it and ascending under every ordering — sorting `entries` instead
+        // would scatter them. After the sidecars moved, so "edited" reads where they are now.
+        if self.settings.library_sort.needs_edited() {
+            for e in scan.iter_mut() {
+                e.edited = sidecar::edited_at(&e.path);
+            }
+        }
+        catalog::sort(&mut scan, self.settings.library_sort);
+        let n = self.open_scan(ctx, LibrarySource::Folder(dir.clone()), scan);
+        let mut status = if n == 0 {
+            "No supported images in this folder.".to_string()
+        } else {
+            format!("{n} photos")
+        };
+        status.push_str(&rustroom_app::move_tracking::recognised(relinked));
+        self.status = status;
     }
 
     /// Show every photo the catalog knows, from every folder ever opened.
@@ -159,28 +205,41 @@ impl RustroomApp {
     /// untouched. Re-opening the folder catalogues it again, minus the library metadata.
     pub(crate) fn forget_folder(&mut self, ctx: &egui::Context, id: i64, path: &std::path::Path) {
         if let Some(cat) = &self.catalog {
-            match cat.forget_folder(id) {
-                // ⚠ Pushed so the deletion is undoable. This is the destructive one — it takes
-                // the ratings, flags, labels and keyword assignments with it.
-                Ok(snap) => {
-                    let open = self.open_photo();
-                    self.actions.push(
-                        ActionKind::CatalogDelete {
-                            snapshot: Box::new(snap),
-                        },
-                        open.as_ref(),
-                    );
+            // ⚠ M9.9: the folder AND every folder beneath it — the tree shows them as one, and
+            // forgetting a parent while its children stayed would leave them re-rooted, surprising.
+            // One undo step: a `Batch` of the deletions, the shape a paste already uses.
+            let folders = cat.folders().unwrap_or_default();
+            let mut ids: Vec<i64> = rustroom_app::folder_tree::subtree(&folders, path)
+                .map(|f| f.id)
+                .collect();
+            if ids.is_empty() {
+                ids.push(id);
+            }
+            let mut parts = Vec::new();
+            for fid in ids {
+                match cat.forget_folder(fid) {
+                    // ⚠ Pushed so the deletion is undoable. This is the destructive one — it takes
+                    // the ratings, flags, labels and keyword assignments with it.
+                    Ok(snap) => parts.push(ActionKind::CatalogDelete {
+                        snapshot: Box::new(snap),
+                    }),
+                    Err(e) => {
+                        self.status = format!("Could not forget the folder: {e}");
+                        break;
+                    }
                 }
-                Err(e) => {
-                    self.status = format!("Could not forget the folder: {e}");
-                    return;
-                }
+            }
+            let open = self.open_photo();
+            match parts.len() {
+                0 => return,
+                1 => self.actions.push(parts.remove(0), open.as_ref()),
+                _ => self.actions.push(ActionKind::Batch(parts), open.as_ref()),
             }
         }
         // ⚠ What is on screen may now be rows that exist nowhere. Two cases, and both need
         // handling: the folder itself, and All Photos, which was showing some of its photos.
         match self.library.as_ref().map(|l| l.source.clone()) {
-            Some(LibrarySource::Folder(p)) if p == path => {
+            Some(LibrarySource::Folder(p)) if p.starts_with(path) => {
                 // ⚠ Closed rather than left showing rows the catalog no longer has — the rule the
                 // collection and keyword deletions already follow.
                 self.library = None;
@@ -592,5 +651,182 @@ mod tests {
             app.library.as_ref().unwrap().source,
             LibrarySource::Folder(_)
         ));
+    }
+}
+
+#[cfg(test)]
+mod move_tests {
+    use crate::test_app::{for_test, TestDir};
+
+    /// ⚠⚠ **M9.9's done-when, end to end:** a RAW rated and edited in `root/a`, then moved on disk
+    /// to `root/b` — the RAW alone, as a Finder drag of one file would — keeps its rating and its
+    /// edits when the tree is scanned again, and the view shows both subfolders' photos.
+    #[test]
+    fn a_file_moved_on_disk_keeps_its_marks_and_edits() {
+        let d = TestDir::new("m99_move");
+        let root = d.0.join("shoot");
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::create_dir_all(root.join("b")).unwrap();
+        let x = root.join("a/x.RAF");
+        std::fs::write(&x, b"some raw bytes").unwrap();
+        std::fs::write(root.join("b/y.RAF"), b"another raw, different size").unwrap();
+        rustroom_app::sidecar::save(
+            &x,
+            &edit_model::Edits {
+                exposure: 0.7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let ctx = egui::Context::default();
+        let mut app = for_test();
+        app.open_folder_at(&ctx, root.clone());
+        assert_eq!(
+            app.library.as_ref().unwrap().entries.len(),
+            2,
+            "both subfolders are shown"
+        );
+        let cat = app.catalog.as_ref().unwrap();
+        cat.set_marks(
+            &x,
+            0,
+            catalog::db::Marks {
+                rating: 5,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let moved = root.join("b/x.RAF");
+        std::fs::rename(&x, &moved).unwrap();
+        app.open_folder_at(&ctx, root.clone());
+
+        let cat = app.catalog.as_ref().unwrap();
+        assert_eq!(
+            cat.marks(&moved, 0).unwrap().rating,
+            5,
+            "the rating followed the file"
+        );
+        assert_eq!(
+            rustroom_app::sidecar::load(&moved).map(|e| e.exposure),
+            Some(0.7),
+            "the edits followed it too"
+        );
+        assert!(
+            app.status.contains("Recognised 1 moved photo"),
+            "{}",
+            app.status
+        );
+        // ⚠ The catalog's count, not the view's: the view is built from the disk scan and shows
+        // two photos either way; the catalog would hold THREE rows had the move not relinked.
+        assert_eq!(
+            cat.photo_count().unwrap(),
+            2,
+            "one photo moved, not a new one beside a stale row"
+        );
+    }
+}
+
+#[cfg(test)]
+mod reindex_tests {
+    use crate::test_app::{for_test, TestDir};
+
+    /// ⚠ Reindex recognises a move too (the author's request): the same fixture as opening, but
+    /// the second scan is a Reindex of the open folder — and the photo OPEN at the time is the one
+    /// that moved, so it must be reopened where it is now.
+    #[test]
+    fn reindex_recognises_a_move_and_reopens_the_moved_photo_where_it_is() {
+        let d = TestDir::new("m99_reindex");
+        let root = d.0.join("shoot");
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::create_dir_all(root.join("b")).unwrap();
+        let x = root.join("a/x.RAF");
+        std::fs::write(&x, b"some raw bytes").unwrap();
+        rustroom_app::sidecar::save(
+            &x,
+            &edit_model::Edits {
+                exposure: 0.7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let ctx = egui::Context::default();
+        let mut app = for_test();
+        app.open_folder_at(&ctx, root.clone());
+        app.catalog
+            .as_ref()
+            .unwrap()
+            .set_marks(
+                &x,
+                0,
+                catalog::db::Marks {
+                    rating: 3,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        // x is the photo OPEN when Reindex runs.
+        app.finalize_session(
+            &ctx,
+            rustroom_app::photo_id::PhotoId::original(x.clone()),
+            crate::test_app::fake_decode(),
+        );
+
+        let moved = root.join("b/x.RAF");
+        std::fs::rename(&x, &moved).unwrap();
+        app.reindex(&ctx);
+        assert_eq!(
+            app.pending.as_ref().map(|p| p.id.path.clone()),
+            Some(moved.clone()),
+            "the open photo must be reopened where it is now, not at its vanished path"
+        );
+
+        let cat = app.catalog.as_ref().unwrap();
+        assert_eq!(
+            cat.marks(&moved, 0).unwrap().rating,
+            3,
+            "the rating followed"
+        );
+        assert_eq!(
+            rustroom_app::sidecar::load(&moved).map(|e| e.exposure),
+            Some(0.7),
+            "the edits followed"
+        );
+        assert!(
+            app.status.contains("Recognised 1 moved photo"),
+            "{}",
+            app.status
+        );
+    }
+}
+
+#[cfg(test)]
+mod forget_tests {
+    use crate::test_app::{for_test, TestDir};
+
+    /// Forgetting a parent forgets its subfolders too — ONE undo step that brings all back.
+    #[test]
+    fn forgetting_a_parent_forgets_its_subtree_as_one_undo_step() {
+        let d = TestDir::new("m99_forget");
+        let root = d.0.join("shoot");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("a.RAF"), b"one").unwrap();
+        std::fs::write(root.join("sub/b.RAF"), b"two!").unwrap();
+        let ctx = egui::Context::default();
+        let mut app = for_test();
+        app.open_folder_at(&ctx, root.clone());
+        let n = |app: &crate::RustroomApp| app.catalog.as_ref().unwrap().folders().unwrap().len();
+        assert_eq!(
+            n(&app),
+            2,
+            "fixture: the parent and its subfolder are catalogued"
+        );
+        let id = app.catalog.as_ref().unwrap().folders().unwrap()[0].id;
+        app.forget_folder(&ctx, id, &root);
+        assert_eq!(n(&app), 0, "both forgotten");
+        app.undo_action(&ctx);
+        assert_eq!(n(&app), 2, "one undo brings both back");
     }
 }

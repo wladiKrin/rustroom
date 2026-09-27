@@ -158,6 +158,39 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-27 — M9.9 folder tree and move tracking (branch `m9.9-folder-tree`)
+
+**3,063 tests**, 81 goldens unmoved, gate green. Spec `2026-09-27-m9.9-folder-tree-design.md`, plan of
+the same date. ✅ **Confirmed by use and merged 2026-09-27.**
+
+**What shipped.** Opening a folder scans its whole tree (`catalog::scan_tree`; hidden and symlinked
+folders skipped — a symlink to an ancestor would never end) and shows it with everything beneath.
+The Folders panel is a tree (`folder_tree`, pure; `folder_rows`, the bin): each folder under its
+nearest known ancestor, labelled from it, recursive counts, a PAINTED disclosure triangle (Phosphor's
+`post` table is version 3 — no glyph names — so a caret codepoint would have been taken on trust, and
+glyphs have rendered as boxes here twice). Forget takes the subtree as one `Batch` undo step.
+
+**Move tracking.** Per folder, before its new rows are added, `Catalog::relink_moved`: a file new to
+the folder is the same photo as a row in ANOTHER folder with the same name, size and mtime whose old
+path is gone — exactly one candidate relinks every per-file table (`photos` with all copies,
+`photo_keywords`, `photo_capture`, `photo_description`, `photo_history`; collections follow the row
+id); a surviving original means a copy, two candidates mean nothing. The app carries a left-behind
+`.RAF.json` and `.xmp` beside the photo, never over one (`move_tracking`), and says "Recognised N
+moved photos". End-to-end test: a RAW rated and edited, moved alone, keeps both.
+
+⚠⚠ **A test that could not fail, caught by its own sabotage.** Removing `photo_description` from
+the relink list left the test GREEN: the assertion meant to guard it had never been added — the
+edit script's anchor no longer existed after `cargo fmt`, and the replace failed silently. Every
+later scripted edit asserts its anchor. Each of the four tables is now sabotaged-and-caught.
+
+⚠ **Reindex recognises moves too** (the author's request after use): opening a folder and Reindex
+share `scan_and_relink`, so Reindex also scans the whole tree, relinks and carries sidecars; a photo
+open during Reindex that moved is reopened at its new path (tested, and sabotaged: reopening the old
+path fails it).
+
+⚠ The end-to-end test first asserted the VIEW had two entries after the move — true whether or not
+the catalog relinked, since the view is built from the disk. It asserts the catalog's photo count.
+
 ### 2026-09-27 — M9.8 keyword renaming, re-parenting and merging (branch `m9.8-keyword-editing`)
 
 **3,048 tests**, 81 goldens unmoved, gate green. Spec `2026-09-27-m9.8-keyword-editing-design.md`,
