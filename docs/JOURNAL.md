@@ -158,10 +158,30 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-27 — double-click resets a slider (branch `slider-reset`, stacked on `m9.7-persistent-history`)
+
+✅ **Confirmed by use and merged 2026-09-27.** The author's request. A double-click on a Develop slider's rail — handle included — or its label
+restores the field's default; one undo step. Temp returns to **As Shot** (`kelvin: None`), not a
+number. `Edited::slider` takes a **required** `default` (79 call sites): an implicit 0 would have
+been silently wrong for Hardness, Detail, Smoothness, Blending, Midpoint, Feather, Strength, Scale
+and the mask ranges; the brush's starting settings became one `brush_tool::DEFAULTS` read by both
+the constructor and the reset. A press ON the handle no longer moves the value (it used to jump to
+the pointer), so the double-click is the reset alone and a grab-to-drag no longer nudges.
+
+⚠⚠ **Guarded by role, not by list:** `every_slider_resets_to_its_fields_default` finds every slider
+the Edit panel draws (36+, all sections open), clicks it off its default, double-clicks it, and
+requires a fresh photo's `Edits` afterwards. Sabotaged twice: a wrong default at one site, and the
+reset removed. ⚠ The Masks panel's sliders use the same struct defaults but are not in that sweep.
+
+⚠ Two things found on the way: the retouch panel had its own copy of the settle rule, still
+`drag_stopped` only, so a click on its Feather or Size track was not undoable — now `settles()`;
+and a label made clickable with `Sense::click()` became a Tab stop in front of the rail, breaking
+Tab-then-arrows — caught by the test written for it an hour earlier, fixed with `Sense::CLICK`.
+
 ### 2026-09-27 — M9.7 persistent history: Ctrl+Z survives a restart (branch `m9.7-persistent-history`)
 
 **3,027 tests**, 81 goldens unmoved, gate green. Spec `2026-09-27-m9.7-persistent-history-design.md`,
-plan of the same date. 🟡 **Awaiting use.**
+plan of the same date. ✅ **Confirmed by use and merged 2026-09-27** (after the two fixes below).
 
 **What shipped.** A photo's undo/redo steps are stored in the catalog (migration 9,
 `photo_history(folder_id, file_name, copy, body)`, keyed like `photos` so a copy has its own;

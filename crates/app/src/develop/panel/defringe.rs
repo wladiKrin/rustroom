@@ -35,11 +35,11 @@ pub fn show(
             }
         }
     });
-    ed.slider(ui, &mut d.purple_amount, 0.0..=100.0, "Purple amount");
+    ed.slider(ui, &mut d.purple_amount, 0.0..=100.0, "Purple amount", 0.0);
     if hue_range(ui, "defringe_purple", &mut d.purple_hue, ed) {
         ed.changed = true;
     }
-    ed.slider(ui, &mut d.green_amount, 0.0..=100.0, "Green amount");
+    ed.slider(ui, &mut d.green_amount, 0.0..=100.0, "Green amount", 0.0);
     if hue_range(ui, "defringe_green", &mut d.green_hue, ed) {
         ed.changed = true;
     }

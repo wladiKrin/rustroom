@@ -333,15 +333,33 @@ fn shape_block(
     ed: &mut Edited,
 ) {
     if matches!(shape, edit_model::Mask::Brush(_)) {
-        ed.slider(ui, &mut *brush.size, 4.0..=300.0, "Size")
-            .on_hover_text(
-                "Brush diameter, in pixels of the full-resolution photo. Drag on the image to \
+        ed.slider(
+            ui,
+            &mut *brush.size,
+            4.0..=300.0,
+            "Size",
+            rustroom_app::brush_tool::DEFAULTS.size,
+        )
+        .on_hover_text(
+            "Brush diameter, in pixels of the full-resolution photo. Drag on the image to \
                  paint.",
-            );
-        ed.slider(ui, &mut *brush.hardness, 0.0..=100.0, "Hardness")
-            .on_hover_text("Shapes the edge: hard is a crisp stroke, soft fades out.");
-        ed.slider(ui, &mut *brush.flow, 1.0..=100.0, "Flow")
-            .on_hover_text("Strength of one pass; repeated passes build up.");
+        );
+        ed.slider(
+            ui,
+            &mut *brush.hardness,
+            0.0..=100.0,
+            "Hardness",
+            rustroom_app::brush_tool::DEFAULTS.hardness,
+        )
+        .on_hover_text("Shapes the edge: hard is a crisp stroke, soft fades out.");
+        ed.slider(
+            ui,
+            &mut *brush.flow,
+            1.0..=100.0,
+            "Flow",
+            rustroom_app::brush_tool::DEFAULTS.flow,
+        )
+        .on_hover_text("Strength of one pass; repeated passes build up.");
         invert_box(ui, shape, ed);
         ui.checkbox(&mut *brush.erase, "Erase")
             .on_hover_text("Strokes remove coverage instead of adding it.");
@@ -351,40 +369,94 @@ fn shape_block(
                  strokes.",
             );
         ui.add_enabled_ui(*brush.auto_mask, |ui| {
-            ed.slider(ui, &mut *brush.tolerance, 0.0..=100.0, "Tolerance")
-                .on_hover_text("How far from the centre pixel's colour auto mask still paints.");
+            ed.slider(
+                ui,
+                &mut *brush.tolerance,
+                0.0..=100.0,
+                "Tolerance",
+                rustroom_app::brush_tool::DEFAULTS.tolerance,
+            )
+            .on_hover_text("How far from the centre pixel's colour auto mask still paints.");
         });
         return;
     }
     invert_box(ui, shape, ed);
     if let edit_model::Mask::Radial(r) = shape {
-        ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather")
-            .on_hover_text("How softly the edge falls off.");
+        ed.slider(
+            ui,
+            &mut r.feather,
+            0.0..=100.0,
+            "Feather",
+            edit_model::RadialGradient::default().feather,
+        )
+        .on_hover_text("How softly the edge falls off.");
     }
     if let edit_model::Mask::Luminance(r) = shape {
         const SCALE: &str = "Selects tones by brightness — 0 is black, 100 is white, the same \
                              scale as the histogram.";
-        ed.slider(ui, &mut r.low, 0.0..=100.0, "Range low")
-            .on_hover_text(SCALE);
-        ed.slider(ui, &mut r.high, 0.0..=100.0, "Range high")
-            .on_hover_text(SCALE);
-        ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather")
-            .on_hover_text("Widens the range with a soft shoulder either side.");
+        ed.slider(
+            ui,
+            &mut r.low,
+            0.0..=100.0,
+            "Range low",
+            edit_model::LuminanceRange::default().low,
+        )
+        .on_hover_text(SCALE);
+        ed.slider(
+            ui,
+            &mut r.high,
+            0.0..=100.0,
+            "Range high",
+            edit_model::LuminanceRange::default().high,
+        )
+        .on_hover_text(SCALE);
+        ed.slider(
+            ui,
+            &mut r.feather,
+            0.0..=100.0,
+            "Feather",
+            edit_model::LuminanceRange::default().feather,
+        )
+        .on_hover_text("Widens the range with a soft shoulder either side.");
     }
     if let edit_model::Mask::Colour(r) = shape {
         const WHEEL: &str = "Degrees around the wheel. The band wraps, so 340 to 20 selects \
                              the reds either side of zero.";
-        ed.slider(ui, &mut r.low, 0.0..=360.0, "Hue low")
-            .on_hover_text(WHEEL);
-        ed.slider(ui, &mut r.high, 0.0..=360.0, "Hue high")
-            .on_hover_text(WHEEL);
-        ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather")
-            .on_hover_text("Widens the band with a soft shoulder either side.");
-        ed.slider(ui, &mut r.min_chroma, 0.0..=0.15, "Min chroma")
-            .on_hover_text(
-                "Stops a near-neutral sky being selected: below it a pixel has no reliable \
+        ed.slider(
+            ui,
+            &mut r.low,
+            0.0..=360.0,
+            "Hue low",
+            edit_model::ColourRange::default().low,
+        )
+        .on_hover_text(WHEEL);
+        ed.slider(
+            ui,
+            &mut r.high,
+            0.0..=360.0,
+            "Hue high",
+            edit_model::ColourRange::default().high,
+        )
+        .on_hover_text(WHEEL);
+        ed.slider(
+            ui,
+            &mut r.feather,
+            0.0..=100.0,
+            "Feather",
+            edit_model::ColourRange::default().feather,
+        )
+        .on_hover_text("Widens the band with a soft shoulder either side.");
+        ed.slider(
+            ui,
+            &mut r.min_chroma,
+            0.0..=0.15,
+            "Min chroma",
+            edit_model::ColourRange::default().min_chroma,
+        )
+        .on_hover_text(
+            "Stops a near-neutral sky being selected: below it a pixel has no reliable \
                  hue, only sensor noise.",
-            );
+        );
     }
 }
 

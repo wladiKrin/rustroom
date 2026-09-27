@@ -167,7 +167,7 @@ pub fn show(
 
     // ---- the four sliders ---------------------------------------------------------------------
     for r in Region::ALL {
-        ed.slider(ui, r.amount(param), -100.0..=100.0, r.label());
+        ed.slider(ui, r.amount(param), -100.0..=100.0, r.label(), 0.0);
     }
     theme::hint(
         ui,

@@ -4,6 +4,24 @@
 //! rule is the one part of painting that can be wrong silently, so it must be testable without a
 //! window.
 
+/// The brush tool's starting settings — and what a double-click on each of its sliders restores.
+///
+/// ⚠ One definition: the app's constructor and the sliders' reset read the same numbers, so a
+/// double-click can never land somewhere a fresh start would not.
+pub struct BrushDefaults {
+    pub size: f32,
+    pub hardness: f32,
+    pub flow: f32,
+    pub tolerance: f32,
+}
+
+pub const DEFAULTS: BrushDefaults = BrushDefaults {
+    size: 40.0,
+    hardness: 50.0,
+    flow: 100.0,
+    tolerance: 35.0,
+};
+
 /// Dabs are splatted a quarter of a radius apart, so recording points more finely than that adds
 /// sidecar bytes and nothing else.
 pub const SPACING_FRACTION: f32 = 0.25;

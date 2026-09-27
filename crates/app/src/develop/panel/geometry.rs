@@ -342,7 +342,7 @@ fn straighten(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
             egui::vec2(w.max(60.0), ui.spacing().interact_size.y),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                ed.slider(ui, &mut s.edits.geometry.angle, -45.0..=45.0, "Angle")
+                ed.slider(ui, &mut s.edits.geometry.angle, -45.0..=45.0, "Angle", 0.0)
                     .on_hover_text("Degrees. Editing it by hand clears any perspective guides.");
             },
         );
@@ -418,15 +418,15 @@ fn perspective(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited, auto: &mut b
         s.edits.geometry.angle,
     );
     let p = &mut s.edits.perspective;
-    ed.slider(ui, &mut p.vertical, -100.0..=100.0, "Vertical")
+    ed.slider(ui, &mut p.vertical, -100.0..=100.0, "Vertical", 0.0)
         .on_hover_text(
             "Keystone about the horizontal axis — for a subject leaning back or forward.",
         );
-    ed.slider(ui, &mut p.horizontal, -100.0..=100.0, "Horizontal")
+    ed.slider(ui, &mut p.horizontal, -100.0..=100.0, "Horizontal", 0.0)
         .on_hover_text("Keystone about the vertical axis — for a subject turned left or right.");
-    ed.slider(ui, &mut p.aspect, -100.0..=100.0, "Aspect ⬍ ⬌")
+    ed.slider(ui, &mut p.aspect, -100.0..=100.0, "Aspect ⬍ ⬌", 0.0)
         .on_hover_text("Stretches the frame: negative taller ⬍, positive wider ⬌. Counteracts the squashing a keystone correction causes.");
-    ed.slider(ui, &mut p.scale, -100.0..=100.0, "Scale")
+    ed.slider(ui, &mut p.scale, -100.0..=100.0, "Scale", 0.0)
         .on_hover_text(
             "−100 fits the whole corrected image inside the frame; 0 leaves it raw, which \
              clips whatever the correction pushes off the edges; +100 zooms in until no black \
@@ -494,11 +494,17 @@ fn lens(ui: &mut egui::Ui, s: &mut Session, lens_profile_found: bool, ed: &mut E
     let distortion = s.edits.applied_lens_correction().distortion;
     if lens_profile_found && distortion {
         if let Some(l) = &mut s.edits.lens_correction {
-            ed.slider(ui, &mut l.scale, 0.0..=100.0, "Lens scale")
-                .on_hover_text(
-                    "How far the corrected frame is scaled up to hide the empty corners \
+            ed.slider(
+                ui,
+                &mut l.scale,
+                0.0..=100.0,
+                "Lens scale",
+                edit_model::LensCorrection::default().scale,
+            )
+            .on_hover_text(
+                "How far the corrected frame is scaled up to hide the empty corners \
                      distortion correction leaves. Judged here, against the uncropped frame.",
-                );
+            );
         }
     } else if !lens_profile_found {
         ui.label(

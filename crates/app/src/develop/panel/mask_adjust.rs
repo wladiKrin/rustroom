@@ -54,25 +54,37 @@ pub fn show(
                 adjustments::white_balance(ui, &mut a.white_balance, baseline, None, ed);
             }
             LocalGroup::Tone => {
-                ed.slider(ui, &mut a.exposure, -5.0..=5.0, "Exposure");
-                ed.slider(ui, &mut a.contrast, -100.0..=100.0, "Contrast");
-                ed.slider(ui, &mut a.highlights, -100.0..=100.0, "Highlights");
-                ed.slider(ui, &mut a.shadows, -100.0..=100.0, "Shadows");
-                ed.slider(ui, &mut a.whites, -100.0..=100.0, "Whites");
-                ed.slider(ui, &mut a.blacks, -100.0..=100.0, "Blacks");
+                ed.slider(ui, &mut a.exposure, -5.0..=5.0, "Exposure", 0.0);
+                ed.slider(ui, &mut a.contrast, -100.0..=100.0, "Contrast", 0.0);
+                ed.slider(ui, &mut a.highlights, -100.0..=100.0, "Highlights", 0.0);
+                ed.slider(ui, &mut a.shadows, -100.0..=100.0, "Shadows", 0.0);
+                ed.slider(ui, &mut a.whites, -100.0..=100.0, "Whites", 0.0);
+                ed.slider(ui, &mut a.blacks, -100.0..=100.0, "Blacks", 0.0);
                 // ⚠ Inline under its sub-label, as in the Edit panel: no histogram ghost, since
                 // a mask's curve acts on a region no histogram describes.
                 // ⚠ `None`: a mask's curve is composite-only by decision, so it gets no channel
                 // selector — see `build_pipeline`'s mask branch, which is the other half of that.
                 curve_rect = tone_curve::show(ui, &mut a.tone_curve, ed, None, None, None);
                 theme::sub_label(ui, "Presence");
-                ed.slider(ui, &mut a.local_contrast.texture, -100.0..=100.0, "Texture");
-                ed.slider(ui, &mut a.local_contrast.clarity, -100.0..=100.0, "Clarity");
-                ed.slider(ui, &mut a.dehaze.amount, -100.0..=100.0, "Dehaze");
+                ed.slider(
+                    ui,
+                    &mut a.local_contrast.texture,
+                    -100.0..=100.0,
+                    "Texture",
+                    0.0,
+                );
+                ed.slider(
+                    ui,
+                    &mut a.local_contrast.clarity,
+                    -100.0..=100.0,
+                    "Clarity",
+                    0.0,
+                );
+                ed.slider(ui, &mut a.dehaze.amount, -100.0..=100.0, "Dehaze", 0.0);
             }
             LocalGroup::Color => {
-                ed.slider(ui, &mut a.vibrance, -100.0..=100.0, "Vibrance");
-                ed.slider(ui, &mut a.saturation, -100.0..=100.0, "Saturation");
+                ed.slider(ui, &mut a.vibrance, -100.0..=100.0, "Vibrance", 0.0);
+                ed.slider(ui, &mut a.saturation, -100.0..=100.0, "Saturation", 0.0);
                 ui.add_space(4.0);
                 hsl_bands::show(ui, &mut a.hsl, channel, ed);
                 theme::sub_label(ui, "Color Grading");
@@ -85,15 +97,21 @@ pub fn show(
                 {
                     color_wheel::show(ui, &mut a.color_grading, *grade, diameter, ed);
                     let w = grade.wheel_mut(&mut a.color_grading);
-                    ed.slider(ui, &mut w.hue, 0.0..=360.0, "Hue");
+                    ed.slider(ui, &mut w.hue, 0.0..=360.0, "Hue", 0.0);
                     // ⚠ `Strength` here too — the same instrument, see `adjustments`.
-                    ed.slider(ui, &mut w.saturation, 0.0..=100.0, "Strength");
-                    ed.slider(ui, &mut w.luminance, -100.0..=100.0, "Luminance");
+                    ed.slider(ui, &mut w.saturation, 0.0..=100.0, "Strength", 0.0);
+                    ed.slider(ui, &mut w.luminance, -100.0..=100.0, "Luminance", 0.0);
                 }
                 ui.separator();
                 let cg = &mut a.color_grading;
-                ed.slider(ui, &mut cg.blending, 0.0..=100.0, "Blending");
-                ed.slider(ui, &mut cg.balance, -100.0..=100.0, "Balance");
+                ed.slider(
+                    ui,
+                    &mut cg.blending,
+                    0.0..=100.0,
+                    "Blending",
+                    edit_model::ColorGrading::default().blending,
+                );
+                ed.slider(ui, &mut cg.balance, -100.0..=100.0, "Balance", 0.0);
             }
             LocalGroup::Detail => {
                 theme::sub_label(ui, "Noise Reduction");
@@ -102,24 +120,44 @@ pub fn show(
                     &mut a.noise_reduction.luminance,
                     0.0..=100.0,
                     "Luminance",
+                    0.0,
                 );
-                ed.slider(ui, &mut a.noise_reduction.detail, 0.0..=100.0, "Detail");
-                ed.slider(ui, &mut a.noise_reduction.color, 0.0..=100.0, "Color");
+                ed.slider(
+                    ui,
+                    &mut a.noise_reduction.detail,
+                    0.0..=100.0,
+                    "Detail",
+                    edit_model::NoiseReduction::default().detail,
+                );
+                ed.slider(ui, &mut a.noise_reduction.color, 0.0..=100.0, "Color", 0.0);
                 ed.slider(
                     ui,
                     &mut a.noise_reduction.smoothness,
                     0.0..=100.0,
                     "Smoothness",
+                    edit_model::NoiseReduction::default().smoothness,
                 );
                 theme::sub_label(ui, "Sharpening");
-                ed.slider(ui, &mut a.sharpening.amount, 0.0..=100.0, "Amount");
-                ed.slider(ui, &mut a.sharpening.radius, 0.5..=3.0, "Radius (px)");
-                ed.slider(ui, &mut a.sharpening.detail, 0.0..=100.0, "Detail");
-                ed.slider(ui, &mut a.sharpening.masking, 0.0..=100.0, "Masking");
+                ed.slider(ui, &mut a.sharpening.amount, 0.0..=100.0, "Amount", 0.0);
+                ed.slider(
+                    ui,
+                    &mut a.sharpening.radius,
+                    0.5..=3.0,
+                    "Radius (px)",
+                    edit_model::Sharpening::default().radius,
+                );
+                ed.slider(
+                    ui,
+                    &mut a.sharpening.detail,
+                    0.0..=100.0,
+                    "Detail",
+                    edit_model::Sharpening::default().detail,
+                );
+                ed.slider(ui, &mut a.sharpening.masking, 0.0..=100.0, "Masking", 0.0);
                 // ⚠ M9.6, Lightroom's meaning: negative protects this area from the global
                 // defringe (a real purple object), positive adds defringe here.
                 theme::sub_label(ui, "Defringe");
-                ed.slider(ui, &mut a.defringe, -100.0..=100.0, "Defringe")
+                ed.slider(ui, &mut a.defringe, -100.0..=100.0, "Defringe", 0.0)
                     .on_hover_text(
                         "Negative protects this area from the Lens panel's defringe; positive \
                          removes purple and green fringes here with its hue ranges",

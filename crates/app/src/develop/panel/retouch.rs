@@ -238,17 +238,21 @@ fn settings(ui: &mut egui::Ui, s: &mut Session, tool: &mut SpotTool, ed: &mut Ed
         *radius = spot_tool::radius_from_px(px, long);
     }
     touched |= r.changed();
-    settled |= r.drag_stopped();
+    settled |= super::settles(&r);
     dragging |= r.dragged();
 
     let feather = live
         .as_mut()
         .map_or(&mut tool.feather, |sp| &mut sp.feather);
     let r = ui
-        .add(super::slider::Slider::new(feather, 0.0..=100.0).text("Feather"))
+        .add(
+            super::slider::Slider::new(feather, 0.0..=100.0)
+                .text("Feather")
+                .reset_to(rustroom_app::spot_tool::SpotTool::default().feather),
+        )
         .on_hover_text("0 is a hard edge; 100 ramps from the centre to the rim.");
     touched |= r.changed();
-    settled |= r.drag_stopped();
+    settled |= super::settles(&r);
     dragging |= r.dragged();
 
     if let (Some(i), Some(sp)) = (selected, live) {
