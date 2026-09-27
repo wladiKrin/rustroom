@@ -254,9 +254,9 @@ fn confirm_forget_folder(app: &mut RustroomApp, ctx: &egui::Context) {
             crate::theme::hint(
                 ui,
                 &format!(
-                    "Removes {count} photos from the catalog, with their ratings, flags, labels \
-                     and keywords. No files are deleted and no edits are lost — re-opening the \
-                     folder catalogues it again."
+                    "Removes {count} photos from the catalog — this folder and every folder \
+                     beneath it — with their ratings, flags, labels and keywords. No files are \
+                     deleted and no edits are lost — re-opening the folder catalogues it again."
                 ),
             );
         },

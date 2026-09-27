@@ -191,28 +191,41 @@ impl RustroomApp {
     /// untouched. Re-opening the folder catalogues it again, minus the library metadata.
     pub(crate) fn forget_folder(&mut self, ctx: &egui::Context, id: i64, path: &std::path::Path) {
         if let Some(cat) = &self.catalog {
-            match cat.forget_folder(id) {
-                // ⚠ Pushed so the deletion is undoable. This is the destructive one — it takes
-                // the ratings, flags, labels and keyword assignments with it.
-                Ok(snap) => {
-                    let open = self.open_photo();
-                    self.actions.push(
-                        ActionKind::CatalogDelete {
-                            snapshot: Box::new(snap),
-                        },
-                        open.as_ref(),
-                    );
+            // ⚠ M9.9: the folder AND every folder beneath it — the tree shows them as one, and
+            // forgetting a parent while its children stayed would leave them re-rooted, surprising.
+            // One undo step: a `Batch` of the deletions, the shape a paste already uses.
+            let folders = cat.folders().unwrap_or_default();
+            let mut ids: Vec<i64> = rustroom_app::folder_tree::subtree(&folders, path)
+                .map(|f| f.id)
+                .collect();
+            if ids.is_empty() {
+                ids.push(id);
+            }
+            let mut parts = Vec::new();
+            for fid in ids {
+                match cat.forget_folder(fid) {
+                    // ⚠ Pushed so the deletion is undoable. This is the destructive one — it takes
+                    // the ratings, flags, labels and keyword assignments with it.
+                    Ok(snap) => parts.push(ActionKind::CatalogDelete {
+                        snapshot: Box::new(snap),
+                    }),
+                    Err(e) => {
+                        self.status = format!("Could not forget the folder: {e}");
+                        break;
+                    }
                 }
-                Err(e) => {
-                    self.status = format!("Could not forget the folder: {e}");
-                    return;
-                }
+            }
+            let open = self.open_photo();
+            match parts.len() {
+                0 => return,
+                1 => self.actions.push(parts.remove(0), open.as_ref()),
+                _ => self.actions.push(ActionKind::Batch(parts), open.as_ref()),
             }
         }
         // ⚠ What is on screen may now be rows that exist nowhere. Two cases, and both need
         // handling: the folder itself, and All Photos, which was showing some of its photos.
         match self.library.as_ref().map(|l| l.source.clone()) {
-            Some(LibrarySource::Folder(p)) if p == path => {
+            Some(LibrarySource::Folder(p)) if p.starts_with(path) => {
                 // ⚠ Closed rather than left showing rows the catalog no longer has — the rule the
                 // collection and keyword deletions already follow.
                 self.library = None;
@@ -698,5 +711,34 @@ mod move_tests {
             2,
             "one photo moved, not a new one beside a stale row"
         );
+    }
+}
+
+#[cfg(test)]
+mod forget_tests {
+    use crate::test_app::{for_test, TestDir};
+
+    /// Forgetting a parent forgets its subfolders too — ONE undo step that brings all back.
+    #[test]
+    fn forgetting_a_parent_forgets_its_subtree_as_one_undo_step() {
+        let d = TestDir::new("m99_forget");
+        let root = d.0.join("shoot");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("a.RAF"), b"one").unwrap();
+        std::fs::write(root.join("sub/b.RAF"), b"two!").unwrap();
+        let ctx = egui::Context::default();
+        let mut app = for_test();
+        app.open_folder_at(&ctx, root.clone());
+        let n = |app: &crate::RustroomApp| app.catalog.as_ref().unwrap().folders().unwrap().len();
+        assert_eq!(
+            n(&app),
+            2,
+            "fixture: the parent and its subfolder are catalogued"
+        );
+        let id = app.catalog.as_ref().unwrap().folders().unwrap()[0].id;
+        app.forget_folder(&ctx, id, &root);
+        assert_eq!(n(&app), 0, "both forgotten");
+        app.undo_action(&ctx);
+        assert_eq!(n(&app), 2, "one undo brings both back");
     }
 }

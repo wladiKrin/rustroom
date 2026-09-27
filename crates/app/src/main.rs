@@ -57,6 +57,7 @@ mod develop;
 mod display_colorspace;
 mod export_flow;
 mod filmstrip;
+mod folder_rows;
 mod immich_flow;
 mod immich_panel;
 mod interaction;
@@ -436,6 +437,8 @@ struct RustroomApp {
     snapshot_rename: Option<(u32, String)>,
     /// The Keywords row being renamed in place, and its draft (M9.8). `snapshot_rename`'s shape.
     keyword_rename: Option<(i64, String)>,
+    /// Folders collapsed in the Folders tree (M9.9), for this session.
+    folders_collapsed: std::collections::HashSet<std::path::PathBuf>,
     /// The Library panel section being dragged, if one is.
     ///
     /// ⚠ On the app rather than a local, because a drag spans frames and a `Response` only knows
@@ -732,6 +735,7 @@ impl RustroomApp {
             label_draft: None,
             snapshot_rename: None,
             keyword_rename: None,
+            folders_collapsed: Default::default(),
             panel_drag: None,
             cell_zoom_pending: false,
             info_sizes: Default::default(),
