@@ -372,6 +372,9 @@ struct RustroomApp {
     /// canvas size-drag writes `radius` back here, which is what makes the panel's Size slider
     /// follow the gesture.
     spot_tool: rustroom_app::spot_tool::SpotTool,
+    /// The red-eye tool's settings (M9.11) — `spot_tool`'s standing. Its `active` field is the
+    /// Retouch tool's eye mode: `None` places patches, `Some(kind)` places eyes.
+    eye_tool: rustroom_app::eye_tool::EyeTool,
     /// Which HSL channel the Color section's selector is showing. View state, per app —
     /// like a brush size, it is a property of the tool and not of the photograph.
     hsl_channel: develop::panel::adjustments::HslChannel,
@@ -712,6 +715,7 @@ impl RustroomApp {
             status: String::new(),
             show_filmstrip: true,
             spot_tool: Default::default(),
+            eye_tool: Default::default(),
             brush_size: rustroom_app::brush_tool::DEFAULTS.size,
             brush_hardness: rustroom_app::brush_tool::DEFAULTS.hardness,
             brush_flow: rustroom_app::brush_tool::DEFAULTS.flow,
@@ -975,6 +979,15 @@ pub struct Session {
     /// press and the release and the release then sees no gesture at all. The drag placed nothing
     /// and the lifecycle looked perfect from every angle until it was instrumented.
     spot_drag: crate::develop::canvas::spot_overlay::SpotDrag,
+    /// Which eye is selected (M9.11). View state, never `Edits` — `selected_spot`'s rule.
+    /// ⚠ Selecting an eye clears `selected_spot` and vice versa, so the panel's sliders always
+    /// edit exactly one thing.
+    selected_eye: Option<usize>,
+    /// An eye the view leaves out while it is moved or resized — `suppressed_spot`'s twin, so the
+    /// red pupil underneath is visible to aim at. Applied in `view_edits`.
+    suppressed_eye: Option<usize>,
+    /// The eye gesture across frames — on the session for `spot_drag`'s reason.
+    eye_drag: crate::develop::canvas::eye_overlay::EyeDrag,
     /// Drawn perspective guides.
     ///
     /// ⚠⚠ **View state, never `Edits`.** A guide is scaffolding for arriving at a slider value,

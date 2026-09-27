@@ -55,6 +55,8 @@ pub fn op_glyph(op: edit_model::MaskOp) -> &'static str {
 pub enum RowGlyph {
     Mask(MaskKind),
     Spot(edit_model::SpotMode),
+    /// A red- or pet-eye correction (M9.11).
+    Eye(edit_model::EyeKind),
     Preset,
 }
 
@@ -224,6 +226,7 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         match spec.glyph {
             RowGlyph::Mask(k) => mask_glyph::paint(&painter, glyph, k, text),
             RowGlyph::Spot(m) => mask_glyph::paint_spot(&painter, glyph, m, text),
+            RowGlyph::Eye(k) => mask_glyph::paint_pupil(&painter, glyph, k, text),
             RowGlyph::Preset => mask_glyph::paint_star(&painter, glyph, text),
         }
         x += GLYPH + 6.0;

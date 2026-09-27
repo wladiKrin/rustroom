@@ -14,6 +14,7 @@ pub mod mask;
 pub(crate) mod mask_coverage;
 pub mod noise_reduction;
 pub mod output_transform;
+pub mod red_eye;
 pub mod saturation;
 pub mod sharpening;
 pub mod spot_removal;

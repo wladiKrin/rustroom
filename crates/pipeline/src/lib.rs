@@ -163,6 +163,7 @@ pub use stages::noise_reduction::{
     LUM_RADIUS_FULL,
 };
 pub use stages::output_transform::OutputTransform;
+pub use stages::red_eye::{redness, RedEyeStage};
 pub use stages::saturation::{SaturationStage, EPS as SATURATION_EPS};
 pub use stages::sharpening::{max_kernel_radius, SharpenStage, RADIUS_RANGE};
 pub use stages::spot_removal::SpotRemovalStage;
@@ -905,6 +906,8 @@ pub fn prefix_airlight_key(
 pub enum PrefixStepKey {
     LensCorrection(edit_model::LensCorrection, Resampler),
     SpotRemoval(Vec<edit_model::Spot>),
+    /// M9.11 — the whole eye list, so any change to any eye misses the cache (`SpotRemoval`'s rule).
+    RedEye(Vec<edit_model::Eye>),
     /// ⚠ Carries the perspective since M7.3b: the keystone is part of this stage's one resample.
     Geometry(edit_model::Geometry, edit_model::Perspective, Resampler),
     NoiseReduction(edit_model::NoiseReduction),
@@ -1025,6 +1028,15 @@ pub fn build_prefix_steps(
         steps.push(PrefixStep {
             key: PrefixStepKey::SpotRemoval(edits.spots.clone()),
             stage: Box::new(SpotRemovalStage::new(&edits.spots)),
+        });
+    }
+
+    // ⚠ M9.11: red eye right after spots, in the same pre-perspective space — so `SpotMap` draws
+    // both, and a heal patch beside a pupil samples the uncorrected neighbour it was placed against.
+    if !edits.eyes.is_empty() {
+        steps.push(PrefixStep {
+            key: PrefixStepKey::RedEye(edits.eyes.clone()),
+            stage: Box::new(RedEyeStage::new(&edits.eyes)),
         });
     }
 
@@ -3523,6 +3535,14 @@ mod tests {
                 feather: 30.0,
                 mode: edit_model::SpotMode::Heal,
             }],
+            eyes: vec![edit_model::Eye {
+                centre: [0.6, 0.35],
+                radius: 0.01,
+                kind: edit_model::EyeKind::Pet,
+                pupil_size: 60.0,
+                darken: 40.0,
+                catchlight: Some([-0.35, -0.35]),
+            }],
             rendering: Some(edit_model::Rendering::Camera),
             look: edit_model::Look {
                 file: Some("velvia.cube".into()),
@@ -3808,10 +3828,10 @@ mod tests {
         b.masks[0].adjustments.noise_reduction.luminance = 95.0;
         let steps_a = build_prefix_steps(&a, RenderScale::FULL, None, Resampler::default(), None);
         let steps_b = build_prefix_steps(&b, RenderScale::FULL, None, Resampler::default(), None);
-        assert_eq!(steps_a.len(), 6);
+        assert_eq!(steps_a.len(), 7);
 
         // Same up to and including the geometry and the defringe (M9.6)...
-        for n in 0..=5 {
+        for n in 0..=6 {
             assert_eq!(
                 PrefixKey::upto(&steps_a, n, RenderScale::FULL),
                 PrefixKey::upto(&steps_b, n, RenderScale::FULL),
@@ -3820,8 +3840,8 @@ mod tests {
         }
         // ...and different once the masked capture correction has run.
         assert_ne!(
-            PrefixKey::upto(&steps_a, 6, RenderScale::FULL),
-            PrefixKey::upto(&steps_b, 6, RenderScale::FULL)
+            PrefixKey::upto(&steps_a, 7, RenderScale::FULL),
+            PrefixKey::upto(&steps_b, 7, RenderScale::FULL)
         );
 
         // The full key is the deepest truncation, so `new` and `upto` cannot disagree.
@@ -3927,6 +3947,8 @@ mod tests {
                 "noise_reduction",
                 "dehaze",
                 "spot_removal",
+                // ⚠ M9.11: right after spots, in their space.
+                "red_eye",
                 "geometry",
                 // ⚠ M9.6: after geometry, in the frame the masks live in.
                 "defringe",
@@ -4103,8 +4125,8 @@ mod tests {
         let base_keys = keys(&base);
         assert_eq!(
             base_keys.len(),
-            6,
-            "all six prefix steps should be active — NR, dehaze, spots, the geometry (with the \
+            7,
+            "all seven prefix steps should be active — NR, dehaze, spots, red eye (M9.11), the geometry (with the \
              keystone fused in since M7.3b), the defringe (M9.6) and the fixture's masked capture \
              correction"
         );
@@ -4112,7 +4134,7 @@ mod tests {
         let variants = [
             // ⚠ The keystone moves the GEOMETRY key since M7.3b — it is part of that step.
             (
-                3,
+                4,
                 Edits {
                     perspective: edit_model::Perspective {
                         vertical: 70.0,
@@ -4135,7 +4157,7 @@ mod tests {
                 },
             ),
             (
-                3,
+                4,
                 Edits {
                     geometry: edit_model::Geometry {
                         angle: 7.0,
@@ -4165,7 +4187,7 @@ mod tests {
             // ⚠ The masked capture correction is a prefix step like any other, and its key must
             // move with its own parameters and nothing else — the same property the five above
             // assert, extended to the step this milestone added.
-            (5, {
+            (6, {
                 let mut e = base.clone();
                 e.masks[0].adjustments.noise_reduction.luminance = 90.0;
                 e
@@ -4173,7 +4195,7 @@ mod tests {
             // ⚠ M9.6: the defringe step moves with the global settings AND with a mask's local
             // slider — and a mask's local slider moves nothing else, not its capture step.
             (
-                4,
+                5,
                 Edits {
                     defringe: edit_model::Defringe {
                         purple_amount: 70.0,
@@ -4182,15 +4204,21 @@ mod tests {
                     ..base.clone()
                 },
             ),
-            (4, {
+            (5, {
                 let mut e = base.clone();
                 e.masks[0].adjustments.defringe = -40.0;
+                e
+            }),
+            // ⚠ M9.11: the red-eye step moves with its own eye list and nothing else.
+            (3, {
+                let mut e = base.clone();
+                e.eyes[0].darken = 95.0;
                 e
             }),
         ];
         for (moved, e) in variants {
             let ks = keys(&e);
-            for i in 0..6 {
+            for i in 0..7 {
                 if i == moved {
                     assert_ne!(ks[i], base_keys[i], "step {i} should have changed");
                 } else {
@@ -5098,7 +5126,7 @@ mod tests {
     /// precedes dehaze so dehaze sees the vignetting correction; spots sit pre-perspective; the one
     /// geometric resample is last, so a geometry drag re-runs nothing else.
     #[test]
-    fn the_prefix_runs_lens_nr_dehaze_spots_then_geometry() {
+    fn the_prefix_runs_lens_nr_dehaze_spots_red_eye_then_geometry() {
         let edits = Edits {
             noise_reduction: edit_model::NoiseReduction {
                 luminance: 30.0,
@@ -5124,6 +5152,14 @@ mod tests {
                 feather: 50.0,
                 mode: Default::default(),
             }],
+            eyes: vec![edit_model::Eye {
+                centre: [0.4, 0.4],
+                radius: 0.01,
+                kind: Default::default(),
+                pupil_size: 50.0,
+                darken: 50.0,
+                catchlight: None,
+            }],
             ..Edits::default()
         };
         let names: Vec<&'static str> = build_prefix_steps(
@@ -5143,6 +5179,7 @@ mod tests {
                 "noise_reduction",
                 "dehaze",
                 "spot_removal",
+                "red_eye",
                 "geometry"
             ]
         );
@@ -5212,6 +5249,11 @@ mod tests {
             !build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
                 .stage_names()
                 .contains(&"spot_removal")
+        );
+        assert!(
+            !build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+                .stage_names()
+                .contains(&"red_eye")
         );
 
         // And an empty list on an otherwise busy edit set inserts nothing either.

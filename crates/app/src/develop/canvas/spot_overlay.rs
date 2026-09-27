@@ -130,11 +130,15 @@ pub(super) fn draw_spot_overlay(
             // ⚠ Hit-test BEFORE placement: a click on an existing handle selects it rather than
             // stacking a new spot on top of it.
             match spot_tool::hit_test(&s.edits.spots, at, aspect, min_grab) {
-                Some((i, _)) => s.selected_spot = Some(i),
+                Some((i, _)) => {
+                    s.selected_spot = Some(i);
+                    s.selected_eye = None;
+                }
                 None => {
                     let sp = place_with_source(at, *tool, &s.edits.spots, aspect, sample);
                     s.edits.spots.push(sp);
                     s.selected_spot = Some(s.edits.spots.len() - 1);
+                    s.selected_eye = None;
                     changed = true;
                 }
             }
@@ -148,6 +152,7 @@ pub(super) fn draw_spot_overlay(
             s.spot_drag = match spot_tool::hit_test(&s.edits.spots, at, aspect, min_grab) {
                 Some((i, h)) => {
                     s.selected_spot = Some(i);
+                    s.selected_eye = None;
                     // ⚠⚠ **The patch leaves the view for the duration of the drag**, so the
                     // blemish underneath is visible and can be lined up against. Without this its
                     // old effect stays on screen and hides the very thing being aimed at.
@@ -190,10 +195,9 @@ pub(super) fn draw_spot_overlay(
             if let Some(p) = resp.interact_pointer_pos() {
                 let now = to_source(p);
                 let was = to_source(p - resp.drag_delta());
-                let moved = s.edits.spots.get_mut(i).is_some_and(|sp| {
+                if let Some(sp) = s.edits.spots.get_mut(i) {
                     spot_tool::apply_drag(sp, h, now[0] - was[0], now[1] - was[1]);
-                    true
-                });
+                }
                 // ⚠⚠ **Deliberately NO render while the drag runs — the moving circle IS the
                 // feedback**, which is `draw_crop_overlay`'s model rather than the mask overlay's.
                 // Reported as "very laggy, as it adapts the retouching on the go", and the reason
@@ -205,7 +209,9 @@ pub(super) fn draw_spot_overlay(
                 // ⚠ An earlier version did request here, citing the M3.1a bug. That reasoning was
                 // right for masks and wrong here, and only using it showed which. The release path
                 // below still requests, so the pixels are never left stale.
-                changed |= moved;
+                //
+                // ⚠⚠ **And the move is REPORTED on release, not here.** Reporting it on every drag
+                // frame logged one undo action per frame with no history step behind any of them.
             }
         }
     }
@@ -251,6 +257,10 @@ pub(super) fn draw_spot_overlay(
         if let Some(sp) = placed {
             s.edits.spots.push(sp);
             s.selected_spot = Some(s.edits.spots.len() - 1);
+            s.selected_eye = None;
+            changed = true;
+        }
+        if matches!(s.spot_drag, SpotDrag::Moving(..)) {
             changed = true;
         }
         if s.spot_drag != SpotDrag::None {
@@ -269,6 +279,13 @@ pub(super) fn draw_spot_overlay(
             s.spot_drag = SpotDrag::None;
         }
     }
+
+    // ⚠⚠ **The overlay records its own history step, and reports the edit only if one was
+    // recorded** — the mask and crop overlays' rule. `develop::body` logs an `ActionKind` for a
+    // `true`, and a logged action with no history step behind it makes Ctrl+Z pop the step
+    // *before* this one (`History::push`'s doc) — which is what every spot placement did until
+    // M9.11. A move that ended where it began pushes nothing and so reports nothing.
+    let changed = changed && s.history.push(s.edits.clone());
 
     // ---- the overlay ------------------------------------------------------------------------
     // ⚠ Widened by `overlay_clip`: `line_segment` centres its stroke on the path, so a halo drawn

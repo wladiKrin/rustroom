@@ -29,7 +29,8 @@ use rustroom_app::menu::Command;
 /// panel takes what is left, so rail (right, outermost) → adjustments (right) → filmstrip
 /// (bottom) → canvas (central) must be preserved exactly. The rail coming *first* is what puts
 /// it against the window edge rather than between the panel and the image.
-/// Delete or Backspace removes the selected retouch spot. `true` when one was removed.
+/// Delete or Backspace removes the selected retouch spot or eye (M9.11). `true` when one was
+/// removed.
 ///
 /// ⚠ **Gated on nothing having keyboard focus**, the rule every bare key in this app follows:
 /// without it, Backspace in the Save-preset name field would delete a spot instead of a
@@ -37,7 +38,7 @@ use rustroom_app::menu::Command;
 ///
 /// ⚠ And on the Retouch tool being active, so the key means nothing anywhere else — a Delete that
 /// silently removed a patch while the user was moving a slider would be unattributable.
-fn delete_selected_spot(app: &mut RustroomApp, ctx: &egui::Context) -> bool {
+fn delete_selected_retouch(app: &mut RustroomApp, ctx: &egui::Context) -> bool {
     if app.tool != rustroom_app::tool::Tool::Retouch || ctx.memory(|m| m.focused()).is_some() {
         return false;
     }
@@ -49,6 +50,20 @@ fn delete_selected_spot(app: &mut RustroomApp, ctx: &egui::Context) -> bool {
     let Some(s) = app.session.as_mut() else {
         return false;
     };
+    // ⚠ M9.11: an eye and a patch are never selected together, so Delete has one target.
+    if let Some(i) = s.selected_eye.filter(|&i| i < s.edits.eyes.len()) {
+        s.edits.eyes.remove(i);
+        s.selected_eye = None;
+        if s.suppressed_eye == Some(i) {
+            s.suppressed_eye = None;
+        }
+        s.request(
+            s.view_edits(rustroom_app::tool::Tool::Retouch),
+            s.render_max_dim(),
+            s.requested_region,
+        );
+        return s.history.push(s.edits.clone());
+    }
     let removed = s.selected_spot;
     if rustroom_app::spot_tool::delete_selected(&mut s.edits.spots, &mut s.selected_spot) {
         // ⚠ The row flags go with the patch, or the next patch inherits its eye and hold-out.
@@ -88,7 +103,7 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         filmstrip::show(app, ui, ctx);
     }
     photo_edited |= canvas::show(app, ui, ctx);
-    photo_edited |= delete_selected_spot(app, ctx);
+    photo_edited |= delete_selected_retouch(app, ctx);
 
     // Recorded in the same order as everything else, so "delete a preset, move a slider,
     // Ctrl+Z twice" undoes the slider and then restores the preset.

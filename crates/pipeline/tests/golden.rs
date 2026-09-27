@@ -2177,6 +2177,102 @@ fn the_spot_goldens_do_not_clip_and_differ() {
     );
 }
 
+/// M9.11: pale skin, and two eyes — iris rings of radius 10 around a red pupil on the left and a green eyeshine on the right, both radius 5.
+fn red_eye_chart() -> ImageBuf {
+    let (sw, sh) = (SPOT_W, SPOT_H);
+    let mut img = ImageBuf::new(sw, sh);
+    for y in 0..sh {
+        for x in 0..sw {
+            let d = |cx: f32| ((x as f32 - cx).powi(2) + (y as f32 - 24.0).powi(2)).sqrt();
+            // ⚠ `set_srgb` takes LINEAR sRGB. A flash pupil is ~(0.60, 0.10, 0.10) *encoded*, which
+            // is (0.32, 0.01, 0.01) linear; written as linear (0.60, 0.10, 0.10) it is a pale pink
+            // the stage rightly corrects only partly — the first draft of this chart did that.
+            let px = if d(20.0) <= 5.0 {
+                [0.32, 0.01, 0.01]
+            } else if d(44.0) <= 5.0 {
+                [0.55, 0.95, 0.45]
+            } else if d(20.0) <= 10.0 || d(44.0) <= 10.0 {
+                // ⚠ An iris ring, as in a real eye: the red stage's fringe pass corrects any
+                // faintly red pixel near the pupil, so skin placed directly against it (this
+                // chart's first version) was greyed into a pale ring — pinned by the golden.
+                [0.10, 0.10, 0.11]
+            } else {
+                [0.78, 0.57, 0.44]
+            };
+            set_srgb(&mut img, x, y, px);
+        }
+    }
+    img
+}
+
+/// One red and one pet eye (with its catchlight), circles 7 px against the pupils' 5 — a real
+/// click pads the detected pupil, so skin inside the circle is part of what this pins.
+fn red_eye_case() -> Edits {
+    let eye = |x: f32, kind, catchlight| edit_model::Eye {
+        centre: [x / 63.0, 24.0 / 47.0],
+        radius: 7.0 / 64.0,
+        kind,
+        pupil_size: 50.0,
+        darken: 50.0,
+        catchlight,
+    };
+    Edits {
+        eyes: vec![
+            eye(20.0, edit_model::EyeKind::Red, None),
+            eye(44.0, edit_model::EyeKind::Pet, Some([-0.35, -0.35])),
+        ],
+        ..Edits::default()
+    }
+}
+
+#[test]
+fn golden_red_eye() {
+    check_golden_with("red_eye", &red_eye_case(), red_eye_chart());
+}
+
+/// ⚠ A golden of an unchanged picture would pin nothing: prove both pupils actually moved, and
+/// the skin between them did not.
+#[test]
+fn the_red_eye_golden_corrects_both_pupils_and_not_the_skin() {
+    let render = |e: &Edits| {
+        to_rgb8(
+            &build_pipeline(e, RenderScale::FULL, ProfileRendering::colorimetric())
+                .run(red_eye_chart()),
+        )
+    };
+    let (fixed, neutral) = (render(&red_eye_case()), render(&Edits::default()));
+    let at = |b: &[u8], x: usize, y: usize| -> [i32; 3] {
+        let i = (y * SPOT_W + x) * 3;
+        [b[i] as i32, b[i + 1] as i32, b[i + 2] as i32]
+    };
+    let red_before = at(&neutral, 20, 24);
+    let red_after = at(&fixed, 20, 24);
+    assert!(
+        red_before[0] - red_before[1] > 60,
+        "fixture check: the left pupil is red on the neutral render: {red_before:?}"
+    );
+    assert!(
+        (red_after[0] - red_after[1]).abs() < 25,
+        "the red pupil is still red: {red_after:?}"
+    );
+    let pet_before = at(&neutral, 45, 25);
+    let pet_after = at(&fixed, 45, 25);
+    // ⚠ Measured, not guessed: a linear factor of ~0.09 (Darken 50) encodes to about a third of
+    // the sRGB value — [196, 249, 179] became [77, 77, 77] — so "less than half, and grey" is the
+    // property, where a first bar of "a third" sat exactly on the measurement.
+    assert!(
+        pet_after.iter().sum::<i32>() * 2 < pet_before.iter().sum::<i32>(),
+        "the eyeshine was not darkened: {pet_before:?} → {pet_after:?}"
+    );
+    let spread = pet_after.iter().max().unwrap() - pet_after.iter().min().unwrap();
+    assert!(spread <= 3, "the pet pupil kept its colour: {pet_after:?}");
+    assert_eq!(
+        at(&fixed, 32, 24),
+        at(&neutral, 32, 24),
+        "the skin between the eyes moved"
+    );
+}
+
 // ── M7.1b, colour range masks ────────────────────────────────────────────────────────────────
 //
 // ⚠ **Appended, never inserted** — PARALLEL-WORK.md rule 3, and another track adds goldens in this
