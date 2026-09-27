@@ -285,7 +285,7 @@ Every planned phase closed except **M7.3b** (since done, 2026-09-25), so the roa
 
 **▶ The order the user set: M7.3b ✅, the drag-frame fixes ✅ and GPU geometry ✅ (all merged and
 confirmed by use 2026-09-26); Phase 9's checklist from the top — M5.1c (parametric curve) ✅ merged and confirmed by use
-2026-09-26; M6.4c (rendering intents) ✅ merged and confirmed by use 2026-09-26; M9.6 (defringe) ✅ merged and confirmed by use 2026-09-27; M9.7 (persistent history) ✅ merged and confirmed by use 2026-09-27 (with double-click slider reset); M9.8 (keyword editing) 🟡 built, awaiting use; **M9.9 (folder tree + move tracking) is next.** **M9.8 (keyword re-parenting) is next.** A Straighten drag on
+2026-09-26; M6.4c (rendering intents) ✅ merged and confirmed by use 2026-09-26; M9.6 (defringe) ✅ merged and confirmed by use 2026-09-27; M9.7 (persistent history) ✅ merged and confirmed by use 2026-09-27 (with double-click slider reset); M9.8 (keyword editing) 🟡 built, awaiting use; **M9.9 (folder tree + move tracking) is next.** A Straighten drag on
 DSCF6263: **~97 → ~41 ms per frame in the app** (85.0 → 28.8 ms headless). ⚠ The remaining app-vs-probe
 gap (~10–12 ms) is GPU submit+wait, and it is **NOT** the window's per-frame upload: freezing the window
 changed nothing, so the shared-device idea is ⛔ declined on that measurement (`docs/BACKLOG.md`). The
