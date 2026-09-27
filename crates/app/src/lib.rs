@@ -39,6 +39,7 @@ pub mod immich_source;
 pub mod immich_stack_cache;
 pub mod immich_upload;
 pub mod immich_worker;
+pub mod ingest;
 pub mod keyword_tool;
 pub mod library_filter;
 pub mod looks;
