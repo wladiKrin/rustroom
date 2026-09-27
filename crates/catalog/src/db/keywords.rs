@@ -242,6 +242,31 @@ impl Catalog {
         Ok(())
     }
 
+    /// The distinct files named by `(folder_id, file_name, _)` assignments — a deletion
+    /// snapshot's, whose XMP its undo and redo rewrite. A folder no longer in the catalog is
+    /// skipped.
+    pub fn assignment_paths(
+        &self,
+        assignments: &[(i64, String, i64)],
+    ) -> Result<Vec<PathBuf>, CatalogError> {
+        let mut out: Vec<PathBuf> = Vec::new();
+        for (folder, file, _) in assignments {
+            let path: Option<String> = self
+                .conn
+                .query_row("SELECT path FROM folders WHERE id = ?1", [folder], |r| {
+                    r.get(0)
+                })
+                .ok();
+            if let Some(p) = path {
+                let f = PathBuf::from(p).join(file);
+                if !out.contains(&f) {
+                    out.push(f);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Whether the file `photo` carries keyword `id` directly — for tests and the app's checks.
     pub fn file_has_keyword(&self, id: i64, photo: &std::path::Path) -> Result<bool, CatalogError> {
         let Some((folder, name)) = split(photo) else {

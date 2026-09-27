@@ -64,6 +64,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         TagSelection(i64),
         UntagSelection(i64),
         CreateKeyword,
+        RenameKeyword(i64, String),
+        MoveKeyword(i64, Option<i64>),
         OpenAllPhotos,
         OpenFolder(std::path::PathBuf),
         ForgetFolder(i64, std::path::PathBuf, i64),
@@ -419,57 +421,34 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             crate::theme::hint(ui, "No keywords yet.");
                                         }
                                         let picked_kw = app.selected_keyword();
-                                        let tag_hover = format!("Tag {picked} selected");
-                                        let untag_hover = format!("Remove from {picked} selected");
-                                        for k in &kws {
-                                            // ⚠ Indented by depth — the only thing that makes the tree readable,
-                                            // since the rows are a flat depth-first list.
-                                            //
-                                            // ⚠ `−` completes the existing mechanism rather than adding a second
-                                            // one: `unassign_keyword` already existed and was tested. Both go
-                                            // through one pair of functions the photo context menu also calls.
-                                            let r = list_row::row(
-                                                ui,
-                                                RowSpec {
-                                                    name: &k.name,
-                                                    count: Some(k.count),
-                                                    meta: "",
-                                                    selected: picked_kw == Some(k.id),
-                                                    indent: k.depth as f32 * 12.0,
-                                                    hover: "",
-                                                    actions: &[
-                                                        RowAction {
-                                                            glyph: '×',
-                                                            verb: "Delete",
-                                                            hover: "Delete, with everything under it",
-                                                            enabled: true,
-                                                        },
-                                                        RowAction {
-                                                            glyph: '+',
-                                                            verb: "Tag",
-                                                            hover: &tag_hover,
-                                                            enabled: picked > 0,
-                                                        },
-                                                        RowAction {
-                                                            glyph: '−',
-                                                            verb: "Untag",
-                                                            hover: &untag_hover,
-                                                            enabled: picked > 0,
-                                                        },
-                                                    ],
-                                                },
-                                            );
-                                            match r.action {
-                                                Some(0) => {
-                                                    action = Action::DeleteKeyword(k.id, k.name.clone())
-                                                }
-                                                Some(1) => action = Action::TagSelection(k.id),
-                                                Some(_) => action = Action::UntagSelection(k.id),
-                                                None if r.clicked => {
-                                                    action = Action::OpenKeyword(k.id, k.name.clone())
-                                                }
-                                                None => {}
+                                        // ⚠ M9.8: the rows, their rename field and their drag live in
+                                        // `keyword_rows`; this maps what they asked for onto `Action`.
+                                        match crate::keyword_rows::rows(
+                                            ui,
+                                            &kws,
+                                            picked,
+                                            picked_kw,
+                                            &mut app.keyword_rename,
+                                        ) {
+                                            Some(crate::keyword_rows::Out::Open(id, name)) => {
+                                                action = Action::OpenKeyword(id, name)
                                             }
+                                            Some(crate::keyword_rows::Out::Delete(id, name)) => {
+                                                action = Action::DeleteKeyword(id, name)
+                                            }
+                                            Some(crate::keyword_rows::Out::Tag(id)) => {
+                                                action = Action::TagSelection(id)
+                                            }
+                                            Some(crate::keyword_rows::Out::Untag(id)) => {
+                                                action = Action::UntagSelection(id)
+                                            }
+                                            Some(crate::keyword_rows::Out::Rename(id, name)) => {
+                                                action = Action::RenameKeyword(id, name)
+                                            }
+                                            Some(crate::keyword_rows::Out::Move(id, parent)) => {
+                                                action = Action::MoveKeyword(id, parent)
+                                            }
+                                            None => {}
                                         }
                                     },
                                 )
@@ -858,6 +837,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         }
         Action::TagSelection(id) => app.assign_keyword_to_selection(id),
         Action::UntagSelection(id) => app.unassign_keyword_from_selection(id),
+        Action::RenameKeyword(id, name) => app.rename_keyword(id, &name),
+        Action::MoveKeyword(id, parent) => app.move_keyword(id, parent),
     }
 }
 

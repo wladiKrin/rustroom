@@ -119,6 +119,14 @@ pub enum Modal {
         descendants: usize,
         assignments: usize,
     },
+    /// Confirming a keyword merge — a rename or move whose name a sibling already has (M9.8).
+    ConfirmMergeKeyword {
+        from: i64,
+        into: i64,
+        from_name: String,
+        into_name: String,
+        photos: usize,
+    },
     /// Confirming a preset deletion. `dont_ask_again` is scratch state — it is committed to
     /// `Settings` only on the Delete path, never on Cancel.
     ConfirmDeletePreset {
@@ -167,6 +175,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         ConfirmDelete,
         ConfirmForget,
         ConfirmDeleteKeyword,
+        ConfirmMergeKeyword,
         PhotoInfo,
         EditRule,
         Settings,
@@ -186,6 +195,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::ConfirmDeletePreset { .. } => Which::ConfirmDelete,
         Modal::ConfirmForgetFolder { .. } => Which::ConfirmForget,
         Modal::ConfirmDeleteKeyword { .. } => Which::ConfirmDeleteKeyword,
+        Modal::ConfirmMergeKeyword { .. } => Which::ConfirmMergeKeyword,
         Modal::PhotoInfo { .. } => Which::PhotoInfo,
         Modal::EditRule { .. } => Which::EditRule,
         Modal::Settings => Which::Settings,
@@ -207,6 +217,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::ConfirmDelete => presets::confirm_delete(app, ctx),
         Which::ConfirmForget => confirm_forget_folder(app, ctx),
         Which::ConfirmDeleteKeyword => confirm_delete_keyword(app, ctx),
+        Which::ConfirmMergeKeyword => confirm_merge_keyword(app, ctx),
         Which::PhotoInfo => info::show(app, ctx),
         Which::EditRule => rule_edit::show(app, ctx),
         Which::Settings => settings::show(app, ctx),
@@ -311,6 +322,50 @@ fn confirm_delete_keyword(app: &mut RustroomApp, ctx: &egui::Context) {
     if out.primary {
         app.delete_keyword_now(id);
         app.modal = Modal::None;
+    } else if out.dismissed {
+        app.modal = Modal::None;
+    }
+}
+
+/// Confirming a keyword merge (M9.8): the author's rule for a rename or move onto a name a sibling
+/// already has. It says what joins what and how many photos gain the survivor.
+fn confirm_merge_keyword(app: &mut RustroomApp, ctx: &egui::Context) {
+    let Modal::ConfirmMergeKeyword {
+        from,
+        into,
+        from_name,
+        into_name,
+        photos,
+    } = &app.modal
+    else {
+        return;
+    };
+    let (from, into, from_name, into_name, photos) =
+        (*from, *into, from_name.clone(), into_name.clone(), *photos);
+    let out = dialog(
+        ctx,
+        &mut app.settings,
+        "confirm_merge_keyword",
+        "Merge keywords?",
+        theme::DialogSize::Compact,
+        Footer::confirm("Merge", false, "Cancel"),
+        |ui| {
+            ui.label(format!(
+                "“{into_name}” already exists here. Merge “{from_name}” into it?"
+            ));
+            crate::theme::hint(
+                ui,
+                &format!(
+                    "{photos} photo{} tagged “{from_name}” will carry “{into_name}”; keywords \
+                     beneath it join those beneath “{into_name}”. Ctrl+Z undoes it.",
+                    if photos == 1 { "" } else { "s" }
+                ),
+            );
+        },
+    );
+    if out.primary {
+        app.modal = Modal::None;
+        app.merge_keyword_now(from, into);
     } else if out.dismissed {
         app.modal = Modal::None;
     }

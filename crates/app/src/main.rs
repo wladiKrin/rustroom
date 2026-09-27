@@ -60,6 +60,8 @@ mod filmstrip;
 mod immich_flow;
 mod immich_panel;
 mod interaction;
+mod keyword_ops;
+mod keyword_rows;
 mod library;
 mod library_state;
 mod list_row;
@@ -432,6 +434,8 @@ struct RustroomApp {
     /// wherever `rename_draft` is, and for the same reason — a draft left behind belongs to a
     /// photo that is no longer open.
     snapshot_rename: Option<(u32, String)>,
+    /// The Keywords row being renamed in place, and its draft (M9.8). `snapshot_rename`'s shape.
+    keyword_rename: Option<(i64, String)>,
     /// The Library panel section being dragged, if one is.
     ///
     /// ⚠ On the app rather than a local, because a drag spans frames and a `Response` only knows
@@ -727,6 +731,7 @@ impl RustroomApp {
             rename_draft: None,
             label_draft: None,
             snapshot_rename: None,
+            keyword_rename: None,
             panel_drag: None,
             cell_zoom_pending: false,
             info_sizes: Default::default(),

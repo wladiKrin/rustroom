@@ -70,10 +70,22 @@ pub struct RowOut {
 /// ⚠ The actions are registered **after** the row so they win the hit-test tie — egui takes the
 /// last widget registered at a point — and a click on one is not a click on the row.
 pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), ROW_HEIGHT),
-        egui::Sense::click(),
-    );
+    row_with(ui, spec, egui::Sense::click())
+}
+
+/// [`row`], also sensing a DRAG — the Keywords list's move gesture (M9.8). `RowOut::response`
+/// carries it.
+///
+/// ⚠⚠ The row itself senses the drag. A drag-only layer registered over a click-only row was
+/// tried first and SWALLOWED the row's clicks and double-clicks: egui gave the pointer to the top
+/// widget. On one response, egui tells a click from a drag by whether the pointer passed the
+/// drag threshold.
+pub fn row_draggable(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
+    row_with(ui, spec, egui::Sense::click_and_drag())
+}
+
+fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), sense);
     let resp = if spec.hover.is_empty() {
         resp
     } else {

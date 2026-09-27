@@ -162,6 +162,7 @@ pub fn for_test() -> RustroomApp {
         rename_draft: None,
         label_draft: None,
         snapshot_rename: None,
+        keyword_rename: None,
         panel_drag: None,
         cell_zoom_pending: false,
         info_sizes: Default::default(),
