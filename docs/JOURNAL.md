@@ -166,8 +166,8 @@ plan of the same date. 🟡 **Awaiting use.**
 **What shipped.** A photo's undo/redo steps are stored in the catalog (migration 9,
 `photo_history(folder_id, file_name, copy, body)`, keyed like `photos` so a copy has its own;
 cascades with its folder) as a versioned JSON body (`history_store`, the newest **100** undo and
-redo steps). Stored at the one `finalize_session` stash choke point and for the open photo in
-`eframe::App::on_exit`; a history with nothing to undo or redo deletes its row. Restored on a stash
+redo steps). Stored at the one `finalize_session` stash choke point and, for the open photo, in
+`persist_current_session` beside its sidecar; a history with nothing to undo or redo deletes its row. Restored on a stash
 miss through `take_matching`'s rule — its present must equal the edits on disk, or the row is
 deleted — and `ActionLog::seed` puts its steps at the FRONT of the log (in force, then undone), so
 Ctrl+Z reaches them after this session's own. No catalog: exactly as before. **No new UI** — a
@@ -188,6 +188,21 @@ step, not the moment of opening. ⚠ A crash loses only the open photo's steps f
 
 Sabotages run: no log seeding (the restart test's Ctrl+Z does nothing); no save on exit (nothing
 restored); no staleness check (the stale history is undone into).
+
+⚠⚠ **FOUND BY USE, THE SAME DAY: IT SAVED NOTHING.** The catalog held **zero** `photo_history`
+rows after a real quit. The open photo's history was saved in `eframe::App::on_exit`, which
+**never runs** here: closing the window (⌘Q included) ends in `std::process::exit(0)` in `shell.rs`
+— the workaround for a macOS Touch Bar teardown crash — right after `persist_current_session`. The
+restart test called `on_exit` BY HAND, so it passed against a path the app never takes: shape (d)
+of *a claim you did not run*. Fixed by saving the history inside `persist_current_session`, the
+function the real close path calls, and the test now calls that; removing the line fails it.
+
+⚠⚠ **A second bug, older than M9.7, reported in the same breath: a CLICK on a slider's rail was
+not an undo step.** The rail sets its value on the press, before any drag exists, and `Edited`
+settled only on `drag_stopped` — so the edit reached the picture and never the undo stack (and so
+never the stored history either). `settles()` now also takes a `clicked()` release and a change
+made with the pointer not held (the arrow keys); a real drag is still exactly one step, asserted
+beside the click.
 
 ### 2026-09-27 — M9.6 defringe: purple/green, global and in masks (branch `m9.6-defringe`)
 

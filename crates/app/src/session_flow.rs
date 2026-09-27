@@ -311,6 +311,12 @@ impl RustroomApp {
         // whole-file writes would make the last-saved copy silently overwrite the other.
         let path = s.path.clone();
         let _ = sidecar::persist_copy(&path, s.copy, &s.edits);
+        // ⚠⚠ M9.7: the history goes WITH the sidecar, here, and not in `eframe::App::on_exit` —
+        // which was tried first and NEVER RUNS: closing the window (⌘Q included) ends in
+        // `std::process::exit(0)` in `shell.rs`, the workaround for a macOS teardown crash, right
+        // after calling this. Found by use: the catalog held zero rows. Written together, the
+        // stored history always ends at exactly the edits on disk, which is what a restore checks.
+        self.persist_history(&PhotoId::new(path.clone(), s.copy), &s.history);
         // ⚠⚠ **The row's cached edits must follow the sidecar, or the thumbnail goes stale the
         // moment this photo stops being the open one.** `thumb_request` prefers the live session's
         // edits *only while the photo is open*; every other row renders from `PhotoEntry::edits`,
@@ -1410,8 +1416,10 @@ mod tests {
                 Some(&id),
             );
         }
-        rustroom_app::sidecar::save(photo, &app.session.as_ref().unwrap().edits).unwrap();
-        eframe::App::on_exit(&mut app);
+        // ⚠⚠ The REAL quit path: `shell.rs` calls exactly this on a close request and then
+        // `process::exit`s, so no `on_exit` hook ever runs. An earlier version of this test called
+        // `on_exit` by hand and passed while the app saved nothing.
+        app.persist_current_session();
     }
 
     #[test]

@@ -17,14 +17,6 @@ use rustroom_app::photo_id::PhotoId;
 use rustroom_app::render_engine::RegionRect;
 
 impl eframe::App for RustroomApp {
-    /// ⚠ M9.7: the open photo's history is the one not yet in the catalog — every other photo's
-    /// was stored when it was stashed.
-    fn on_exit(&mut self) {
-        if let Some(s) = self.session.as_ref() {
-            self.persist_history(&PhotoId::new(s.path.clone(), s.copy), &s.history);
-        }
-    }
-
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
