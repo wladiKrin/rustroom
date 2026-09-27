@@ -205,6 +205,8 @@ pub struct DayRow {
 mod history;
 /// Renaming, re-parenting and merging keywords (M9.8) — its own file for `history`'s reason.
 mod keywords;
+/// Recognising a photo moved on disk between known folders (M9.9).
+mod moves;
 pub use keywords::{Change as KeywordChange, KeywordMerge};
 
 pub struct Catalog {
@@ -1770,7 +1772,7 @@ fn split(photo: &Path) -> Option<(String, String)> {
 /// ⚠ Nothing reads these yet, and that is deliberate: they cost nothing to record during a scan
 /// the caller is already doing, and the alternative is discovering later that the data was never
 /// captured for any photo anyone owns.
-fn file_facts(f: &CatalogEntry) -> (Option<i64>, Option<i64>) {
+pub(super) fn file_facts(f: &CatalogEntry) -> (Option<i64>, Option<i64>) {
     let mtime = f
         .modified
         .duration_since(std::time::UNIX_EPOCH)
