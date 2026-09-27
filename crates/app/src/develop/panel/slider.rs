@@ -159,9 +159,10 @@ impl egui::Widget for Slider<'_> {
                 let (a, b) = (at(p.x - aim), at(p.x + aim));
                 *value = egui::emath::smart_aim::best_in_range_f64(a.min(b), a.max(b)) as f32;
             }
-            if resp.clicked() {
-                resp.request_focus();
-            }
+            // ⚠⚠ A click does NOT take focus (2026-09-27, the author's call): focus withholds every
+            // shortcut — Ctrl+Z included — until something else is clicked, and a click on the rail
+            // is an edit, not the start of typing. It used to `request_focus()` here for the arrow
+            // keys; Tab still focuses the rail for them.
             if resp.has_focus() {
                 ui.memory_mut(|m| {
                     m.set_focus_lock_filter(
@@ -341,6 +342,97 @@ mod tests {
         assert!(v > 0.0, "a drag to the right moved nothing: {v}");
         assert!(changes >= 1, "no frame reported a change");
         assert_eq!(settles, 1, "one release, one settle");
+    }
+
+    /// ⚠⚠ **Reported 2026-09-27: a click on the rail moved the value and Ctrl+Z did nothing.** The
+    /// rail sets the value on the PRESS, before any drag exists, so a click never produced the
+    /// `drag_stopped` a settle waited for — the edit reached the picture and never the undo stack.
+    /// Counted through `Edited::slider` itself, per frame as the panel does, and a drag is asserted
+    /// to still settle exactly ONCE, so a fix that settled on every change cannot pass.
+    #[test]
+    fn a_click_on_the_rail_settles_once_and_a_drag_still_settles_once() {
+        let count = |motion: f32| {
+            let ctx = test_ui::ctx();
+            let mut v = 0.0f32;
+            let mut settles = 0u32;
+            let mut body = |ui: &mut egui::Ui| {
+                let mut ed = crate::develop::panel::Edited::default();
+                ed.slider(ui, &mut v, -100.0..=100.0, "Contrast");
+                settles += ed.settled as u32;
+            };
+            let at = test_ui::find(&ctx, "Contrast", &mut body).expect("drawn");
+            let from = at + egui::vec2(40.0, 0.0);
+            drag(&ctx, from, from + egui::vec2(motion, 0.0), &mut body);
+            (v, settles)
+        };
+        let (v, clicked) = count(0.0);
+        assert!(v > 0.0, "the click must move the value: {v}");
+        assert_eq!(clicked, 1, "a click is one undo step");
+        let (_, dragged) = count(30.0);
+        assert_eq!(
+            dragged, 1,
+            "a drag is still one undo step, not one per phase"
+        );
+    }
+
+    /// ⚠⚠ **Reported 2026-09-27: after a click on the rail, Ctrl+Z did nothing until you clicked
+    /// elsewhere.** The click took keyboard FOCUS, and `shell.rs`'s `pressed_command` withholds every
+    /// shortcut while anything is focused — the gate that keeps typing in a text field from firing
+    /// commands. A click on the rail is an edit, not the start of typing, so it must leave nothing
+    /// focused. (Tab still focuses the rail for the arrow keys.)
+    #[test]
+    fn a_click_on_the_rail_leaves_nothing_focused() {
+        let ctx = test_ui::ctx();
+        let mut v = 0.0f32;
+        let mut body = |ui: &mut egui::Ui| {
+            let _ = ui.add(Slider::new(&mut v, -100.0..=100.0).text("Contrast"));
+        };
+        let at = test_ui::find(&ctx, "Contrast", &mut body).expect("drawn");
+        let from = at + egui::vec2(40.0, 0.0);
+        drag(&ctx, from, from, &mut body);
+        assert!(
+            v > 0.0,
+            "fixture: the click must land on the rail and move it"
+        );
+        assert_eq!(
+            ctx.memory(|m| m.focused()),
+            None,
+            "a click on the rail kept focus, so Ctrl+Z is withheld"
+        );
+    }
+
+    /// And the arrow keys stay reachable: Tab focuses the rail, and ArrowRight then nudges it —
+    /// the claim the comment at the removed `request_focus` makes, run rather than asserted.
+    #[test]
+    fn tab_focuses_the_rail_and_the_arrow_keys_nudge_it() {
+        let ctx = test_ui::ctx();
+        let mut v = 0.0f32;
+        let key = |k: egui::Key| egui::Event::Key {
+            key: k,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        };
+        for events in [
+            vec![],
+            vec![key(egui::Key::Tab)],
+            vec![],
+            vec![key(egui::Key::ArrowRight)],
+            vec![],
+        ] {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(test_ui::screen()),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let _ = ui.add(Slider::new(&mut v, -100.0..=100.0).text("Contrast"));
+                },
+            );
+        }
+        assert!(v > 0.0, "Tab then ArrowRight moved nothing: {v}");
     }
 
     #[test]

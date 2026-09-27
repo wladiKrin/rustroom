@@ -18,7 +18,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// The schema this build expects. Bump it whenever [`Catalog::migrate`] gains a step.
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 /// What can go wrong talking to the catalog.
 ///
@@ -199,6 +199,10 @@ pub struct DayRow {
     pub day: u32,
     pub count: i64,
 }
+
+/// A photo's undo history (M9.7) — its own file, because this one is already the largest in the
+/// crate. A child module, so it reaches the private connection.
+mod history;
 
 pub struct Catalog {
     conn: Connection,
@@ -447,6 +451,25 @@ impl Catalog {
                 "BEGIN;
                  DELETE FROM photo_capture WHERE taken IS NULL;
                  PRAGMA user_version = 8;
+                 COMMIT;",
+            )?;
+        }
+        if from < 9 {
+            // ⚠⚠ A **new gate**, never an edit to versions 1–8. M9.7: a photo's undo history.
+            //
+            // ⚠ Keyed like `photos` — `(folder, file, copy)` — because a virtual copy is a
+            // different photo with its own undo stack. The body is opaque text: this crate knows
+            // nothing of `Edits`, and must not start to. See `db/history.rs`.
+            self.conn.execute_batch(
+                "BEGIN;
+                 CREATE TABLE photo_history (
+                     folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                     file_name TEXT NOT NULL,
+                     copy      INTEGER NOT NULL,
+                     body      TEXT NOT NULL,
+                     PRIMARY KEY (folder_id, file_name, copy)
+                 );
+                 PRAGMA user_version = 9;
                  COMMIT;",
             )?;
         }
@@ -2160,7 +2183,8 @@ mod tests {
             // was exactly that — the failure is loud, but only if this test exists.
             cat.conn
                 .execute_batch(
-                    "DROP TABLE photo_description;
+                    "DROP TABLE photo_history;
+                     DROP TABLE photo_description;
                      DROP TABLE smart_collections;
                      DROP TABLE photo_capture;
                      DROP TABLE photo_keywords;
@@ -2343,7 +2367,8 @@ mod tests {
             .unwrap();
             cat.conn
                 .execute_batch(
-                    "DROP TABLE photo_description;
+                    "DROP TABLE photo_history;
+                     DROP TABLE photo_description;
                      DROP TABLE smart_collections;
                      DROP TABLE photo_capture;
                      DROP TABLE photo_keywords;
@@ -2391,7 +2416,8 @@ mod tests {
             .unwrap();
             cat.conn
                 .execute_batch(
-                    "DROP TABLE photo_description;
+                    "DROP TABLE photo_history;
+                     DROP TABLE photo_description;
                      ALTER TABLE photos DROP COLUMN xmp_mtime;
                      PRAGMA user_version = 5;",
                 )
@@ -2964,7 +2990,8 @@ mod tests {
             cat.set_xmp_mtime(Path::new("/x/a.RAF"), 42).unwrap();
             cat.conn
                 .execute_batch(
-                    "DROP TABLE photo_description;
+                    "DROP TABLE photo_history;
+                     DROP TABLE photo_description;
                      PRAGMA user_version = 6;",
                 )
                 .unwrap();
@@ -3570,10 +3597,13 @@ mod tests {
         );
 
         // Re-run the migration from version 7, as an existing database would.
-        cat.conn.execute_batch("PRAGMA user_version = 7;").unwrap();
+        // ⚠ Version 9's table dropped too, or re-running from 7 meets it already there (M9.7).
+        cat.conn
+            .execute_batch("DROP TABLE photo_history; PRAGMA user_version = 7;")
+            .unwrap();
         cat.migrate().unwrap();
 
-        assert_eq!(cat.version().unwrap(), 8);
+        assert_eq!(cat.version().unwrap(), 9);
         assert_eq!(
             cat.files_without_capture(Path::new("/a")).unwrap(),
             vec!["blank.JPG".to_string()],

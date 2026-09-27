@@ -158,6 +158,52 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-27 — M9.7 persistent history: Ctrl+Z survives a restart (branch `m9.7-persistent-history`)
+
+**3,027 tests**, 81 goldens unmoved, gate green. Spec `2026-09-27-m9.7-persistent-history-design.md`,
+plan of the same date. 🟡 **Awaiting use.**
+
+**What shipped.** A photo's undo/redo steps are stored in the catalog (migration 9,
+`photo_history(folder_id, file_name, copy, body)`, keyed like `photos` so a copy has its own;
+cascades with its folder) as a versioned JSON body (`history_store`, the newest **100** undo and
+redo steps). Stored at the one `finalize_session` stash choke point and, for the open photo, in
+`persist_current_session` beside its sidecar; a history with nothing to undo or redo deletes its row. Restored on a stash
+miss through `take_matching`'s rule — its present must equal the edits on disk, or the row is
+deleted — and `ActionLog::seed` puts its steps at the FRONT of the log (in force, then undone), so
+Ctrl+Z reaches them after this session's own. No catalog: exactly as before. **No new UI** — a
+History list was discussed and deferred by the author (snapshots, Before/After and the Now row cover
+much of it; it can be built on the stored data later).
+
+⚠⚠ **THE DECISION THE PLAN ASKED TO BE WRITTEN DOWN: catalog, not sidecar.** The sidecar is the
+photograph's *description* — read by other tools, backups and people, rewritten on every save; a
+history is *working state*. Measured: sidecars are 3.4 KB median, 44 KB max (DSCF7218), and one step
+of DSCF7218's settings is **11.7 KB** (four masks), so 100 steps is **~1.1 MB** (~300 KB typical) —
+fine in a catalog written once per photo switch, wrong in a sidecar. The accepted cost: a folder
+moved outside Rustroom, a forgotten folder (its undo does not restore histories), or a deleted
+catalog loses the history — never the edits. Lightroom makes the same choice. Also recorded in
+`catalog/src/db/history.rs`.
+
+⚠ The Now row counts changes since `History::initial()`, which after a restore is the oldest stored
+step, not the moment of opening. ⚠ A crash loses only the open photo's steps from that session.
+
+Sabotages run: no log seeding (the restart test's Ctrl+Z does nothing); no save on exit (nothing
+restored); no staleness check (the stale history is undone into).
+
+⚠⚠ **FOUND BY USE, THE SAME DAY: IT SAVED NOTHING.** The catalog held **zero** `photo_history`
+rows after a real quit. The open photo's history was saved in `eframe::App::on_exit`, which
+**never runs** here: closing the window (⌘Q included) ends in `std::process::exit(0)` in `shell.rs`
+— the workaround for a macOS Touch Bar teardown crash — right after `persist_current_session`. The
+restart test called `on_exit` BY HAND, so it passed against a path the app never takes: shape (d)
+of *a claim you did not run*. Fixed by saving the history inside `persist_current_session`, the
+function the real close path calls, and the test now calls that; removing the line fails it.
+
+⚠⚠ **A second bug, older than M9.7, reported in the same breath: a CLICK on a slider's rail was
+not an undo step.** The rail sets its value on the press, before any drag exists, and `Edited`
+settled only on `drag_stopped` — so the edit reached the picture and never the undo stack (and so
+never the stored history either). `settles()` now also takes a `clicked()` release and a change
+made with the pointer not held (the arrow keys); a real drag is still exactly one step, asserted
+beside the click.
+
 ### 2026-09-27 — M9.6 defringe: purple/green, global and in masks (branch `m9.6-defringe`)
 
 **3,014 tests**, **81 goldens** (+`defringe`; the other 80 unmoved), gate green. Spec

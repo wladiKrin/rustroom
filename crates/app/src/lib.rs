@@ -27,6 +27,7 @@ pub mod grade_view;
 pub mod grid_nav;
 pub mod histogram;
 pub mod history;
+pub mod history_store;
 pub mod icons;
 pub mod immich_cache;
 pub mod immich_catalog;

@@ -41,6 +41,18 @@ pub struct Edited {
     pub settled: bool,
 }
 
+/// Whether `r`'s gesture is over, so its change is one undo step.
+///
+/// ⚠⚠ **`drag_stopped` alone missed a CLICK (reported 2026-09-27).** The rail sets the value on the
+/// press, before any drag exists, so a click on the track reached the picture and never the undo
+/// stack. Now also: a `clicked()` release, and a change made with the pointer NOT held on the
+/// widget — the arrow keys. A press that has not been released yet settles nothing, so a real drag
+/// is still ONE step, and a settle with no net change records nothing (`History::push` ignores an
+/// equal value).
+fn settles(r: &egui::Response) -> bool {
+    r.drag_stopped() || r.clicked() || (r.changed() && !r.is_pointer_button_down_on())
+}
+
 impl Edited {
     /// A slider bound to `value`, recording change and settle separately.
     ///
@@ -55,8 +67,7 @@ impl Edited {
         label: &str,
     ) -> egui::Response {
         let r = ui.add(slider::Slider::new(value, range).text(label));
-        self.changed |= r.changed();
-        self.settled |= r.drag_stopped();
+        self.absorb(&r);
         // ⚠ Returned so a caller can attach hover text. Every existing call site ignores it,
         // which is why this was additive rather than a new `slider_hint` beside it.
         r
@@ -75,7 +86,7 @@ impl Edited {
     /// formatter. Same accounting as [`Self::slider`].
     pub fn absorb(&mut self, r: &egui::Response) {
         self.changed |= r.changed();
-        self.settled |= r.drag_stopped();
+        self.settled |= settles(r);
     }
 
     /// A discrete act — a button, a checkbox, a preset click.
