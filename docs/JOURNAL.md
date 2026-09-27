@@ -161,7 +161,8 @@ goldens unmoved.
 ### 2026-09-27 — M9.8 keyword renaming, re-parenting and merging (branch `m9.8-keyword-editing`)
 
 **3,048 tests**, 81 goldens unmoved, gate green. Spec `2026-09-27-m9.8-keyword-editing-design.md`,
-plan of the same date. 🟡 **Awaiting use.**
+plan of the same date. ✅ **Confirmed by use and merged 2026-09-27.** ⚠ Changed after use: the new-keyword parent
+dropdown is gone — the parent is the keyword last clicked, cleared by a click anywhere else (the author's call).
 
 **What shipped.** In the Library's Keywords list: double-click a name to rename it in place (Enter
 commits, Escape cancels); drag a keyword onto another to nest it there, or onto the "⤒ Top level"
