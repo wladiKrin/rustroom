@@ -158,6 +158,38 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-27 — M9.8 keyword renaming, re-parenting and merging (branch `m9.8-keyword-editing`)
+
+**3,048 tests**, 81 goldens unmoved, gate green. Spec `2026-09-27-m9.8-keyword-editing-design.md`,
+plan of the same date. 🟡 **Awaiting use.**
+
+**What shipped.** In the Library's Keywords list: double-click a name to rename it in place (Enter
+commits, Escape cancels); drag a keyword onto another to nest it there, or onto the "⤒ Top level"
+row that appears below the list while dragging. A rename or move onto a name a sibling already has
+asks — "Merge “Pariss” into “Paris”? 12 photos" — and merges: every file carrying the one carries the
+other, sub-keywords merge recursively. All undoable (`KeywordRename`, `KeywordMove`, `KeywordMerge`,
+global), and **every change, undo and redo rewrites the XMP of the files it touched**, collected before
+the change, through `write_xmp_for`. Catalog logic in `db/keywords.rs`: `rename_keyword`,
+`move_keyword` (a move under itself or a descendant is `Change::Loop`), `merge_keyword` →
+`KeywordMerge`, reversed by `unmerge_keyword` with the ORIGINAL ids (the deletion restore re-creates
+under new ids, which would strand an earlier undo entry naming the keyword). Rules in `keyword_tool`
+(names: trimmed, non-empty, no `|` — XMP's level separator; drops: not onto itself, a descendant or
+its current parent). Rows in a new `keyword_rows` bin module — `collections_panel.rs` was ~860 lines
+of code.
+
+⚠⚠ **A gap older than M9.8, fixed with it: deleting a keyword never rewrote XMP**, so a deleted
+keyword stayed in every tagged RAW's sidecar, where Lightroom still saw it. Delete, its undo and its
+redo now go through the same funnel.
+
+⚠ Found by the tests, both real UI bugs: (1) a drag-only layer registered over a click-only row
+SWALLOWED the row's clicks and double-clicks — egui gave the pointer to the top widget — so the row
+now senses click-and-drag itself (`list_row::row_draggable`); (2) the "Top level" drop row, drawn
+ABOVE the list, appeared as a drag began and pushed every row down a line, so the row under the
+pointer changed mid-drag — found by instrumenting the drag, fixed by drawing it below.
+
+Sabotages run: an unmerge that forgets the added assignments (the exact-state test fails); rename
+and delete without their XMP write (both XMP tests fail).
+
 ### 2026-09-27 — double-click resets a slider (branch `slider-reset`, stacked on `m9.7-persistent-history`)
 
 ✅ **Confirmed by use and merged 2026-09-27.** The author's request. A double-click on a Develop slider's rail — handle included — or its label
