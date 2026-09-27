@@ -1363,7 +1363,8 @@ mod tests {
         // ⚠ Geometry has a twin since 2026-09-26. Spot removal is here because it was measured
         // and closed unported (`docs/BACKLOG.md`), and a name nothing implements must fall through
         // too.
-        for name in ["spot_removal", "no_such_stage"] {
+        // Red eye (M9.11) has no twin either: a few thousand pixels per eye in the prefix.
+        for name in ["spot_removal", "red_eye", "no_such_stage"] {
             assert!(
                 accelerate_prefix_stage(
                     name,
