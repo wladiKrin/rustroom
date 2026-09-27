@@ -700,7 +700,7 @@ pub struct EditGroups {
     /// ⚠ Off by default, like `geometry` and for the same reason: a gradient positioned for
     /// one composition is meaningless on another.
     pub masks: bool,
-    /// Spot removal — clone and heal patches.
+    /// Spot removal — clone and heal patches — and red/pet-eye corrections (M9.11).
     ///
     /// ⚠ Off by default, like `geometry` and `masks`: the values are content-referred, and
     /// Lightroom's Copy Settings excludes Spot Removal for the same reason it excludes the crop.
@@ -1670,6 +1670,44 @@ pub enum SpotMode {
     Heal,
 }
 
+/// One red- or pet-eye correction: a circle around a pupil, detected at the click and stored.
+///
+/// ⚠ **The stage never detects** (M9.11 spec, approach A): an eye that re-detected on every render
+/// would move whenever an upstream edit changed the pixels. The circle is found once, in the app,
+/// and from then on it is an edit like any other.
+///
+/// ⚠ Same space as [`Spot`]: post-lens, pre-perspective frame, normalised per axis; `radius` a
+/// fraction of the long edge. Same `Copy` and no container-level `serde(default)`, for `Spot`'s
+/// reasons — an eye with a defaulted `centre` would be one nobody placed.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Eye {
+    pub centre: [f32; 2],
+    pub radius: f32,
+    pub kind: EyeKind,
+    /// 0..=100: how far the correction reaches into weakly red (pet: dimmer) pixels. The circle
+    /// still bounds it.
+    pub pupil_size: f32,
+    /// 0..=100: how dark the corrected pupil ends up.
+    pub darken: f32,
+    /// Pet only: the catchlight's offset from `centre`, in **radius** units of the stage's frame
+    /// (a pixel direction, so both axes share one scale). `None` = no catchlight.
+    ///
+    /// ⚠ Stored, not derived in the stage: the stage's frame is pre-orientation, so "up-left on
+    /// screen" is only knowable in the app.
+    #[serde(default)]
+    pub catchlight: Option<[f32; 2]>,
+}
+
+/// What kind of flash reflection an [`Eye`] corrects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum EyeKind {
+    /// A human red pupil: the red is removed and the pupil darkened.
+    #[default]
+    Red,
+    /// An animal's green, yellow or white eyeshine: replaced by a dark pupil.
+    Pet,
+}
+
 /// All edits applied to one image. Every field is neutral by default.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -1761,6 +1799,9 @@ pub struct Edits {
     /// all 53 goldens byte-identical.
     #[serde(default)]
     pub look: Look,
+    /// Red- and pet-eye corrections (M9.11), applied right after spot removal on the
+    /// pre-geometry frame. Empty = no stage. Rides the Retouch group with `spots`.
+    pub eyes: Vec<Eye>,
 }
 
 impl Edits {
@@ -1833,6 +1874,7 @@ impl Edits {
             spots,
             rendering,
             look,
+            eyes,
         } = src;
 
         if groups.white_balance {
@@ -1884,6 +1926,7 @@ impl Edits {
         }
         if groups.retouch {
             self.spots = spots.clone();
+            self.eyes = eyes.clone();
         }
         if groups.rendering {
             self.rendering = *rendering;
@@ -3308,6 +3351,14 @@ mod tests {
                 feather: 30.0,
                 mode: SpotMode::Clone,
             }],
+            eyes: vec![Eye {
+                centre: [0.6, 0.35],
+                radius: 0.01,
+                kind: EyeKind::Pet,
+                pupil_size: 60.0,
+                darken: 40.0,
+                catchlight: Some([-0.35, -0.35]),
+            }],
             rendering: Some(Rendering::Camera),
             look: Look {
                 file: Some("velvia.cube".into()),
@@ -4593,6 +4644,59 @@ mod tests {
         // An older sidecar has no `spots` key and must load with none.
         let e: Edits = serde_json::from_str(r#"{"exposure": 0.5}"#).unwrap();
         assert!(e.spots.is_empty());
+    }
+
+    /// ⚠ Both directions, `spots_travel_on_the_retouch_group_and_no_other`'s shape.
+    #[test]
+    fn eyes_travel_on_the_retouch_group_and_no_other() {
+        let src = all_nonneutral();
+        assert!(
+            !src.eyes.is_empty(),
+            "fixture check: the source carries an eye"
+        );
+        let mut with = Edits::default();
+        with.merge_from(&src, EditGroups::only(RETOUCH_GROUP));
+        assert_eq!(with.eyes, src.eyes);
+        for (g, name) in EDIT_GROUP_NAMES.iter().enumerate() {
+            if g == RETOUCH_GROUP {
+                continue;
+            }
+            let mut without = Edits::default();
+            without.merge_from(&src, EditGroups::only(g));
+            assert!(
+                without.eyes.is_empty(),
+                "group {g} ({name}) must not carry eyes"
+            );
+        }
+    }
+
+    #[test]
+    fn an_eye_round_trips_and_an_unstated_catchlight_is_none() {
+        let e = Edits {
+            eyes: vec![Eye {
+                centre: [0.4, 0.3],
+                radius: 0.01,
+                kind: EyeKind::Pet,
+                pupil_size: 70.0,
+                darken: 20.0,
+                catchlight: Some([-0.3, -0.3]),
+            }],
+            ..Edits::default()
+        };
+        let back: Edits = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
+        assert_eq!(back, e);
+        let hand = r#"{"eyes":[{"centre":[0.1,0.2],"radius":0.01,"kind":"Red","pupil_size":50.0,"darken":50.0}]}"#;
+        let e: Edits = serde_json::from_str(hand).unwrap();
+        assert_eq!(e.eyes[0].catchlight, None);
+        assert_eq!(e.eyes[0].kind, EyeKind::Red);
+        let no_centre =
+            r#"{"eyes":[{"radius":0.01,"kind":"Red","pupil_size":50.0,"darken":50.0}]}"#;
+        assert!(
+            serde_json::from_str::<Edits>(no_centre).is_err(),
+            "an eye nobody placed must not be invented at the corner"
+        );
+        let old: Edits = serde_json::from_str(r#"{"exposure": 0.5}"#).unwrap();
+        assert!(old.eyes.is_empty());
     }
 
     /// ⚠⚠ Hand-written `Default`, not derived: `strength` is 100 at neutral, and the

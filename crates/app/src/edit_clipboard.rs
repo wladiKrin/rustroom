@@ -196,6 +196,14 @@ mod tests {
                 feather: 30.0,
                 mode: edit_model::SpotMode::Clone,
             }],
+            eyes: vec![edit_model::Eye {
+                centre: [0.6, 0.35],
+                radius: 0.01,
+                kind: edit_model::EyeKind::Pet,
+                pupil_size: 60.0,
+                darken: 40.0,
+                catchlight: Some([-0.35, -0.35]),
+            }],
             rendering: Some(edit_model::Rendering::Camera),
             look: edit_model::Look {
                 file: Some("portra.cube".into()),
