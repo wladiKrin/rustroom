@@ -199,6 +199,12 @@ impl Session {
         for i in gone.into_iter().rev() {
             e.spots.remove(i);
         }
+        // M9.11: the eye being moved or resized leaves the view too, `suppressed_spot`'s reason.
+        if let Some(i) = self.suppressed_eye {
+            if i < e.eyes.len() {
+                e.eyes.remove(i);
+            }
+        }
         // ⚠⚠ **Mask isolation.** While a mask's tint is shown, that mask's adjustments leave the
         // view, so painting changes no pixels and needs no render — which is what keeps the rung
         // from changing mid-stroke. Every other mask and every global edit still render.
@@ -664,6 +670,9 @@ impl RustroomApp {
             soft_next: false,
             backdrop: None,
             spot_drag: Default::default(),
+            selected_eye: None,
+            suppressed_eye: None,
+            eye_drag: Default::default(),
             active_mask_handle: None,
             guides: Vec::new(),
             active_guide: None,

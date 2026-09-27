@@ -130,11 +130,15 @@ pub(super) fn draw_spot_overlay(
             // ⚠ Hit-test BEFORE placement: a click on an existing handle selects it rather than
             // stacking a new spot on top of it.
             match spot_tool::hit_test(&s.edits.spots, at, aspect, min_grab) {
-                Some((i, _)) => s.selected_spot = Some(i),
+                Some((i, _)) => {
+                    s.selected_spot = Some(i);
+                    s.selected_eye = None;
+                }
                 None => {
                     let sp = place_with_source(at, *tool, &s.edits.spots, aspect, sample);
                     s.edits.spots.push(sp);
                     s.selected_spot = Some(s.edits.spots.len() - 1);
+                    s.selected_eye = None;
                     changed = true;
                 }
             }
@@ -148,6 +152,7 @@ pub(super) fn draw_spot_overlay(
             s.spot_drag = match spot_tool::hit_test(&s.edits.spots, at, aspect, min_grab) {
                 Some((i, h)) => {
                     s.selected_spot = Some(i);
+                    s.selected_eye = None;
                     // ⚠⚠ **The patch leaves the view for the duration of the drag**, so the
                     // blemish underneath is visible and can be lined up against. Without this its
                     // old effect stays on screen and hides the very thing being aimed at.
@@ -252,6 +257,7 @@ pub(super) fn draw_spot_overlay(
         if let Some(sp) = placed {
             s.edits.spots.push(sp);
             s.selected_spot = Some(s.edits.spots.len() - 1);
+            s.selected_eye = None;
             changed = true;
         }
         if matches!(s.spot_drag, SpotDrag::Moving(..)) {

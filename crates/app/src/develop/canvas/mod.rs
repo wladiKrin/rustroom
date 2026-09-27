@@ -7,6 +7,7 @@
 //! comment at the call site.
 
 mod crop_overlay;
+pub(crate) mod eye_overlay;
 mod guide_overlay;
 mod loupe;
 mod mask_overlay;
@@ -91,6 +92,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     // `&mut app.spot_tool` cannot be taken while `match &mut app.session` holds its borrow — the
     // canvas takes `&mut app` whole, unlike the panel, which borrows disjoint fields.
     let mut app_spot_tool = app.spot_tool;
+    let mut app_eye_tool = app.eye_tool;
+    let mut eye_status: Option<String> = None;
     // ⚠ The defringe pick's status line, written back to `app.status` after the session borrow —
     // `app_spot_tool`'s shape (M9.6).
     let mut fringe_status: Option<String> = None;
@@ -568,14 +571,29 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                 // ⚠ Built here rather than inside the overlay so the shared borrow of
                                 // `s` it holds ends before the overlay takes `&mut s`.
                                 let sample = sampler_for(s);
-                                photo_edited |= draw_spot_overlay(
+                                // ⚠ M9.11: patch gestures only in a patch mode. Eyes are drawn in
+                                // every mode but take gestures only in theirs — one click, one
+                                // meaning. Patch outlines are not drawn in an eye mode.
+                                if app_eye_tool.active.is_none() {
+                                    photo_edited |= draw_spot_overlay(
+                                        ui,
+                                        s,
+                                        &resp,
+                                        img_rect,
+                                        frame_rect,
+                                        &mut app_spot_tool,
+                                        &sample,
+                                    );
+                                }
+                                photo_edited |= eye_overlay::draw_eye_overlay(
                                     ui,
                                     s,
                                     &resp,
                                     img_rect,
                                     frame_rect,
-                                    &mut app_spot_tool,
+                                    &mut app_eye_tool,
                                     &sample,
+                                    &mut eye_status,
                                 );
                             }
                             Tool::Edit | Tool::Presets => {}
@@ -722,6 +740,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     // ⚠ Written back after the session borrow ends: the size-drag sets the radius, and the panel's
     // Size slider reads this same field next frame. One value, two affordances.
     app.spot_tool = app_spot_tool;
+    app.eye_tool = app_eye_tool;
+    if let Some(m) = eye_status {
+        app.status = m;
+    }
     if let Some(m) = fringe_status {
         app.status = m;
     }
@@ -1720,6 +1742,84 @@ mod tests {
             "a move was not exactly one step"
         );
         assert_eq!(s.history.get(), &s.edits);
+    }
+
+    fn eye_app(ctx: &egui::Context, kind: edit_model::EyeKind) -> crate::RustroomApp {
+        let mut app = retouch_app(ctx);
+        app.eye_tool.active = Some(kind);
+        app
+    }
+
+    fn eyes(app: &crate::RustroomApp) -> Vec<edit_model::Eye> {
+        app.session.as_ref().expect("a session").edits.eyes.clone()
+    }
+
+    /// M9.11: a click in an eye mode places one eye and no patch, as one undo step, selected.
+    #[test]
+    fn an_eye_mode_click_places_one_eye_and_no_spot_as_one_history_step() {
+        let ctx = egui::Context::default();
+        let mut app = eye_app(&ctx, edit_model::EyeKind::Red);
+        let depth = app.session.as_ref().unwrap().history.undo_depth();
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::click_through(&mut app, &ctx, centre);
+        assert_eq!(
+            eyes(&app).len(),
+            1,
+            "the click did not place exactly one eye"
+        );
+        assert!(spots(&app).is_empty(), "an eye-mode click placed a spot");
+        let s = app.session.as_ref().unwrap();
+        assert_eq!(s.history.undo_depth(), depth + 1, "not one history step");
+        assert_eq!(s.history.get(), &s.edits);
+        assert_eq!(s.selected_eye, Some(0));
+        assert_eq!(s.selected_spot, None);
+        // The test photo is a flat chart: nothing to detect, so the fallback circle and its
+        // message — a click is never a no-op.
+        assert!(
+            app.status.contains("No red pupil"),
+            "no message for a failed detection: {:?}",
+            app.status
+        );
+    }
+
+    /// The guard on the guard: patch mode still places patches, and no eyes.
+    #[test]
+    fn patch_mode_places_no_eye() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::click_through(&mut app, &ctx, centre);
+        assert!(eyes(&app).is_empty(), "patch mode placed an eye");
+        assert_eq!(spots(&app).len(), 1);
+    }
+
+    #[test]
+    fn clicking_a_placed_eye_selects_it_and_a_drag_inside_moves_it_as_one_step() {
+        let ctx = egui::Context::default();
+        let mut app = eye_app(&ctx, edit_model::EyeKind::Red);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::click_through(&mut app, &ctx, centre);
+        {
+            // Grabbable at test scale: the fallback radius is a few screen points here.
+            let s = app.session.as_mut().unwrap();
+            s.edits.eyes[0].radius = 0.2;
+            s.history.push(s.edits.clone());
+            s.selected_eye = None;
+        }
+        super::test_support::click_through(&mut app, &ctx, centre);
+        assert_eq!(eyes(&app).len(), 1, "the second click stacked an eye");
+        assert_eq!(app.session.as_ref().unwrap().selected_eye, Some(0));
+        let depth = app.session.as_ref().unwrap().history.undo_depth();
+        let before = eyes(&app)[0].centre;
+        super::test_support::drag_through(&mut app, &ctx, centre, centre + egui::vec2(10.0, 0.0));
+        let s = app.session.as_ref().unwrap();
+        assert_ne!(
+            s.edits.eyes[0].centre, before,
+            "the drag did not move the eye"
+        );
+        assert_eq!(s.edits.eyes[0].radius, 0.2, "a move resized the eye");
+        assert_eq!(s.history.undo_depth(), depth + 1, "a move was not one step");
+        assert_eq!(s.suppressed_eye, None, "the eye stayed out of the view");
     }
 
     /// ⚠⚠ The render is sampled **on the drag frame itself** (`DRAG_PASS`), not after the
