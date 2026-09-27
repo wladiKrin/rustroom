@@ -48,7 +48,7 @@ pub enum Handle {
 /// different distances unless the frame is square. [`Spot::radius`] is a fraction of the long
 /// edge, so every comparison against it must be in that unit or a disc becomes an ellipse — the
 /// trap `BrushStroke::radius` records, and which `mask_tool::hit_test` corrects for separately.
-fn long_edge_scale(aspect: f32) -> (f32, f32) {
+pub(crate) fn long_edge_scale(aspect: f32) -> (f32, f32) {
     if aspect >= 1.0 {
         // The width is the long edge, so a unit of normalised y is `1/aspect` of it.
         (1.0, 1.0 / aspect)
