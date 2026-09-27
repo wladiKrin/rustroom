@@ -161,7 +161,7 @@ goldens unmoved.
 ### 2026-09-27 — M9.12 import from a card (branch `m9.12-import`)
 
 **3,129 tests** (+29), 82 goldens unmoved, gate green. Spec `2026-09-27-m9.12-import-design.md`,
-plan of the same date. 🟡 **Built; awaiting use.**
+plan of the same date. ✅ **Confirmed by use and merged 2026-09-27** (after the fast survey and the layout choice below).
 
 **What shipped.** File → *Import…* (⇧⌘I). The author's choices: the **full dialog**; **dated
 subfolders** `Destination/YYYY/YYYY-MM-DD/`; a **ticked grid, new only**; **remembered fields**
