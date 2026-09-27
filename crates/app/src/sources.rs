@@ -25,35 +25,67 @@ impl RustroomApp {
         self.open_folder_at(ctx, dir);
     }
 
-    /// Scan `dir` and show it. The half of `open_folder` that is not the file dialog.
+    /// Scan `dir` and everything beneath it, and show it all. The half of `open_folder` that is not
+    /// the file dialog.
+    ///
+    /// ⚠⚠ M9.9: **the whole tree** (`catalog::scan_tree`) — each subfolder holding images becomes a
+    /// catalog folder, and the view shows `dir` with everything beneath (the author's choice,
+    /// Lightroom's default). And per folder, BEFORE its new rows are added, a file new to it that
+    /// is a photo moved from another known folder is relinked (`Catalog::relink_moved`), its
+    /// left-behind sidecars following it (`move_tracking::carry_sidecars`).
     pub(crate) fn open_folder_at(&mut self, ctx: &egui::Context, dir: PathBuf) {
-        match catalog::scan_folder(&dir) {
-            Ok(mut scan) => {
-                // ⚠ Ordered **before** expanding into entries. Sorting the scan is what keeps a
-                // file's copies adjacent to it and ascending under every ordering — sorting
-                // `entries` instead would scatter them.
-                if self.settings.library_sort.needs_edited() {
-                    for e in scan.iter_mut() {
-                        e.edited = sidecar::edited_at(&e.path);
+        let tree = match catalog::scan_tree(&dir) {
+            Ok(t) => t,
+            Err(e) => {
+                self.status = format!("Could not read folder: {e}");
+                return;
+            }
+        };
+        let mut relinked = 0usize;
+        let mut scan = Vec::new();
+        for (folder, entries) in tree {
+            if let Some(cat) = &self.catalog {
+                // ⚠ `gone` is the filesystem's answer: a surviving original makes the new file a
+                // copy, and the catalog itself checks no files.
+                match cat.relink_moved(&folder, &entries, |p| !p.exists()) {
+                    Ok(moved) => {
+                        for (from, to) in &moved {
+                            rustroom_app::move_tracking::carry_sidecars(from, to);
+                        }
+                        relinked += moved.len();
                     }
+                    Err(e) => eprintln!("catalog: {e}"),
                 }
-                catalog::sort(&mut scan, self.settings.library_sort);
                 // ⚠ The catalog records the *files*; copies are added when they are created
                 // rather than scanned, because they live in the sidecar and not on disk.
-                if let Some(cat) = &self.catalog {
-                    if let Err(e) = cat.sync_folder(&dir, &scan) {
-                        eprintln!("catalog: {e}");
-                    }
+                if let Err(e) = cat.sync_folder(&folder, &entries) {
+                    eprintln!("catalog: {e}");
                 }
-                let n = self.open_scan(ctx, LibrarySource::Folder(dir.clone()), scan);
-                self.status = if n == 0 {
-                    "No supported images in this folder.".into()
-                } else {
-                    format!("{n} photos")
-                };
             }
-            Err(e) => self.status = format!("Could not read folder: {e}"),
+            scan.extend(entries);
         }
+        // ⚠ Ordered **before** expanding into entries. Sorting the scan is what keeps a file's
+        // copies adjacent to it and ascending under every ordering — sorting `entries` instead
+        // would scatter them. After the sidecars moved, so "edited" reads where they are now.
+        if self.settings.library_sort.needs_edited() {
+            for e in scan.iter_mut() {
+                e.edited = sidecar::edited_at(&e.path);
+            }
+        }
+        catalog::sort(&mut scan, self.settings.library_sort);
+        let n = self.open_scan(ctx, LibrarySource::Folder(dir.clone()), scan);
+        let mut status = if n == 0 {
+            "No supported images in this folder.".to_string()
+        } else {
+            format!("{n} photos")
+        };
+        if relinked > 0 {
+            status.push_str(&format!(
+                " · Recognised {relinked} moved photo{}",
+                if relinked == 1 { "" } else { "s" }
+            ));
+        }
+        self.status = status;
     }
 
     /// Show every photo the catalog knows, from every folder ever opened.
@@ -592,5 +624,79 @@ mod tests {
             app.library.as_ref().unwrap().source,
             LibrarySource::Folder(_)
         ));
+    }
+}
+
+#[cfg(test)]
+mod move_tests {
+    use crate::test_app::{for_test, TestDir};
+
+    /// ⚠⚠ **M9.9's done-when, end to end:** a RAW rated and edited in `root/a`, then moved on disk
+    /// to `root/b` — the RAW alone, as a Finder drag of one file would — keeps its rating and its
+    /// edits when the tree is scanned again, and the view shows both subfolders' photos.
+    #[test]
+    fn a_file_moved_on_disk_keeps_its_marks_and_edits() {
+        let d = TestDir::new("m99_move");
+        let root = d.0.join("shoot");
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::create_dir_all(root.join("b")).unwrap();
+        let x = root.join("a/x.RAF");
+        std::fs::write(&x, b"some raw bytes").unwrap();
+        std::fs::write(root.join("b/y.RAF"), b"another raw, different size").unwrap();
+        rustroom_app::sidecar::save(
+            &x,
+            &edit_model::Edits {
+                exposure: 0.7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let ctx = egui::Context::default();
+        let mut app = for_test();
+        app.open_folder_at(&ctx, root.clone());
+        assert_eq!(
+            app.library.as_ref().unwrap().entries.len(),
+            2,
+            "both subfolders are shown"
+        );
+        let cat = app.catalog.as_ref().unwrap();
+        cat.set_marks(
+            &x,
+            0,
+            catalog::db::Marks {
+                rating: 5,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let moved = root.join("b/x.RAF");
+        std::fs::rename(&x, &moved).unwrap();
+        app.open_folder_at(&ctx, root.clone());
+
+        let cat = app.catalog.as_ref().unwrap();
+        assert_eq!(
+            cat.marks(&moved, 0).unwrap().rating,
+            5,
+            "the rating followed the file"
+        );
+        assert_eq!(
+            rustroom_app::sidecar::load(&moved).map(|e| e.exposure),
+            Some(0.7),
+            "the edits followed it too"
+        );
+        assert!(
+            app.status.contains("Recognised 1 moved photo"),
+            "{}",
+            app.status
+        );
+        // ⚠ The catalog's count, not the view's: the view is built from the disk scan and shows
+        // two photos either way; the catalog would hold THREE rows had the move not relinked.
+        assert_eq!(
+            cat.photo_count().unwrap(),
+            2,
+            "one photo moved, not a new one beside a stale row"
+        );
     }
 }

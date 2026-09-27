@@ -45,6 +45,7 @@ pub mod mask_kind;
 pub mod mask_tool;
 pub mod menu;
 pub mod metadata_scanner;
+pub mod move_tracking;
 pub mod panel_order;
 pub mod perspective_detect;
 pub mod photo_id;
