@@ -166,176 +166,76 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 94 dated sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-09-26)
+### State (2026-09-27)
 
-**3027 tests**, **81 goldens** (⚠ 81: M6.4c and M9.6 added one each; older counts are stale).
-✅ **M9.10 DNG export (2026-09-27, confirmed by use and merged).** The finished picture as
-a linear ProPhoto DNG, lossless-JPEG tiles (`export::lj92`). darktable with workflow "none" renders
-it within 0 levels mean / 4 max; its default workflow adds +0.66 EV. `grep -n 'M9.10' docs/JOURNAL.md`.
-✅ **M9.9 folder tree and move tracking (2026-09-27, confirmed by use and merged; Reindex relinks too).**
-Opening scans the tree; the Folders panel nests; a file moved on disk between known folders keeps
-its rows and sidecars (strict name+size+mtime match, automatic). `grep -n 'M9.9' docs/JOURNAL.md`.
-✅ **M9.8 keyword editing (2026-09-27, confirmed by use and merged).** Rename in
-place, drag to move, merge on a collision (asked), all undoable, every change rewriting the XMP of
-the files it touched; a deleted keyword now leaves the XMP too. `grep -n 'M9.8' docs/JOURNAL.md`.
-✅ **M9.7 persistent history (2026-09-27, confirmed by use and merged).** Ctrl+Z
-survives a restart: a photo's newest 100 steps in the catalog (`photo_history`, migration 9), stored
-on photo switch and on exit, restored only if it still ends at the sidecar's edits, the action log
-seeded. ⚠⚠ Catalog, not sidecar — the reasons in the journal. `grep -n 'M9.7' docs/JOURNAL.md`.
-✅ **M9.6 defringe (2026-09-27, confirmed by use and merged).** Purple/green amount + hue
-range in the Lens section (with an eyedropper), a −100..+100 Defringe per mask (negative protects).
-ONE prefix step after geometry. ⚠⚠ ~62 ms at fit, and a straighten drag pays it when it is on —
-a GPU twin if use asks. `grep -n 'M9.6' docs/JOURNAL.md`.
-✅ **M6.4c rendering intents (2026-09-26, confirmed by use and merged).**
-`color::gamut`: **Clip (default — the author's call from crops of his own photos)**, Relative
-colorimetric and Perceptual, the last two hue-preserving in Oklab with an **exact per-pixel
-boundary** (a table desaturated pure red by 49 levels at the gamut corners). Canvas intent from the
-View menu; export intent per preset. ⚠⚠ The default render is main's bit for bit. `grep -n 'M6.4c'
-docs/JOURNAL.md`.
-✅ **The resident final checkpoint (2026-09-26, branch `resident-final`, stacked on
-`per-pixel-fusion`; confirmed by use and merged 2026-09-26, the whole stack together — "very smooth").** `PrefixCache` keeps the tail's input on the GPU under
-`(final key, Option<Rect>)`; a one-chain tail runs from it, a miss keeps its upload, the last GPU
-prefix step keeps its output, and **the settle after a handoff is a download (~101–122 → ~21–30
-ms), not a render**. The tail's input travels as an `Arc` — the 2.5 ms clone per tail frame is gone.
-⚠⚠ **The drag frame is ~3 ms slower** (the tail copies the kept output instead of taking the one-shot
-plane in place); the fix — the first fused unit reading from the resident, a fourth binding on the
-emitter — is priced in the journal and needs its own spec. Measured A/B against a worktree build of
-`0877bb2` because the sidecar changed under the day's figures. `grep -n 'resident final' docs/JOURNAL.md`.
-✅ **Per-pixel fusion (2026-09-26, branch `per-pixel-fusion`,
-stacked on `gpu-timestamps`; in use with the resident final since 2026-09-26, no regression felt).** A run of consecutive per-pixel
-stages is ONE walk on the CPU (`pipeline::per_pixel`, bit-identical) and ONE dispatch on the GPU
-(`gpu_pipeline::per_pixel`, three bindings); grouping is at **run time**, the stage list is
-untouched; `RUSTROOM_NO_FUSION=1` is the A/B. Measured: the GPU whole tail **35.6 → 21.2 ms** at
-rung 3200, the author's sidecar drag 25.0 → 21.6, a Straighten frame ~30 → ~28. ⚠⚠ **The walk
-calls a stage once per ROW** — per pixel it read 200 → 299 ms on the CPU (61 M virtual calls);
-row-wise 177.6 → 172.0. ⚠ Three drag pairs at load 6–11 read fused 2–4 ms slower before the
-row-wise fix, unexplained; use decides. `grep -n 'per-pixel fusion' docs/JOURNAL.md`.
-✅ **GPU timestamps (same day, branch `gpu-timestamps`):** `RUSTROOM_DEBUG_GPU_TIME=1` prints a
-`GPUTIME` block per chain — one compute pass per unit, its GPU time, the quantise, and the wall's
-remainder as `copies+latency`. ⚠⚠ **The copies are not marked: an encoder timestamp outside a
-pass deadlocks wgpu 29's Metal backend.** ⚠ A timed frame is ~10 ms slower; quote per-pass
-numbers, never a timed wall. A full-frame per-pixel pass is ~2.2 ms at 6.8 Mpx, the Catmull-Rom
-geometry gather 15.7. `grep -n 'GPU timestamps' docs/JOURNAL.md`.
-✅ **M7.3b (2026-09-25, confirmed by use and merged 2026-09-26)**
-fuses perspective into `GeometryStage`, reorders the prefix, and moves spots before perspective.
-`grep -n 'M7.3b' docs/JOURNAL.md`. ⚠⚠ **Its drag speedup applies only when NR or dehaze is on**,
-which is 2 and 1 of the author's 49 edited photos. Quoting "4x faster geometric drags" without that
-condition overstated it, and the author noticed.
-⚠ `Edits::version` is **never written** (always 0); do not trust any note giving it a value.
+**3071 tests**, **81 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
+trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
+✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
-✅ **Stacks — same-stem files as one grid cell (2026-09-25, confirmed by use).** `Pictures/fuji` was
-**830 cells for 415 photographs**; both camera folders are **100% RAW+JPEG pairs**. A **view grouping
-only** — edits, sidecars, marks and the catalog untouched. ⚠⚠ **Grouping happens in
-`library_state::browser_entries`, the function BOTH entry-building paths must go through** — `sources`
-on folder-open and `rebuild_entries` on re-sort. A comment claiming one site is not one site; that bug
-shipped. ⚠ `smart_sources` deliberately does **not** group: it evaluates every file against a rule.
-⚠⚠ **Stem alone is safe here** — unlike the Immich migration, the filesystem enforces uniqueness
-within a folder. ⚠ Settings → Appearance; `enabled` defaults **true** (the `gpu_tail` trap).
-⚠⚠ **Both folder-content predicates (`formats_present`, `folder_overrides_hidden`) read the SCAN, not
-the grouped entries** — reading `entries` made the JPEG chip flicker and silently disabled the hidden-
-format override in an all-paired folder. `grep -n 'stacks: same-stem' docs/JOURNAL.md`.
+⚠⚠ **This block is the LIVE STATE, not a changelog — overwrite it, never append.** Finished work is
+one line with a `grep` pointer; its story is in `docs/JOURNAL.md`. (Compacted 2026-09-27 from a block
+that had grown to ~170 lines by appending.)
 
-⚠⚠ **Run the git command above rather than trusting any count here** — this block was wrong about the
-push state twice on 2026-09-24. ⚠ Still never push. ✅ CI on Linux is green; its one failure was a test
-asserting an absolute path's existence — shape **(e)** in *Standing lessons*.
+**Phase 9 so far — all merged and confirmed by use** (`grep -n '<id>' docs/JOURNAL.md` for each):
 
-✅ **Immich slice 4 — Download / Remove downloads (2026-09-24, confirmed by use).** ⚠⚠ Its
-load-bearing part is a **bounded download queue** (cap **4**): `request` spawns a thread per job, so
-a bulk album would have spawned **872**. ⚠ Start the next job **after** `in_flight.remove`.
-⚠⚠ **Removal deletes only the image** — sidecar, catalog row and thumbnail survive, and
-`cache_path`'s byte-identical re-download reattaches them. `grep -n 'Immich slice 4' docs/JOURNAL.md`.
-✅ **Landed 2026-09-23/24, all confirmed by use:** per-channel RGB tone curves (⚠⚠ `apply` was already
-`map_samples`, so the goldens stayed byte-identical); the **Color section** behind `ADVANCED COLOR`
-(⚠⚠ not three real sections — that would split the `Color` edit group *and* the Sync dialog); the
-**histogram's** sqrt scale with bins 0 and 255 out of it (⚠⚠ the test says **not** to fix its
-2.2%-at-2000:1 limit by lowering the threshold); and the **Now row counting what DIFFERS** via
-`Edits::changed_parameters`, ⚠⚠ derived from **serialisation, never a field list**.
-`grep -n 'per-channel RGB\|made legible\|histogram.s scale' docs/JOURNAL.md`.
+| Id | What | The thing to remember |
+|---|---|---|
+| M5.1c | Parametric curve (Lightroom's model, own representation) | folded into `ToneCurveStage`'s composite table; on-curve drag has a Settings binding |
+| M6.4c | Rendering intents: Clip (default), Relative, Perceptual | ⚠⚠ Clip is the default by the author's choice from crops; hue-preserving intents use an EXACT per-pixel boundary (a table cost 49 levels at the gamut corners) |
+| M9.6 | Defringe, global (Lens section, eyedropper) + per mask (−100 protects) | ONE prefix step after geometry, ~62 ms at fit; edge band measured (0.02 greyed foliage) |
+| M9.7 | Persistent history (Ctrl+Z survives restart) | ⚠⚠ in the CATALOG (`photo_history`), saved in `persist_current_session` — `on_exit` NEVER runs (close ends in `process::exit`) |
+| — | Double-click resets a slider; a click on the rail is an undo step and takes no focus | `Edited::slider` takes a REQUIRED default; `every_slider_resets_to_its_fields_default` sweeps by role |
+| M9.8 | Keywords: rename in place, drag to move, merge on collision | every change and undo rewrites XMP; ⚠ deleting a keyword now leaves the XMP too; new parent = the keyword last clicked |
+| M9.9 | Folder tree + move tracking | `scan_and_relink` shared by open and Reindex; strict name+size+mtime match, a surviving original is a copy |
+| M9.10 | DNG export: the finished picture as a linear DNG | `export::lj92` + `export::dng`; darktable workflow "none" renders it intact (0.00 mean), its default adds +0.66 EV; ⚠ `ColorMatrix1` at D65 (libraw ignores the illuminant tag) |
 
-⚠⚠ **The Immich invariants that are easy to break again:** the catalog keys a row on the **path's** own
-file name, never `CatalogEntry::file_name`; `row_is_browsable` hides an absent **Immich** row from
-catalog-wide views but **never** an absent local one; `present_names` is one `read_dir` filtered through
-`catalog::is_supported`. ⚠ Out of scope by decision: eviction of cached originals, the OS keychain (keys
-are **plaintext**), reading Immich's own `rating`/`isFavorite`. ⚠ The **rail's** album and bucket lists
-are still refetched every launch; only *asset* lists are cached. ⚠ **Auto-advance is a Settings toggle**
-already `true` in the user's file, so changing the Rust default would not change his behaviour.
+**Earlier, still worth knowing** (all merged, all confirmed by use):
+- **The GPU stack** (2026-09-26): timestamps (`RUSTROOM_DEBUG_GPU_TIME=1`; ⚠ an encoder timestamp
+  outside a pass deadlocks wgpu 29's Metal backend), per-pixel fusion (`RUSTROOM_NO_FUSION=1`; ⚠ the
+  walk calls a stage once per ROW), and the resident final checkpoint (⚠ the drag frame ~3 ms slower,
+  the fix priced in the journal). `grep -n 'GPU timestamps\|per-pixel fusion\|resident final' docs/JOURNAL.md`.
+- **M7.3b** — perspective fused into `GeometryStage`; ⚠⚠ its drag speedup applies only with NR or
+  dehaze on (2 and 1 of 49 photos). **Stacks** — ⚠⚠ grouping happens in
+  `library_state::browser_entries`, which BOTH entry-building paths must go through; both folder-content
+  predicates read the SCAN, not the grouped entries.
+- ⚠ `Edits::version` is **never written** (always 0); do not trust any note giving it a value.
+- ⚠⚠ **Immich invariants** (M9.1, complete): the catalog keys a row on the **path's** own file name,
+  never `CatalogEntry::file_name`; `row_is_browsable` hides an absent **Immich** row from catalog-wide
+  views but never an absent local one; `asset.upload` is a grant separate from `asset.update` (upload
+  rides `immich_upload_key`); never delete a staged file on an upload *attempt*; no mtime fallback for
+  the upload date; `Settings.immich_enabled` is read only through `immich_source::connection`.
+  ⛔ Two-way sync is DECLINED — the user's call. ⚠ The server is a **Tailscale Funnel**: a stopped
+  Tailscale on the Mac is never the cause of an Immich error.
 
-✅ **Merged and confirmed by use, specs under `docs/superpowers/specs/`:** the Export dialog, the
-dialogs in one language, the snapshot timeline, the top bar and Library, and the five panel reworks
-plus the mask off switch (2026-09-18 → 22).
+### ▶ Next action
 
-⚠⚠ **This block is the LIVE STATE, not a changelog — overwrite it, never append.** It reached a full
-screen of per-milestone tables twice, which is the 1.2 MB failure in miniature.
+**M9.11 — red-eye** is next: *a flash portrait's pupils corrected in one click each,
+non-destructively* (Obsidian `03-plan-of-action.md`). Then **M9.12** import/ingest, **M9.13** AI
+subject/sky masks — the end of Phase 9. **Phase 10** (was 9) is integration and release: M10.2
+Windows + the Linux GUI (never run), M10.3 contributor docs, M10.4 `v0.1`, M10.5 plugins. ⛔ **M10.1 was
+WITHDRAWN — it was never real** (the licence has been committed since `e71330d`); do not re-open it.
+⚠ M5.1c and M6.4c keep their own ids; Phase 9's new items start at M9.6 because M9.1–M9.5 are retired.
 
-**Landed 2026-09-18, all confirmed by use:** M8.13, M8.14, the `batch_export.rs` split, the rendering
-seam reaching export and thumbnails, `ProfileRendering` as a required argument, and the GPU tail on by
-default. `grep -n 'M8.13\|M8.14' docs/JOURNAL.md`.
+**How the author works** (and has every milestone this session): brainstorm → spec → plan → execute
+inline with no check-ins after the design is approved; a branch per feature; he tries it in the GUI
+and says "works, merge it and delete the branch" — then merge `--no-ff`, delete the branch, mark the
+journal/CLAUDE.md/Obsidian ✅. He reports what he sees precisely; take it literally. He asks for plain
+explanations of domain terms (DNG, fringe, rendering intent) before choosing — give them.
 
-### ▶ Next action — the plan has a queue now; work it in order
+**Proposed, not scheduled (the author's call):** masks' *scene* sliders (WB, exposure, contrast, tone
+regions) run after the global tone curve, where Lightroom applies them as offsets; raised in M7.3b's
+brainstorm. ⚠ The remaining app-vs-probe drag gap (~10–12 ms) is GPU submit+wait, cause unidentified;
+the shared-device idea is ⛔ declined on a measurement (`docs/BACKLOG.md`). ⚠ Defringe has no GPU twin;
+with it on, a straighten drag pays ~62 ms — build one if use asks.
 
-⚠⚠ **RESTRUCTURED 2026-09-25 in `03-plan-of-action.md`** (Obsidian, `private/opensource_lightroom/`).
-Every planned phase closed except **M7.3b** (since done, 2026-09-25), so the roadmap was re-cut:
-- **Phase 9 is NEW — the ten capability gaps**, as a one-at-a-time checklist ordered cheapest-useful
-  first: **M5.1c** parametric curve · **M6.4c** rendering intents/gamut · **M9.6** defringe · **M9.7**
-  persistent history · **M9.8** keyword re-parenting · **M9.9** folder tree + move tracking · **M9.10**
-  DNG · **M9.11** red-eye · **M9.12** import/ingest · **M9.13** AI subject/sky masks.
-  ⚠⚠ **M5.1c and M6.4c keep their OWN identifiers** — they are sub-slices of closed phases, and minting
-  `M9.x` names for them would put one piece of work under two names. ⚠ Phase 9's new items start at
-  **M9.6** because M9.1–M9.5 are retired, not free.
-- **The old Phase 9 is Phase 10** (integration, cross-platform, release). ⚠ **M9.1 (Immich) KEEPS ITS
-  NAME** inside it — it shipped, and ten references point at that string. M9.2–M9.5 → **M10.2–M10.5**.
-- ⛔ **M10.1 was WITHDRAWN the same day it was written — it was never real.** `LICENSE` (the full
-  674-line GPL-3.0 text) has been committed since `e71330d`, and `[workspace.package]` has carried
-  `license = "GPL-3.0-or-later"` all along. ⚠⚠ **Do not re-open it from a list**; it exists in the plan
-  only as the record of the broken-`ls` check in *Standing lessons* below.
+⚠⚠ **The GPU port is finished** — done, declined with numbers, or blocked on a considered trade.
 
-**▶ The order the user set: M7.3b ✅, the drag-frame fixes ✅ and GPU geometry ✅ (all merged and
-confirmed by use 2026-09-26); Phase 9's checklist from the top — M5.1c (parametric curve) ✅ merged and confirmed by use
-2026-09-26; M6.4c (rendering intents) ✅ merged and confirmed by use 2026-09-26; M9.6 (defringe) ✅ merged and confirmed by use 2026-09-27; M9.7 (persistent history) ✅ merged and confirmed by use 2026-09-27 (with double-click slider reset); M9.8 (keyword editing) ✅ merged and confirmed by use 2026-09-27; M9.9 (folder tree + move tracking) ✅ merged and confirmed by use 2026-09-27; M9.10 (DNG export) ✅ merged and confirmed by use 2026-09-27; **M9.11 (red-eye) is next.** A Straighten drag on
-DSCF6263: **~97 → ~41 ms per frame in the app** (85.0 → 28.8 ms headless). ⚠ The remaining app-vs-probe
-gap (~10–12 ms) is GPU submit+wait, and it is **NOT** the window's per-frame upload: freezing the window
-changed nothing, so the shared-device idea is ⛔ declined on that measurement (`docs/BACKLOG.md`). The
-real cause is unidentified. ⚠ **Proposed and not yet scheduled:** masks' *scene* sliders (WB, exposure,
-contrast, tone regions) run after the global tone curve today, where Lightroom applies them as
-offsets at the global slider's position. It was raised in M7.3b's brainstorm and split off as its
-own milestone. It is the author's call.
-
-⚠⚠ **The GPU port is finished** — done, declined with numbers, or blocked on a considered trade. Do
-not go looking for the next port; there isn't one.
-
-✅ **The Immich integration is COMPLETE (M9.1, 2026-09-22 → 25), and its detail has moved out of this
-section** — it was 34 lines of finished work inside a *next action* list. The invariants worth keeping:
-⚠⚠ **`asset.upload` is a grant SEPARATE from `asset.update`** (168-value enum), which is the whole
-basis of upload-without-write-back, so upload rides its own **`immich_upload_key`**; ⚠⚠ **never delete
-a staged file on an upload *attempt*** — an SSL/EOF means the *response* was lost, measured 4-in-2,373
-with none actually failing to apply; ⚠⚠ **there is no mtime fallback for the upload date** (it filed an
-unreadable date under the DOWNLOAD time), and `Edited` is read at **plan** time because recording an
-upload bumps the sidecar's mtime; ⚠ `Settings.immich_enabled` is read **only** through
-**`immich_source::connection`**, one choke point, defaulting **true** (the `gpu_tail` trap); ⚠ server
-stacks have **no validator**, so freshness rests on **Reindex** alone. ⛔ **Two-way sync is DECLINED —
-the user's call, not a deferral. Do not re-propose it from a list**; the table is in `docs/BACKLOG.md`.
-`grep -n 'export delivery\|completely optional\|server-side stacks' docs/JOURNAL.md`.
-
-**The small leftovers, in the order the user has shown interest:**
-
-1. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
-   **3.4 against 15.3** at export. ⚠⚠ Blocked on a shader restructure — the shader writes one `u32`
-   per sample because packing four into a word would race. **A considered trade, not an oversight.**
-2. **Rename `ProfileRendering` → `TailRendering`** — `look` is not a camera-profile field. Now a
-   ~120-site diff. ⚠ Its own change, never folded into another.
-3. File sizes — ⚠ **in *Open items* only, measured by code.** A list kept in two places is how this
-   file reached 1.2 MB.
-4. Move `PrefixCache`'s tests into `prefix_cache.rs`.
-
-⛔ **Declined with numbers, and the numbers are in `docs/BACKLOG.md` — do not re-propose from the
-list alone:** the prefix seams' *download* half in general (11–13%, needs `PrefixCache` to hold a
-`GpuImage`; ⚠ built for the LAST step only on `gpu-geometry`, the author's call),
-spot removal on the GPU (0.05–0.4 ms against a ~1.6 ms floor), `MIN_GPU_BOX_PX` (user's call, on
-use), the GPU-side coverage cache (re-priced downward).
-
-⚠ **`MAX_TILE_DABS`** — swept; the cliff is at **2560, not 3584**. Blocked on a **portability**
-question (1024 is the largest capacity keeping 3 workgroups on a 16 KB device) that no M2 run
-settles.
+**The small leftovers:** (1) the u8 coverage wire — ⚠⚠ blocked on a shader restructure (packing four
+samples in a `u32` would race); (2) rename `ProfileRendering` → `TailRendering` (~120 sites, its own
+change); (3) file sizes — in *Open items* only; (4) move `PrefixCache`'s tests into `prefix_cache.rs`.
+⛔ Declined with numbers in `docs/BACKLOG.md` — do not re-propose from a list: the prefix seams'
+download half in general, spot removal on the GPU, `MIN_GPU_BOX_PX`, the GPU-side coverage cache.
+⚠ `MAX_TILE_DABS`: the cliff is at 2560; blocked on a portability question.
 
 ### The GPU port — closed (reopened once, for geometry, 2026-09-26)
 
