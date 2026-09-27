@@ -169,6 +169,9 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 ### State (2026-09-26)
 
 **3027 tests**, **81 goldens** (⚠ 81: M6.4c and M9.6 added one each; older counts are stale).
+✅ **M9.10 DNG export (2026-09-27, confirmed by use and merged).** The finished picture as
+a linear ProPhoto DNG, lossless-JPEG tiles (`export::lj92`). darktable with workflow "none" renders
+it within 0 levels mean / 4 max; its default workflow adds +0.66 EV. `grep -n 'M9.10' docs/JOURNAL.md`.
 ✅ **M9.9 folder tree and move tracking (2026-09-27, confirmed by use and merged; Reindex relinks too).**
 Opening scans the tree; the Folders panel nests; a file moved on disk between known folders keeps
 its rows and sidecars (strict name+size+mtime match, automatic). `grep -n 'M9.9' docs/JOURNAL.md`.
@@ -288,7 +291,7 @@ Every planned phase closed except **M7.3b** (since done, 2026-09-25), so the roa
 
 **▶ The order the user set: M7.3b ✅, the drag-frame fixes ✅ and GPU geometry ✅ (all merged and
 confirmed by use 2026-09-26); Phase 9's checklist from the top — M5.1c (parametric curve) ✅ merged and confirmed by use
-2026-09-26; M6.4c (rendering intents) ✅ merged and confirmed by use 2026-09-26; M9.6 (defringe) ✅ merged and confirmed by use 2026-09-27; M9.7 (persistent history) ✅ merged and confirmed by use 2026-09-27 (with double-click slider reset); M9.8 (keyword editing) ✅ merged and confirmed by use 2026-09-27; M9.9 (folder tree + move tracking) ✅ merged and confirmed by use 2026-09-27; **M9.10 (DNG export) is next.** A Straighten drag on
+2026-09-26; M6.4c (rendering intents) ✅ merged and confirmed by use 2026-09-26; M9.6 (defringe) ✅ merged and confirmed by use 2026-09-27; M9.7 (persistent history) ✅ merged and confirmed by use 2026-09-27 (with double-click slider reset); M9.8 (keyword editing) ✅ merged and confirmed by use 2026-09-27; M9.9 (folder tree + move tracking) ✅ merged and confirmed by use 2026-09-27; M9.10 (DNG export) ✅ merged and confirmed by use 2026-09-27; **M9.11 (red-eye) is next.** A Straighten drag on
 DSCF6263: **~97 → ~41 ms per frame in the app** (85.0 → 28.8 ms headless). ⚠ The remaining app-vs-probe
 gap (~10–12 ms) is GPU submit+wait, and it is **NOT** the window's per-frame upload: freezing the window
 changed nothing, so the shared-device idea is ⛔ declined on that measurement (`docs/BACKLOG.md`). The

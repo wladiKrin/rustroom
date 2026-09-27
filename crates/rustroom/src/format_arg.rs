@@ -14,12 +14,13 @@ use export::ExportFormat;
 use std::path::Path;
 
 /// The tokens `--format` accepts, in the order the error messages list them.
-const TOKENS: [(&str, ExportFormat); 5] = [
+const TOKENS: [(&str, ExportFormat); 6] = [
     ("jpeg", ExportFormat::Jpeg),
     ("png8", ExportFormat::Png8),
     ("png16", ExportFormat::Png16),
     ("tiff8", ExportFormat::Tiff8),
     ("tiff16", ExportFormat::Tiff16),
+    ("dng", ExportFormat::Dng),
 ];
 
 /// `jpeg|png8|png16|tiff8|tiff16`, for an error message.
@@ -58,6 +59,8 @@ fn infer_from_extension(path: &Path) -> Option<ExportFormat> {
         "jpg" | "jpeg" => Some(ExportFormat::Jpeg),
         "png" => Some(ExportFormat::Png8),
         "tif" | "tiff" => Some(ExportFormat::Tiff8),
+        // ⚠ M9.10: a DNG has one form, so the extension names it fully.
+        "dng" => Some(ExportFormat::Dng),
         _ => None,
     }
 }
@@ -213,5 +216,14 @@ mod tests {
             resolve(p("out.jpeg"), Some("jpeg")).unwrap(),
             ExportFormat::Jpeg
         );
+    }
+
+    #[test]
+    fn a_dng_extension_infers_dng() {
+        assert_eq!(
+            infer_from_extension(std::path::Path::new("out/x.DNG")),
+            Some(ExportFormat::Dng)
+        );
+        assert_eq!(parse_format("dng").unwrap(), ExportFormat::Dng);
     }
 }

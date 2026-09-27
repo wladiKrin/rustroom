@@ -1,5 +1,7 @@
 //! Encode a display-referred (sRGB, 0..=1) `ImageBuf` to an image file.
 
+pub mod dng;
+pub mod lj92;
 pub mod metadata;
 pub mod output_sharpen;
 pub mod watermark;
@@ -47,16 +49,29 @@ pub enum ExportFormat {
     Png16,
     Tiff8,
     Tiff16,
+    /// The finished picture as a linear DNG (M9.10) — see `dng`.
+    Dng,
 }
 
 impl ExportFormat {
-    pub const ALL: [ExportFormat; 5] = [
+    pub const ALL: [ExportFormat; 6] = [
         ExportFormat::Jpeg,
         ExportFormat::Png8,
         ExportFormat::Png16,
         ExportFormat::Tiff8,
         ExportFormat::Tiff16,
+        ExportFormat::Dng,
     ];
+
+    /// The colour space this format is always rendered in, whatever the export's setting —
+    /// `Some` for DNG alone, which stores linear ProPhoto and lets the opening application convert.
+    /// ⚠ The export render and the dialog both read this, so the two cannot disagree.
+    pub fn fixed_space(self) -> Option<color::OutputSpace> {
+        match self {
+            ExportFormat::Dng => Some(color::OutputSpace::ProPhoto),
+            _ => None,
+        }
+    }
 
     /// ⚠ `tif` not `tiff`, `jpg` not `jpeg` — fixed so existing exports keep their shape.
     /// Both spellings are equally valid; this one is simply chosen.
@@ -65,6 +80,7 @@ impl ExportFormat {
             ExportFormat::Jpeg => "jpg",
             ExportFormat::Png8 | ExportFormat::Png16 => "png",
             ExportFormat::Tiff8 | ExportFormat::Tiff16 => "tif",
+            ExportFormat::Dng => "dng",
         }
     }
 
@@ -81,6 +97,7 @@ impl ExportFormat {
             ExportFormat::Png16 => "PNG 16-bit",
             ExportFormat::Tiff8 => "TIFF 8-bit",
             ExportFormat::Tiff16 => "TIFF 16-bit",
+            ExportFormat::Dng => "DNG (linear, rendered)",
         }
     }
 }
@@ -257,6 +274,13 @@ pub fn save(
                 .map_err(image::ImageError::Unsupported)?;
             enc.write_image(&rgb16_ne_bytes(image), w, h, ExtendedColorType::Rgb16)?;
         }
+        ExportFormat::Dng => {
+            drop(file);
+            // ⚠ The render arrives display-ENCODED in `space` (ProPhoto, when it came through the
+            // export render — `fixed_space`); a DNG stores LINEAR data, so the encoding is undone
+            // and, for any other space, its primaries converted back to the working space.
+            dng::save(&dng::linear_working(image, space), path)?;
+        }
     }
     Ok(())
 }
@@ -315,15 +339,31 @@ mod tests {
         assert_eq!(ExportFormat::default(), ExportFormat::Jpeg);
     }
 
+    /// A written file's size and 8-bit pixels, through the reader that format has — `image`, or
+    /// libraw for a DNG, which `image` cannot open (M9.10).
+    pub(crate) fn reopen(path: &std::path::Path, f: ExportFormat) -> (u32, u32, Vec<u8>) {
+        if f == ExportFormat::Dng {
+            let d = raw_decode::decode_raw(path, &raw_decode::DecodeOptions::linear_scene())
+                .unwrap_or_else(|e| panic!("{f:?} reopen: {e}"));
+            let px = to_rgb8(&d.image);
+            return (d.image.width() as u32, d.image.height() as u32, px);
+        }
+        let back = image::open(path).unwrap_or_else(|e| panic!("{f:?} reopen: {e}"));
+        (back.width(), back.height(), back.to_rgb8().into_raw())
+    }
+
+    /// ⚠ 32×24, not smaller: libraw refuses any image under 22 px on a side
+    /// (`identify.cpp`: `height < 22 || width < 22`), so a DNG fixture below that is unreadable
+    /// for a reason that has nothing to do with the file.
     #[test]
     fn every_format_writes_a_readable_file() {
-        let img = ramp(8, 4);
+        let img = ramp(32, 24);
         for f in ExportFormat::ALL {
             let path = tmp(&format!("all.{}", f.extension()));
             save(&img, &path, f, 90, color::OutputSpace::Srgb)
                 .unwrap_or_else(|e| panic!("{f:?}: {e}"));
-            let back = image::open(&path).unwrap_or_else(|e| panic!("{f:?} reopen: {e}"));
-            assert_eq!((back.width(), back.height()), (8, 4), "{f:?}");
+            let (w, h, _) = reopen(&path, f);
+            assert_eq!((w, h), (32, 24), "{f:?}");
             let _ = std::fs::remove_file(&path);
         }
     }
@@ -411,7 +451,18 @@ mod tests {
         for f in ExportFormat::ALL {
             let path = tmp(&format!("icc.{}", f.extension()));
             save(&img, &path, f, 90, color::OutputSpace::Srgb).unwrap();
-            assert!(carries_profile(&path, f), "{f:?} carries no ICC profile");
+            if f == ExportFormat::Dng {
+                // ⚠ A DNG describes its colour with matrices, not an ICC profile: the check is
+                // that `ColorMatrix1` (tag 50721, `0xC621`) is there — its correctness is
+                // `dng::tests::libraw_reads_the_dng_back_as_the_picture`.
+                let bytes = std::fs::read(&path).unwrap();
+                assert!(
+                    bytes.windows(2).any(|w| w == [0x21, 0xC6]),
+                    "DNG has no ColorMatrix1"
+                );
+            } else {
+                assert!(carries_profile(&path, f), "{f:?} carries no ICC profile");
+            }
             let _ = std::fs::remove_file(&path);
         }
     }

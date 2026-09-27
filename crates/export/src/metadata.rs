@@ -375,7 +375,11 @@ pub fn embed(path: &Path, format: ExportFormat, meta: &FileMetadata) -> Result<(
     let out = match format {
         ExportFormat::Jpeg => jpeg_with_xmp(&bytes, packet.as_bytes())?,
         ExportFormat::Png8 | ExportFormat::Png16 => png_with_xmp(&bytes, packet.as_bytes())?,
-        ExportFormat::Tiff8 | ExportFormat::Tiff16 => tiff_with_xmp(&bytes, packet.as_bytes())?,
+        // ⚠ A DNG is a TIFF, and the post-pass rewrites only IFD0's XMP tag — the SubIFD holding
+        // the image is reached by offset and left exactly where it was.
+        ExportFormat::Tiff8 | ExportFormat::Tiff16 | ExportFormat::Dng => {
+            tiff_with_xmp(&bytes, packet.as_bytes())?
+        }
     };
     std::fs::write(path, out).map_err(image::ImageError::IoError)?;
     Ok(())
@@ -873,13 +877,14 @@ mod tests {
     /// a wrong CRC or a dangling offset still contains the marker string, so a byte search alone
     /// would pass on a file no reader can open.
     fn round_trip(fmt: ExportFormat, m: &FileMetadata) -> (Vec<u8>, Vec<u8>) {
-        let img = ramp(9, 5);
+        // ⚠ Above libraw's 22 px floor, which a DNG is read back through.
+        let img = ramp(33, 25);
         let path = tmp(&format!("rt.{}", fmt.extension()));
         crate::save(&img, &path, fmt, 95, color::OutputSpace::Srgb).unwrap();
-        let before = image::open(&path).unwrap().to_rgb8().into_raw();
+        let before = crate::tests::reopen(&path, fmt).2;
         embed(&path, fmt, m).unwrap();
         let bytes = std::fs::read(&path).unwrap();
-        let after = image::open(&path).unwrap().to_rgb8().into_raw();
+        let after = crate::tests::reopen(&path, fmt).2;
         assert_eq!(
             before, after,
             "{fmt:?}: embedding metadata changed the pixels"
