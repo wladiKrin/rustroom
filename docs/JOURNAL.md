@@ -160,7 +160,7 @@ goldens unmoved.
 
 ### 2026-09-27 — double-click resets a slider (branch `slider-reset`, stacked on `m9.7-persistent-history`)
 
-The author's request. A double-click on a Develop slider's rail — handle included — or its label
+✅ **Confirmed by use and merged 2026-09-27.** The author's request. A double-click on a Develop slider's rail — handle included — or its label
 restores the field's default; one undo step. Temp returns to **As Shot** (`kelvin: None`), not a
 number. `Edited::slider` takes a **required** `default` (79 call sites): an implicit 0 would have
 been silently wrong for Hardness, Detail, Smoothness, Blending, Midpoint, Feather, Strength, Scale
@@ -181,7 +181,7 @@ Tab-then-arrows — caught by the test written for it an hour earlier, fixed wit
 ### 2026-09-27 — M9.7 persistent history: Ctrl+Z survives a restart (branch `m9.7-persistent-history`)
 
 **3,027 tests**, 81 goldens unmoved, gate green. Spec `2026-09-27-m9.7-persistent-history-design.md`,
-plan of the same date. 🟡 **Awaiting use.**
+plan of the same date. ✅ **Confirmed by use and merged 2026-09-27** (after the two fixes below).
 
 **What shipped.** A photo's undo/redo steps are stored in the catalog (migration 9,
 `photo_history(folder_id, file_name, copy, body)`, keyed like `photos` so a copy has its own;
