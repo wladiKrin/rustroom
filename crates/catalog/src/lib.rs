@@ -145,6 +145,46 @@ pub fn scan_folder(dir: &Path) -> std::io::Result<Vec<CatalogEntry>> {
     Ok(entries)
 }
 
+/// Scan `dir` and every folder beneath it (M9.9): `(folder, its entries)` for each folder holding a
+/// supported image, `dir` itself first even when empty, the rest in path order.
+///
+/// ⚠ **Hidden folders are skipped** — `.git`, `.thumbnails`, an app's cache — which hold no
+/// photographs anyone means. ⚠⚠ **So are symlinked folders**: a link to an ancestor would recurse
+/// forever, and one elsewhere would put the same photos in the catalog under two paths.
+///
+/// ⚠ An unreadable subfolder is skipped, not an error: one permission-denied directory must not
+/// hide the rest of the tree. Only `dir` itself failing to read is an error, as for `scan_folder`.
+pub fn scan_tree(dir: &Path) -> std::io::Result<Vec<(std::path::PathBuf, Vec<CatalogEntry>)>> {
+    let mut out = vec![(dir.to_path_buf(), scan_folder(dir)?)];
+    let mut pending = subfolders(dir);
+    while let Some(d) = pending.pop() {
+        if let Ok(entries) = scan_folder(&d) {
+            pending.extend(subfolders(&d));
+            if !entries.is_empty() {
+                out.push((d, entries));
+            }
+        }
+    }
+    out[1..].sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
+}
+
+/// The visible, non-symlinked subfolders of `dir`.
+fn subfolders(dir: &Path) -> Vec<std::path::PathBuf> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    rd.flatten()
+        .filter(|e| {
+            let hidden = e.file_name().to_string_lossy().starts_with('.');
+            // `file_type` does not follow a symlink, which is exactly the test wanted.
+            let real_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            !hidden && real_dir
+        })
+        .map(|e| e.path())
+        .collect()
+}
+
 /// Order a scan.
 ///
 /// ⚠ Separated from `scan_folder` so the rules are testable **without a filesystem**, which here
@@ -420,5 +460,29 @@ mod tests {
                 o.label()
             );
         }
+    }
+
+    /// M9.9: the tree, with a hidden folder and a symlinked one that must both be skipped — the
+    /// symlink pointing BACK at the root, where following it would never end.
+    #[test]
+    fn scan_tree_recurses_and_skips_hidden_and_symlinked_folders() {
+        let root = std::env::temp_dir().join(format!("rustroom_scantree_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for d in ["a/b", ".hidden", "empty"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        for f in ["top.jpg", "a/one.RAF", "a/b/two.jpg", ".hidden/no.jpg"] {
+            std::fs::write(root.join(f), b"x").unwrap();
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&root, root.join("a/loop")).unwrap();
+
+        let tree = scan_tree(&root).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        let folders: Vec<String> = tree
+            .iter()
+            .map(|(d, e)| format!("{}:{}", d.strip_prefix(&root).unwrap().display(), e.len()))
+            .collect();
+        assert_eq!(folders, vec![":1", "a:1", "a/b:1"], "{folders:?}");
     }
 }
