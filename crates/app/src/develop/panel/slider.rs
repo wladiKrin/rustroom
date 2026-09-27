@@ -14,8 +14,13 @@
 //! it while focused, and the returned response is the union of rail and value exactly as
 //! `egui::Slider::add_contents` builds it.
 //!
-//! ⚠ Not built, deliberately: double-click to reset, a precision modifier, vertical rails,
-//! `step`, clamping modes. Only what the panel's call sites use.
+//! ⚠ **Double-click resets** (2026-09-27, the author's request): on the rail — the handle included
+//! — or on the label, back to [`Slider::reset_to`]'s value; a slider given none has no reset. A
+//! press ON the handle no longer moves the value, so grabbing it to drag does not nudge it, and a
+//! double-click on it is one undo step, the reset, rather than a nudge and then a reset.
+//!
+//! ⚠ Not built, deliberately: a precision modifier, vertical rails, `step`, clamping modes. Only
+//! what the panel's call sites use.
 
 use eframe::egui;
 use rustroom_app::slider_map;
@@ -43,6 +48,7 @@ pub struct Slider<'a> {
     log: bool,
     formatter: Option<Formatter<'a>>,
     parser: Option<Parser<'a>>,
+    reset: Option<f32>,
 }
 
 impl<'a> Slider<'a> {
@@ -54,7 +60,15 @@ impl<'a> Slider<'a> {
             log: false,
             formatter: None,
             parser: None,
+            reset: None,
         }
+    }
+
+    /// What a double-click restores — the field's default. Without it a double-click resets
+    /// nothing.
+    pub fn reset_to(mut self, value: f32) -> Self {
+        self.reset = Some(value);
+        self
     }
 
     pub fn text(mut self, label: &'a str) -> Self {
@@ -89,6 +103,7 @@ impl egui::Widget for Slider<'_> {
             log,
             formatter,
             parser,
+            reset,
         } = self;
         let (min, max) = (*range.start(), *range.end());
         let height = ui.spacing().interact_size.y;
@@ -120,8 +135,12 @@ impl egui::Widget for Slider<'_> {
             ui.spacing_mut().item_spacing.x = GAP;
 
             // ── label ──
+            // ⚠ Clicks, so a double-click on the label resets too — Lightroom's gesture. ⚠⚠ But
+            // `CLICK` alone, NOT `Sense::click()`, which adds `FOCUSABLE`: a focusable label is a
+            // Tab stop in front of the rail, and Tab then landed on the label and the arrow keys
+            // nudged nothing — caught by `tab_focuses_the_rail_and_the_arrow_keys_nudge_it`.
             let (label_rect, label_resp) =
-                ui.allocate_exact_size(egui::vec2(LABEL_WIDTH, height), egui::Sense::hover());
+                ui.allocate_exact_size(egui::vec2(LABEL_WIDTH, height), egui::Sense::CLICK);
             let font = egui::TextStyle::Body.resolve(ui.style());
             let colour = ui.visuals().text_color();
             let mut job = egui::text::LayoutJob::simple_singleline(label.to_owned(), font, colour);
@@ -139,9 +158,11 @@ impl egui::Widget for Slider<'_> {
                 galley,
                 colour,
             );
-            if elided {
-                label_resp.on_hover_text(label);
-            }
+            let label_resp = if elided {
+                label_resp.on_hover_text(label)
+            } else {
+                label_resp
+            };
 
             // ── rail ──
             let rail_w = (ui.available_width() - value_w - GAP).max(24.0);
@@ -149,7 +170,15 @@ impl egui::Widget for Slider<'_> {
                 ui.allocate_exact_size(egui::vec2(rail_w, height), egui::Sense::click_and_drag());
             let x_range =
                 egui::Rangef::new(rect.left() + HANDLE_RADIUS, rect.right() - HANDLE_RADIUS);
-            if let Some(p) = resp.interact_pointer_pos() {
+            // ⚠ A press ON the handle grabs it without moving it; the value follows the pointer
+            // only once a drag is under way. Otherwise the first click of a double-click nudged the
+            // value to the pointer — a stray undo step before the reset.
+            let handle_x = egui::lerp(x_range, slider_map::t_of(*value, min, max, log));
+            let pressed_on_handle = !resp.dragged()
+                && ui
+                    .input(|i| i.pointer.press_origin())
+                    .is_some_and(|p| (p.x - handle_x).abs() <= HANDLE_RADIUS + 1.0);
+            if let Some(p) = resp.interact_pointer_pos().filter(|_| !pressed_on_handle) {
                 // Position-based, through smart aim, exactly as egui's own slider does it.
                 let aim = ui.input(|i| i.aim_radius());
                 let at = |x: f32| {
@@ -180,6 +209,13 @@ impl egui::Widget for Slider<'_> {
                 if steps != 0 {
                     let t = slider_map::t_of(*value, min, max, log) + steps as f32 * KEY_STEP;
                     *value = slider_map::value_of(t, min, max, log);
+                }
+            }
+            // The reset, after the position: a double-click off the handle lands on the default,
+            // not where its first click moved the value.
+            if let Some(d) = reset {
+                if resp.double_clicked() || label_resp.double_clicked() {
+                    *value = d.clamp(min, max);
                 }
             }
             if *value != old {
@@ -277,7 +313,9 @@ impl egui::Widget for Slider<'_> {
                     },
                 )
                 .inner;
-            resp.union(value_resp)
+            // ⚠ The label joins the response, so a caller reading `double_clicked()` — Temp, which
+            // resets to As Shot rather than to a number — sees a double-click on the label too.
+            resp.union(value_resp).union(label_resp)
         })
         .inner
     }
@@ -357,7 +395,7 @@ mod tests {
             let mut settles = 0u32;
             let mut body = |ui: &mut egui::Ui| {
                 let mut ed = crate::develop::panel::Edited::default();
-                ed.slider(ui, &mut v, -100.0..=100.0, "Contrast");
+                ed.slider(ui, &mut v, -100.0..=100.0, "Contrast", 0.0);
                 settles += ed.settled as u32;
             };
             let at = test_ui::find(&ctx, "Contrast", &mut body).expect("drawn");
@@ -433,6 +471,67 @@ mod tests {
             );
         }
         assert!(v > 0.0, "Tab then ArrowRight moved nothing: {v}");
+    }
+
+    /// A press ON the handle grabs it without moving it — so a double-click on the handle is the
+    /// reset alone, not a nudge to the pointer first. ⚠ The value is off-centre, where a press at
+    /// the handle and a press at the rail's centre are different points.
+    #[test]
+    fn a_click_on_the_handle_does_not_move_it_and_a_double_click_resets() {
+        let ctx = test_ui::ctx();
+        let v = std::cell::Cell::new(37.0f32);
+        let mut body = |ui: &mut egui::Ui| {
+            let mut x = v.get();
+            let _ = ui.add(
+                Slider::new(&mut x, -100.0..=100.0)
+                    .text("Contrast")
+                    .reset_to(0.0),
+            );
+            v.set(x);
+        };
+        let rail = test_ui::find(&ctx, "Contrast", &mut body).expect("drawn");
+        // The handle sits 37/200 of the rail right of the centre; find it by scanning for the one
+        // press that leaves the value alone rather than by re-deriving the geometry here.
+        let handle = (0..120)
+            .map(|dx| rail + egui::vec2(dx as f32 * 0.5, 0.0))
+            .find(|&p| {
+                let mut probe = 37.0f32;
+                let c = test_ui::ctx();
+                test_ui::click_at(&c, p, false, |ui: &mut egui::Ui| {
+                    let _ = ui.add(Slider::new(&mut probe, -100.0..=100.0).text("Contrast"));
+                });
+                probe == 37.0
+            })
+            .expect("some press must land on the handle");
+        test_ui::click_at(&ctx, handle, false, &mut body);
+        assert_eq!(v.get(), 37.0, "a click on the handle nudged it");
+        test_ui::click_at(&ctx, handle, true, &mut body);
+        assert_eq!(v.get(), 0.0, "a double-click on the handle must reset");
+    }
+
+    #[test]
+    fn a_double_click_on_the_label_resets_and_none_means_no_reset() {
+        let ctx = test_ui::ctx();
+        let v = std::cell::Cell::new(37.0f32);
+        let reset = std::cell::Cell::new(Some(0.0f32));
+        let mut body = |ui: &mut egui::Ui| {
+            let mut x = v.get();
+            let mut s = Slider::new(&mut x, -100.0..=100.0).text("Contrast");
+            if let Some(r) = reset.get() {
+                s = s.reset_to(r);
+            }
+            let _ = ui.add(s);
+            v.set(x);
+        };
+        let rail = test_ui::find(&ctx, "Contrast", &mut body).expect("drawn");
+        // The label column is left of the rail: its centre is LABEL_WIDTH/2 in from the row's left.
+        let label = egui::pos2(LABEL_WIDTH / 2.0 + 1.0, rail.y);
+        test_ui::click_at(&ctx, label, true, &mut body);
+        assert_eq!(v.get(), 0.0, "a double-click on the label must reset");
+        v.set(37.0);
+        reset.set(None);
+        test_ui::click_at(&ctx, label, true, &mut body);
+        assert_eq!(v.get(), 37.0, "a slider with no default resets nothing");
     }
 
     #[test]

@@ -190,8 +190,15 @@ pub(crate) fn white_balance(
     if r.changed() {
         wb.kelvin = Some(1.0e6 / mired);
     }
+    // ⚠ A double-click resets Temp to AS SHOT — `kelvin: None`, the photo following its file —
+    // rather than to a number: no fixed temperature is this slider's default. After the line
+    // above, so a first click that moved the value cannot win.
+    if r.double_clicked() {
+        wb.kelvin = None;
+        ed.discrete();
+    }
     ed.absorb(&r);
-    ed.slider(ui, &mut wb.tint, -100.0..=100.0, "Tint");
+    ed.slider(ui, &mut wb.tint, -100.0..=100.0, "Tint", 0.0);
 
     // ⚠ One row for the two shortcuts (2026-09-19): both move the sliders above, and two
     // full-width rows of buttons under two sliders was heavy for what they are. A mask has
@@ -299,12 +306,12 @@ pub(crate) fn tone(
         // That is what makes Auto exactly one Ctrl+Z — the model the WB presets already follow.
         ed.mark_changed();
     }
-    ed.slider(ui, &mut edits.exposure, -5.0..=5.0, "Exposure");
-    ed.slider(ui, &mut edits.contrast, -100.0..=100.0, "Contrast");
-    ed.slider(ui, &mut edits.highlights, -100.0..=100.0, "Highlights");
-    ed.slider(ui, &mut edits.shadows, -100.0..=100.0, "Shadows");
-    ed.slider(ui, &mut edits.whites, -100.0..=100.0, "Whites");
-    ed.slider(ui, &mut edits.blacks, -100.0..=100.0, "Blacks");
+    ed.slider(ui, &mut edits.exposure, -5.0..=5.0, "Exposure", 0.0);
+    ed.slider(ui, &mut edits.contrast, -100.0..=100.0, "Contrast", 0.0);
+    ed.slider(ui, &mut edits.highlights, -100.0..=100.0, "Highlights", 0.0);
+    ed.slider(ui, &mut edits.shadows, -100.0..=100.0, "Shadows", 0.0);
+    ed.slider(ui, &mut edits.whites, -100.0..=100.0, "Whites", 0.0);
+    ed.slider(ui, &mut edits.blacks, -100.0..=100.0, "Blacks", 0.0);
     // ⚠ The curve directly after the six sliders, because it refines the tone they set; a
     // sub-label rather than a header, since `tone_curve` belongs to the `Tone` edit group and a
     // header here would put the panel and the Sync dialog out of step. The curve draws its own
@@ -347,6 +354,7 @@ pub(crate) fn tone(
         &mut edits.local_contrast.texture,
         -100.0..=100.0,
         "Texture",
+        0.0,
     )
     .on_hover_text("Fine surface detail. Negative smooths texture while keeping edges sharp; positive crisps detail along edges too.");
     ed.slider(
@@ -354,8 +362,9 @@ pub(crate) fn tone(
         &mut edits.local_contrast.clarity,
         -100.0..=100.0,
         "Clarity",
+        0.0,
     );
-    ed.slider(ui, &mut edits.dehaze.amount, -100.0..=100.0, "Dehaze");
+    ed.slider(ui, &mut edits.dehaze.amount, -100.0..=100.0, "Dehaze", 0.0);
 }
 
 /// The colour-grading block's view state: the `Shad │ Mid │ High │ Global` selector and the
@@ -464,8 +473,8 @@ pub fn show(
     section(ui, SECTIONS[2], false, edits, ed, |ui, edits, ed| {
         // ⚠ Vibrance first: Adobe's order, and the gentler control. Saturation clips
         // already-saturated colour far more readily, so it is the one offered second.
-        ed.slider(ui, &mut edits.vibrance, -100.0..=100.0, "Vibrance");
-        ed.slider(ui, &mut edits.saturation, -100.0..=100.0, "Saturation");
+        ed.slider(ui, &mut edits.vibrance, -100.0..=100.0, "Vibrance", 0.0);
+        ed.slider(ui, &mut edits.saturation, -100.0..=100.0, "Saturation", 0.0);
 
         // ⚠⚠ **Closed by default, and that is the change.** A newcomer opening Color met ~40 values
         // behind 15 sliders, two segmented selectors and a wheel; they now meet **two sliders**, with
@@ -527,14 +536,14 @@ pub fn show(
                 // which need the struct itself.
                 color_wheel::show(ui, &mut edits.color_grading, *grade_range, diameter, ed);
                 let w = grade_range.wheel_mut(&mut edits.color_grading);
-                ed.slider(ui, &mut w.hue, 0.0..=360.0, "Hue");
+                ed.slider(ui, &mut w.hue, 0.0..=360.0, "Hue", 0.0);
                 // ⚠⚠ `Strength`, not `Saturation`: the global Saturation slider and HSL's Saturation channel both
                 // mean **the image's chroma**, while this means **how much tint is applied** — the same word
                 // for the opposite subject, and a named cause of the "the Color section is confusing" review
                 // (2026-09-24). ⚠ `Hue` and `Luminance` are deliberately left alone: they repeat by word but
                 // not by meaning, and Lightroom labels its wheels the same way.
-                ed.slider(ui, &mut w.saturation, 0.0..=100.0, "Strength");
-                ed.slider(ui, &mut w.luminance, -100.0..=100.0, "Luminance");
+                ed.slider(ui, &mut w.saturation, 0.0..=100.0, "Strength", 0.0);
+                ed.slider(ui, &mut w.luminance, -100.0..=100.0, "Luminance", 0.0);
             }
             ui.separator();
             let g = &mut edits.color_grading;
@@ -547,8 +556,14 @@ pub fn show(
             // ⚠ Separated because without it they sit flush against Hue/Saturation/Luminance, which
             // *are* per-wheel. A caption saying so was tried and removed (user's call, 2026-09-02) —
             // the hairline carries it.
-            ed.slider(ui, &mut g.blending, 0.0..=100.0, "Blending");
-            ed.slider(ui, &mut g.balance, -100.0..=100.0, "Balance");
+            ed.slider(
+                ui,
+                &mut g.blending,
+                0.0..=100.0,
+                "Blending",
+                edit_model::ColorGrading::default().blending,
+            );
+            ed.slider(ui, &mut g.balance, -100.0..=100.0, "Balance", 0.0);
             // ⚠ Two inputs, one value on the wire, derived here because this is the one place the
             // checkbox and the selector are both in scope. Change-guarded: this body runs every
             // frame, and an unguarded write would request a render sixty times a second.
@@ -566,18 +581,42 @@ pub fn show(
         // Lightroom, which puts Sharpening first.
         theme::sub_label(ui, "Noise Reduction");
         let nr = &mut edits.noise_reduction;
-        ed.slider(ui, &mut nr.luminance, 0.0..=100.0, "Luminance");
-        ed.slider(ui, &mut nr.detail, 0.0..=100.0, "Detail");
-        ed.slider(ui, &mut nr.color, 0.0..=100.0, "Color");
-        ed.slider(ui, &mut nr.smoothness, 0.0..=100.0, "Smoothness");
+        ed.slider(ui, &mut nr.luminance, 0.0..=100.0, "Luminance", 0.0);
+        ed.slider(
+            ui,
+            &mut nr.detail,
+            0.0..=100.0,
+            "Detail",
+            edit_model::NoiseReduction::default().detail,
+        );
+        ed.slider(ui, &mut nr.color, 0.0..=100.0, "Color", 0.0);
+        ed.slider(
+            ui,
+            &mut nr.smoothness,
+            0.0..=100.0,
+            "Smoothness",
+            edit_model::NoiseReduction::default().smoothness,
+        );
         theme::sub_label(ui, "Sharpening");
         let sh = &mut edits.sharpening;
-        ed.slider(ui, &mut sh.amount, 0.0..=100.0, "Amount");
+        ed.slider(ui, &mut sh.amount, 0.0..=100.0, "Amount", 0.0);
         // The one slider not on a 0..100 scale: a physical quantity in full-resolution
         // pixels, and naming it in pixels is what makes "scaled for the render" legible.
-        ed.slider(ui, &mut sh.radius, 0.5..=3.0, "Radius (px)");
-        ed.slider(ui, &mut sh.detail, 0.0..=100.0, "Detail");
-        ed.slider(ui, &mut sh.masking, 0.0..=100.0, "Masking");
+        ed.slider(
+            ui,
+            &mut sh.radius,
+            0.5..=3.0,
+            "Radius (px)",
+            edit_model::Sharpening::default().radius,
+        );
+        ed.slider(
+            ui,
+            &mut sh.detail,
+            0.0..=100.0,
+            "Detail",
+            edit_model::Sharpening::default().detail,
+        );
+        ed.slider(ui, &mut sh.masking, 0.0..=100.0, "Masking", 0.0);
     });
 
     // ⚠ Its own section rather than a block inside Detail, and its own edit group with it. They
@@ -615,7 +654,15 @@ pub fn show(
             //
             // ⚠ "Scale", not "Crop": only *pincushion* correction empties the frame, and barrel
             // correction's autoscale is exactly 1, so on many photos this does nothing at all.
-            let scaled = ed.slider(ui, &mut l.scale, 0.0..=100.0, "Scale").changed();
+            let scaled = ed
+                .slider(
+                    ui,
+                    &mut l.scale,
+                    0.0..=100.0,
+                    "Scale",
+                    edit_model::LensCorrection::default().scale,
+                )
+                .changed();
             if touched || scaled {
                 edits.lens_correction = Some(l);
             }
@@ -631,10 +678,22 @@ pub fn show(
 
     section(ui, SECTIONS[5], false, edits, ed, |ui, edits, ed| {
         let v = &mut edits.vignette;
-        ed.slider(ui, &mut v.amount, -100.0..=100.0, "Amount");
-        ed.slider(ui, &mut v.midpoint, 0.0..=100.0, "Midpoint");
-        ed.slider(ui, &mut v.roundness, -100.0..=100.0, "Roundness");
-        ed.slider(ui, &mut v.feather, 0.0..=100.0, "Feather");
+        ed.slider(ui, &mut v.amount, -100.0..=100.0, "Amount", 0.0);
+        ed.slider(
+            ui,
+            &mut v.midpoint,
+            0.0..=100.0,
+            "Midpoint",
+            edit_model::Vignette::default().midpoint,
+        );
+        ed.slider(ui, &mut v.roundness, -100.0..=100.0, "Roundness", 0.0);
+        ed.slider(
+            ui,
+            &mut v.feather,
+            0.0..=100.0,
+            "Feather",
+            edit_model::Vignette::default().feather,
+        );
     });
 }
 
@@ -1008,6 +1067,92 @@ mod tests {
         );
         crate::test_ui::click(&ctx, "Pick a fringe", &mut body);
         assert!(picking, "the picker did not arm");
+    }
+
+    /// ⚠⚠ **Every slider in the Edit panel resets to its field's DEFAULT on a double-click** —
+    /// the guard behind `Edited::slider`'s required `default`. Not a list of fields: the sliders
+    /// are found by ROLE, so one added tomorrow is covered. Each is clicked off its default, then
+    /// double-clicked; afterwards the photo must be a fresh photo again, and anything left over
+    /// names the slider whose default is wrong. ⚠ The fixture is asserted to have moved things
+    /// first, or a harness whose clicks landed nowhere would pass.
+    #[test]
+    fn every_slider_resets_to_its_fields_default() {
+        let ctx = crate::test_ui::ctx();
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            ctx.style_mut_of(theme, |s| s.animation_time = 0.0);
+        }
+        let buf = tone_fixture();
+        let mut edits = edit_model::Edits::default();
+        let mut channel = HslChannel::default();
+        let mut curve = tone_curve::CurveChannel::Parametric;
+        let mut grade = color_wheel::GradeRange::default();
+        let (mut show_range, mut view) = (false, None);
+        let mut ed = Edited::default();
+        // ⚠ The closure holds `edits` mutably, so the test reads this mirror between clicks.
+        let seen = std::cell::RefCell::new(edit_model::Edits::default());
+        let mut body = |ui: &mut egui::Ui| {
+            ed = Edited::default();
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                show(
+                    ui,
+                    &mut edits,
+                    Channels {
+                        hsl: &mut channel,
+                        curve: &mut curve,
+                        parametric_drag: Default::default(),
+                    },
+                    GradeUi {
+                        range: &mut grade,
+                        show_range: &mut show_range,
+                        view: &mut view,
+                    },
+                    SourceInfo {
+                        lens: Some("XF23mmF2 R WR"),
+                        lens_profile_found: true,
+                        wb_baseline: color::wb::Illuminant::default(),
+                        baseline_ev: None,
+                        buffer: &buf,
+                        hist: None,
+                    },
+                    Pickers::default(),
+                    &mut ed,
+                )
+            });
+            *seen.borrow_mut() = edits.clone();
+        };
+        for h in ["Color", "Detail", "Lens", "Vignette"] {
+            crate::test_ui::click(&ctx, h, &mut body);
+        }
+        crate::test_ui::click(&ctx, "Advanced color", &mut body);
+        let sliders = crate::test_ui::slider_centres(&ctx, &mut body);
+        assert!(sliders.len() > 30, "only {} sliders found", sliders.len());
+
+        let mut moved = 0;
+        for (label, at) in &sliders {
+            // A third of the way from the rail's centre toward its right end: off any default
+            // at the centre or an end, and away from the handle so the click moves it.
+            let off = *at + egui::vec2(40.0, 0.0);
+            let before = seen.borrow().clone();
+            crate::test_ui::click_at(&ctx, off, false, &mut body);
+            moved += (*seen.borrow() != before) as usize;
+            crate::test_ui::click_at(&ctx, off, true, &mut body);
+            let mut e = seen.borrow().clone();
+            // ⚠ Touching Lens Scale DECIDES the lens corrections (`Some`), by design; decided
+            // at the default is the fresh photo's corrections.
+            if e.lens_correction == Some(edit_model::LensCorrection::default()) {
+                e.lens_correction = None;
+            }
+            assert!(
+                e == edit_model::Edits::default(),
+                "{label:?} did not reset to its default: {} parameter(s) differ",
+                e.changed_parameters(&edit_model::Edits::default())
+            );
+        }
+        assert!(
+            moved > 25,
+            "only {moved} of {} single clicks moved anything",
+            sliders.len()
+        );
     }
 
     /// The Edit panel with the state the range view reads and writes, held together so a

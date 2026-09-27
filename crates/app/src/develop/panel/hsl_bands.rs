@@ -31,6 +31,7 @@ pub fn show(
             channel.value_mut(&mut hsl.bands[i]),
             -100.0..=100.0,
             name,
+            0.0,
         );
     }
 }

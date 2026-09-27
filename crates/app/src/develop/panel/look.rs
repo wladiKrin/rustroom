@@ -86,7 +86,13 @@ pub fn section(
              replaces the camera's.",
         );
 
-    ed.slider(ui, &mut edits.look.strength, 0.0..=100.0, "Strength");
+    ed.slider(
+        ui,
+        &mut edits.look.strength,
+        0.0..=100.0,
+        "Strength",
+        edit_model::Look::default().strength,
+    );
 
     // ⚠ What to say is decided in the lib, where it is a pure function a test can reach; this
     // body only draws it. See `looks::notes`.

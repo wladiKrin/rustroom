@@ -142,6 +142,75 @@ pub fn slider_labels(ctx: &egui::Context, body: impl FnMut(&mut egui::Ui)) -> Ve
         .collect()
 }
 
+/// Every slider's label and rail centre — [`slider_labels`]' role filter, with positions.
+pub fn slider_centres(
+    ctx: &egui::Context,
+    body: impl FnMut(&mut egui::Ui),
+) -> Vec<(String, egui::Pos2)> {
+    let out = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(screen()),
+            ..Default::default()
+        },
+        body,
+    );
+    let Some(update) = out.platform_output.accesskit_update else {
+        return Vec::new();
+    };
+    update
+        .nodes
+        .iter()
+        .filter(|(_, n)| n.numeric_value().is_some())
+        .filter_map(|(_, n)| {
+            let b = n.bounds()?;
+            Some((
+                n.label()?.to_owned(),
+                egui::pos2((b.x0 + b.x1) as f32 / 2.0, (b.y0 + b.y1) as f32 / 2.0),
+            ))
+        })
+        .collect()
+}
+
+/// Click `at` once (`double: false`) or twice in quick succession, with real timestamps.
+///
+/// ⚠⚠ **The time is load-bearing.** egui tells a double-click by the gap between the two
+/// presses, read from `RawInput::time`; frames without one do not reliably count as quick.
+pub fn click_at(
+    ctx: &egui::Context,
+    at: egui::Pos2,
+    double: bool,
+    mut body: impl FnMut(&mut egui::Ui),
+) {
+    let t0 = ctx.input(|i| i.time) + 1.0;
+    let button = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    let mut frames = vec![
+        vec![egui::Event::PointerMoved(at)],
+        vec![button(true)],
+        vec![button(false)],
+    ];
+    if double {
+        frames.push(vec![button(true)]);
+        frames.push(vec![button(false)]);
+    }
+    frames.push(Vec::new());
+    for (k, events) in frames.into_iter().enumerate() {
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen()),
+                time: Some(t0 + k as f64 * 0.05),
+                events,
+                ..Default::default()
+            },
+            &mut body,
+        );
+    }
+}
+
 /// Where the widget labelled `label` sits, after laying `body` out once.
 pub fn find(
     ctx: &egui::Context,

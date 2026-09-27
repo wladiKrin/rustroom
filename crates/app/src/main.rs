@@ -705,12 +705,12 @@ impl RustroomApp {
             status: String::new(),
             show_filmstrip: true,
             spot_tool: Default::default(),
-            brush_size: 40.0,
-            brush_hardness: 50.0,
-            brush_flow: 100.0,
+            brush_size: rustroom_app::brush_tool::DEFAULTS.size,
+            brush_hardness: rustroom_app::brush_tool::DEFAULTS.hardness,
+            brush_flow: rustroom_app::brush_tool::DEFAULTS.flow,
             brush_erase: false,
             brush_auto_mask: false,
-            brush_tolerance: 35.0,
+            brush_tolerance: rustroom_app::brush_tool::DEFAULTS.tolerance,
             // On by default: a freshly added brush mask with no adjustment yet is otherwise
             // completely invisible, which is a poor first five minutes.
             hsl_channel: Default::default(),
