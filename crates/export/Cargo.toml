@@ -36,3 +36,6 @@ chrono = "0.4.45"
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# ⚠ M9.10: the DNG tests read the file back through libraw — an INDEPENDENT reader, which is the
+# whole point: a writer checked only against a reader of its own proves self-consistency.
+raw-decode = { path = "../raw-decode" }

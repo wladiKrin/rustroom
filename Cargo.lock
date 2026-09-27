@@ -1403,6 +1403,7 @@ dependencies = [
  "image",
  "lcms2",
  "pipeline",
+ "raw-decode",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
