@@ -99,6 +99,18 @@ pub enum ActionKind {
     /// would make every entry in the undo and redo stacks that large — including the
     /// zero-sized `PhotoEdit`, which is by far the most common.
     Sync(Box<SyncAction>),
+    /// A keyword renamed (M9.8). ⚠ Global, `CatalogDelete`'s rule: a keyword is not a property of
+    /// any one photograph.
+    KeywordRename { id: i64, from: String, to: String },
+    /// A keyword moved to another parent (`None`: the top level).
+    KeywordMove {
+        id: i64,
+        from: Option<i64>,
+        to: Option<i64>,
+    },
+    /// One keyword merged into another. Boxed for `Sync`'s reason: the record can list many
+    /// assignments, and an inline variant would make every entry in the log that large.
+    KeywordMerge(Box<catalog::db::KeywordMerge>),
     /// Several actions performed by one gesture, undone and redone as a unit.
     ///
     /// Pasting into a multi-selection is the motivating case: it changes the open photo
@@ -161,6 +173,9 @@ fn reachable(kind: &ActionKind, open: Option<&PhotoId>) -> bool {
         | ActionKind::Sync(_)
         | ActionKind::CopyDelete { .. }
         | ActionKind::CatalogDelete { .. }
+        | ActionKind::KeywordRename { .. }
+        | ActionKind::KeywordMove { .. }
+        | ActionKind::KeywordMerge(_)
         | ActionKind::Rename { .. } => true,
         ActionKind::Batch(parts) => parts.iter().all(|p| reachable(p, open)),
     }

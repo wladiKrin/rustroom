@@ -203,6 +203,9 @@ pub struct DayRow {
 /// A photo's undo history (M9.7) — its own file, because this one is already the largest in the
 /// crate. A child module, so it reaches the private connection.
 mod history;
+/// Renaming, re-parenting and merging keywords (M9.8) — its own file for `history`'s reason.
+mod keywords;
+pub use keywords::{Change as KeywordChange, KeywordMerge};
 
 pub struct Catalog {
     conn: Connection,

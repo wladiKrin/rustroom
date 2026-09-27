@@ -274,6 +274,9 @@ impl RustroomApp {
         let Some(cat) = &self.catalog else {
             return;
         };
+        // ⚠⚠ M9.8: collected BEFORE the delete — afterwards the keyword has no files to ask
+        // about. Until now a deleted keyword stayed in every tagged RAW's XMP sidecar.
+        let files = cat.keyword_files(id).unwrap_or_default();
         let snap = match cat.delete_keyword(id) {
             Ok(snap) => snap,
             Err(e) => {
@@ -293,6 +296,7 @@ impl RustroomApp {
         if self.selected_keyword() == Some(id) {
             self.library = None;
         }
+        self.write_xmp_for(&files);
         self.status = "Deleted keyword — Ctrl+Z to restore".to_string();
     }
 

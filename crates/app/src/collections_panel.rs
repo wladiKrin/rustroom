@@ -64,6 +64,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         TagSelection(i64),
         UntagSelection(i64),
         CreateKeyword,
+        RenameKeyword(i64, String),
+        MoveKeyword(i64, Option<i64>),
         OpenAllPhotos,
         OpenFolder(std::path::PathBuf),
         ForgetFolder(i64, std::path::PathBuf, i64),
@@ -380,10 +382,19 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     "Keywords",
                                     &n,
                                     |ui| {
+                                        // ⚠⚠ The parent is the keyword last CLICKED — no dropdown (the
+                                        // author's call, 2026-09-27): click one, type, and the new
+                                        // keyword goes under it; a click anywhere else clears it, and
+                                        // the next one goes to the top level. The hint says which.
+                                        let hint = app
+                                            .new_keyword_parent
+                                            .and_then(|id| kws.iter().find(|k| k.id == id))
+                                            .map(|k| format!("New keyword under {}", k.name))
+                                            .unwrap_or_else(|| "New keyword".to_string());
                                         ui.horizontal(|ui| {
                                             let field = ui.add(
                                                 egui::TextEdit::singleline(&mut app.new_keyword)
-                                                    .hint_text("New keyword")
+                                                    .hint_text(hint)
                                                     .desired_width(ui.available_width() - 30.0),
                                             );
                                             let named = !app.new_keyword.trim().is_empty();
@@ -393,83 +404,53 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                 action = Action::CreateKeyword;
                                             }
                                         });
-                                        let parent_name = app
-                                            .new_keyword_parent
-                                            .and_then(|id| kws.iter().find(|k| k.id == id))
-                                            .map(|k| k.name.clone())
-                                            .unwrap_or_else(|| "(top level)".to_string());
-                                        egui::ComboBox::from_id_salt("kw_parent")
-                                            .selected_text(format!("under {parent_name}"))
-                                            .show_ui(ui, |ui| {
-                                                ui.selectable_value(
-                                                    &mut app.new_keyword_parent,
-                                                    None,
-                                                    "(top level)",
-                                                );
-                                                for k in &kws {
-                                                    ui.selectable_value(
-                                                        &mut app.new_keyword_parent,
-                                                        Some(k.id),
-                                                        format!("{}{}", "  ".repeat(k.depth), k.name),
-                                                    );
-                                                }
-                                            });
-
                                         if kws.is_empty() {
                                             crate::theme::hint(ui, "No keywords yet.");
                                         }
                                         let picked_kw = app.selected_keyword();
-                                        let tag_hover = format!("Tag {picked} selected");
-                                        let untag_hover = format!("Remove from {picked} selected");
-                                        for k in &kws {
-                                            // ⚠ Indented by depth — the only thing that makes the tree readable,
-                                            // since the rows are a flat depth-first list.
-                                            //
-                                            // ⚠ `−` completes the existing mechanism rather than adding a second
-                                            // one: `unassign_keyword` already existed and was tested. Both go
-                                            // through one pair of functions the photo context menu also calls.
-                                            let r = list_row::row(
-                                                ui,
-                                                RowSpec {
-                                                    name: &k.name,
-                                                    count: Some(k.count),
-                                                    meta: "",
-                                                    selected: picked_kw == Some(k.id),
-                                                    indent: k.depth as f32 * 12.0,
-                                                    hover: "",
-                                                    actions: &[
-                                                        RowAction {
-                                                            glyph: '×',
-                                                            verb: "Delete",
-                                                            hover: "Delete, with everything under it",
-                                                            enabled: true,
-                                                        },
-                                                        RowAction {
-                                                            glyph: '+',
-                                                            verb: "Tag",
-                                                            hover: &tag_hover,
-                                                            enabled: picked > 0,
-                                                        },
-                                                        RowAction {
-                                                            glyph: '−',
-                                                            verb: "Untag",
-                                                            hover: &untag_hover,
-                                                            enabled: picked > 0,
-                                                        },
-                                                    ],
-                                                },
-                                            );
-                                            match r.action {
-                                                Some(0) => {
-                                                    action = Action::DeleteKeyword(k.id, k.name.clone())
-                                                }
-                                                Some(1) => action = Action::TagSelection(k.id),
-                                                Some(_) => action = Action::UntagSelection(k.id),
-                                                None if r.clicked => {
-                                                    action = Action::OpenKeyword(k.id, k.name.clone())
-                                                }
-                                                None => {}
+                                        // ⚠ M9.8: the rows, their rename field and their drag live in
+                                        // `keyword_rows`; this maps what they asked for onto `Action`.
+                                        match crate::keyword_rows::rows(
+                                            ui,
+                                            &kws,
+                                            picked,
+                                            picked_kw,
+                                            &mut app.keyword_rename,
+                                        ) {
+                                            Some(crate::keyword_rows::Out::Open(id, name)) => {
+                                                app.new_keyword_parent = Some(id);
+                                                action = Action::OpenKeyword(id, name)
                                             }
+                                            Some(crate::keyword_rows::Out::Delete(id, name)) => {
+                                                action = Action::DeleteKeyword(id, name)
+                                            }
+                                            Some(crate::keyword_rows::Out::Tag(id)) => {
+                                                action = Action::TagSelection(id)
+                                            }
+                                            Some(crate::keyword_rows::Out::Untag(id)) => {
+                                                action = Action::UntagSelection(id)
+                                            }
+                                            Some(crate::keyword_rows::Out::Rename(id, name)) => {
+                                                action = Action::RenameKeyword(id, name)
+                                            }
+                                            Some(crate::keyword_rows::Out::Move(id, parent)) => {
+                                                action = Action::MoveKeyword(id, parent)
+                                            }
+                                            None => {}
+                                        }
+                                        // A click anywhere outside this list — the field, the rows
+                                        // and the drop row — clears the parent. ⚠ Read from the
+                                        // context's input, so a click on the grid or another panel
+                                        // counts, not only one inside this section.
+                                        let list = ui.min_rect();
+                                        let outside = ui.input(|i| {
+                                            i.pointer.primary_clicked()
+                                                && i.pointer
+                                                    .interact_pos()
+                                                    .is_some_and(|p| !list.contains(p))
+                                        });
+                                        if outside {
+                                            app.new_keyword_parent = None;
                                         }
                                     },
                                 )
@@ -858,6 +839,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         }
         Action::TagSelection(id) => app.assign_keyword_to_selection(id),
         Action::UntagSelection(id) => app.unassign_keyword_from_selection(id),
+        Action::RenameKeyword(id, name) => app.rename_keyword(id, &name),
+        Action::MoveKeyword(id, parent) => app.move_keyword(id, parent),
     }
 }
 
@@ -978,6 +961,34 @@ mod tests {
     ///
     /// ⚠ Both halves: present when configured, absent when off. An absence alone would pass against
     /// a panel that drew nothing.
+    /// The new keyword's parent is the keyword last clicked, and a click anywhere else clears it —
+    /// the author's replacement for the parent dropdown. ⚠ Both halves, and the clear is asserted
+    /// from a click OUTSIDE the panel's list, which is the case the rule is about.
+    #[test]
+    fn clicking_a_keyword_makes_it_the_parent_and_clicking_elsewhere_clears_it() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        app.settings.panel_sections.keywords = true;
+        let europe = app
+            .catalog
+            .as_ref()
+            .unwrap()
+            .create_keyword("Europe", None)
+            .unwrap();
+        crate::test_ui::click(&ctx, "Europe", |ui| super::show(&mut app, ui, &ctx));
+        assert_eq!(
+            app.new_keyword_parent,
+            Some(europe),
+            "the click must set the parent"
+        );
+        let far = egui::pos2(390.0, 1390.0);
+        crate::test_ui::click_at(&ctx, far, false, |ui| super::show(&mut app, ui, &ctx));
+        assert_eq!(
+            app.new_keyword_parent, None,
+            "a click elsewhere must clear it"
+        );
+    }
+
     #[test]
     fn the_immich_section_appears_only_when_the_integration_is_on() {
         let labels = |enabled: bool| -> Vec<String> {

@@ -87,8 +87,14 @@ impl RustroomApp {
                         Err(e) => self.status = format!("Could not restore: {e}"),
                     }
                 }
+                // ⚠ M9.8: a restored keyword goes back into its photos' XMP too.
+                let files = self.snapshot_files(&snapshot);
+                self.write_xmp_for(&files);
                 self.after_catalog_restore(ctx, &snapshot);
             }
+            ActionKind::KeywordRename { .. }
+            | ActionKind::KeywordMove { .. }
+            | ActionKind::KeywordMerge(_) => self.replay_keyword_action(&kind, false),
             ActionKind::PresetDelete { name } => {
                 match self.preset_store.restore(&name) {
                     Ok(Some(p)) => self.status = format!("Restored preset “{}”", p.name),
@@ -176,7 +182,12 @@ impl RustroomApp {
             }
             ActionKind::CatalogDelete { snapshot } => {
                 self.redo_catalog_delete(ctx, &snapshot);
+                let files = self.snapshot_files(&snapshot);
+                self.write_xmp_for(&files);
             }
+            ActionKind::KeywordRename { .. }
+            | ActionKind::KeywordMove { .. }
+            | ActionKind::KeywordMerge(_) => self.replay_keyword_action(&kind, true),
             ActionKind::PresetDelete { name } => {
                 match self.preset_store.delete(&name) {
                     Ok(()) => self.status = format!("Deleted preset “{name}”"),
