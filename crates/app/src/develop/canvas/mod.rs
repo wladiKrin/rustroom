@@ -292,12 +292,15 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                         // exactly the two-facts-that-disagree failure — and a silent one, showing as
                         // a subtly wrong band at the edge of the visible area.
                         let shown_edits = s.view_edits(tool);
-                        // M9.14: the preview texture's key is the edits on screen — taken here,
-                        // before `request` consumes them.
+                        // M9.14: the preview is of the photo's plain edits — the key the loader
+                        // was asked with — so it stands in only while the view shows exactly
+                        // those (not Before, not a geometry tool's uncropped view of a crop).
+                        let view_is_plain = !s.show_before && shown_edits == s.edits;
                         let stand_in_key = rustroom_app::thumb_key::ThumbKey::new(
                             rustroom_app::photo_id::PhotoId::new(s.path.clone(), s.copy),
-                            &shown_edits,
+                            &s.edits,
                         );
+                        let needed_long = view_region::needed_long(fit_cap, fit, s.zoom);
                         let (vis, want) = if native {
                             let v = view_region::visible_rect(
                                 iw, ih, avail.x, avail.y, scale, s.pan.x, s.pan.y,
@@ -435,7 +438,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                         // M9.14: the preview stands in where the live buffer cannot supply the
                         // pixels asked for — the rule is `stand_in::prefer_preview`; the key check
                         // is that the texture is of the edits on screen, never the before image.
-                        let stand_in = if s.buffer_is_full_res || s.show_before {
+                        let stand_in = if s.buffer_is_full_res || !view_is_plain {
                             None
                         } else {
                             preview_textures
@@ -443,7 +446,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                 .filter(|(t, _)| {
                                     let long = t.size()[0].max(t.size()[1]);
                                     rustroom_app::stand_in::prefer_preview(
-                                        rung,
+                                        needed_long,
                                         s.buffer_long,
                                         long,
                                     )
@@ -1038,6 +1041,97 @@ mod tests {
             "a region render must paint the backdrop under it and a whole-image one must not; \
              whole={whole} region={region}"
         );
+    }
+
+    /// The texture ids of every textured rect the canvas painted in one frame.
+    fn painted_texture_ids(
+        app: &mut crate::RustroomApp,
+        ctx: &egui::Context,
+    ) -> Vec<egui::TextureId> {
+        fn collect(s: &egui::Shape, out: &mut Vec<egui::TextureId>) {
+            match s {
+                egui::Shape::Rect(r) => {
+                    if let Some(b) = &r.brush {
+                        out.push(b.fill_texture_id);
+                    }
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
+                _ => {}
+            }
+        }
+        let c = ctx.clone();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(super::test_support::screen()),
+                ..Default::default()
+            },
+            |ui| {
+                super::show(app, ui, &c);
+            },
+        );
+        let mut ids = Vec::new();
+        out.shapes.iter().for_each(|s| collect(&s.shape, &mut ids));
+        ids
+    }
+
+    /// M9.14: at fit the live render is painted; asked for more pixels than the buffer has,
+    /// the preview is painted in its place; once the buffer is full resolution, the live render
+    /// again. Pixel-level, through the real `show`.
+    #[test]
+    fn a_preview_stands_in_only_where_the_buffer_falls_short() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        // ⚠ 800×400 on a 400×300 screen, so fit is 0.5 and the buffer has the pixels at fit —
+        // an 80-px fixture blown up 5× would be short of pixels at fit too, and the preview
+        // would legitimately win everywhere.
+        crate::test_app::open_test_photo(&mut app, &ctx, 800, 400);
+        let (live_id, key) = {
+            let s = app.session.as_mut().expect("session");
+            s.buffer_is_full_res = false;
+            s.buffer_long = 800;
+            s.fit_image_size = egui::vec2(800.0, 400.0);
+            let key = rustroom_app::thumb_key::ThumbKey::new(
+                rustroom_app::photo_id::PhotoId::new(s.path.clone(), s.copy),
+                &s.edits,
+            );
+            (s.texture.as_ref().expect("live texture").id(), key)
+        };
+        let preview = crate::test_app::texture(&ctx, "preview", 1600, 800);
+        let preview_id = preview.id();
+        app.preview_textures.insert(
+            key,
+            (preview, rustroom_app::preview_loader::PreviewSource::Camera),
+            1600 * 800 * 4,
+        );
+
+        let at_fit = painted_texture_ids(&mut app, &ctx);
+        assert!(
+            at_fit.contains(&live_id),
+            "at fit the live render is painted"
+        );
+        assert!(
+            !at_fit.contains(&preview_id),
+            "at fit the preview stays out of it"
+        );
+
+        app.session.as_mut().expect("session").zoom = 8.0;
+        let zoomed = painted_texture_ids(&mut app, &ctx);
+        assert!(
+            zoomed.contains(&preview_id),
+            "zoomed past the buffer, the preview stands in"
+        );
+        assert!(
+            !zoomed.contains(&live_id),
+            "and the soft live render is not painted over it"
+        );
+
+        app.session.as_mut().expect("session").buffer_is_full_res = true;
+        let full = painted_texture_ids(&mut app, &ctx);
+        assert!(
+            full.contains(&live_id),
+            "the full buffer wins at every zoom"
+        );
+        assert!(!full.contains(&preview_id));
     }
 
     /// ⚠ A backdrop from a different framing is dropped rather than stretched. A crop or an

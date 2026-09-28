@@ -64,7 +64,7 @@ pub fn buffer(w: usize, h: usize) -> std::sync::Arc<core_image::ImageBuf> {
     std::sync::Arc::new(b)
 }
 
-fn texture(ctx: &egui::Context, name: &str, w: usize, h: usize) -> egui::TextureHandle {
+pub fn texture(ctx: &egui::Context, name: &str, w: usize, h: usize) -> egui::TextureHandle {
     let img = egui::ColorImage::new([w, h], vec![egui::Color32::GRAY; w * h]);
     ctx.load_texture(name, img, egui::TextureOptions::default())
 }
