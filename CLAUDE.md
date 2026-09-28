@@ -93,7 +93,7 @@ opensource_lightroom/
 ├── CLAUDE.md                 # this file
 ├── crates/
 │   ├── core-image/           # ✅ ImageBuf (f32 RGB) + Capture (EXIF facts, both decoders) + map_samples/map_pixels/map_pixels_xy/to_rgb8/to_rgba8 (rayon-parallel) /crop/downscale_to + Thumbnail
-│   ├── raw-decode/           # ✅ libraw(rsraw); DecodeOptions{linear_scene,display,preview(half_size),demosaic}; Demosaic tiers -> user_qual; extract_thumbnail
+│   ├── raw-decode/           # ✅ libraw(rsraw); DecodeOptions{linear_scene,display,preview(half_size),demosaic}; Demosaic tiers -> user_qual; extract_thumbnail + extract_preview (the largest embedded JPEG at its own size, M9.14)
 │   ├── image-decode/         # ✅ JPEG/PNG/TIFF → linear ImageBuf (image + srgb_to_linear) + thumbnail; EXIF orientation applied in both
 │   ├── color/                # ✅ sRGB transfer fns + Oklab (lcms2/ICC still deferred)
 │   ├── edit-model/           # ✅ serde Edits op-list (orientation/WB/exposure/contrast/tone/curve/saturation/hsl/local_contrast/dehaze/NR/sharpening/vignette/geometry) + EditGroups partition + merge_from
@@ -168,7 +168,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-28)
 
-**3179 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
+**3201 tests**, **82 goldens**, gate green on `m9.14-previews` (unmerged — awaiting use; `grep -n 'M9.14' docs/JOURNAL.md`). ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -214,8 +214,11 @@ that had grown to ~170 lines by appending.)
 
 ✅ **The first-use review fixes are merged and confirmed by use** (2026-09-28; `grep -n 'First-use
 review fixes' docs/JOURNAL.md`). The reviews themselves were transient and are deleted; their
-milestone-sized findings sit in `docs/BACKLOG.md` under "First-session reviews". **In progress:
-P-20, background 1:1 previews** — the author's pick at the merge; brainstorm first.
+milestone-sized findings sit in `docs/BACKLOG.md` under "First-session reviews". **M9.14 Previews**
+(P-20) is on branch `m9.14-previews`, awaiting the author's use: the camera's embedded JPEG as the
+free 1:1 of an untouched photo, rendered previews for edited photos on leaving and on demand, one
+store feeding Develop, Compare and Survey. ⚠⚠ Untouched = equality with `initial_edits(None)`, never
+the sidecar's `is_neutral`; ⚠⚠ the stand-in rule reads `view_region::needed_long`, never the rung.
 ✅ **Phase 9 is complete** (M9.13 merged 2026-09-28). Next is **Phase 10** (was 9), integration and
 release: M10.2
 Windows + the Linux GUI (never run), M10.3 contributor docs, M10.4 `v0.1`, M10.5 plugins. ⛔ **M10.1 was

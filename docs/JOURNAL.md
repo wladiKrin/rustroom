@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M9.14 Previews: instant 1:1 in Develop, Compare and Survey (2026-09-29)](#2026-09-29--m914-previews-instant-11-in-develop-compare-and-survey-branch-m914-previews-awaiting-use)
 - [The resident final checkpoint: the tail's input stays on the GPU (2026-09-26)](#2026-09-26--the-resident-final-checkpoint-the-tails-input-stays-on-the-gpu-branch-resident-final)
 - [Per-pixel fusion: a run of per-pixel stages as one pass (2026-09-26)](#2026-09-26--per-pixel-fusion-a-run-of-per-pixel-stages-as-one-pass-branch-per-pixel-fusion)
 - [GPU timestamps: per-pass GPU time in the running app (2026-09-26)](#2026-09-26--gpu-timestamps-per-pass-gpu-time-in-the-running-app-branch-gpu-timestamps)
@@ -157,6 +158,65 @@ goldens unmoved.
 - ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
+
+### 2026-09-29 — M9.14 Previews: instant 1:1 in Develop, Compare and Survey (branch `m9.14-previews`, awaiting use)
+
+**The ask** (P-20, the professional review's first blocker): a focus check across a shoot is a wall
+of seconds per frame, because true 1:1 waits for the full decode. **Spec**
+`docs/superpowers/specs/2026-09-28-m9.14-previews-design.md`, **plan**
+`docs/superpowers/plans/2026-09-29-m9.14-previews.md`; the gate green at **3,201 tests**.
+
+**Measured before deciding** (this Mac, 8 cores / 16 GB, one X-T4 RAF, decode only): Better
+**16.0 s** a frame alone and **7.4 s** each with three in parallel, Fast 7.3 / 3.0, Fastest 3.0 /
+1.8. ⚠ The 7.4 s the demosaic decision quoted for Better is the *three-parallel per-frame* figure;
+the X-T4 is X-Trans and its 3-pass demosaic is the cost. So a folder-wide rendered-preview build is
+about an hour and 4 GB per 500 frames at the default tier — **declined by the author on that
+number.** The X-T4 embeds a **4416×2944** JPEG (71% of 1:1), 4 MB, reachable through libraw's
+thumbnail list; every RAW in the author's library is an X-T4 file.
+
+**What the author chose:** *1* the camera's own JPEG as the free preview of an untouched photo,
+*2* Rustroom's rendering for an edited photo, built when it is left, *3* the same on demand for a
+selection at a chosen tier. Consumers: Develop, Compare and Survey; **no Loupe** — Develop plays
+that role. Declined: decode-ahead in memory, a GPU demosaic, edits applied over the camera JPEG.
+
+**What shipped.** `raw_decode::extract_preview` / `image_decode::preview` (the largest embedded
+JPEG at its own size, oriented; `extract_thumbnail` is that plus the 512-px shrink). Lib:
+`preview_key` (identity + a **stable** FNV-1a fingerprint of the serialized edits + the tier —
+⚠ not `DefaultHasher`, which names nothing on disk), `preview_store` (`<config>/rustroom/previews`,
+plain `<hash>.jpg`, `ThumbStore`'s budget sweep, 10 GB default), `preview_loader` (one thread:
+rendered from the store, else the camera JPEG for an untouched photo, else nothing; capped to the
+GPU's texture limit; converted to the display space like thumbnails), `preview_build` (a
+`LeaveQueue` that replaces a re-edited entry in place, and **a build is an export job** —
+`ExportWorker` with JPEG 90 sRGB full size at the tier, the `{copy}` template rendering the key's
+hash), `stand_in::prefer_preview`. Bin: `preview_flow` (the request shaped from the settings, a
+second `ThumbCache` of textures pinned by the on-screen window, the pumps, the leave hook in the
+photo switch, Photo → Build previews with progress and cancel), the canvas stand-in painted at
+`frame_rect` with a "Camera preview" / "Preview" corner label, `multi/preview_pane` replacing the
+`RenderEngine` panes (Compare no longer decodes anything), Survey cells over 512 px drawing the
+preview at fit, Settings → Display "Preview quality" (*Same as 1:1 view* by default) and "Preview
+cache".
+
+**Untouched, precisely:** equality with `Settings::initial_edits(None)` — the camera rendering and
+the lens decision from the settings, everything else default. ⚠ **Not** the sidecar's `is_neutral`,
+which compares against `Edits::default()` and would call every freshly opened photo edited;
+`a_fresh_photo_is_untouched_while_the_sidecar_rule_calls_it_edited` pins the difference.
+
+**Two things the plan got wrong, caught in execution.** *(1)* ⚠⚠ The stand-in rule was fed the
+**rung** the canvas asks for, and `tier_max_dim` caps the rung at the buffer's long edge — so "the
+rung exceeds the buffer" could never be true and the preview would never have shown. The
+pixel-level test `a_preview_stands_in_only_where_the_buffer_falls_short` (through the real `show`,
+asserting which texture id was painted) found it; the rule now reads `view_region::needed_long`,
+the on-screen size before the cap. **A milestone that had every unit test green and no picture.**
+*(2)* Survey cannot zoom a cell: its pinch already resizes the wall and its scroll scrolls it, so
+a per-cell zoom would fight both. A large cell draws the preview at fit; Enter opens the photo in
+Develop, where the same preview stands in at 1:1.
+
+**Not verified in use, and why:** the driven look was attempted at 01:35 and the screen was at
+the login window — nothing could be captured. The author's look: an untouched RAF at 1:1 in
+Develop shows "Camera preview" within a fraction of a second and hands over to the live render
+when the full decode lands; Compare's panes are sharp at zoom without a decode; a Survey of two
+shows previews; leaving an edited photo builds its preview (one at a time, silently); Photo →
+Build previews reports "Building previews n of m…" with Cancel; Settings → Display has the two rows.
 
 ### 2026-09-28 — First-use review fixes (branch `first-use-fixes`, merged 2026-09-28)
 
