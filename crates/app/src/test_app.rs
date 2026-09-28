@@ -198,6 +198,7 @@ pub fn for_test() -> RustroomApp {
         modal: Modal::None,
         thumb_cache_bytes: None,
         immich_thumb_cache_bytes: None,
+        preview_cache_bytes: None,
         settings_draft: None,
         actions: ActionLog::default(),
         // ⚠ Empty, and deliberately not pointed at the real looks directory: a test that found

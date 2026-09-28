@@ -668,6 +668,13 @@ pub struct Settings {
     /// ⚠ A separate budget on a separate directory, so neither sweep can evict the other's
     /// entries.
     pub immich_thumb_budget_mb: u32,
+    /// Demosaic tier for **rendered previews** (M9.14). `None` follows [`Self::view_demosaic`],
+    /// so a preview matches what Develop shows at 1:1; a lower tier is a cost choice — on an
+    /// X-T4 a frame decodes in 16 s at Better, 7 s at Fast, 3 s at Fastest (measured 2026-09-28).
+    pub preview_demosaic: Option<Demosaic>,
+    /// Byte budget for the rendered-preview cache, in megabytes. No field-level `serde(default)`,
+    /// for `thumb_budget_mb`'s reason: `u32`'s own default is 0, a cache that deletes what it writes.
+    pub preview_budget_mb: u32,
 }
 
 /// The Library grid's default cell size, and the size its type scale is relative to.
@@ -759,6 +766,11 @@ impl Settings {
             .map(|n| n.get())
             .unwrap_or(1);
         (self.export_concurrency as usize).clamp(1, cores)
+    }
+
+    /// The tier rendered previews are built at: the chosen one, else the 1:1 view's.
+    pub fn preview_tier(&self) -> Demosaic {
+        self.preview_demosaic.unwrap_or(self.view_demosaic)
     }
 
     /// The grid cell size in points, guaranteed usable.
@@ -922,6 +934,8 @@ impl Default for Settings {
             immich_upload_key: String::new(),
             thumb_budget_mb: 5120,
             immich_thumb_budget_mb: 5120,
+            preview_demosaic: None,
+            preview_budget_mb: 10240,
             confirm_preset_delete: true,
             export: ExportOptions::default(),
             import: Default::default(),
@@ -1671,6 +1685,8 @@ mod tests {
             // Non-default so a field re-defaulted on load cannot pass.
             thumb_budget_mb: 2048,
             immich_thumb_budget_mb: 1024,
+            preview_demosaic: Some(Demosaic::Fastest),
+            preview_budget_mb: 4096,
             export: ExportOptions {
                 dest_dir: std::path::PathBuf::from("/tmp/rustroom_out"),
                 quality: 71,
@@ -1707,6 +1723,30 @@ mod tests {
         assert!(!loaded.confirm_preset_delete, "the old field must survive");
         assert_eq!(loaded.thumb_budget_mb, 5120);
         assert_eq!(loaded.immich_thumb_budget_mb, 5120);
+    }
+
+    #[test]
+    fn the_preview_settings_round_trip_and_an_old_file_gets_their_defaults() {
+        let f = TempFile::new("preview_settings");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete": false}"#).unwrap();
+        let old = SettingsStore::new(f.0.clone()).load();
+        assert_eq!(
+            old.preview_demosaic, None,
+            "follows the 1:1 view by default"
+        );
+        assert_eq!(old.preview_budget_mb, 10240);
+        assert_eq!(old.preview_tier(), old.view_demosaic);
+        let s = Settings {
+            preview_demosaic: Some(Demosaic::Fast),
+            preview_budget_mb: 2048,
+            ..Default::default()
+        };
+        assert_eq!(s.preview_tier(), Demosaic::Fast);
+        let store = SettingsStore::new(f.0.clone());
+        store.save(&s).unwrap();
+        let loaded = store.load();
+        assert_eq!(loaded.preview_demosaic, Some(Demosaic::Fast));
+        assert_eq!(loaded.preview_budget_mb, 2048);
     }
 
     #[test]

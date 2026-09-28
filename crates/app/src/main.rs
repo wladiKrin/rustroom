@@ -613,6 +613,8 @@ struct RustroomApp {
     /// ⚠ Its own field rather than a sum: the two caches have separate budgets, so a single number
     /// could not tell you which one is full.
     immich_thumb_cache_bytes: Option<u64>,
+    /// The rendered-preview cache's size, computed when the Settings dialog opens (M9.14).
+    preview_cache_bytes: Option<u64>,
     /// The Settings dialog's draft while it is open — applied on Apply, dropped on Cancel.
     settings_draft: Option<modals::settings::SettingsDraft>,
     /// One chronological order over photo edits *and* preset deletions, so Ctrl+Z walks
@@ -813,6 +815,7 @@ impl RustroomApp {
             modal: Modal::None,
             thumb_cache_bytes: None,
             immich_thumb_cache_bytes: None,
+            preview_cache_bytes: None,
             settings_draft: None,
             actions: ActionLog::default(),
             // ⚠ Empty until a photo opens: the looks directory is scanned once per photo in
