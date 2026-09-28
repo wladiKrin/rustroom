@@ -67,6 +67,12 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSView",
     "NSResponder",
     "objc2-quartz-core",
+    # For `native_menu::strip_injected_items` — the same features muda already enables, so
+    # nothing new compiles.
+    "NSApplication",
+    "NSMenu",
+    "NSMenuItem",
+    "NSWindow",
 ] }
 objc2-quartz-core = { version = "0.3", default-features = false, features = [
     "std",

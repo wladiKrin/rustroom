@@ -491,8 +491,8 @@ fn camera_profile_row(app: &mut RustroomApp, ui: &mut egui::Ui) {
     if app.camera_profiles_cache.is_empty() {
         theme::hint(
             ui,
-            "No profiles installed. Rustroom ships none — drop .dcp files into the profiles \
-             folder beside your settings to use them.",
+            "Colours come from Rustroom's built-in camera data. To use a profile from your camera \
+             maker instead, put its .dcp file in the profiles folder next to your settings.",
         );
     }
     // ⚠ A change guard like its neighbours: this body runs every frame, and `apply_camera_profile`

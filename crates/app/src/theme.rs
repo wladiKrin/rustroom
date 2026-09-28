@@ -46,22 +46,44 @@ fn accent_color(accent: Accent, dark: bool) -> egui::Color32 {
 /// ⚠ Pinned to Phosphor 2.1.2, whose licence sits beside it. See `rustroom_app::icons`.
 const ICON_FONT: &[u8] = include_bytes!("../assets/Phosphor.ttf");
 
-/// Install the icon font as a fallback on every family. Call once, at startup.
+/// The bundled text face.
 ///
-/// ⚠ **A fallback, not a primary and not a named family.** `FontPriority::Lowest` means the font
-/// is consulted only for glyphs no earlier font has — and since Phosphor's codepoints are all in
-/// the Private Use Area, nothing else can ever reach it. The payoff is that call sites stay
-/// ordinary text: `ui.button(icons::UNDO)` needs no `FontId`, and `Tool::glyph` keeps returning a
-/// plain `char`.
+/// ⚠ Inter 4.1 (OFL; licence beside it), pinned. egui's own Ubuntu Light is a light weight that
+/// reads thin on grey — the first-use reviews called the type "faintly amateur" — and a regular
+/// weight is the cheapest single change toward a finished-looking tool. Inter also carries the
+/// keyboard glyphs (⇧ ⌘ ⌥ ⌃ → ←) Ubuntu Light lacks, which is what had the shortcuts dialog and
+/// the Library's empty state drawing tofu boxes. Coverage was checked by parsing its cmap.
+const TEXT_FONT: &[u8] = include_bytes!("../assets/Inter-Regular.ttf");
+
+/// Install the text face, the fallbacks and the icon font. Call once, at startup.
 ///
-/// ⚠ **`Context::add_font`, never a hand-built `FontDefinitions`.** Building one from scratch
-/// replaces the whole stack, which would discard egui's own fonts and leave every ordinary label
-/// unrenderable. `add_font` inserts into the existing stack.
+/// The proportional stack, in the order egui consults it: **Inter**, then egui's own fonts
+/// (Ubuntu Light and the two emoji faces), then **Hack** — egui's monospace face, added as a
+/// last resort because it is the only bundled font with ▸ ▾ ▴ — and finally Phosphor for the
+/// icons.
 ///
-/// ⚠ Registered on **both** `Proportional` and `Monospace`. Only Proportional is used today, but a
-/// monospace label that happened to contain an icon would otherwise silently show tofu.
+/// ⚠ **Starts from `FontDefinitions::default()`, never from an empty one.** An empty one would
+/// discard egui's fonts and leave the emoji and arrow fallbacks unrenderable.
+///
+/// ⚠ Phosphor stays a `FontPriority::Lowest` fallback on **both** families: its codepoints are
+/// all in the Private Use Area, so nothing else can reach it, and call sites stay ordinary text —
+/// `ui.button(icons::UNDO)` needs no `FontId`.
+///
+/// ⚠⚠ Every non-ASCII character a label uses must be in this stack. `every_menu_string_is_renderable`
+/// below sweeps the menus, the tool names and the fixed hint strings; a new symbol in a string
+/// that the menus do not already use belongs in that test's list.
 pub fn install_fonts(ctx: &egui::Context) {
     use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
+    let mut defs = egui::FontDefinitions::default();
+    defs.font_data.insert(
+        "Inter".to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(TEXT_FONT)),
+    );
+    if let Some(family) = defs.families.get_mut(&egui::FontFamily::Proportional) {
+        family.insert(0, "Inter".to_owned());
+        family.push("Hack".to_owned());
+    }
+    ctx.set_fonts(defs);
     ctx.add_font(FontInsert::new(
         "phosphor",
         egui::FontData::from_static(ICON_FONT),
@@ -506,6 +528,61 @@ mod tests {
         // is it panicking, which at startup would take the whole app with it.
         let s = tuned();
         assert!(s.text_styles.contains_key(&egui::TextStyle::Body));
+    }
+
+    /// ⚠⚠ Every non-ASCII character in a menu label, a shortcut label, a tool name or one of the
+    /// fixed hint strings must be drawable by the installed stack, or it shows as a tofu box —
+    /// which is how the empty Library said "File □ Open folder…" and the shortcuts dialog wrote
+    /// "□⌘O" for a shift chord, on the very first screen a new user sees. The sample size is
+    /// asserted first so a model that came back empty could not pass.
+    #[test]
+    fn every_menu_string_is_renderable() {
+        use rustroom_app::menu::{model, Item};
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        // A frame must run first: a fresh `Context` has not built its atlas.
+        let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        let id = egui::FontId::proportional(14.0);
+        let mut strings: Vec<String> = vec![
+            crate::multi::compare::INSTRUCTION.to_owned(),
+            crate::multi::survey::INSTRUCTION.to_owned(),
+            crate::library::EMPTY_LIBRARY_HINT.to_owned(),
+        ];
+        strings.extend(
+            rustroom_app::tool::Tool::ALL
+                .iter()
+                .map(|t| t.label().to_owned()),
+        );
+        for section in model() {
+            strings.push(section.title.to_owned());
+            for item in section.items {
+                if let Item::Action {
+                    label, shortcut, ..
+                } = item
+                {
+                    strings.push(label);
+                    if let Some(sc) = shortcut {
+                        strings.push(sc.label());
+                    }
+                }
+            }
+        }
+        assert!(strings.len() > 60, "sample: {}", strings.len());
+        let symbols: Vec<char> = strings
+            .iter()
+            .flat_map(|s| s.chars())
+            .filter(|c| !c.is_ascii())
+            .collect();
+        assert!(symbols.len() > 10, "sample: {} symbols", symbols.len());
+        for s in &strings {
+            for c in s.chars().filter(|c| !c.is_ascii()) {
+                assert!(
+                    ctx.fonts_mut(|f| f.has_glyph(&id, c)),
+                    "{c:?} (U+{:04X}) in {s:?} is in no bundled font and would draw as a box",
+                    c as u32
+                );
+            }
+        }
     }
 
     #[test]

@@ -70,7 +70,7 @@ impl StackPrimary {
 
     pub fn label(self) -> &'static str {
         match self {
-            StackPrimary::EditedElseRaw => "Edited, else RAW",
+            StackPrimary::EditedElseRaw => "Edited file, otherwise RAW",
             StackPrimary::Raw => "RAW",
             StackPrimary::Jpeg => "JPEG",
         }

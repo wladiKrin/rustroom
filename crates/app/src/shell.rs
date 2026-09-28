@@ -458,6 +458,10 @@ impl RustroomApp {
                                             )
                                             .monospace(),
                                         ),
+                                    )
+                                    .on_hover_text(
+                                        "The colour under the pointer as displayed: red, green, \
+                                         blue, 0–255",
                                     );
                                     let (patch, painter) = ui.allocate_painter(
                                         egui::vec2(READOUT_SWATCH, READOUT_SWATCH),

@@ -108,6 +108,10 @@ const MARK_NONE: &str = "☐ ";
 /// ⚠ 1.6 (user's call, 2026-09-23): the stars, the reject cross and the colour chip were legible but
 /// small. They are what a culling pass actually reads, so they are not tied to the caption's size.
 /// ⚠ `thumb::marks_row` clamps the result, so this cannot make them absurd on a huge cell.
+/// What an empty Library says. Also swept by `theme::every_menu_string_is_renderable`.
+pub(crate) const EMPTY_LIBRARY_HINT: &str =
+    "Open a folder to browse (File → Open folder…), or import from a card (File → Import…).";
+
 const MARK_SCALE: f32 = 1.6;
 
 pub fn cell_menu(
@@ -314,11 +318,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             ui.centered_and_justified(|ui| {
                 // ⚠ Names the menu items: there has been no "Open folder…" button since the menus took
                 // the toolbar's place, and the old text still pointed at one.
-                crate::theme::empty_state(
-                    ui,
-                    "Open a folder to browse (File → Open folder…), or import from a card \
-                     (File → Import…).",
-                );
+                crate::theme::empty_state(ui, EMPTY_LIBRARY_HINT);
             });
             return;
         };

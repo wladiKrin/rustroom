@@ -391,8 +391,8 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                             .response
                                             .on_hover_text(
                                                 "Which file a collapsed stack shows and opens. \
-                                                 With “Edited, else RAW” a pair you have worked \
-                                                 on shows the file you worked on; if both are \
+                                                 With “Edited file, otherwise RAW” a pair you have \
+                                                 worked on shows the file you worked on; if both are \
                                                  edited it shows the RAW.",
                                             );
                                     });
@@ -635,6 +635,11 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                     // tab holds a switch and nothing else.
                     // ⚠ A switch rather than a tick box: enabling or disabling a whole integration
                     // is a decision, not one preference among many (user's call, 2026-09-24).
+                    theme::hint(
+                        ui,
+                        "Immich is a self-hosted photo server (immich.app). With a server and an API \
+                         key, its albums appear in the Library and exports can upload to it.",
+                    );
                     crate::segmented::switch(ui, &mut d.immich_enabled, "Enable Immich")
                         .on_hover_text(
                             "When off, Immich disappears from the rest of Rustroom — the left \

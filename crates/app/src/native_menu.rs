@@ -68,10 +68,16 @@ fn suppress_injected_edit_items() {
     let keys = [
         ns_string!("NSDisabledDictationMenuItem"),
         ns_string!("NSDisabledCharacterPaletteMenuItem"),
+        // "Enter Full Screen" in the View menu; the window's own green button still works.
+        ns_string!("NSFullScreenMenuItemEverywhere"),
     ];
     // ⚠ `&**` twice: `ns_string!` gives `&NSString`, which derefs to `&NSObject` and then to
     // `&AnyObject` — the value type `registerDefaults` insists on.
-    let yes: [&AnyObject; 2] = [&**ns_string!("YES"), &**ns_string!("YES")];
+    let yes: [&AnyObject; 3] = [
+        &**ns_string!("YES"),
+        &**ns_string!("YES"),
+        &**ns_string!("NO"),
+    ];
     let dict = NSDictionary::from_slices(&keys, &yes);
     unsafe { NSUserDefaults::standardUserDefaults().registerDefaults(&dict) };
 }
@@ -79,6 +85,7 @@ fn suppress_injected_edit_items() {
 /// Build and install the menu. Call once, from the app's constructor.
 pub fn install(ctx: &egui::Context) {
     suppress_injected_edit_items();
+    forbid_window_tabbing();
     let menu = Menu::new();
     let mut by_id = HashMap::new();
 
@@ -136,7 +143,7 @@ pub fn install(ctx: &egui::Context) {
                         Some(sc) => (format!("{label}   {}", sc.label()), None),
                         None => (label.to_string(), None),
                     };
-                    let mi = MenuItem::new(text, true, accel);
+                    let mi = MenuItem::new(native_label(&text), true, accel);
                     by_id.insert(mi.id().clone(), command);
                     let _ = sub.append(&mi);
                 }
@@ -146,6 +153,7 @@ pub fn install(ctx: &egui::Context) {
     }
 
     menu.init_for_nsapp();
+    strip_injected_items();
 
     // ⚠ egui does not redraw an idle window, and a menu click generates no winit event — so
     // without an explicit repaint the command would sit in the channel until the user happened
@@ -216,4 +224,106 @@ fn accelerator(sc: menu::Shortcut) -> Option<muda::accelerator::Accelerator> {
         mods |= Modifiers::SHIFT;
     }
     Some(Accelerator::new(Some(mods), code))
+}
+
+/// muda reads `&` as a mnemonic marker on every platform and drops it, which turned "Crop &
+/// Geometry" into "Crop  Geometry" in the Photo menu; `&&` is its escape for a literal ampersand.
+fn native_label(label: &str) -> String {
+    label.replace('&', "&&")
+}
+
+/// The items AppKit adds to any main menu on its own — "AutoFill" and "Emoji & Symbols" into a
+/// menu titled Edit, tab-bar items and "Enter Full Screen" into one titled View. To a new user
+/// they read as features that do nothing.
+///
+/// ⚠ English titles, on purpose: the `NSUserDefaults` keys in
+/// [`suppress_injected_edit_items`] are the language-independent half of this and stop most of
+/// the injection before it happens; this list is the fallback for the ones AppKit keeps adding
+/// (AutoFill has no documented default). A non-English system keeps only that first half.
+const INJECTED_TITLES: [&str; 6] = [
+    "AutoFill",
+    "Emoji & Symbols",
+    "Start Dictation…",
+    "Show Tab Bar",
+    "Show All Tabs",
+    "Enter Full Screen",
+];
+
+/// Remove AppKit's injected items from every top-level menu, and the separators they leave
+/// dangling at either end. Runs once, right after `init_for_nsapp`, when they are already there.
+fn strip_injected_items() {
+    use objc2_app_kit::NSApplication;
+    use objc2_foundation::MainThreadMarker;
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(main) = NSApplication::sharedApplication(mtm).mainMenu() else {
+        return;
+    };
+    for i in 0..main.numberOfItems() {
+        if let Some(sub) = main.itemAtIndex(i).and_then(|it| it.submenu()) {
+            strip_from(&sub);
+        }
+    }
+}
+
+fn strip_from(menu: &objc2_app_kit::NSMenu) {
+    let mut i = menu.numberOfItems();
+    while i > 0 {
+        i -= 1;
+        let Some(item) = menu.itemAtIndex(i) else {
+            continue;
+        };
+        let title = item.title().to_string();
+        if INJECTED_TITLES.contains(&title.as_str()) {
+            menu.removeItem(&item);
+        }
+    }
+    // A separator that now leads or trails the menu belonged to a removed item.
+    for at_end in [true, false] {
+        loop {
+            let n = menu.numberOfItems();
+            if n == 0 {
+                break;
+            }
+            let idx = if at_end { n - 1 } else { 0 };
+            match menu.itemAtIndex(idx) {
+                Some(it) if it.isSeparatorItem() => menu.removeItem(&it),
+                _ => break,
+            }
+        }
+    }
+}
+
+/// Stop AppKit offering "Show Tab Bar" / "Show All Tabs" in the View menu: window tabbing is an
+/// AppKit feature this single-window app never uses.
+fn forbid_window_tabbing() {
+    use objc2_app_kit::NSWindow;
+    use objc2_foundation::MainThreadMarker;
+    if let Some(mtm) = MainThreadMarker::new() {
+        NSWindow::setAllowsAutomaticWindowTabbing(false, mtm);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_ampersand_is_escaped_for_muda() {
+        assert_eq!(native_label("Crop & Geometry"), "Crop && Geometry");
+        assert_eq!(native_label("Open file…"), "Open file…");
+    }
+
+    /// The model's own labels all survive the escape: none contains a literal `&&`.
+    #[test]
+    fn no_menu_label_already_uses_mudas_escape() {
+        for section in menu::model() {
+            for item in section.items {
+                if let Item::Action { label, .. } = item {
+                    assert!(!label.contains("&&"), "{label:?}");
+                }
+            }
+        }
+    }
 }

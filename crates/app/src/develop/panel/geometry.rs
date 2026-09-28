@@ -1145,8 +1145,8 @@ mod tests {
     /// ⚠ The rail must say what the tool now does. Asserted on `Tool::label` rather than by
     /// finding the widget, because the rail is drawn by a different module entirely.
     #[test]
-    fn the_rail_calls_the_crop_tool_geometry() {
-        assert_eq!(rustroom_app::tool::Tool::Crop.label(), "Geometry");
+    fn the_rail_calls_the_crop_tool_crop_and_geometry() {
+        assert_eq!(rustroom_app::tool::Tool::Crop.label(), "Crop & Geometry");
     }
 
     /// ⚠⚠ The reset button covers the whole Geometry group, perspective included. Without this
