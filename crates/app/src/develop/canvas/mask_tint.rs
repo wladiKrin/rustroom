@@ -248,7 +248,9 @@ fn coverage(
                     edit_model::Mask::Linear(_) | edit_model::Mask::Radial(_) => {
                         k.analytic_coverage(u, v, aspect).unwrap_or(0.0)
                     }
-                    edit_model::Mask::Brush(_) => {
+                    // ⚠ M9.13: an AI mask's raster sits in the same per-component slot as a brush's,
+                    // resampled to this grid by whoever filled `maps`.
+                    edit_model::Mask::Brush(_) | edit_model::Mask::Ai(_) => {
                         maps[j].as_ref().map_or(0.0, |c| c.at(x, y) as f32 / 255.0)
                     }
                     edit_model::Mask::Luminance(r) => {

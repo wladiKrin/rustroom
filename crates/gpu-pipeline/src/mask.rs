@@ -302,6 +302,12 @@ impl GpuMaskStage {
                     geometry: *geometry,
                 })
             }
+            // M9.13: an AI mask's map was resampled into the frame on the CPU side, so it uploads
+            // exactly as a prebuilt brush map does.
+            // ⚠ Without one — the network has not answered yet — `None` leaves the CPU stage, whose
+            // `CoverageSource::Raster` renders coverage 0: correct, and only for the seconds until the
+            // map arrives. A zero-coverage GPU component would be a new shader path for that window.
+            edit_model::Mask::Ai(_) => prebuilt.map(|map| Component::Prebuilt { map }),
             edit_model::Mask::Linear(g) => Some(Component::Analytic {
                 expr: "cov_linear(u, v, params.aspect, {j}u)",
                 a: [g.from[0], g.from[1], g.to[0], g.to[1]],
@@ -914,6 +920,52 @@ mod tests {
             "a painted mask diverged by {} levels over {:.3}% of samples",
             d.worst_levels,
             d.differing_percent()
+        );
+    }
+
+    /// M9.13: an AI mask's map, resampled on the CPU side, renders the same picture on the GPU —
+    /// and without one the GPU declines, so the CPU's "covers nothing" stands.
+    #[test]
+    fn an_ai_mask_with_its_map_renders_the_same_picture() {
+        let Some(ctx) = ctx() else { return };
+        let (w, h) = (96, 64);
+        let m = with_mask(Mask::Ai(edit_model::AiMask::default()));
+        let map = Arc::new(pipeline::brush::CoverageMap {
+            x0: 10,
+            y0: 8,
+            w: 50,
+            h: 40,
+            data: (0..50 * 40).map(|i| ((i % 50) * 5) as u8).collect(),
+            outside: 0,
+        });
+        let prebuilt = [Some(map)];
+        let src = scene(w, h);
+        let want = pipeline::MaskStage::new_in_region(
+            &m,
+            RenderScale::FULL,
+            None,
+            &Geometry::default(),
+            &prebuilt,
+            color::wb::Illuminant::default(),
+            None,
+        )
+        .apply(src.clone());
+        let stage = GpuMaskStage::new(
+            &m,
+            &Geometry::default(),
+            None,
+            RenderScale::FULL,
+            color::wb::Illuminant::default(),
+            &prebuilt,
+            subs_for(&ctx, &m),
+            &ctx,
+        )
+        .expect("an AI mask with its map must build");
+        let got = crate::GpuChain::new(ctx.clone(), vec![Box::new(stage)]).apply(src.clone());
+        assert_agrees("ai", &want, &got, &src);
+        assert!(
+            gpu_stage(&ctx, &m).is_none(),
+            "without a map the GPU must decline, leaving the CPU's zero coverage"
         );
     }
 

@@ -426,6 +426,8 @@ fn paint_mask(
         // ⚠ And the tint is not drawn from here in any case — see `draw_mask_overlay`, which
         // draws it once for the whole composite.
         edit_model::Mask::Luminance(_) | edit_model::Mask::Colour(_) => {}
+        // ⚠ M9.13: nothing to drag. A Select mask's click point is drawn by the AI click gesture.
+        edit_model::Mask::Ai(_) => {}
     }
 }
 

@@ -74,6 +74,8 @@ pub fn hit_test(m: &Mask, p: [f32; 2], aspect: f32, tol: f32) -> Option<Handle> 
         // ⚠ A colour range has no position either, for the identical reason — it selects hues.
         // Its sliders are the whole of its interaction, exactly as the luminance range's are.
         Mask::Colour(_) => None,
+        // ⚠ An AI mask has no handles: a Select mask is re-aimed by a click, not a drag.
+        Mask::Ai(_) => None,
     }
 }
 

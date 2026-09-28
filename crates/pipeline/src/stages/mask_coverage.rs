@@ -51,6 +51,13 @@ pub(super) enum CoverageSource {
     /// chases its own effect — a saturation lift moves a colour out of the band that selected it,
     /// so the correction would fade as it applied.
     Colour(edit_model::ColourRange),
+    /// An AI mask (M9.13): a raster computed outside the pipeline and handed in through
+    /// `BrushCoverage`, already resampled to the frame with its threshold and invert applied.
+    /// ⚠⚠ **No map means coverage 0** — the network has not answered yet (or its model is missing),
+    /// and a mask that silently covered everything would be the worse failure.
+    Raster {
+        prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
+    },
 }
 
 /// Display-referred lightness of a working-space pixel, in 0..=100.
@@ -193,10 +200,12 @@ impl Composite {
                 let (hue, chroma) = facts.hue_chroma(base_px);
                 r.coverage_at(hue, chroma)
             }
-            CoverageSource::Painted { .. } => match cx.maps.get(j).and_then(|m| m.as_ref()) {
-                Some(cov) => cov.at(cx.fx, cx.fy) as f32 / 255.0,
-                None => 0.0,
-            },
+            CoverageSource::Painted { .. } | CoverageSource::Raster { .. } => {
+                match cx.maps.get(j).and_then(|m| m.as_ref()) {
+                    Some(cov) => cov.at(cx.fx, cx.fy) as f32 / 255.0,
+                    None => 0.0,
+                }
+            }
         }
     }
 
