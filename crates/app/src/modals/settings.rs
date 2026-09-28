@@ -241,7 +241,12 @@ impl SettingsDraft {
         if plain {
             app.save_settings();
         }
-        if self.theme_choice != app.settings.theme || self.accent != app.settings.accent {
+        // ⚠ The size is part of the appearance: a size-only change used to be dropped here, and
+        // Apply did nothing (reported 2026-09-28).
+        if self.theme_choice != app.settings.theme
+            || self.accent != app.settings.accent
+            || self.ui_scale != app.settings.ui_scale
+        {
             app.apply_appearance(self.theme_choice, self.accent, self.ui_scale, ctx);
         }
         if self.tier != app.settings.view_demosaic {

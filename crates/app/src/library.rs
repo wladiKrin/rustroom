@@ -828,21 +828,32 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                 thumb_rect.left() + 6.0,
                                                 thumb_rect.bottom() - size * 0.75,
                                             );
-                                            for k in 1..=5u8 {
-                                                let c = egui::pos2(
-                                                    base.x + (k as f32 - 0.5) * size,
-                                                    base.y,
-                                                );
-                                                let hit = egui::Rect::from_center_size(
-                                                    c,
+                                            let star_hit = |k: u8| {
+                                                egui::Rect::from_center_size(
+                                                    egui::pos2(
+                                                        base.x + (k as f32 - 0.5) * size,
+                                                        base.y,
+                                                    ),
                                                     egui::vec2(size, size),
-                                                );
+                                                )
+                                            };
+                                            // ⚠ The pointer over star k previews a rating of k,
+                                            // so stars 1..=k light together — a rating is a
+                                            // count, not a position (reported 2026-09-28).
+                                            let previewed = (1..=5u8)
+                                                .find(|k| ui.rect_contains_pointer(star_hit(*k)));
+                                            for k in 1..=5u8 {
+                                                let hit = star_hit(k);
+                                                let c = hit.center();
                                                 let r = ui.interact(
                                                     hit,
                                                     ui.id().with(("star", i, k)),
                                                     egui::Sense::click(),
                                                 );
-                                                let lit = k <= marks.rating || r.hovered();
+                                                let lit = match previewed {
+                                                    Some(h) => k <= h,
+                                                    None => k <= marks.rating,
+                                                };
                                                 ui.painter().text(
                                                     c,
                                                     egui::Align2::CENTER_CENTER,
