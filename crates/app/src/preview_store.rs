@@ -59,6 +59,16 @@ impl PreviewStore {
         self.path_for(key).is_file()
     }
 
+    /// Make the directory exist, for a build about to write into it.
+    ///
+    /// ⚠ The export worker does **not** create its destination — the Export dialog refuses a
+    /// directory that is not there — so a build into a store that has never been written would
+    /// fail with "No such file or directory" at the encode. Best-effort: a store that cannot be
+    /// made simply never gets a preview.
+    pub fn ensure_dir(&self) {
+        let _ = std::fs::create_dir_all(&self.dir);
+    }
+
     /// Decode the stored JPEG. Every failure — missing, unreadable, not a JPEG — is a miss.
     ///
     /// ⚠⚠ Touches the file's mtime so eviction is LRU rather than FIFO — `ThumbStore::get`'s
