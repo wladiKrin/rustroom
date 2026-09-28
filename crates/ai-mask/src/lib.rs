@@ -15,3 +15,12 @@ pub mod registry;
 pub use infer::{Embedding, InferError, Sam, Subject};
 pub use map::ProbMap;
 pub use registry::{ModelId, ModelSpec, SubjectModel};
+
+/// Lower-case hex SHA-256 of `bytes` — the AI map cache's key.
+pub fn digest_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}

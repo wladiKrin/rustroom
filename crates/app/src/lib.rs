@@ -1,6 +1,9 @@
 //! Rustroom GUI logic (no egui here — unit-testable units live in this lib).
 
 pub mod action_log;
+pub mod ai_cache;
+pub mod ai_coverage;
+pub mod ai_space;
 pub mod auto_tone_tool;
 pub mod batch_export;
 pub mod brush_tool;
