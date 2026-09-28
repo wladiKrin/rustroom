@@ -21,6 +21,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     enum Action {
         None,
         Apply(usize),
+        ApplyBuiltin(usize),
         Delete(String),
         Save,
         UndoDelete,
@@ -33,10 +34,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     };
 
     let n = app.preset_list.len();
+    let starters = rustroom_app::presets::builtin();
     let count = match n {
-        0 => "no presets".to_owned(),
-        1 => "1 preset".to_owned(),
-        n => format!("{n} presets"),
+        0 => format!("{} built-in", starters.len()),
+        1 => format!("1 of yours · {} built-in", starters.len()),
+        n => format!("{n} of yours · {} built-in", starters.len()),
     };
     let mut out = section::header(
         ui,
@@ -70,16 +72,43 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             },
         );
 
-        if n == 0 {
-            ui.label(
-                egui::RichText::new("No presets yet. Save current… keeps this photo's settings.")
-                    .weak(),
-            );
-        }
         // ⚠ Computed once per frame against the open photo's edits: `matches` clones the edits,
         // and a mask's brush strokes are not free. A handful of presets is fine; a hundred would
         // want a cache keyed on the edits.
         let current = app.session.as_ref().map(|s| s.edits.clone());
+        // ⚠ The starters first, under their own caption, and never deletable: an amateur's first
+        // question of any editor is "can it make this look nice in one click", and an empty
+        // panel answered no (A-23).
+        ui.label(egui::RichText::new("Built-in").small().weak());
+        for (i, p) in starters.iter().enumerate() {
+            let has = current.as_ref().is_some_and(|e| p.matches(e));
+            let out = mask_components::row(
+                ui,
+                mask_components::RowSpec {
+                    glyph: mask_components::RowGlyph::Preset,
+                    op: None,
+                    name: &p.name,
+                    meta: "",
+                    accessible: &p.name,
+                    selected: has,
+                    current: false,
+                    deletable: false,
+                    indent: 0.0,
+                    eye: None,
+                    hold: None,
+                },
+            );
+            if out.clicked {
+                action = Action::ApplyBuiltin(i);
+            }
+        }
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new("Yours").small().weak());
+        if n == 0 {
+            ui.label(
+                egui::RichText::new("None yet. Save current… keeps this photo's settings.").weak(),
+            );
+        }
         for (i, p) in app.preset_list.iter().enumerate() {
             let meta = rustroom_app::presets::groups_summary(p.groups);
             let has = current.as_ref().is_some_and(|e| p.matches(e));
@@ -125,6 +154,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 name: String::new(),
                 groups: EditGroups::default(),
             };
+        }
+        Action::ApplyBuiltin(i) => {
+            if let Some(p) = rustroom_app::presets::builtin().get(i).cloned() {
+                let (n, failed) = app.apply_to_selection(&p.edits, p.groups);
+                app.status = match (n, failed) {
+                    (0, _) => "Nothing selected".to_string(),
+                    (1, 0) => format!("Applied “{}”", p.name),
+                    (n, 0) => format!("Applied “{}” to {n} photos", p.name),
+                    (n, f) => format!("Applied “{}” to {n} photos, {f} failed", p.name),
+                };
+            }
         }
         Action::Apply(i) => {
             if let Some(p) = app.preset_list.get(i).cloned() {
@@ -173,6 +213,25 @@ mod tests {
         let ctx = test_ui::ctx();
         let c = ctx.clone();
         test_ui::click(&ctx, label, |ui| show(app, ui, &c));
+    }
+
+    /// The starters are on the panel before the user has saved anything, and clicking one goes
+    /// through the same apply path as a saved preset.
+    #[test]
+    fn the_starter_presets_are_listed_and_clickable() {
+        let mut app = app_with(&[]);
+        let ctx = test_ui::ctx();
+        let c = ctx.clone();
+        let found = test_ui::labelled_centres(&ctx, Vec::new(), |ui| show(&mut app, ui, &c));
+        for name in ["Natural", "Punchy", "Black & white"] {
+            assert!(
+                found.iter().any(|(l, _)| l == name),
+                "{name} is not on the panel: {:?}",
+                found.iter().map(|(l, _)| l).collect::<Vec<_>>()
+            );
+        }
+        click_in_panel("Punchy", &mut app);
+        assert_eq!(app.status, "Nothing selected");
     }
 
     #[test]
