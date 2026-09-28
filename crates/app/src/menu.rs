@@ -19,6 +19,8 @@ pub enum Command {
     OpenRecent(usize),
     Import,
     Export,
+    /// Build rendered previews for the selection, or the open photo (M9.14).
+    BuildPreviews,
     Settings,
     Undo,
     Redo,
@@ -283,6 +285,8 @@ pub fn model_with(recent: &[PathBuf]) -> Vec<Section> {
                 ),
                 Item::Separator,
                 action("Save as preset…", Command::SavePreset, None),
+                Item::Separator,
+                action("Build previews", Command::BuildPreviews, None),
             ],
         },
         Section {

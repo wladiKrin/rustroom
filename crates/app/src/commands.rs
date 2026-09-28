@@ -33,6 +33,7 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
             }
         }
         Command::Import => app.open_import(),
+        Command::BuildPreviews => app.start_preview_build(),
         Command::Export => {
             if !app.export_jobs().is_empty() {
                 // Reset the working copy from the committed value, so a previously cancelled

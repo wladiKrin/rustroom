@@ -74,6 +74,7 @@ mod multi;
 mod name_edit;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod preview_flow;
 mod segmented;
 mod session_flow;
 mod settings_apply;
@@ -105,6 +106,9 @@ const MAX_CONCURRENT_DECODES: usize = 2;
 const MAX_CONCURRENT_FULL_DECODES: usize = 1;
 /// Recently viewed photos kept decoded in memory (~85 MB each).
 const BUFFER_CACHE_CAP: usize = 3;
+/// GPU memory for preview textures (M9.14): three 26-Mpx RGBA pictures, the most the on-screen
+/// window (Compare's two panes plus a neighbour) ever pins.
+const PREVIEW_TEXTURE_BUDGET: usize = 192 * 1024 * 1024;
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
@@ -269,6 +273,9 @@ struct PendingOpen {
     start_at: Instant,
     /// The worker sequence number, once the decode has actually been requested.
     seq: Option<u64>,
+    /// What to ask the preview loader for while the decode runs (M9.14): the camera JPEG or a
+    /// rendered preview stands in for the thumbnail placeholder the moment it lands.
+    preview_request: rustroom_app::preview_loader::PreviewRequest,
 }
 
 struct RustroomApp {
@@ -339,6 +346,26 @@ struct RustroomApp {
     /// Path and sequence number of the full-resolution decode in flight, if any.
     full_pending: Option<(PathBuf, u64)>,
     cache: BufferCache,
+    /// M9.14: the preview worker — the camera's JPEG or a rendered preview, one thread.
+    previews: rustroom_app::preview_loader::PreviewLoader,
+    /// Preview textures on the GPU, pinned by the on-screen window exactly as thumbnails are.
+    /// ⚠ Three 26-Mpx RGBA pictures fit the budget; the window never holds more than Compare's two.
+    preview_textures: rustroom_app::thumb_cache::ThumbCache<(
+        egui::TextureHandle,
+        rustroom_app::preview_loader::PreviewSource,
+    )>,
+    preview_store: rustroom_app::preview_store::PreviewStore,
+    /// The last want-list handed to the preview loader, so it is re-sent only when it changes.
+    preview_want: Vec<rustroom_app::preview_loader::PreviewRequest>,
+    /// Edited photos left without a preview, built one at a time in the background.
+    leave_queue: rustroom_app::preview_build::LeaveQueue,
+    /// The build in flight, if any, and whether it was asked for or came from the leave queue.
+    preview_builder: Option<(
+        rustroom_app::batch_export::ExportWorker,
+        preview_flow::BuildKind,
+    )>,
+    /// "Building previews 3 of 12…" while an on-demand build runs; empty otherwise.
+    preview_progress: String,
     /// Undo stacks for photos that are not open, so switching away and back does not throw
     /// one away. Unlike `cache`, which is capped at 3 because it holds decoded buffers, this
     /// is unbounded — it holds `Edits`, not pixels.
@@ -657,6 +684,9 @@ impl RustroomApp {
         let export_preset_list = export_preset_store.list();
         let settings_store = SettingsStore::user_default();
         let settings = settings_store.load();
+        let preview_store = rustroom_app::preview_store::PreviewStore::user_default(
+            settings.preview_budget_mb as u64 * 1024 * 1024,
+        );
         #[cfg(target_os = "macos")]
         native_menu::install(ctx, &settings.recent_folders);
         // ⚠ Before any UI runs: `add_font` rebuilds the glyph atlas, so installing later would
@@ -681,9 +711,11 @@ impl RustroomApp {
         {
             let local = settings.thumb_budget_mb as u64 * 1024 * 1024;
             let immich = settings.immich_thumb_budget_mb as u64 * 1024 * 1024;
+            let previews = settings.preview_budget_mb as u64 * 1024 * 1024;
             std::thread::spawn(move || {
                 rustroom_app::thumb_store::ThumbStore::user_default(local).sweep();
                 rustroom_app::thumb_store::ThumbStore::immich_default(immich).sweep();
+                rustroom_app::preview_store::PreviewStore::user_default(previews).sweep();
             });
         }
         // ⚠ Opened once, at startup. A failure is reported and then ignored — see the field.
@@ -727,6 +759,29 @@ impl RustroomApp {
             full_decoder: full_res_worker(settings.view_demosaic, None, ctx),
             full_pending: None,
             cache: BufferCache::new(BUFFER_CACHE_CAP),
+            previews: {
+                let ctx3 = ctx.clone();
+                // ⚠ The device's own limit, not a constant: an X-T4's 4416 px fits any GPU this
+                // targets, but a 61 Mpx sensor's rendered preview must be shrunk to what the
+                // texture upload accepts, and only the device knows that number.
+                let max_side = cc
+                    .wgpu_render_state
+                    .as_ref()
+                    .map(|s| s.device.limits().max_texture_dimension_2d as usize)
+                    .unwrap_or(8192);
+                rustroom_app::preview_loader::PreviewLoader::new(
+                    preview_store.clone(),
+                    settings.effective_display_space(os_manages_colour),
+                    max_side,
+                    move || ctx3.request_repaint(),
+                )
+            },
+            preview_textures: rustroom_app::thumb_cache::ThumbCache::new(PREVIEW_TEXTURE_BUDGET),
+            preview_store,
+            preview_want: Vec::new(),
+            leave_queue: Default::default(),
+            preview_builder: None,
+            preview_progress: String::new(),
             histories: HistoryStash::default(),
             status: String::new(),
             show_filmstrip: true,

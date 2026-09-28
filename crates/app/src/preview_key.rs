@@ -134,8 +134,10 @@ mod tests {
         );
         let c = PreviewKey::new(id.clone(), &Edits::default(), Demosaic::Fast);
         assert_ne!(a.file_name(), c.file_name(), "the tier is part of the key");
-        let mut e = Edits::default();
-        e.contrast = 10.0;
+        let e = Edits {
+            contrast: 10.0,
+            ..Default::default()
+        };
         let d = PreviewKey::new(id.clone(), &e, Demosaic::Better);
         assert_ne!(
             a.file_name(),

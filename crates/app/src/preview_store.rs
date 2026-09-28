@@ -271,7 +271,7 @@ mod tests {
         let store = PreviewStore::new(d.0.join("previews"), total - 1);
         assert_eq!(store.size_bytes(), total, "fixture check");
         store.sweep();
-        assert!(store.size_bytes() <= total - 1);
+        assert!(store.size_bytes() < total);
         assert!(!store.has(&key(&d.0, 0)), "the oldest went first");
         assert!(store.has(&key(&d.0, 3)), "the newest stayed");
         assert!(store.has(&key(&d.0, 2)), "one deletion was enough");

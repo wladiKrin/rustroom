@@ -63,6 +63,12 @@ impl eframe::App for RustroomApp {
         self.pump_decodes(&ctx);
         self.maybe_request_full_res(&ctx);
         self.pump_full_res(&ctx);
+        // M9.14: preview textures land, builds advance, and Develop pins its stand-in.
+        self.pump_previews(&ctx);
+        self.pump_preview_builds(&ctx);
+        if self.view == AppView::Develop {
+            self.sync_develop_previews();
+        }
         // Outside the view match: Ctrl+V must reach a selection made in the Library grid,
         // not only one made in the filmstrip.
         // ⚠ Before the key handling, so a menu activation and a keypress in the same frame
@@ -418,6 +424,11 @@ impl RustroomApp {
                                 self.cancel_export();
                             }
                             ui.label(&self.export_progress);
+                        } else if !self.preview_progress.is_empty() {
+                            if ui.button("Cancel").clicked() {
+                                self.cancel_preview_build();
+                            }
+                            ui.label(&self.preview_progress);
                         } else if !immich_progress.is_empty() {
                             if ui.button("Cancel").clicked() {
                                 self.cancel_immich_downloads();

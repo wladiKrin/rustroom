@@ -197,9 +197,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
         .frame(crate::theme::canvas_frame(ui.style()))
         .show(ui, |ui| {
             if let Some(p) = &app.pending {
-                draw_pending_canvas(ui, p, app.session.as_ref());
+                // M9.14: the camera JPEG or a rendered preview, when it has landed, takes the
+                // thumbnail placeholder's place — sharp instead of a 512-px blur.
+                let preview = app
+                    .preview_textures
+                    .get(&p.preview_request.key())
+                    .map(|(t, _)| t);
+                draw_pending_canvas(ui, p, app.session.as_ref(), preview);
                 return;
             }
+            // ⚠ A disjoint field borrow, taken before `app.session` is borrowed mutably below.
+            let preview_textures = &app.preview_textures;
             match &mut app.session {
                 Some(s) => {
                     if let Some(tex) = &s.texture {
@@ -284,6 +292,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                         // exactly the two-facts-that-disagree failure — and a silent one, showing as
                         // a subtly wrong band at the edge of the visible area.
                         let shown_edits = s.view_edits(tool);
+                        // M9.14: the preview texture's key is the edits on screen — taken here,
+                        // before `request` consumes them.
+                        let stand_in_key = rustroom_app::thumb_key::ThumbKey::new(
+                            rustroom_app::photo_id::PhotoId::new(s.path.clone(), s.copy),
+                            &shown_edits,
+                        );
                         let (vis, want) = if native {
                             let v = view_region::visible_rect(
                                 iw, ih, avail.x, avail.y, scale, s.pan.x, s.pan.y,
@@ -418,6 +432,25 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                             );
                         }
 
+                        // M9.14: the preview stands in where the live buffer cannot supply the
+                        // pixels asked for — the rule is `stand_in::prefer_preview`; the key check
+                        // is that the texture is of the edits on screen, never the before image.
+                        let stand_in = if s.buffer_is_full_res || s.show_before {
+                            None
+                        } else {
+                            preview_textures
+                                .get(&stand_in_key)
+                                .filter(|(t, _)| {
+                                    let long = t.size()[0].max(t.size()[1]);
+                                    rustroom_app::stand_in::prefer_preview(
+                                        rung,
+                                        s.buffer_long,
+                                        long,
+                                    )
+                                })
+                                .cloned()
+                        };
+
                         let resp = ui.allocate_rect(img_rect, egui::Sense::drag());
                         // ⚠⚠ **The backdrop, painted at `frame_rect` UNDER the region texture.** A
                         // region render covers only `img_rect`; everything outside it used to be
@@ -438,7 +471,39 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                 }
                             }
                         }
-                        egui::Image::new(shown).paint_at(ui, resp.rect);
+                        match &stand_in {
+                            // ⚠ At `frame_rect`, the whole post-geometry frame: a camera JPEG
+                            // is the camera's framing, which for an untouched photo is the frame;
+                            // a rendered preview is the frame exactly.
+                            Some((tex, source)) => {
+                                egui::Image::new(tex).paint_at(ui, frame_rect);
+                                let label = match source {
+                                    rustroom_app::preview_loader::PreviewSource::Camera => {
+                                        "Camera preview"
+                                    }
+                                    rustroom_app::preview_loader::PreviewSource::Rendered => {
+                                        "Preview"
+                                    }
+                                };
+                                let at = frame_rect.min + egui::vec2(10.0, 8.0);
+                                let font = egui::FontId::proportional(12.0);
+                                let galley = ui.painter().layout_no_wrap(
+                                    label.to_string(),
+                                    font.clone(),
+                                    egui::Color32::WHITE,
+                                );
+                                ui.painter().rect_filled(
+                                    egui::Rect::from_min_size(at, galley.size())
+                                        .expand2(egui::vec2(6.0, 3.0)),
+                                    egui::CornerRadius::same(3),
+                                    egui::Color32::from_black_alpha(140),
+                                );
+                                ui.painter().galley(at, galley, egui::Color32::WHITE);
+                            }
+                            None => {
+                                egui::Image::new(shown).paint_at(ui, resp.rect);
+                            }
+                        }
                         // ⚠ The same rectangle as the frame it was computed from — `J`.
                         if let Some(clip) = &s.clip_texture {
                             egui::Image::new(clip).paint_at(ui, resp.rect);
@@ -760,10 +825,15 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
 
 /// Canvas while a decode is in flight: the target photo's thumbnail if we have one (scaled
 /// up to fill, since thumbnails are ≤512 px), else the previous photo dimmed, else a spinner.
-fn draw_pending_canvas(ui: &mut egui::Ui, pending: &PendingOpen, session: Option<&Session>) {
-    let showing_placeholder = pending.placeholder.is_some();
+fn draw_pending_canvas(
+    ui: &mut egui::Ui,
+    pending: &PendingOpen,
+    session: Option<&Session>,
+    preview: Option<&egui::TextureHandle>,
+) {
+    let showing_placeholder = pending.placeholder.is_some() || preview.is_some();
     let fallback = session.and_then(|s| s.texture.as_ref());
-    let Some(tex) = pending.placeholder.as_ref().or(fallback) else {
+    let Some(tex) = preview.or(pending.placeholder.as_ref()).or(fallback) else {
         ui.centered_and_justified(|ui| {
             ui.spinner();
         });

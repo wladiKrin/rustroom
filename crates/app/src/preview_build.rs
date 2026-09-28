@@ -123,8 +123,10 @@ mod tests {
         assert!(q.is_empty());
         q.push(a.clone(), Edits::default());
         q.push(b.clone(), Edits::default());
-        let mut e = Edits::default();
-        e.exposure = 1.0;
+        let e = Edits {
+            exposure: 1.0,
+            ..Default::default()
+        };
         q.push(a.clone(), e.clone());
         assert_eq!(q.len(), 2);
         let first = q.pop().expect("a job");

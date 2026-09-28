@@ -416,7 +416,17 @@ impl RustroomApp {
                 return;
             }
         }
+        // M9.14: the photo being left — if edited and without a preview, it is built behind you.
+        let leaving = self
+            .session
+            .as_ref()
+            .map(|s| (PhotoId::new(s.path.clone(), s.copy), s.edits.clone()));
         self.persist_current_session();
+        if let Some((left, edits)) = leaving {
+            if left != id {
+                self.queue_leave_build(left, edits);
+            }
+        }
 
         // ⚠ The cache is keyed by **path**, so opening a copy of an already-decoded file is a
         // hit — which is exactly M3.4's "no storage cost".
@@ -433,11 +443,19 @@ impl RustroomApp {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         self.status = format!("Decoding {name}…");
+        // ⚠ The sidecar's edits through the same defaults a session gets, so the request's
+        // untouched flag agrees with what `finalize_session` will hold a second later.
+        let preview_request = self.preview_request(
+            id.clone(),
+            self.settings
+                .initial_edits(sidecar::load_copy(&id.path, id.copy)),
+        );
         self.pending = Some(PendingOpen {
             id,
             placeholder,
             start_at: Instant::now() + DECODE_DEBOUNCE,
             seq: None,
+            preview_request,
         });
     }
 
