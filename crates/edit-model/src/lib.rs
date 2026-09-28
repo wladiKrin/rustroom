@@ -145,7 +145,10 @@ pub enum Quarter {
 impl Quarter {
     /// Quarter turns clockwise, 0..=3 — the arithmetic form, so composition is modular
     /// addition rather than a match table nobody can check.
-    fn turns(self) -> u8 {
+    ///
+    /// ⚠ Public since M9.13: the AI worker turns the photo upright by exactly this much before a
+    /// network sees it.
+    pub fn turns(self) -> u8 {
         match self {
             Quarter::Zero => 0,
             Quarter::Cw90 => 1,
