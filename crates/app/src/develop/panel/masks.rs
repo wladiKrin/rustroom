@@ -293,8 +293,31 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
         } else if out.clicked {
             pick = Some(i);
         }
+        // ⚠ An AI mask whose map has not landed yet says so on its own row, where the user is
+        // looking, and keeps its sliders quiet until it has — the top bar's "Finding the
+        // subject…" was thirteen seconds away from where the click happened (P-12).
+        let waiting = match &s.edits.masks[i].mask {
+            edit_model::Mask::Ai(a) => {
+                let store = s.engine.ai_maps();
+                let missing = store.read().expect("ai maps").get(&a.prompt).is_none();
+                missing.then(|| match a.prompt {
+                    edit_model::AiPrompt::Subject => "Finding the subject…",
+                    edit_model::AiPrompt::Click { .. } => "Outlining what you clicked…",
+                })
+            }
+            _ => None,
+        };
+        if let Some(text) = waiting {
+            ui.horizontal(|ui| {
+                ui.add_space(18.0);
+                ui.spinner();
+                crate::theme::hint(ui, text);
+            });
+        }
         if picked {
-            mask_components::rows(ui, s, i, ed);
+            ui.add_enabled_ui(waiting.is_none(), |ui| {
+                mask_components::rows(ui, s, i, ed);
+            });
         }
     }
     if let Some(i) = pick {

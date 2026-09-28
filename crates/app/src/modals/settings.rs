@@ -38,6 +38,7 @@ pub struct SettingsDraft {
     export_width: u32,
     theme_choice: ThemeChoice,
     accent: Accent,
+    ui_scale: rustroom_app::settings::UiScale,
     pan_drag: PanDrag,
     erase_drag: EraseDrag,
     parametric_drag: ParametricDrag,
@@ -97,6 +98,7 @@ impl SettingsDraft {
             export_width: s.export_concurrency,
             theme_choice: s.theme,
             accent: s.accent,
+            ui_scale: s.ui_scale,
             pan_drag: s.pan_drag,
             erase_drag: s.erase_drag,
             parametric_drag: s.parametric_drag,
@@ -240,7 +242,7 @@ impl SettingsDraft {
             app.save_settings();
         }
         if self.theme_choice != app.settings.theme || self.accent != app.settings.accent {
-            app.apply_appearance(self.theme_choice, self.accent, ctx);
+            app.apply_appearance(self.theme_choice, self.accent, self.ui_scale, ctx);
         }
         if self.tier != app.settings.view_demosaic {
             app.apply_view_demosaic(self.tier, ctx);
@@ -357,6 +359,20 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 .response
                                 .on_hover_text(
                                     "The accent marks active controls; Neutral turns it off.",
+                                );
+                            ui.end_row();
+                            ui.label("Interface size");
+                            egui::ComboBox::from_id_salt("ui_scale_pick")
+                                .selected_text(d.ui_scale.label())
+                                .show_ui(ui, |ui| {
+                                    for z in rustroom_app::settings::UiScale::ALL {
+                                        ui.selectable_value(&mut d.ui_scale, z, z.label());
+                                    }
+                                })
+                                .response
+                                .on_hover_text(
+                                    "Everything larger or smaller, text and controls alike — \
+                                     for a big screen sat far away, or small type.",
                                 );
                             ui.end_row();
 

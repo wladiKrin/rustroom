@@ -19,6 +19,17 @@ use rustroom_app::render_engine::RegionRect;
 impl eframe::App for RustroomApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // ⚠ A folder or photos dropped on the window open, the way the empty Library promises.
+        let dropped: Vec<std::path::PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.clone())
+                .collect()
+        });
+        if !dropped.is_empty() {
+            self.open_dropped(&ctx, dropped);
+        }
 
         // Workaround for an upstream winit/macOS teardown bug: when the window closes,
         // AppKit's Touch Bar responder tracking (`_NSTouchBarFinderObservation`) removes a

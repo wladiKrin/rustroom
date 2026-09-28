@@ -60,6 +60,7 @@ pub mod photo_info;
 pub mod prefix_cache;
 pub mod presets;
 pub mod render_engine;
+pub mod reveal;
 pub mod rule;
 pub mod rule_form;
 pub mod safe_name;

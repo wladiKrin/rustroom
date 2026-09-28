@@ -33,6 +33,14 @@ fn banded(cells: &[(usize, egui::Rect)], start: egui::Pos2, now: egui::Pos2) -> 
 pub enum CellAction {
     /// Open it in Develop.
     Edit,
+    /// Rate, flag or label every target — the digits' and P/X/U's work, findable with a mouse.
+    Mark(rustroom_app::marks::MarkAction),
+    /// The Export dialog for the selection.
+    Export,
+    /// Open it and make a virtual copy of it.
+    VirtualCopy,
+    /// Show the file in the platform's file manager.
+    Reveal,
     /// Put its caption into edit mode.
     Rename,
     /// Show everything known about it.
@@ -110,7 +118,42 @@ const MARK_NONE: &str = "☐ ";
 /// ⚠ `thumb::marks_row` clamps the result, so this cannot make them absurd on a huge cell.
 /// What an empty Library says. Also swept by `theme::every_menu_string_is_renderable`.
 pub(crate) const EMPTY_LIBRARY_HINT: &str =
-    "Open a folder to browse (File → Open folder…), or import from a card (File → Import…).";
+    "You can also drop a folder or some photos onto this window. Nothing is copied or changed: \
+     Rustroom reads your photos where they are and keeps its edits beside them.";
+
+/// The empty Library: two real buttons and one sentence, where the first-use review found a
+/// footnote in a void (A-08).
+fn empty_library(ui: &mut egui::Ui) -> Option<rustroom_app::menu::Command> {
+    let mut picked: Option<rustroom_app::menu::Command> = None;
+    ui.vertical_centered(|ui| {
+        ui.add_space((ui.available_height() * 0.35).max(24.0));
+        ui.label(egui::RichText::new("No photos yet").heading());
+        ui.add_space(12.0);
+        let big = |text: &str| {
+            egui::Button::new(egui::RichText::new(text).size(15.0))
+                .min_size(egui::vec2(240.0, 36.0))
+        };
+        if ui
+            .add(big("Open a folder…"))
+            .on_hover_text("Browse a folder of photos — ⇧⌘O")
+            .clicked()
+        {
+            picked = Some(rustroom_app::menu::Command::OpenFolder);
+        }
+        ui.add_space(6.0);
+        if ui
+            .add(big("Import from a card…"))
+            .on_hover_text("Copy new photos from a memory card into dated folders — ⇧⌘I")
+            .clicked()
+        {
+            picked = Some(rustroom_app::menu::Command::Import);
+        }
+        ui.add_space(14.0);
+        ui.set_max_width(460.0);
+        crate::theme::hint(ui, EMPTY_LIBRARY_HINT);
+    });
+    picked
+}
 
 const MARK_SCALE: f32 = 1.6;
 
@@ -142,6 +185,75 @@ pub fn cell_menu(
         .clicked()
     {
         action = Some(CellAction::Info);
+        ui.close();
+    }
+    ui.separator();
+    // ⚠ The marks a mouse can reach: the digits and P/X/U do this too, and nothing in the grid
+    // said so — "I cannot find how to say which photo I like" (A-12, P-16).
+    if catalog.is_some() {
+        ui.menu_button("Rating", |ui| {
+            for stars in (0..=5u8).rev() {
+                let text = if stars == 0 {
+                    "None".to_string()
+                } else {
+                    "★".repeat(stars as usize)
+                };
+                if ui.button(text).clicked() {
+                    action = Some(CellAction::Mark(rustroom_app::marks::MarkAction::Rating(
+                        stars,
+                    )));
+                    ui.close();
+                }
+            }
+        });
+        ui.menu_button("Flag", |ui| {
+            for (label, flag) in [
+                ("Pick", catalog::db::Flag::Pick),
+                ("Reject", catalog::db::Flag::Reject),
+                ("Unflag", catalog::db::Flag::None),
+            ] {
+                if ui.button(label).clicked() {
+                    action = Some(CellAction::Mark(rustroom_app::marks::MarkAction::Flag(
+                        flag,
+                    )));
+                    ui.close();
+                }
+            }
+        });
+        ui.menu_button("Colour", |ui| {
+            if ui.button("None").clicked() {
+                action = Some(CellAction::Mark(rustroom_app::marks::MarkAction::Label(0)));
+                ui.close();
+            }
+            for (code, name) in rustroom_app::xmp_sync::LABELS {
+                if ui.button(name).clicked() {
+                    action = Some(CellAction::Mark(rustroom_app::marks::MarkAction::Label(
+                        code,
+                    )));
+                    ui.close();
+                }
+            }
+        });
+        ui.separator();
+    }
+    if ui.button("Export…").clicked() {
+        action = Some(CellAction::Export);
+        ui.close();
+    }
+    if ui
+        .add_enabled(single, egui::Button::new("Create virtual copy"))
+        .on_disabled_hover_text("One photo at a time")
+        .clicked()
+    {
+        action = Some(CellAction::VirtualCopy);
+        ui.close();
+    }
+    if ui
+        .add_enabled(single, egui::Button::new("Show in Finder"))
+        .on_disabled_hover_text("One photo at a time")
+        .clicked()
+    {
+        action = Some(CellAction::Reveal);
         ui.close();
     }
     let Some(cat) = catalog else {
@@ -234,11 +346,34 @@ pub fn apply_cell_action(
         // ⚠ These two act on the targets, not on `index` — see `menu_targets`.
         CellAction::AddToCollection(cid) => app.add_targets_to_collection(cid, index),
         CellAction::SetKeyword { id: kid, on } => app.set_keyword_on_targets(kid, on, index),
+        CellAction::Mark(mark) => {
+            let targets = app
+                .library
+                .as_ref()
+                .map(|l| menu_targets(l, index))
+                .unwrap_or_default();
+            app.apply_mark_to(&targets, mark);
+        }
+        CellAction::Export => {
+            crate::commands::execute(app, ctx, rustroom_app::menu::Command::Export);
+        }
+        CellAction::VirtualCopy => {
+            app.open_entry(ctx, index);
+            app.create_virtual_copy(ctx);
+        }
+        CellAction::Reveal => {
+            if let Err(e) = rustroom_app::reveal::in_file_manager(&id.path) {
+                app.status = format!("Could not show the file: {e}");
+            }
+        }
     }
 }
 
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let mut open_index: Option<usize> = None;
+    // ⚠ Declared out here like `open_index`: the empty state's buttons run a command that needs
+    // `&mut RustroomApp`, which the closure cannot have while it borrows fields of it.
+    let mut empty_pick: Option<rustroom_app::menu::Command> = None;
     // ⚠ Collected and applied after the closure, the shape every action in this file uses: the
     // closure holds `lib`, and all three of these need `&mut app`.
     let mut menu: Option<(usize, CellAction)> = None;
@@ -315,11 +450,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // disk without cloning the set into the draw closure.
         let immich_present = &app.immich_present;
         let Some(lib) = &mut app.library else {
-            ui.centered_and_justified(|ui| {
-                // ⚠ Names the menu items: there has been no "Open folder…" button since the menus took
-                // the toolbar's place, and the old text still pointed at one.
-                crate::theme::empty_state(ui, EMPTY_LIBRARY_HINT);
-            });
+            empty_pick = empty_library(ui);
             return;
         };
         // A folder can be reloaded with fewer photos than the selection remembers. This
@@ -587,7 +718,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                     // ⚠ `count`, never "1": a lone file is
                                                     // `stack: None`, so this is always ≥ 2.
                                                     if st.expanded {
-                                                        "×".to_string()
+                                                        // ⚠ Not "×": on both children of an
+                                                        // expanded stack it read as delete (A-11).
+                                                        "▴".to_string()
                                                     } else {
                                                         st.count.to_string()
                                                     },
@@ -850,6 +983,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     }
     if let Some((i, action)) = menu {
         apply_cell_action(app, ctx, i, action);
+    }
+    if let Some(cmd) = empty_pick {
+        crate::commands::execute(app, ctx, cmd);
     }
     if let Some(i) = open_index {
         app.open_entry(ctx, i);

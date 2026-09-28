@@ -110,6 +110,8 @@ pub fn install_fonts(ctx: &egui::Context) {
 /// Hence `style_mut_of` rather than `set_style_of`: mutating in place preserves each theme's
 /// own visuals, where handing over a whole `Style` would overwrite them.
 pub fn apply(ctx: &egui::Context, settings: &Settings) {
+    // The whole interface, photo included, at the chosen size; egui re-lays everything out.
+    ctx.set_zoom_factor(settings.ui_scale.factor());
     ctx.set_theme(match settings.theme {
         ThemeChoice::Dark => egui::ThemePreference::Dark,
         ThemeChoice::Light => egui::ThemePreference::Light,

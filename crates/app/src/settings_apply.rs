@@ -32,10 +32,12 @@ impl RustroomApp {
         &mut self,
         theme_choice: ThemeChoice,
         accent: Accent,
+        ui_scale: rustroom_app::settings::UiScale,
         ctx: &egui::Context,
     ) {
         self.settings.theme = theme_choice;
         self.settings.accent = accent;
+        self.settings.ui_scale = ui_scale;
         self.save_settings();
         theme::apply(ctx, &self.settings);
     }

@@ -86,6 +86,38 @@ impl Accent {
 /// ⚠ A closed three-value enum, not a keybinding system. The risk in this area is ballooning
 /// into general rebinding; three values already cover every device. A mouse button is not a
 /// modifier, which is why the set spans both kinds.
+/// How large the interface is drawn, as egui's zoom factor.
+///
+/// ⚠ An enum, not an `f32`: `Settings` derives `Eq`, and three steps are what a person can tell
+/// apart. Nothing in Settings could make the interface bigger before this (A-22).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum UiScale {
+    #[default]
+    Normal,
+    Larger,
+    Largest,
+}
+
+impl UiScale {
+    pub const ALL: [UiScale; 3] = [Self::Normal, Self::Larger, Self::Largest];
+
+    pub fn factor(self) -> f32 {
+        match self {
+            Self::Normal => 1.0,
+            Self::Larger => 1.25,
+            Self::Largest => 1.5,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "100 %",
+            Self::Larger => "125 %",
+            Self::Largest => "150 %",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PanDrag {
     /// Middle-button drag. ⚠ Unavailable on an Apple Magic Mouse, which has no middle button —
@@ -396,6 +428,8 @@ pub struct Settings {
     pub theme: ThemeChoice,
     /// The accent colour for active state.
     pub accent: Accent,
+    /// How large the interface is drawn.
+    pub ui_scale: UiScale,
     /// Which drag gesture pans the canvas. Scroll and two-finger swipe always pan.
     pub pan_drag: PanDrag,
     /// Which held mouse button makes a brush stroke erase for the duration of the gesture.
@@ -656,7 +690,9 @@ impl Settings {
     }
 }
 
-pub const DEFAULT_CELL: u32 = 168;
+/// ⚠ 224, up from 168 (2026-09-28): on a wide window the 168-pt cells read as postage stamps in
+/// a void, and the first-use review took the grid for "still loading" (A-09).
+pub const DEFAULT_CELL: u32 = 224;
 /// The smallest and largest cell the buttons will reach.
 pub const CELL_RANGE: (u32, u32) = (108, 320);
 /// The custom crop ratio's default, 5:4 — a print ratio none of the five preset chips offers.
@@ -899,6 +935,7 @@ impl Default for Settings {
             canvas_intent: color::RenderingIntent::default(),
             theme: ThemeChoice::default(),
             accent: Accent::default(),
+            ui_scale: UiScale::default(),
             pan_drag: PanDrag::default(),
             erase_drag: EraseDrag::default(),
             parametric_drag: ParametricDrag::default(),
@@ -1552,6 +1589,7 @@ mod tests {
             // decision rather than as a silently defaulted value.
             export_concurrency: DEFAULT_EXPORT_WIDTH + 1,
             recent_folders: vec![std::path::PathBuf::from("/photos/2026-09")],
+            ui_scale: UiScale::Larger,
             // Not the default, so the round trip actually carries it.
             hidden_formats: {
                 let mut f = crate::format_filter::FormatFilter::default();
