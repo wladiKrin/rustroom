@@ -66,6 +66,9 @@ impl eframe::App for RustroomApp {
         if let Some(cmd) = pressed_command(&ctx) {
             commands::execute(self, &ctx, cmd);
         }
+        // ⚠ After the shortcuts, so a digit some menu item claimed would win — none does now that
+        // the tools sit on letters, which is the point: rating in Develop.
+        self.handle_develop_culling(&ctx);
         self.pump_export(&ctx);
         self.pump_import(&ctx);
         self.pump_ai(&ctx);
@@ -258,7 +261,7 @@ impl eframe::App for RustroomApp {
             // ⚠ macOS gets the real system menu bar instead; drawing this one too would put a
             // redundant row under a nearly-empty system menu.
             if !cfg!(target_os = "macos") {
-                if let Some(cmd) = menu_bar::show(ui) {
+                if let Some(cmd) = menu_bar::show(ui, &self.settings.recent_folders) {
                     pending_command = Some(cmd);
                 }
             }
@@ -282,7 +285,9 @@ impl eframe::App for RustroomApp {
                 // ⚠ Panel order is load-bearing: egui allocates side panels in call order and
                 // the central panel takes what is left, so the collections panel must be drawn
                 // *before* the grid.
-                crate::collections_panel::show(self, ui, &ctx);
+                if self.show_panels {
+                    crate::collections_panel::show(self, ui, &ctx);
+                }
                 // ⚠ Exhaustive, so a fourth Library layout is a compile error here rather than
                 // a mode that silently shows the grid — the rule `commands::execute`'s match
                 // already follows.
@@ -523,31 +528,38 @@ fn pressed_command(ctx: &egui::Context) -> Option<Command> {
     if ctx.memory(|m| m.focused()).is_some() {
         return None;
     }
+    let mut hit = None;
     for section in menu::model() {
-        for item in section.items {
+        menu::walk(&section.items, &mut |item| {
+            if hit.is_some() {
+                return;
+            }
             let menu::Item::Action {
                 command,
                 shortcut: Some(sc),
                 ..
             } = item
             else {
-                continue;
+                return;
             };
             if sc.cmd && matches!(sc.key, 'C' | 'V') {
-                continue;
+                return;
             }
             let Some(key) = egui_key(sc.key) else {
-                continue;
+                return;
             };
-            let hit = ctx.input(|i| {
+            let pressed = ctx.input(|i| {
                 i.key_pressed(key) && i.modifiers.command == sc.cmd && i.modifiers.shift == sc.shift
             });
-            if hit {
-                return Some(command);
+            if pressed {
+                hit = Some(*command);
             }
+        });
+        if hit.is_some() {
+            break;
         }
     }
-    None
+    hit
 }
 
 /// The model's key character as an egui key.
@@ -570,6 +582,11 @@ fn egui_key(c: char) -> Option<egui::Key> {
         'G' => egui::Key::G,
         'D' => egui::Key::D,
         'N' => egui::Key::N,
+        'R' => egui::Key::R,
+        'K' => egui::Key::K,
+        'Q' => egui::Key::Q,
+        'T' => egui::Key::T,
+        '\t' => egui::Key::Tab,
         '+' => egui::Key::Plus,
         '-' => egui::Key::Minus,
         '0' => egui::Key::Num0,

@@ -537,7 +537,7 @@ mod tests {
     /// asserted first so a model that came back empty could not pass.
     #[test]
     fn every_menu_string_is_renderable() {
-        use rustroom_app::menu::{model, Item};
+        use rustroom_app::menu::Item;
         let ctx = egui::Context::default();
         install_fonts(&ctx);
         // A frame must run first: a fresh `Context` has not built its atlas.
@@ -553,19 +553,28 @@ mod tests {
                 .iter()
                 .map(|t| t.label().to_owned()),
         );
-        for section in model() {
+        for (title, lines) in crate::modals::EXTRA_KEYS {
+            strings.push((*title).to_owned());
+            for (what, key) in *lines {
+                strings.push((*what).to_owned());
+                strings.push((*key).to_owned());
+            }
+        }
+        let recent = [std::path::PathBuf::from("/tmp/Bilder — Katzen")];
+        for section in rustroom_app::menu::model_with(&recent) {
             strings.push(section.title.to_owned());
-            for item in section.items {
-                if let Item::Action {
+            rustroom_app::menu::walk(&section.items, &mut |item| match item {
+                Item::Action {
                     label, shortcut, ..
-                } = item
-                {
-                    strings.push(label);
+                } => {
+                    strings.push(label.clone());
                     if let Some(sc) = shortcut {
                         strings.push(sc.label());
                     }
                 }
-            }
+                Item::Submenu { label, .. } => strings.push(label.clone()),
+                Item::Separator => {}
+            });
         }
         assert!(strings.len() > 60, "sample: {}", strings.len());
         let symbols: Vec<char> = strings

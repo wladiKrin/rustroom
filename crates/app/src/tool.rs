@@ -66,11 +66,6 @@ impl Tool {
     pub fn is_geometry(self) -> bool {
         matches!(self, Self::Crop)
     }
-
-    /// The tool for a 1–4 keypress, if any.
-    pub fn from_digit(d: u32) -> Option<Tool> {
-        Self::ALL.get(d.checked_sub(1)? as usize).copied()
-    }
 }
 
 #[cfg(test)]
@@ -113,18 +108,5 @@ mod tests {
         glyphs.sort_unstable();
         glyphs.dedup();
         assert_eq!(glyphs.len(), 5, "two tools share a glyph");
-    }
-
-    #[test]
-    fn the_digits_select_the_rail_in_order() {
-        // ⚠ 1-based, matching the labels a user sees. Off-by-one here means every shortcut
-        // picks the neighbouring tool — plausible-looking and completely wrong.
-        assert_eq!(Tool::from_digit(1), Some(Tool::Edit));
-        assert_eq!(Tool::from_digit(2), Some(Tool::Crop));
-        assert_eq!(Tool::from_digit(3), Some(Tool::Masks));
-        assert_eq!(Tool::from_digit(4), Some(Tool::Retouch));
-        assert_eq!(Tool::from_digit(5), Some(Tool::Presets));
-        assert_eq!(Tool::from_digit(0), None, "there is no tool 0");
-        assert_eq!(Tool::from_digit(6), None);
     }
 }

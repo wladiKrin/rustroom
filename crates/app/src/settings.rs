@@ -573,6 +573,8 @@ pub struct Settings {
     /// would use `bool`'s own default of `false` instead, silently disabling the feature for every
     /// existing user. The same trap `write_xmp` and `snapshot_strip_height` both document.
     pub auto_advance: bool,
+    /// The folders opened most recently, first first — the File menu's "Open recent".
+    pub recent_folders: Vec<std::path::PathBuf>,
     /// The Immich server's base URL, e.g. `https://photos.example.com`. Empty means unconfigured.
     ///
     /// ⚠ No field-level `#[serde(default)]`: the struct carries a container-level one, so a
@@ -641,6 +643,18 @@ pub struct Settings {
 /// a 26 Mpx camera. 8 reaches 4.55x for 2.4 GB, which is a fine trade on a desktop and a poor one
 /// on a laptop — hence a setting, and hence a default that errs toward the laptop.
 pub const DEFAULT_EXPORT_WIDTH: u32 = 4;
+
+/// How many folders "Open recent" remembers.
+pub const RECENT_FOLDERS_MAX: usize = 8;
+
+impl Settings {
+    /// Put `dir` at the front of the recent folders, once, and keep the list short.
+    pub fn remember_folder(&mut self, dir: &std::path::Path) {
+        self.recent_folders.retain(|p| p != dir);
+        self.recent_folders.insert(0, dir.to_path_buf());
+        self.recent_folders.truncate(RECENT_FOLDERS_MAX);
+    }
+}
 
 pub const DEFAULT_CELL: u32 = 168;
 /// The smallest and largest cell the buttons will reach.
@@ -903,6 +917,7 @@ impl Default for Settings {
             write_xmp: true,
             drag_quality: DragQuality::default(),
             auto_advance: true,
+            recent_folders: Vec::new(),
         }
     }
 }
@@ -1536,6 +1551,7 @@ mod tests {
             // literal being exhaustive is that a new field lands here as a compile error and a
             // decision rather than as a silently defaulted value.
             export_concurrency: DEFAULT_EXPORT_WIDTH + 1,
+            recent_folders: vec![std::path::PathBuf::from("/photos/2026-09")],
             // Not the default, so the round trip actually carries it.
             hidden_formats: {
                 let mut f = crate::format_filter::FormatFilter::default();

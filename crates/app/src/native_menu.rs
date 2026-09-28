@@ -83,7 +83,7 @@ fn suppress_injected_edit_items() {
 }
 
 /// Build and install the menu. Call once, from the app's constructor.
-pub fn install(ctx: &egui::Context) {
+pub fn install(ctx: &egui::Context, recent: &[std::path::PathBuf]) {
     suppress_injected_edit_items();
     forbid_window_tabbing();
     let menu = Menu::new();
@@ -112,43 +112,9 @@ pub fn install(ctx: &egui::Context) {
     let _ = app_menu.append(&PredefinedMenuItem::quit(None));
     let _ = menu.append(&app_menu);
 
-    for section in menu::model() {
+    for section in menu::model_with(recent) {
         let sub = Submenu::new(section.title, true);
-        for item in section.items {
-            match item {
-                Item::Separator => {
-                    let _ = sub.append(&PredefinedMenuItem::separator());
-                }
-                // ⚠ About and Settings live in the application menu on macOS, where users
-                // look for them — so they are skipped here rather than shown twice. The model
-                // keeps both in their cross-platform places for the in-window bar, which has
-                // no application menu.
-                Item::Action {
-                    command: Command::About | Command::Settings,
-                    ..
-                } => {}
-                Item::Action {
-                    label,
-                    command,
-                    shortcut,
-                } => {
-                    // ⚠ Only *safe* chords become real accelerators. A bare key would steal
-                    // every such character typed into a text field, and ⌘C/⌘V/⌘Z would break
-                    // editing inside one — see `Shortcut::safe_as_native_accelerator`. The
-                    // rest are shown in the label and handled by egui, focus-gated.
-                    let (text, accel) = match shortcut {
-                        Some(sc) if sc.safe_as_native_accelerator() => {
-                            (label.to_string(), accelerator(sc))
-                        }
-                        Some(sc) => (format!("{label}   {}", sc.label()), None),
-                        None => (label.to_string(), None),
-                    };
-                    let mi = MenuItem::new(native_label(&text), true, accel);
-                    by_id.insert(mi.id().clone(), command);
-                    let _ = sub.append(&mi);
-                }
-            }
-        }
+        append_items(&sub, section.items, &mut by_id);
         let _ = menu.append(&sub);
     }
 
@@ -180,6 +146,15 @@ pub fn install(ctx: &egui::Context) {
 }
 
 /// Drain any menu activations since the last frame.
+/// Rebuild the menu with a new "Open recent" list — a no-op until [`install`] has run, which is
+/// what keeps the headless tests (and any second window) away from AppKit.
+pub fn refresh(ctx: &egui::Context, recent: &[std::path::PathBuf]) {
+    if MENU.with(|m| m.borrow().is_none()) {
+        return;
+    }
+    install(ctx, recent);
+}
+
 pub fn poll() -> Vec<Command> {
     let mut out = Vec::new();
     let Ok(rx) = events().rx.lock() else {
@@ -323,6 +298,48 @@ mod tests {
                 if let Item::Action { label, .. } = item {
                     assert!(!label.contains("&&"), "{label:?}");
                 }
+            }
+        }
+    }
+}
+
+/// Append the model's items to a native submenu, recursing into nested submenus.
+///
+/// ⚠ About and Settings are skipped: they live in the application menu, where macOS expects
+/// them, and the app menu is built by hand above.
+fn append_items(sub: &Submenu, items: Vec<Item>, by_id: &mut HashMap<MenuId, Command>) {
+    for item in items {
+        match item {
+            Item::Separator => {
+                let _ = sub.append(&PredefinedMenuItem::separator());
+            }
+            Item::Submenu { label, items } => {
+                let nested = Submenu::new(native_label(&label), true);
+                append_items(&nested, items, by_id);
+                let _ = sub.append(&nested);
+            }
+            Item::Action {
+                command: Command::About | Command::Settings,
+                ..
+            } => {}
+            Item::Action {
+                label,
+                command,
+                shortcut,
+            } => {
+                // ⚠ The chord is part of the label for the unsafe ones — see
+                // `Shortcut::safe_as_native_accelerator`: a bare key or a text-editing chord as a
+                // real accelerator would fire while typing in a field.
+                let (text, accel) = match shortcut {
+                    Some(sc) if sc.safe_as_native_accelerator() => {
+                        (label.to_string(), accelerator(sc))
+                    }
+                    Some(sc) => (format!("{label}   {}", sc.label()), None),
+                    None => (label.to_string(), None),
+                };
+                let mi = MenuItem::new(native_label(&text), true, accel);
+                by_id.insert(mi.id().clone(), command);
+                let _ = sub.append(&mi);
             }
         }
     }

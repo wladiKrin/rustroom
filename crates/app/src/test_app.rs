@@ -141,6 +141,7 @@ pub fn for_test() -> RustroomApp {
         histories: HistoryStash::default(),
         status: String::new(),
         show_filmstrip: false,
+        show_panels: true,
         spot_tool: Default::default(),
         eye_tool: Default::default(),
         brush_size: rustroom_app::brush_tool::DEFAULTS.size,

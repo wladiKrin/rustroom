@@ -94,12 +94,14 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // place that owns the re-render. The 1–4 keys and the Photo menu arrive through the same
     // method, so none of the three can switch tools without re-rendering.
     let mut picked = app.tool;
-    if app.session.is_some() {
+    if app.session.is_some() && app.show_panels {
         rail::show(ui, &mut picked);
     }
     app.select_tool(picked);
-    photo_edited |= panel::show(app, ui);
-    if app.show_filmstrip && app.library.is_some() {
+    if app.show_panels {
+        photo_edited |= panel::show(app, ui);
+    }
+    if app.show_filmstrip && app.show_panels && app.library.is_some() {
         filmstrip::show(app, ui, ctx);
     }
     photo_edited |= canvas::show(app, ui, ctx);

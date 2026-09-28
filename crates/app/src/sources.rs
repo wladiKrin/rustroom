@@ -100,6 +100,10 @@ impl RustroomApp {
         };
         status.push_str(&rustroom_app::move_tracking::recognised(relinked));
         self.status = status;
+        self.settings.remember_folder(&dir);
+        self.save_settings();
+        #[cfg(target_os = "macos")]
+        crate::native_menu::refresh(ctx, &self.settings.recent_folders);
     }
 
     /// Show every photo the catalog knows, from every folder ever opened.

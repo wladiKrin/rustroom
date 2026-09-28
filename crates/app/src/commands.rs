@@ -27,6 +27,11 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
     match cmd {
         Command::OpenFile => app.open_dialog(ctx),
         Command::OpenFolder => app.open_folder(ctx),
+        Command::OpenRecent(i) => {
+            if let Some(dir) = app.settings.recent_folders.get(i).cloned() {
+                app.open_folder_at(ctx, dir);
+            }
+        }
         Command::Import => app.open_import(),
         Command::Export => {
             if !app.export_jobs().is_empty() {
@@ -115,6 +120,7 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
             }
         }
         Command::ToggleFilmstrip => app.show_filmstrip = !app.show_filmstrip,
+        Command::TogglePanels => app.show_panels = !app.show_panels,
         // ⚠ Every mask's eye at once — the keyboard twin of the panel's "Show all / Hide all".
         Command::ToggleMaskOverlay => {
             if let Some(s) = &mut app.session {
