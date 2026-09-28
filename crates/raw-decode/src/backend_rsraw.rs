@@ -8,7 +8,9 @@ use std::path::Path;
 
 const U16_MAX_F: f32 = u16::MAX as f32;
 
-pub(crate) fn extract_thumbnail(bytes: &[u8]) -> Result<Thumbnail, DecodeError> {
+/// The largest embedded thumbnail as a decoded image, plus libraw's flip code — not yet
+/// oriented, so a caller can shrink first and rotate a fraction of the pixels.
+fn largest_embedded(bytes: &[u8]) -> Result<(image::DynamicImage, i32), DecodeError> {
     let mut raw =
         RawImage::open(bytes).map_err(|e| DecodeError::Backend(format!("open: {e:?}")))?;
     // The camera orientation libraw would apply during a full decode; embedded thumbnails
@@ -22,8 +24,6 @@ pub(crate) fn extract_thumbnail(bytes: &[u8]) -> Result<Thumbnail, DecodeError> 
         .into_iter()
         .max_by_key(|t| t.width as u64 * t.height as u64)
         .ok_or_else(|| DecodeError::Format("no embedded thumbnail".into()))?;
-
-    const THUMB_MAX_DIM: u32 = 512;
 
     let dynimg = match t.format {
         ThumbFormat::Jpeg => image::load_from_memory(&t.data)
@@ -46,15 +46,34 @@ pub(crate) fn extract_thumbnail(bytes: &[u8]) -> Result<Thumbnail, DecodeError> 
             )))
         }
     };
+    Ok((dynimg, flip))
+}
 
+fn to_thumbnail(img: image::RgbaImage) -> Thumbnail {
+    Thumbnail {
+        width: img.width() as usize,
+        height: img.height() as usize,
+        rgba: img.into_raw(),
+    }
+}
+
+pub(crate) fn extract_thumbnail(bytes: &[u8]) -> Result<Thumbnail, DecodeError> {
+    let (img, flip) = largest_embedded(bytes)?;
+    const THUMB_MAX_DIM: u32 = 512;
     // Downscale to a modest size — the grid draws these at ~160 px, so full-res is wasteful.
     // Rotate after downscaling: same result, a fraction of the pixels to move.
-    let scaled = apply_flip(dynimg.thumbnail(THUMB_MAX_DIM, THUMB_MAX_DIM), flip).to_rgba8();
-    Ok(Thumbnail {
-        width: scaled.width() as usize,
-        height: scaled.height() as usize,
-        rgba: scaled.into_raw(),
-    })
+    Ok(to_thumbnail(
+        apply_flip(img.thumbnail(THUMB_MAX_DIM, THUMB_MAX_DIM), flip).to_rgba8(),
+    ))
+}
+
+/// The largest embedded JPEG at **its own size**, oriented — M9.14's camera preview.
+///
+/// ⚠ The same extraction as [`extract_thumbnail`] minus the shrink: 4416×2944 on an X-T4,
+/// about 4 MB of JPEG, roughly 0.2 s to read and decode.
+pub(crate) fn extract_preview(bytes: &[u8]) -> Result<Thumbnail, DecodeError> {
+    let (img, flip) = largest_embedded(bytes)?;
+    Ok(to_thumbnail(apply_flip(img, flip).to_rgba8()))
 }
 
 /// Derive camera → ProPhoto from a `.dcp`, following the DNG spec's dual-illuminant rule.
