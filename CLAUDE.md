@@ -212,8 +212,8 @@ that had grown to ~170 lines by appending.)
 
 ### ▶ Next action
 
-✅ **Phase 9 is complete** (M9.13 merged 2026-09-28). Next is **Phase 10**:
-**Phase 10** (was 9) is integration and release: M10.2
+✅ **Phase 9 is complete** (M9.13 merged 2026-09-28). Next is **Phase 10** (was 9), integration and
+release: M10.2
 Windows + the Linux GUI (never run), M10.3 contributor docs, M10.4 `v0.1`, M10.5 plugins. ⛔ **M10.1 was
 WITHDRAWN — it was never real** (the licence has been committed since `e71330d`); do not re-open it.
 ⚠ M5.1c and M6.4c keep their own ids; Phase 9's new items start at M9.6 because M9.1–M9.5 are retired.
