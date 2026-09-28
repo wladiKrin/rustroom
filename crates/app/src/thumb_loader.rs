@@ -258,7 +258,7 @@ fn render_edits(
 ///
 /// ⚠ 8-bit → 8-bit here, unlike the canvas, which converts in float before quantizing. A
 /// thumbnail is a camera JPEG with no float behind it, so there is no precision to preserve.
-fn convert_thumb(thumb: &mut Thumbnail, space: color::OutputSpace) {
+pub fn convert_thumb(thumb: &mut Thumbnail, space: color::OutputSpace) {
     if space == color::OutputSpace::Srgb {
         return;
     }

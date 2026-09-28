@@ -61,6 +61,7 @@ pub mod photo_info;
 pub mod prefix_cache;
 pub mod presets;
 pub mod preview_key;
+pub mod preview_loader;
 pub mod preview_store;
 pub mod render_engine;
 pub mod reveal;
