@@ -68,6 +68,7 @@ impl eframe::App for RustroomApp {
         }
         self.pump_export(&ctx);
         self.pump_import(&ctx);
+        self.pump_ai(&ctx);
         // ⚠ Beside the other pumps, so an album list or a finished download lands on the next
         // frame rather than waiting for whatever the user does next.
         self.pump_immich(&ctx);

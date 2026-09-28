@@ -54,6 +54,8 @@ struct TintCache {
     /// never the placement.* A pointer changes when a new frame lands and does not change when the
     /// view is panned, which is exactly the distinction wanted.
     base: Option<*const u8>,
+    /// The AI maps' generation this was drawn from (M9.13) — a map arriving is a miss.
+    ai_gen: u64,
     /// Coverage outside the box — non-zero for an **inverted** brush, which covers the whole
     /// frame except what was painted.
     ///
@@ -132,6 +134,16 @@ impl pipeline::brush::BasePixels for TintBase<'_> {
     }
 }
 
+/// What the tint needs to draw an AI component (M9.13) — references only, so building one every
+/// frame costs nothing; the decode mapping is made on a cache miss.
+pub(super) struct AiTintSource<'a> {
+    pub maps: &'a rustroom_app::ai_coverage::AiMaps,
+    pub edits: &'a edit_model::Edits,
+    pub lens: Option<&'a lens_profile::LensShot>,
+    /// The decode buffer's size.
+    pub decode: (usize, usize),
+}
+
 /// Whether the composite needs the displayed frame to be evaluated.
 fn needs_base(m: &edit_model::MaskedAdjustment) -> bool {
     std::iter::once(&m.mask)
@@ -167,6 +179,7 @@ fn coverage(
     tw: usize,
     th: usize,
     view: Option<&TintBase<'_>>,
+    ai: &AiTintSource<'_>,
 ) -> pipeline::brush::CoverageMap {
     // ⚠ A plain binding rather than a closure: a closure taking and returning a reference needs
     // the two lifetimes tied, which is more ceremony than the one call site is worth.
@@ -193,6 +206,21 @@ fn coverage(
             edit_model::Mask::Brush(b) => Some(pipeline::brush::rasterize_in(
                 b, geometry, tw, th, None, as_base,
             )),
+            // M9.13: the AI map on this grid, through the same decode mapping the render uses.
+            edit_model::Mask::Ai(a) => ai.maps.get(&a.prompt).map(|p| {
+                let dm = rustroom_app::ai_space::DecodeMap::new(
+                    geometry,
+                    ai.edits.perspective,
+                    tw,
+                    th,
+                    ai.lens.and_then(|l| {
+                        rustroom_app::ai_space::corrector_for(l, ai.edits, ai.decode.0, ai.decode.1)
+                    }),
+                    ai.decode.0,
+                    ai.decode.1,
+                );
+                rustroom_app::ai_coverage::to_frame(p, a, &dm, None)
+            }),
             _ => None,
         })
         .collect();
@@ -289,6 +317,7 @@ pub(super) fn paint_tint(
     geometry: &edit_model::Geometry,
     frame_rect: egui::Rect,
     base: Option<&TintFrame>,
+    ai: &AiTintSource<'_>,
 ) {
     let (w, h) = (frame_rect.width() as usize, frame_rect.height() as usize);
     if w == 0 || h == 0 {
@@ -325,6 +354,7 @@ pub(super) fn paint_tint(
                 && c.mask == m.mask
                 && c.refine == m.refine
                 && c.base == base_id
+                && c.ai_gen == ai.maps.generation()
         });
         if found.is_none() {
             // ⚠ Gated only when this brush actually needs pixels *and* a frame has landed. With
@@ -333,7 +363,7 @@ pub(super) fn paint_tint(
             let view = base
                 .filter(|_| needs_base(m))
                 .map(|f| TintBase { f, tw, th });
-            let cov = coverage(m, geometry, tw, th, view.as_ref());
+            let cov = coverage(m, geometry, tw, th, view.as_ref(), ai);
             let outside = cov.outside;
             let drawn = if cov.w == 0 || cov.h == 0 {
                 None
@@ -367,6 +397,7 @@ pub(super) fn paint_tint(
                 w,
                 h,
                 base: base_id,
+                ai_gen: ai.maps.generation(),
                 drawn,
                 outside,
             });
@@ -541,12 +572,60 @@ mod tests {
         }
     }
 
+    /// No AI maps — every tint test but the AI one's.
+    fn no_ai<R>(f: impl FnOnce(&AiTintSource<'_>) -> R) -> R {
+        let maps = rustroom_app::ai_coverage::AiMaps::default();
+        let edits = edit_model::Edits::default();
+        f(&AiTintSource {
+            maps: &maps,
+            edits: &edits,
+            lens: None,
+            decode: (1, 1),
+        })
+    }
+
     fn plane(
         m: &edit_model::MaskedAdjustment,
         tw: usize,
         th: usize,
     ) -> pipeline::brush::CoverageMap {
-        coverage(m, &edit_model::Geometry::default(), tw, th, None)
+        no_ai(|ai| coverage(m, &edit_model::Geometry::default(), tw, th, None, ai))
+    }
+
+    /// M9.13: an AI component tints where its map covers — on the tint grid, through the decode
+    /// mapping — and a mask without its map tints nothing.
+    #[test]
+    fn an_ai_component_tints_where_its_map_covers() {
+        let m = edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Ai(edit_model::AiMask::default()),
+            ..Default::default()
+        };
+        let mut maps = rustroom_app::ai_coverage::AiMaps::default();
+        maps.insert(
+            edit_model::AiPrompt::Subject,
+            std::sync::Arc::new(ai_mask::ProbMap::from_fn(20, 10, |x, _| {
+                if x < 10 {
+                    1.0
+                } else {
+                    0.0
+                }
+            })),
+        );
+        let edits = edit_model::Edits::default();
+        let ai = AiTintSource {
+            maps: &maps,
+            edits: &edits,
+            lens: None,
+            decode: (40, 20),
+        };
+        let cov = coverage(&m, &edit_model::Geometry::default(), 40, 20, None, &ai);
+        assert_eq!(cov.at(5, 10), 255);
+        assert_eq!(cov.at(35, 10), 0);
+        let empty = plane(&m, 40, 20);
+        assert!(
+            empty.data.iter().all(|&c| c == 0),
+            "no map must tint nothing"
+        );
     }
 
     /// As [`plane`], with a displayed frame for the pixel-dependent kinds to read.
@@ -557,7 +636,7 @@ mod tests {
     ) -> pipeline::brush::CoverageMap {
         let f = strip(8, (0, 0), (8, 1));
         let view = TintBase { f: &f, tw, th };
-        coverage(m, &edit_model::Geometry::default(), tw, th, Some(&view))
+        no_ai(|ai| coverage(m, &edit_model::Geometry::default(), tw, th, Some(&view), ai))
     }
 
     /// ⚠⚠ **The tint covers every component, not just the base.** A version that tinted the base

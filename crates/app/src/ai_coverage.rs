@@ -14,6 +14,8 @@ use rayon::prelude::*;
 #[derive(Debug, Default, Clone)]
 pub struct AiMaps {
     entries: Vec<(edit_model::AiPrompt, std::sync::Arc<ProbMap>)>,
+    /// Bumped on every change — what the canvas tint keys on, so a map arriving redraws it.
+    generation: u64,
 }
 
 impl AiMaps {
@@ -27,10 +29,16 @@ impl AiMaps {
     pub fn insert(&mut self, prompt: edit_model::AiPrompt, map: std::sync::Arc<ProbMap>) {
         self.entries.retain(|(p, _)| *p != prompt);
         self.entries.push((prompt, map));
+        self.generation += 1;
     }
 
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.generation += 1;
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub fn is_empty(&self) -> bool {

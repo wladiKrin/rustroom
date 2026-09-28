@@ -199,8 +199,11 @@ mod tests {
 
     /// A network that answers "the point it was given" as a single hot pixel on a 4×2 map, and
     /// records what it saw.
+    /// What the fake network was asked: the point, and the input's size.
+    type Seen = std::sync::Arc<std::sync::Mutex<Vec<([f32; 2], (u32, u32))>>>;
+
     struct Fake {
-        seen: std::sync::Arc<std::sync::Mutex<Vec<([f32; 2], (u32, u32))>>>,
+        seen: Seen,
     }
     impl Runner for Fake {
         fn subject(&mut self, _: SubjectModel, img: &RgbImage) -> Result<ProbMap, String> {

@@ -29,6 +29,7 @@
 //! unconditionally. Without that guard, `apply_view_demosaic` would rebuild a decode worker
 //! and start an 11-second decode sixty times a second.
 
+pub mod ai_download;
 pub mod edits;
 pub mod export;
 pub mod import;
@@ -62,6 +63,8 @@ pub enum Modal {
     ExportSettings,
     /// Importing from a card or a folder (M9.12). Its state lives in `RustroomApp::import`.
     Import,
+    /// Offering to download the AI models a mask needs (M9.13). State in `RustroomApp::ai`.
+    AiDownload,
     /// An upload did not confirm, and the file is at `at`. Raised for the **first** one in a run.
     ///
     /// ⚠ A notice, not a question: there is nothing to decide, and the export is still running.
@@ -174,6 +177,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Sync,
         Export,
         Import,
+        AiDownload,
         SaveExport,
         ConfirmDeleteExport,
         ConfirmDelete,
@@ -194,6 +198,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::SyncSettings => Which::Sync,
         Modal::ExportSettings => Which::Export,
         Modal::Import => Which::Import,
+        Modal::AiDownload => Which::AiDownload,
         Modal::UploadUnconfirmed { .. } => Which::UploadUnconfirmed,
         Modal::SaveExportPreset { .. } => Which::SaveExport,
         Modal::ConfirmDeleteExportPreset { .. } => Which::ConfirmDeleteExport,
@@ -218,6 +223,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::Sync => edits::sync(app, ctx),
         Which::Export => export::settings(app, ctx),
         Which::Import => import::show(app, ctx),
+        Which::AiDownload => ai_download::show(app, ctx),
         Which::SaveExport => export::save_preset(app, ctx),
         Which::ConfirmDeleteExport => export::confirm_delete(app, ctx),
         Which::ConfirmDelete => presets::confirm_delete(app, ctx),
@@ -532,13 +538,14 @@ mod tests {
     /// `egui::Resize` state.
     #[test]
     fn every_dialog_has_a_class_and_the_ids_are_unique() {
-        let dialogs: [(&str, DialogSize); 16] = [
+        let dialogs: [(&str, DialogSize); 17] = [
             ("save_preset", DialogSize::Standard),
             ("confirm_delete", DialogSize::Compact),
             ("paste_settings", DialogSize::Standard),
             ("sync_settings", DialogSize::Standard),
             ("export_settings", DialogSize::Standard),
             ("import", DialogSize::Wide),
+            ("ai_download", DialogSize::Standard),
             ("save_export_preset", DialogSize::Standard),
             ("confirm_delete_export", DialogSize::Compact),
             ("export_collision", DialogSize::Standard),

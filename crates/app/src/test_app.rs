@@ -177,6 +177,7 @@ pub fn for_test() -> RustroomApp {
         export_draft: ExportOptions::default(),
         exporter: None,
         import: None,
+        ai: Default::default(),
         export_progress: String::new(),
         export_collision: None,
         export_apply_all: false,
