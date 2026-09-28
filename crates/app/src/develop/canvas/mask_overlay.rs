@@ -74,9 +74,20 @@ pub(super) fn draw_mask_overlay(
     let painter = ui.painter_at(img_rect);
     // ⚠ Every mask whose eye is on, before and independent of the selection: the tint is per
     // mask since 2026-09-19, and a mask can be shown without being the one edited.
-    for (k, shown) in s.edits.masks.iter().zip(s.mask_shown.iter()) {
-        if *shown {
-            paint_tint(&painter, k, &s.edits.geometry, frame_rect, brush.base);
+    {
+        // ⚠ Scoped: the read guard must end before anything below mutates the session.
+        let maps = s.engine.ai_maps();
+        let maps = maps.read().expect("ai maps");
+        let ai = super::mask_tint::AiTintSource {
+            maps: &maps,
+            edits: &s.edits,
+            lens: s.lens.shot.as_ref(),
+            decode: (s.buffer.width(), s.buffer.height()),
+        };
+        for (k, shown) in s.edits.masks.iter().zip(s.mask_shown.iter()) {
+            if *shown {
+                paint_tint(&painter, k, &s.edits.geometry, frame_rect, brush.base, &ai);
+            }
         }
     }
 
@@ -107,6 +118,48 @@ pub(super) fn draw_mask_overlay(
         egui::Stroke::new(1.5, egui::Color32::WHITE),
         true,
     );
+
+    // ⚠ M9.13: a Select mask is aimed by a click — the point goes to the photo's DECODE space, the
+    // map's own, through the same chain the render uses, so it stays on its object through every
+    // crop, rotation and lens change. One click, one undo step; the flow computes the new map.
+    if let edit_model::Mask::Ai(edit_model::AiMask {
+        prompt: edit_model::AiPrompt::Click { .. },
+        ..
+    }) = mask
+    {
+        let click = ui
+            .interact(
+                img_rect,
+                ui.id().with("ai_select_click"),
+                egui::Sense::click(),
+            )
+            .on_hover_cursor(egui::CursorIcon::Crosshair);
+        if click.clicked() {
+            if let Some(p) = click.interact_pointer_pos() {
+                let (dw, dh) = (s.buffer.width(), s.buffer.height());
+                let dm = rustroom_app::ai_space::DecodeMap::new(
+                    &s.edits.geometry,
+                    s.edits.perspective,
+                    frame_rect.width() as usize,
+                    frame_rect.height() as usize,
+                    s.lens
+                        .shot
+                        .as_ref()
+                        .and_then(|l| rustroom_app::ai_space::corrector_for(l, &s.edits, dw, dh)),
+                    dw,
+                    dh,
+                );
+                let point = dm.frame_to_decode(p.x - frame_rect.left(), p.y - frame_rect.top());
+                if let Some(edit_model::Mask::Ai(a)) =
+                    mask_components::component_mut(&mut s.edits.masks[i], j)
+                {
+                    a.prompt = edit_model::AiPrompt::Click { point };
+                }
+                s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
+                return s.history.push(s.edits.clone());
+            }
+        }
+    }
 
     let aspect = canvas_geom::frame_aspect(frame_rect);
     let mut moved = false;
@@ -426,6 +479,8 @@ fn paint_mask(
         // ⚠ And the tint is not drawn from here in any case — see `draw_mask_overlay`, which
         // draws it once for the whole composite.
         edit_model::Mask::Luminance(_) | edit_model::Mask::Colour(_) => {}
+        // ⚠ M9.13: nothing to drag. A Select mask's click point is drawn by the AI click gesture.
+        edit_model::Mask::Ai(_) => {}
     }
 }
 

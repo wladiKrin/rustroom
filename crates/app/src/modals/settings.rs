@@ -34,6 +34,7 @@ pub struct SettingsDraft {
     tier: raw_decode::Demosaic,
     gpu_tail: bool,
     resampler: pipeline::Resampler,
+    ai_subject: ai_mask::SubjectModel,
     export_width: u32,
     theme_choice: ThemeChoice,
     accent: Accent,
@@ -92,6 +93,7 @@ impl SettingsDraft {
             tier: s.view_demosaic,
             gpu_tail: s.gpu_tail,
             resampler: s.resampler,
+            ai_subject: s.ai_subject_model,
             export_width: s.export_concurrency,
             theme_choice: s.theme,
             accent: s.accent,
@@ -218,6 +220,20 @@ impl SettingsDraft {
         }
         if self.immich_thumb_budget_mb != app.settings.immich_thumb_budget_mb {
             app.settings.immich_thumb_budget_mb = self.immich_thumb_budget_mb;
+            plain = true;
+        }
+        if self.ai_subject != app.settings.ai_subject_model {
+            app.settings.ai_subject_model = self.ai_subject;
+            // ⚠ The open photo's maps came from the other network: dropped, so the next frame
+            // loads (or computes) this one's. Other photos key on the model, so they need nothing.
+            if let Some(s) = &app.session {
+                s.engine.ai_maps().write().expect("ai maps").clear();
+                s.request(
+                    s.view_edits(app.tool),
+                    s.render_max_dim(),
+                    s.requested_region,
+                );
+            }
             plain = true;
         }
         if plain {
@@ -520,6 +536,21 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             );
                         theme::hint(ui, d.resampler.hint());
                     });
+
+                    theme::sub_label(ui, "AI subject model");
+                    egui::ComboBox::from_id_salt("ai_subject_pick")
+                        .selected_text(d.ai_subject.label())
+                        .show_ui(ui, |ui| {
+                            for m in ai_mask::SubjectModel::ALL {
+                                ui.selectable_value(&mut d.ai_subject, m, m.label());
+                            }
+                        })
+                        .response
+                        .on_hover_text(
+                            "Which network finds a Subject mask. IS-Net takes about 2 s a photo; \
+                             BiRefNet lite about 25 s, with a crisper edge. Each is downloaded the \
+                             first time it is used, and every answer is kept.",
+                        );
                 }
                 // ⚠⚠ An explicit index, **not** `_`. This arm was the catch-all, so adding a sixth
                 // tab would have made Immich render Input's contents — it compiles and it looks

@@ -239,6 +239,9 @@ pub struct RenderEngine {
     /// handover, because "where looks live" existing in two places is how the two come to
     /// disagree.
     looks_dir: Option<std::path::PathBuf>,
+    /// The photo's AI mask maps (M9.13), shared with the worker's `BrushCache`. The session writes
+    /// here when a map arrives and then asks for a render.
+    ai_maps: crate::ai_coverage::SharedAiMaps,
 }
 
 impl RenderEngine {
@@ -272,6 +275,8 @@ impl RenderEngine {
         let warmed_worker = Arc::clone(&warmed);
         let settle_downloads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let settles_worker = Arc::clone(&settle_downloads);
+        let ai_maps = crate::ai_coverage::SharedAiMaps::default();
+        let ai_maps_worker = Arc::clone(&ai_maps);
         let handle = thread::spawn(move || {
             let warmed = warmed_worker;
             let settle_downloads = settles_worker;
@@ -283,7 +288,10 @@ impl RenderEngine {
             let mut look_cache: Option<(String, Arc<pipeline::lut::Cube>)> = None;
             // Lives beside the prefix cache and for the same reason: this thread is the sole
             // renderer, so neither needs locking.
-            let mut brush_cache = BrushCache::default();
+            let mut brush_cache = BrushCache {
+                ai: ai_maps_worker,
+                ..BrushCache::default()
+            };
             // ⚠ Holds the request that ended a warm-behind wait, so nothing is ever dropped on the
             // floor: the wait below **takes** a request out of the channel to learn the gesture is
             // still live, and the next turn of the loop must serve that one rather than block.
@@ -474,6 +482,7 @@ impl RenderEngine {
             warmed,
             settle_downloads,
             looks_dir: kept_looks_dir,
+            ai_maps,
         }
     }
 
@@ -494,6 +503,11 @@ impl RenderEngine {
     /// ⚠ Unconditional rather than `#[cfg(test)]`, for `requests_issued`'s reason: `session_flow`
     /// is in the **bin** and this is the **lib**, which the bin's test target compiles without
     /// `cfg(test)`, so a gated accessor would not exist where it is needed.
+    /// The AI mask maps this engine's renders read (M9.13). Write a map, then request a render.
+    pub fn ai_maps(&self) -> crate::ai_coverage::SharedAiMaps {
+        Arc::clone(&self.ai_maps)
+    }
+
     pub fn looks_dir(&self) -> Option<&std::path::Path> {
         self.looks_dir.as_deref()
     }
@@ -797,6 +811,9 @@ struct CoverageSpec {
 /// What one mask's cached coverage was built from.
 #[derive(PartialEq)]
 struct MaskCoverageKey {
+    /// An AI component's mask and the identity of the map it was built from (M9.13) — a new map
+    /// arriving for the same prompt is a new key.
+    ai: Option<(edit_model::AiMask, usize)>,
     /// This component's brush. `None` for an analytic shape, which is never cached here.
     brush: Option<edit_model::Brush>,
     geometry: edit_model::Geometry,
@@ -848,6 +865,8 @@ struct MaskCoverageKey {
 #[derive(Default)]
 struct BrushCache {
     entries: Vec<(MaskCoverageKey, Arc<pipeline::brush::CoverageMap>)>,
+    /// The AI maps, shared with the session (M9.13).
+    ai: crate::ai_coverage::SharedAiMaps,
 }
 
 impl BrushCache {
@@ -912,7 +931,13 @@ impl BrushCache {
     ///
     /// ⚠ `i` and `j` are still parameters because they say **which shape** this is — see
     /// [`Self::mask_at`] — and `i` alone decides the base identity.
-    fn key(edits: &Edits, i: usize, j: usize, spec: CoverageSpec) -> MaskCoverageKey {
+    fn key(
+        edits: &Edits,
+        i: usize,
+        j: usize,
+        spec: CoverageSpec,
+        ai: &crate::ai_coverage::AiMaps,
+    ) -> MaskCoverageKey {
         let brush = match Self::mask_at(edits, i, j) {
             Some(edit_model::Mask::Brush(b)) => Some(b.clone()),
             _ => None,
@@ -920,7 +945,16 @@ impl BrushCache {
         let base = brush
             .as_ref()
             .and_then(|b| Self::base_id(edits, i, b, spec.max_dim));
+        // ⚠ The map's address is its identity: a new map for the same prompt is a new `Arc`.
+        // No map is address 0 — cached as nothing, and missed the moment one arrives.
+        let ai = match Self::mask_at(edits, i, j) {
+            Some(edit_model::Mask::Ai(a)) => {
+                Some((*a, ai.get(&a.prompt).map_or(0, |m| Arc::as_ptr(m) as usize)))
+            }
+            _ => None,
+        };
         MaskCoverageKey {
+            ai,
             brush,
             geometry: edits.geometry,
             fw: spec.fw,
@@ -939,13 +973,34 @@ impl BrushCache {
         j: usize,
         map: Arc<pipeline::brush::CoverageMap>,
     ) {
-        let key = Self::key(edits, i, j, spec);
+        let key = Self::key(edits, i, j, spec, &self.ai.read().expect("ai maps"));
         self.entries.retain(|(k, _)| *k != key);
         self.entries.insert(0, (key, map));
         self.entries.truncate(Self::cap(edits));
     }
 
-    fn get_or_build(&mut self, edits: &Edits, spec: CoverageSpec) -> Arc<pipeline::BrushCoverage> {
+    /// [`Self::get_or_build`] with no decode and no lens — the brush tests', which have no AI mask.
+    #[cfg(test)]
+    fn build_for_test(
+        &mut self,
+        edits: &Edits,
+        spec: CoverageSpec,
+    ) -> Arc<pipeline::BrushCoverage> {
+        self.get_or_build(edits, spec, (0, 0), None)
+    }
+
+    /// `decode` is the source buffer's size and `lens` its lens shot — what an AI component needs to
+    /// map frame pixels into its decode-space map (M9.13).
+    fn get_or_build(
+        &mut self,
+        edits: &Edits,
+        spec: CoverageSpec,
+        decode: (usize, usize),
+        lens: Option<&lens_profile::LensShot>,
+    ) -> Arc<pipeline::BrushCoverage> {
+        let ai = self.ai.read().expect("ai maps").clone();
+        // Built once per call, and only if an AI component needs it.
+        let mut decode_map: Option<crate::ai_space::DecodeMap> = None;
         // ⚠ One row per mask, one slot per component within it — index 0 being the mask's base
         // shape. The row exists even for a mask with no brush at all, so the stage's `(i, j)`
         // always addresses the slot the cache computed a key for.
@@ -954,7 +1009,7 @@ impl BrushCache {
         for (i, m) in edits.masks.iter().enumerate() {
             let mut row = Vec::with_capacity(1 + m.refine.len());
             for j in 0..=m.refine.len() {
-                let key = Self::key(edits, i, j, spec);
+                let key = Self::key(edits, i, j, spec, &ai);
                 if let Some(pos) = self.entries.iter().position(|(k, _)| *k == key) {
                     // Promote the hit, so the least recently used entry is the one evicted.
                     let hit = self.entries.remove(pos);
@@ -978,6 +1033,34 @@ impl BrushCache {
                             None,
                         )))
                     }
+                    // ⚠ M9.13: an AI component is its map, resampled into this frame with its
+                    // threshold and invert — no map, no coverage (`CoverageSource::Raster`).
+                    // ⚠ Warped through the lens ONCE per map and lens setting (`post_lens`), so a
+                    // geometry drag pays only the geometry's inverse — see `post_lens`'s numbers.
+                    Some(edit_model::Mask::Ai(a)) => ai.get(&a.prompt).map(|map| {
+                        let lensed = crate::ai_coverage::post_lens(
+                            map,
+                            crate::ai_space::lens_key(lens, edits, decode.0, decode.1),
+                            decode,
+                            || {
+                                lens.and_then(|l| {
+                                    crate::ai_space::corrector_for(l, edits, decode.0, decode.1)
+                                })
+                            },
+                        );
+                        let dm = decode_map.get_or_insert_with(|| {
+                            crate::ai_space::DecodeMap::new(
+                                &edits.geometry,
+                                edits.perspective,
+                                spec.fw,
+                                spec.fh,
+                                None,
+                                decode.0,
+                                decode.1,
+                            )
+                        });
+                        Arc::new(crate::ai_coverage::to_frame(&lensed, a, dm, spec.region))
+                    }),
                     _ => None,
                 };
                 if let Some(built) = &built {
@@ -1154,6 +1237,8 @@ fn render_cached_with(
         grade_view,
     } = spec;
     let buffer_long = buffer.width().max(buffer.height());
+    // ⚠ Kept for the AI masks' decode mapping (M9.13): `lens` is moved into the prefix below.
+    let ai_lens = lens.clone();
     let scale = render_scale(
         buffer_long,
         rendered_long_edge(buffer_long, max_dim),
@@ -1584,7 +1669,12 @@ fn render_cached_with(
         max_dim,
     };
     let t_cov = std::time::Instant::now();
-    let coverage = brush_cache.get_or_build(edits, cov_spec);
+    let coverage = brush_cache.get_or_build(
+        edits,
+        cov_spec,
+        (buffer.width(), buffer.height()),
+        ai_lens.as_ref(),
+    );
     if debug_steps {
         eprintln!(
             "  TIMING coverage {:6.1} ms",
@@ -2307,6 +2397,70 @@ mod tests {
             cache,
             bc,
         )
+    }
+
+    /// M9.13, end to end through the preview's render: an AI mask whose map is in the shared store
+    /// darkens exactly the half the map covers — and before the map arrives it darkens nothing.
+    #[test]
+    fn an_ai_mask_renders_from_the_shared_map_and_not_before() {
+        let mut b = ImageBuf::new(64, 32);
+        for y in 0..32 {
+            for x in 0..64 {
+                b.set_pixel(x, y, [0.18; 3]);
+            }
+        }
+        let buf = Arc::new(b);
+        let e = Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Ai(edit_model::AiMask::default()),
+                refine: Vec::new(),
+                adjustments: edit_model::LocalAdjustments {
+                    exposure: -2.0,
+                    ..Default::default()
+                },
+                disabled: false,
+            }],
+            ..Edits::default()
+        };
+        let mut bc = BrushCache::default();
+        let (before, _) = render_with(
+            &buf,
+            &e,
+            FrameSpec::fit(64),
+            &mut PrefixCache::default(),
+            &mut bc,
+        );
+        let px = |f: &RenderedFrame, x: usize, y: usize| f.rgba[(y * f.width + x) * 4] as i32;
+        assert_eq!(
+            px(&before, 5, 16),
+            px(&before, 58, 16),
+            "no map yet: nothing is covered"
+        );
+
+        // The subject is the LEFT half of the decode.
+        let map = ai_mask::ProbMap::from_fn(32, 16, |x, _| if x < 16 { 1.0 } else { 0.0 });
+        bc.ai
+            .write()
+            .unwrap()
+            .insert(edit_model::AiPrompt::Subject, Arc::new(map));
+        let (after, _) = render_with(
+            &buf,
+            &e,
+            FrameSpec::fit(64),
+            &mut PrefixCache::default(),
+            &mut bc,
+        );
+        assert!(
+            px(&after, 5, 16) + 20 < px(&after, 58, 16),
+            "the covered half is not darker: {} vs {}",
+            px(&after, 5, 16),
+            px(&after, 58, 16)
+        );
+        assert_eq!(
+            px(&after, 58, 16),
+            px(&before, 58, 16),
+            "the uncovered half changed"
+        );
     }
 
     /// ⚠⚠ **The acceptance for the whole milestone, end to end.** The region-scoped prefix and the
@@ -3817,7 +3971,7 @@ mod tests {
             e
         };
         let mut cache = BrushCache::default();
-        let built = cache.get_or_build(
+        let built = cache.build_for_test(
             &gating(true),
             CoverageSpec {
                 fw: 64,
@@ -3833,7 +3987,7 @@ mod tests {
 
         // ⚠ The discriminating half: a plain brush must STILL be cached, or this would be a
         // performance regression wearing a correctness fix.
-        let built = cache.get_or_build(
+        let built = cache.build_for_test(
             &gating(false),
             CoverageSpec {
                 fw: 64,
@@ -4213,7 +4367,7 @@ mod tests {
         let base = auto_masked_edits(0.0, 0.0);
         assert!(
             cache
-                .get_or_build(
+                .build_for_test(
                     &base,
                     CoverageSpec {
                         fw: 64,
@@ -4245,7 +4399,7 @@ mod tests {
         let own = auto_masked_edits(0.0, 1.5);
         assert!(
             cache
-                .get_or_build(
+                .build_for_test(
                     &own,
                     CoverageSpec {
                         fw: 64,
@@ -4265,7 +4419,7 @@ mod tests {
         let global = auto_masked_edits(1.5, 0.0);
         assert!(
             cache
-                .get_or_build(
+                .build_for_test(
                     &global,
                     CoverageSpec {
                         fw: 64,
@@ -4300,7 +4454,7 @@ mod tests {
         );
         assert!(
             cache
-                .get_or_build(
+                .build_for_test(
                     &e,
                     CoverageSpec {
                         fw: 64,
@@ -4573,7 +4727,7 @@ mod tests {
         // only observable difference between a hit and a rebuild.
         let mut cache = BrushCache::default();
         let edits = brush_edits();
-        let a = cache.get_or_build(
+        let a = cache.build_for_test(
             &edits,
             CoverageSpec {
                 fw: 200,
@@ -4582,7 +4736,7 @@ mod tests {
                 max_dim: 1600,
             },
         );
-        let b = cache.get_or_build(
+        let b = cache.build_for_test(
             &edits,
             CoverageSpec {
                 fw: 200,
@@ -4593,7 +4747,7 @@ mod tests {
         );
         assert!(same_map(&a, &b), "the second call must hit");
 
-        let c = cache.get_or_build(
+        let c = cache.build_for_test(
             &edits,
             CoverageSpec {
                 fw: 400,
@@ -4607,7 +4761,7 @@ mod tests {
         // ⚠ The assertion that pins CAP = 2 rather than 1. With a single entry the 400x200 build
         // would have evicted the 200x100 one, and this would rebuild — which is exactly the zoom
         // thrash the capacity exists to prevent.
-        let d = cache.get_or_build(
+        let d = cache.build_for_test(
             &edits,
             CoverageSpec {
                 fw: 200,
@@ -4623,7 +4777,7 @@ mod tests {
     fn changing_a_stroke_misses_the_brush_cache() {
         // The other half: a hit must depend on the strokes, not merely on the dimensions.
         let mut cache = BrushCache::default();
-        let a = cache.get_or_build(
+        let a = cache.build_for_test(
             &brush_edits(),
             CoverageSpec {
                 fw: 200,
@@ -4636,7 +4790,7 @@ mod tests {
         if let edit_model::Mask::Brush(b) = &mut edited.masks[0].mask {
             b.strokes[0].points.push([0.8, 0.6]);
         }
-        let c = cache.get_or_build(
+        let c = cache.build_for_test(
             &edited,
             CoverageSpec {
                 fw: 200,
@@ -4662,7 +4816,7 @@ mod tests {
         };
         edits.masks.insert(0, inactive);
         let mut cache = BrushCache::default();
-        let cov = cache.get_or_build(
+        let cov = cache.build_for_test(
             &edits,
             CoverageSpec {
                 fw: 200,
@@ -4716,10 +4870,10 @@ mod tests {
         // maps at both live rungs, or every zoom change would re-rasterize the pair.
         let mut cache = BrushCache::default();
         let e = composite_of_two_brushes();
-        let a = cache.get_or_build(&e, whole_frame());
+        let a = cache.build_for_test(&e, whole_frame());
         assert!(a.get(0, 0).is_some(), "the base's map must be built");
         assert!(a.get(0, 1).is_some(), "the refinement's map must be built");
-        let b = cache.get_or_build(&e, whole_frame());
+        let b = cache.build_for_test(&e, whole_frame());
         assert!(same_map_at(&a, &b, 0, 0), "the base must hit");
         assert!(same_map_at(&a, &b, 0, 1), "the refinement must hit");
     }
@@ -4731,14 +4885,14 @@ mod tests {
         // but a shape rendering positionally while its tint shows the gate working.
         let mut cache = BrushCache::default();
         let e = composite_of_two_brushes();
-        let a = cache.get_or_build(&e, whole_frame());
+        let a = cache.build_for_test(&e, whole_frame());
         let mut moved = e.clone();
         if let Some(edit_model::Mask::Brush(b)) =
             moved.masks[0].refine.get_mut(0).map(|r| &mut r.mask)
         {
             b.strokes[0].points.push([0.75, 0.55]);
         }
-        let b = cache.get_or_build(&moved, whole_frame());
+        let b = cache.build_for_test(&moved, whole_frame());
         assert!(
             same_map_at(&a, &b, 0, 0),
             "the untouched base must still hit"
@@ -4757,7 +4911,7 @@ mod tests {
         // 23.76 ms at 6246x4170, measured, and reported in use as "very sluggish at 1:1".
         let mut cache = BrushCache::default();
         let e = brush_edits();
-        let a = cache.get_or_build(
+        let a = cache.build_for_test(
             &e,
             CoverageSpec {
                 fw: 200,
@@ -4766,7 +4920,7 @@ mod tests {
                 max_dim: 1600,
             },
         );
-        let b = cache.get_or_build(
+        let b = cache.build_for_test(
             &e,
             CoverageSpec {
                 fw: 200,
@@ -4776,7 +4930,7 @@ mod tests {
             },
         );
         assert!(same_map(&a, &b), "the same region must hit");
-        let c = cache.get_or_build(
+        let c = cache.build_for_test(
             &e,
             CoverageSpec {
                 fw: 200,
@@ -4793,7 +4947,7 @@ mod tests {
         // The cache's remaining job, and the reason it exists at all: dragging an unrelated
         // slider with a brush mask present must not re-rasterize on every frame.
         let mut cache = BrushCache::default();
-        let a = cache.get_or_build(
+        let a = cache.build_for_test(
             &brush_edits(),
             CoverageSpec {
                 fw: 200,
@@ -4804,7 +4958,7 @@ mod tests {
         );
         let mut louder = brush_edits();
         louder.exposure = 1.5;
-        let b = cache.get_or_build(
+        let b = cache.build_for_test(
             &louder,
             CoverageSpec {
                 fw: 200,
@@ -4826,7 +4980,7 @@ mod tests {
         // *outside* the clip reads nothing.
         let mut cache = BrushCache::default();
         let e = brush_edits();
-        let cov = cache.get_or_build(
+        let cov = cache.build_for_test(
             &e,
             CoverageSpec {
                 fw: 200,

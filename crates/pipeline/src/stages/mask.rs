@@ -193,7 +193,10 @@ impl MaskStage {
             }
             CoverageSource::Painted {
                 prebuilt: Some(c), ..
-            } => Some(std::sync::Arc::clone(c)),
+            }
+            | CoverageSource::Raster { prebuilt: Some(c) } => Some(std::sync::Arc::clone(c)),
+            // ⚠ Nothing to rasterise from: the map comes from outside or not at all.
+            CoverageSource::Raster { prebuilt: None } => None,
             CoverageSource::Painted {
                 brush, geometry, ..
             } => {
@@ -367,6 +370,7 @@ impl MaskStage {
             },
             edit_model::Mask::Luminance(r) => CoverageSource::Range(*r),
             edit_model::Mask::Colour(r) => CoverageSource::Colour(*r),
+            edit_model::Mask::Ai(_) => CoverageSource::Raster { prebuilt },
             m @ (edit_model::Mask::Linear(_) | edit_model::Mask::Radial(_)) => {
                 CoverageSource::Analytic(m.clone())
             }
@@ -776,6 +780,62 @@ mod tests {
             *s = 0.5;
         }
         img
+    }
+
+    /// An AI mask (M9.13) with exposure −1.
+    fn ai_masked() -> MaskedAdjustment {
+        MaskedAdjustment {
+            mask: Mask::Ai(edit_model::AiMask::default()),
+            refine: Vec::new(),
+            adjustments: edit_model::LocalAdjustments {
+                exposure: -1.0,
+                ..Default::default()
+            },
+            disabled: false,
+        }
+    }
+
+    /// The left half of an 80×60 frame at full coverage — what the app would resample a subject's
+    /// map into.
+    fn left_half() -> std::sync::Arc<crate::brush::CoverageMap> {
+        std::sync::Arc::new(crate::brush::CoverageMap {
+            x0: 0,
+            y0: 0,
+            w: 80,
+            h: 60,
+            data: (0..80 * 60)
+                .map(|i| if i % 80 < 40 { 255 } else { 0 })
+                .collect(),
+            outside: 0,
+        })
+    }
+
+    #[test]
+    fn an_ai_mask_applies_its_handed_map_and_only_there() {
+        let stage = MaskStage::new_in_region(
+            &ai_masked(),
+            RenderScale::FULL,
+            None,
+            &Geometry::default(),
+            &[Some(left_half())],
+            color::wb::Illuminant::default(),
+            None,
+        );
+        let out = stage.apply(flat(80, 60));
+        assert!(
+            out.pixel(10, 30)[0] < 0.4,
+            "the covered half was not darkened"
+        );
+        assert_eq!(out.pixel(70, 30), [0.5; 3], "the uncovered half changed");
+    }
+
+    /// ⚠⚠ The spec's "renders empty": a map not computed yet must cover NOTHING — an AI mask that
+    /// fell back to full coverage would darken the whole photo until the network answered.
+    #[test]
+    fn an_ai_mask_without_its_map_changes_nothing() {
+        let stage = MaskStage::new(&ai_masked(), RenderScale::FULL, &Geometry::default());
+        let out = stage.apply(flat(80, 60));
+        assert_eq!(out.data(), flat(80, 60).data());
     }
 
     fn masked(from: [f32; 2], to: [f32; 2]) -> MaskedAdjustment {

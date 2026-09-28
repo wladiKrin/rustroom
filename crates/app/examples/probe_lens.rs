@@ -554,6 +554,7 @@ fn main() {
             best_of(3, || {
                 export_one(
                     ExportSource {
+                        ai: Default::default(),
                         image: image.clone(),
                         baseline: color::wb::Illuminant::default(),
                         lens: lens.clone(),
@@ -565,6 +566,7 @@ fn main() {
                     &dest,
                     &o,
                     ExportRender {
+                        ai_subject: ai_mask::SubjectModel::IsNet,
                         resampler: Resampler::default(),
                         gpu_tail,
                     },

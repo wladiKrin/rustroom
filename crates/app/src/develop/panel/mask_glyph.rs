@@ -74,6 +74,21 @@ pub fn paint(painter: &egui::Painter, rect: egui::Rect, kind: MaskKind, colour: 
                 egui::Stroke::NONE,
             ));
         }
+        // A head and shoulders: the subject.
+        MaskKind::Subject => {
+            painter.circle_filled(egui::pos2(c.x, r.top() + w * 0.3), w * 0.17, colour);
+            // Shoulders: the top of a larger circle, clipped at the glyph's bottom edge.
+            painter.with_clip_rect(r).circle_filled(
+                egui::pos2(c.x, r.bottom() + w * 0.12),
+                w * 0.4,
+                colour,
+            );
+        }
+        // A target: where the click lands.
+        MaskKind::Select => {
+            painter.circle_stroke(c, w * 0.4, stroke);
+            painter.circle_filled(c, w * 0.12, colour);
+        }
     }
 }
 

@@ -1,4 +1,4 @@
-//! The five kinds of mask a user can add, with their menu labels and templates.
+//! The seven kinds of mask a user can add, with their menu labels and templates.
 //!
 //! ⚠ A lib module, not a panel detail: the Add mask menu and the three Refine menus all list
 //! these, and the canvas may one day too. One list, one set of defaults.
@@ -12,17 +12,29 @@ pub enum MaskKind {
     Brush,
     Luminance,
     Colour,
+    /// The photo's subject, found by a network (M9.13).
+    Subject,
+    /// The region under a click, found by a network (M9.13).
+    Select,
 }
 
 impl MaskKind {
-    /// Menu order: the positional shapes first, then the two ranges.
-    pub const ALL: [MaskKind; 5] = [
+    /// Menu order: the positional shapes first, then the two ranges, then the two AI masks.
+    pub const ALL: [MaskKind; 7] = [
         MaskKind::Gradient,
         MaskKind::Radial,
         MaskKind::Brush,
         MaskKind::Luminance,
         MaskKind::Colour,
+        MaskKind::Subject,
+        MaskKind::Select,
     ];
+
+    /// Whether this kind is found by a network — it needs a model downloaded and a moment to
+    /// compute.
+    pub fn is_ai(self) -> bool {
+        matches!(self, MaskKind::Subject | MaskKind::Select)
+    }
 
     /// What the menu item says.
     ///
@@ -35,6 +47,8 @@ impl MaskKind {
             MaskKind::Brush => "Brush",
             MaskKind::Luminance => "Luminance range",
             MaskKind::Colour => "Colour range",
+            MaskKind::Subject => "Subject",
+            MaskKind::Select => "Select by click",
         }
     }
 
@@ -59,6 +73,14 @@ impl MaskKind {
             MaskKind::Colour => {
                 "Colour range — selects colours by hue, wherever they are in the frame."
             }
+            MaskKind::Subject => {
+                "Subject — the main subject, found by a neural network. Computed once per photo \
+                 and cached."
+            }
+            MaskKind::Select => {
+                "Select by click — click the sky, a building, anything: a neural network outlines \
+                 the region under the click. Click again to re-aim."
+            }
         }
     }
 
@@ -70,6 +92,11 @@ impl MaskKind {
             Mask::Brush(_) => MaskKind::Brush,
             Mask::Luminance(_) => MaskKind::Luminance,
             Mask::Colour(_) => MaskKind::Colour,
+            Mask::Ai(edit_model::AiMask {
+                prompt: edit_model::AiPrompt::Subject,
+                ..
+            }) => MaskKind::Subject,
+            Mask::Ai(_) => MaskKind::Select,
         }
     }
 
@@ -98,6 +125,13 @@ impl MaskKind {
             // the chroma gate already at HSL's measured value, so the mask is doing something
             // recognisable before any slider is touched.
             MaskKind::Colour => Mask::Colour(edit_model::ColourRange::default()),
+            MaskKind::Subject => Mask::Ai(edit_model::AiMask::default()),
+            // ⚠ Aimed at the centre until the first click on the canvas re-aims it — a mask that
+            // exists at once, like every other kind, rather than a mode waiting for input.
+            MaskKind::Select => Mask::Ai(edit_model::AiMask {
+                prompt: edit_model::AiPrompt::Click { point: [0.5, 0.5] },
+                ..Default::default()
+            }),
         }
     }
 }

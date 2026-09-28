@@ -125,6 +125,7 @@ impl RustroomApp {
             // field (user's call, 2026-09-15) precisely so there is one setting rather than two
             // that could disagree; the naming hazard is carried by the Settings hint instead.
             rustroom_app::batch_export::ExportRender {
+                ai_subject: self.settings.ai_subject_model,
                 resampler: self.settings.resampler,
                 gpu_tail: self.settings.gpu_tail,
             },

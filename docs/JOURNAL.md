@@ -158,6 +158,66 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-28 — M9.13 AI masks: the brainstorm and the runtime spike (branch `m9.13-ai-masks`)
+
+**Chosen (the author):** build it — for skies, people and subjects of any kind; models **downloaded on
+first use**; the AI result a **mask component with a Refine slider**, computed once from the unedited
+photo and cached; approach **A — Select Subject + Select by click** (a converted ADE20K sky model was
+declined over the dataset's research/education terms). Licences verified at the source: BiRefNet MIT
+(code and weights), MobileSAM Apache-2.0, SAM Apache-2.0, ONNX Runtime MIT; ⛔ BRIA RMBG (non-commercial),
+NVIDIA SegFormer (non-commercial), `onnx-community/ISNet-ONNX` (re-tagged AGPL).
+
+**What shipped** (🟡 built, awaiting use). A new zero-GUI crate **`ai-mask`**: the registry (four
+files pinned by size and SHA-256, with licences), a hash-verified download (a mismatch is deleted,
+never used), preprocessing, `ProbMap`, and `tract` inference for IS-Net, BiRefNet_lite and MobileSAM.
+`Mask::Ai(AiMask { prompt: Subject | Click{point}, threshold, invert })` — **no pixels in the
+sidecar**. The pipeline's `CoverageSource::Raster` reads a prebuilt map from the **brush side
+channel** (`RenderSpec` stays `Copy`) and covers **nothing** without one; the GPU uploads it as a
+prebuilt map. The app lib: maps live in **decode space** (`ai_space::DecodeMap` = `SpotMap` + the lens
+corrector), so a cached map survives every crop, rotation, perspective and lens change;
+`ai_coverage::refine/to_frame`, the disk cache keyed on the file + model + prompt, and the
+`ai_worker` that turns the photo **upright** before a network sees it (the spike's sideways trap).
+Preview: a shared `AiMaps` store read by `BrushCache`, keyed on the map's identity. Export: the tail is
+now built **after** the prefix so the coverage fits the final frame, and `maps_for` reads the same
+cache the preview does. UI: *Subject* and *Select by click* in the Masks panel, a click re-aims a Select
+mask, a **Refine** slider, the tint, a download dialog listing each file's size and licence, and the
+subject model in Settings → Performance.
+
+⚠⚠ **The author's first use: "with an AI mask on, rotations become very slow and sluggish — and
+zooming and panning with the red tint on, but only for the AI masks."** Measured on an X-T4 RAF with
+lens correction (`examples/ai_coverage_bench.rs`): building the lens corrector cost **43 ms**, and
+every frame pixel then paid a lens lookup — a fitted rotation frame **117 ms**, a tint miss **69 ms**.
+A brush never showed it because it rasterises only its own bounding box. Three fixes: (1) the map is
+warped through the lens **once per map and lens setting** (`ai_coverage::post_lens`, memoised; 55 ms,
+once) so a frame pays only the geometry's inverse; (2) coverage is sampled on a grid no finer than
+1024 px and interpolated (the maps are ≤1024 px, so nothing is lost — pinned at ≤2 levels); (3) the
+tint keys on the displayed frame only for a mask that READS it, so a pan no longer misses. After:
+rotation frame **7.8 ms**, tint miss **3.6 ms**, full resolution **26 ms**.
+
+⚠⚠ **The flow re-checks every frame, and that is structural, not cosmetic**: the full-resolution
+handover REPLACES the render engine, and a fresh engine's map store is empty — so the per-frame
+`ensure_ai_maps` refills it from the disk cache. A pending/failed/offered set keeps that cheap and
+stops a broken model from looping or the dialog from nagging.
+
+Measured through the production code (`examples/ai_mask_probe.rs`, release, M2): a sky click on
+`DSCF6760.JPG` — encode **2.1 s**, first click **0.31 s**, second **0.18 s**; the selection is the sky
+right of the tower, bounded by the tower and the tree line (15.8% of the frame). Real-model unit tests
+(`--ignored real_`) pass on the same photo. **3,159 tests** (+30), gate green.
+
+**The spike** (full table in the spec): on the author's M2, `tract` runs BiRefNet_lite in **23.6 s**,
+IS-Net in **1.9 s**, the MobileSAM encoder in **1.6 s** and a click in **0.10 s**; `ort` is 2.7–2.8×
+faster on CPU; ⚠ **CoreML cannot compile BiRefNet** (MLProgram rejects its deformable-conv export; the
+older format hung 26 minutes). By the spec's own "within ~3×" rule **`tract` won**. The author then
+chose **both subject models** — IS-Net fast by default, BiRefNet_lite as a Settings choice — having
+been told IS-Net's weights carry no explicit licence.
+
+⚠⚠ **Three confidently-wrong masks on the way, each a real trap for the implementation:** (1) the SAM
+decoder's full-size output is cropped to a **frozen landscape shape** — a click on the tower selected
+a column at 0.42 of the width where the tower is at 0.60 (0.42/0.60 ≈ 683/1024); `low_res_masks` plus
+SAM's own resize/crop/resize is right. (2) A guessed "stretched square" hypothesis made it *closer and
+still wrong* — stopped guessing and read `samexporter`, which documents (1). (3) The spike's loader
+ignored EXIF orientation, so the first BiRefNet mask was sideways.
+
 ### 2026-09-27 — M9.12 import from a card (branch `m9.12-import`)
 
 **3,129 tests** (+29), 82 goldens unmoved, gate green. Spec `2026-09-27-m9.12-import-design.md`,

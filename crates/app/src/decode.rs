@@ -245,6 +245,7 @@ pub(crate) fn decode_for_export(
             // is precisely the shape two derivations produce.
             let (curve, baseline_ev) = profile_rendering(&profile_for_rendering);
             rustroom_app::batch_export::ExportSource {
+                ai: Default::default(),
                 lens: resolve_lens(&d.metadata).shot,
                 baseline: d.metadata.as_shot.unwrap_or_default(),
                 image: d.image,
@@ -260,6 +261,7 @@ pub(crate) fn decode_for_export(
         // through `image_decode`, so there is nothing to match.
         image_decode::decode(path)
             .map(|d| rustroom_app::batch_export::ExportSource {
+                ai: Default::default(),
                 image: d.image,
                 baseline: color::wb::Illuminant::default(),
                 lens: None,

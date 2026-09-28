@@ -145,7 +145,10 @@ pub enum Quarter {
 impl Quarter {
     /// Quarter turns clockwise, 0..=3 — the arithmetic form, so composition is modular
     /// addition rather than a match table nobody can check.
-    fn turns(self) -> u8 {
+    ///
+    /// ⚠ Public since M9.13: the AI worker turns the photo upright by exactly this much before a
+    /// network sees it.
+    pub fn turns(self) -> u8 {
         match self {
             Quarter::Zero => 0,
             Quarter::Cw90 => 1,
@@ -1315,6 +1318,35 @@ pub enum Mask {
     /// variant is backward compatible with every sidecar on disk, and appending is what git merges
     /// cleanly.
     Colour(ColourRange),
+    /// ⚠ A neural network's answer (M9.13) — the subject, or the region under a click. Its coverage
+    /// is a raster computed once from the unedited photo and cached **outside** the edits; this
+    /// holds only what was asked and how to read the answer. **Appended**, rule 3 above.
+    Ai(AiMask),
+}
+
+/// What an AI mask asked for, and how its probability map becomes coverage.
+///
+/// ⚠ No pixels here: the map lives in the app's cache, keyed by the photo and this prompt, and a
+/// mask whose map is not computed yet covers nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct AiMask {
+    pub prompt: AiPrompt,
+    /// −100..=100, labelled **Refine**: grows (+) or shrinks (−) the edge by moving the threshold on
+    /// the soft map. ⚠ Not named `refine` — that is `MaskedAdjustment::refine`, the add/subtract list.
+    pub threshold: f32,
+    pub invert: bool,
+}
+
+/// What the network was asked.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub enum AiPrompt {
+    /// The photo's salient subject.
+    #[default]
+    Subject,
+    /// The region under a click, the point normalised over the **decoded** photo's own pixel grid —
+    /// the space the map is stored in, so it stays put through every crop, rotation and lens change.
+    Click { point: [f32; 2] },
 }
 
 impl Default for Mask {
@@ -1351,6 +1383,8 @@ impl Mask {
             // fallback it replaced. `ColourRange::coverage_at` answers, from `MaskStage`'s pixel
             // loop, exactly as the luminance range's does.
             Mask::Colour(_) => None,
+            // A raster from outside the pipeline — `MaskStage`'s `CoverageSource::Raster` answers.
+            Mask::Ai(_) => None,
         }
     }
 
@@ -1362,6 +1396,11 @@ impl Mask {
             Mask::Brush(_) => "Brush",
             Mask::Luminance(_) => "Luminance",
             Mask::Colour(_) => "Colour",
+            Mask::Ai(AiMask {
+                prompt: AiPrompt::Subject,
+                ..
+            }) => "Subject",
+            Mask::Ai(_) => "Selection",
         }
     }
 
@@ -1377,6 +1416,7 @@ impl Mask {
             Mask::Brush(b) => &mut b.invert,
             Mask::Luminance(r) => &mut r.invert,
             Mask::Colour(r) => &mut r.invert,
+            Mask::Ai(a) => &mut a.invert,
         }
     }
 }
@@ -3290,10 +3330,21 @@ mod tests {
                 // gives about `LocalAdjustments`: a fixture that names exhaustiveness must
                 // actually exercise the field, or a composite would travel untested through
                 // every consumer this fixture exists to check.
-                refine: vec![Refinement {
-                    op: MaskOp::Subtract,
-                    mask: Mask::Radial(RadialGradient::default()),
-                }],
+                refine: vec![
+                    Refinement {
+                        op: MaskOp::Subtract,
+                        mask: Mask::Radial(RadialGradient::default()),
+                    },
+                    // M9.13: an AI component travels with the composite like any other.
+                    Refinement {
+                        op: MaskOp::Add,
+                        mask: Mask::Ai(AiMask {
+                            prompt: AiPrompt::Click { point: [0.4, 0.2] },
+                            threshold: 20.0,
+                            invert: true,
+                        }),
+                    },
+                ],
                 adjustments: LocalAdjustments {
                     exposure: 0.75,
                     // ⚠⚠ Set by hand, because this fixture **does not fail to compile** when
@@ -4697,6 +4748,32 @@ mod tests {
         );
         let old: Edits = serde_json::from_str(r#"{"exposure": 0.5}"#).unwrap();
         assert!(old.eyes.is_empty());
+    }
+
+    #[test]
+    fn an_ai_mask_round_trips_both_prompts_and_inverts() {
+        for prompt in [
+            AiPrompt::Subject,
+            AiPrompt::Click {
+                point: [0.25, 0.75],
+            },
+        ] {
+            let m = Mask::Ai(AiMask {
+                prompt,
+                threshold: -30.0,
+                invert: false,
+            });
+            let back: Mask = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+            assert_eq!(back, m);
+        }
+        let mut m = Mask::Ai(AiMask::default());
+        *m.invert_mut() = true;
+        assert!(matches!(m, Mask::Ai(AiMask { invert: true, .. })));
+        assert_eq!(m.label(), "Subject");
+        assert_eq!(m.analytic_coverage(0.5, 0.5, 1.5), None);
+        // A partial AI mask fills from its defaults.
+        let m: Mask = serde_json::from_str(r#"{"Ai":{"prompt":"Subject"}}"#).unwrap();
+        assert_eq!(m, Mask::Ai(AiMask::default()));
     }
 
     /// ⚠⚠ Hand-written `Default`, not derived: `strength` is 100 at neutral, and the

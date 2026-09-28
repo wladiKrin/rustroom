@@ -291,6 +291,9 @@ pub struct Settings {
     /// The options the last **import** actually used (M9.12) — written only when an import starts,
     /// `export`'s rule, so a cancelled dialog leaves them alone.
     pub import: crate::ingest::options::ImportOptions,
+    /// Which network *Select Subject* uses (M9.13) — IS-Net (fast, the default) or BiRefNet_lite
+    /// (high quality). The preview and the export both read it, so they pick the same cached map.
+    pub ai_subject_model: ai_mask::SubjectModel,
     /// Ask before deleting an **export** preset.
     ///
     /// ⚠ A separate flag from `confirm_preset_delete`, not a shared one. A develop preset
@@ -872,6 +875,7 @@ impl Default for Settings {
             confirm_preset_delete: true,
             export: ExportOptions::default(),
             import: Default::default(),
+            ai_subject_model: Default::default(),
             confirm_export_preset_delete: true,
             view_demosaic: Demosaic::default(),
             gpu_tail: true,
@@ -1632,6 +1636,8 @@ mod tests {
                 keywords: "a, b".into(),
                 preset: Some("Punchy".into()),
             },
+            // Non-default, so a re-defaulted field cannot pass.
+            ai_subject_model: ai_mask::SubjectModel::BiRefNetLite,
         };
         store.save(&s).unwrap();
         assert_eq!(store.load(), s);

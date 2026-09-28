@@ -583,7 +583,19 @@ fn run(
                 let i = next.fetch_add(1, Ordering::Relaxed);
                 let Some(p) = planned.get(i) else { return };
 
-                let decoded = decode(&p.source);
+                // ⚠ M9.13: the photo's cached AI maps ride the source, looked up exactly as the
+                // preview looks them up (`ai_coverage::maps_for`), so both render the same mask.
+                let decoded = decode(&p.source).map(|mut src| {
+                    if let Some(dir) = crate::ai_cache::dir() {
+                        src.ai = crate::ai_coverage::maps_for(
+                            &p.source,
+                            &p.edits,
+                            render.ai_subject,
+                            &dir,
+                        );
+                    }
+                    src
+                });
 
                 // ⚠ Checked *again* after the decode, which is the slow part. Cancelling during a
                 // ~11 s decode must not still write that photo out: libraw cannot be interrupted,

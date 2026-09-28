@@ -77,6 +77,7 @@ fn main() {
             // ⚠ A synthetic chart carries no lens metadata, so `lens: None` is the truth here
             // rather than a shortcut — the same thing a JPEG's decode hands over.
             rustroom_app::batch_export::ExportSource {
+                ai: Default::default(),
                 image: image.clone(),
                 baseline: color::wb::Illuminant::default(),
                 lens: None,
@@ -88,6 +89,7 @@ fn main() {
             &dest,
             &o,
             rustroom_app::batch_export::ExportRender {
+                ai_subject: ai_mask::SubjectModel::IsNet,
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: false,
             },

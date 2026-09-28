@@ -458,6 +458,18 @@ fn shape_block(
                  hue, only sensor noise.",
         );
     }
+    // M9.13: an AI mask's one control. The network's soft map is thresholded; Refine moves the
+    // threshold, so the edge grows or shrinks without computing anything again.
+    if let edit_model::Mask::Ai(a) = shape {
+        ed.slider(ui, &mut a.threshold, -100.0..=100.0, "Refine", 0.0)
+            .on_hover_text(
+                "Grows (+) or shrinks (−) the selection's edge. The network's answer is kept, so \
+                 this is instant.",
+            );
+        if let edit_model::AiPrompt::Click { .. } = a.prompt {
+            crate::theme::hint(ui, "Click the photo to choose what to select.");
+        }
+    }
 }
 
 /// The Invert checkbox, one for every kind.

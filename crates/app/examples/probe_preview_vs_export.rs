@@ -82,6 +82,7 @@ fn main() {
     o.space = color::OutputSpace::Srgb;
     rustroom_app::batch_export::export_one(
         rustroom_app::batch_export::ExportSource {
+            ai: Default::default(),
             image: ed.image,
             baseline: ed.metadata.as_shot.unwrap_or_default(),
             lens: None,
@@ -93,6 +94,7 @@ fn main() {
         &out.join("export.png"),
         &o,
         rustroom_app::batch_export::ExportRender {
+            ai_subject: ai_mask::SubjectModel::IsNet,
             resampler,
             gpu_tail: false,
         },

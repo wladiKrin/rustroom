@@ -47,6 +47,7 @@ use rustroom_app::tool::Tool;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+mod ai_flow;
 mod catalog_ops;
 mod collections_panel;
 mod commands;
@@ -495,6 +496,8 @@ struct RustroomApp {
     export_progress: String,
     /// The Import dialog and any import it is running (M9.12); `None` when neither is open.
     import: Option<import_flow::ImportState>,
+    /// AI masks' worker, requests and model downloads (M9.13).
+    ai: ai_flow::AiState,
     /// The destination awaiting a collision answer; `Some` means the worker is blocked.
     export_collision: Option<PathBuf>,
     /// Scratch state for the collision dialog's "apply to all" tick.
@@ -755,6 +758,7 @@ impl RustroomApp {
             export_draft: settings.export.clone(),
             exporter: None,
             import: None,
+            ai: Default::default(),
             export_progress: String::new(),
             export_collision: None,
             export_apply_all: false,
