@@ -88,7 +88,15 @@ pub(crate) fn pan_button_down(
     input: &egui::InputState,
     binding: PanDrag,
     text_focused: bool,
+    primary_pans: bool,
 ) -> bool {
+    // ⚠ `primary_pans`: the Edit tool owns no left-drag on a zoomed photo, so there a plain drag
+    // pans as well — a trackpad and a Magic Mouse have no middle button, and the first-use
+    // review dragged a 1:1 view and watched nothing happen (A-06). The configured binding stays
+    // for the tools that paint with the left button.
+    if primary_pans && input.pointer.button_down(egui::PointerButton::Primary) {
+        return true;
+    }
     match binding {
         PanDrag::Middle => input.pointer.button_down(egui::PointerButton::Middle),
         PanDrag::Secondary => input.pointer.button_down(egui::PointerButton::Secondary),
@@ -106,6 +114,7 @@ pub(crate) fn pan_delta(
     space_down: bool,
     binding: PanDrag,
     text_focused: bool,
+    primary_pans: bool,
 ) -> egui::Vec2 {
     let mut delta = egui::Vec2::ZERO;
 
@@ -115,7 +124,7 @@ pub(crate) fn pan_delta(
         delta += scroll;
     }
 
-    let dragging = match binding {
+    let bound = match binding {
         PanDrag::Middle => resp.dragged_by(egui::PointerButton::Middle),
         PanDrag::Secondary => resp.dragged_by(egui::PointerButton::Secondary),
         // ⚠ Gated on focus: without it, a space typed into the preset-name field would arm
@@ -124,6 +133,8 @@ pub(crate) fn pan_delta(
             !text_focused && space_down && resp.dragged_by(egui::PointerButton::Primary)
         }
     };
+    // See `pan_button_down` for `primary_pans`.
+    let dragging = bound || (primary_pans && resp.dragged_by(egui::PointerButton::Primary));
     if dragging {
         delta += resp.drag_delta();
     }
@@ -160,7 +171,7 @@ mod tests {
             let c = ctx.clone();
             let _ = ctx.run_ui(input, |_ui| {
                 if pass == 1 {
-                    out = c.input(|i| pan_button_down(i, binding, false));
+                    out = c.input(|i| pan_button_down(i, binding, false, false));
                 }
             });
         }
@@ -320,12 +331,13 @@ mod tests {
     /// pass 3 saw `[0,0]` — which made `a_left_drag_does_not_pan`, the most important test in
     /// this change, pass vacuously: it would have passed with the gating deleted entirely.
     /// Movement therefore continues on every pass from 2 onward.
-    fn pan_delta_for(
+    fn pan_delta_with(
         button: Option<egui::PointerButton>,
         scroll: egui::Vec2,
         binding: PanDrag,
         space_down: bool,
         text_focused: bool,
+        primary_pans: bool,
     ) -> egui::Vec2 {
         let ctx = egui::Context::default();
         let mut out = egui::Vec2::ZERO;
@@ -379,11 +391,51 @@ mod tests {
                     // runs, because `dragged_by` takes the same lock internally.
                     let scroll = ui.input(|i| i.smooth_scroll_delta);
                     let space = ui.input(|i| i.key_down(egui::Key::Space));
-                    out = pan_delta(&resp, scroll, space, binding, text_focused);
+                    out = pan_delta(&resp, scroll, space, binding, text_focused, primary_pans);
                 }
             });
         }
         out
+    }
+
+    fn pan_delta_for(
+        button: Option<egui::PointerButton>,
+        scroll: egui::Vec2,
+        binding: PanDrag,
+        space_down: bool,
+        text_focused: bool,
+    ) -> egui::Vec2 {
+        pan_delta_with(button, scroll, binding, space_down, text_focused, false)
+    }
+
+    /// The Edit tool's plain left-drag pans when `primary_pans` says the view is zoomed and no
+    /// eyedropper is armed — and only then (A-06).
+    #[test]
+    fn a_left_drag_pans_only_when_the_edit_tool_allows_it() {
+        for binding in PanDrag::ALL {
+            let allowed = pan_delta_with(
+                Some(egui::PointerButton::Primary),
+                egui::Vec2::ZERO,
+                binding,
+                false,
+                false,
+                true,
+            );
+            assert_ne!(
+                allowed,
+                egui::Vec2::ZERO,
+                "{binding:?}: a left-drag should pan when the tool allows it"
+            );
+            let refused = pan_delta_with(
+                Some(egui::PointerButton::Primary),
+                egui::Vec2::ZERO,
+                binding,
+                false,
+                false,
+                false,
+            );
+            assert_eq!(refused, egui::Vec2::ZERO, "{binding:?}: and not otherwise");
+        }
     }
 
     #[test]
@@ -488,7 +540,7 @@ mod tests {
                 let resp = ui.allocate_rect(rect, egui::Sense::drag());
                 if pass == 3 {
                     let scroll = ui.input(|i| i.smooth_scroll_delta);
-                    out = pan_delta(&resp, scroll, false, PanDrag::Middle, false);
+                    out = pan_delta(&resp, scroll, false, PanDrag::Middle, false, false);
                 }
             });
         }

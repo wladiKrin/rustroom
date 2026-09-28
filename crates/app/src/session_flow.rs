@@ -28,8 +28,13 @@ use std::time::Instant;
 /// method so it can be tested without building a `Session`, which needs a decoded buffer and a
 /// texture.
 pub(crate) fn before_edits(edits: &Edits) -> Edits {
+    // ⚠ The camera rendering and the lens correction stay: "before" is how the file came in,
+    // profile and all, so an untouched RAW shows no change. Dropping them made Before a flat,
+    // colorimetric frame nobody had ever seen (P-08).
     Edits {
         geometry: edits.geometry,
+        rendering: edits.rendering,
+        lens_correction: edits.lens_correction,
         ..Default::default()
     }
 }
@@ -1245,6 +1250,25 @@ mod tests {
         assert_eq!(before.geometry.angle, 3.0, "the straighten must survive");
         assert_eq!(before.exposure, 0.0, "the adjustments must not");
         assert_eq!(before.vignette.amount, 0.0);
+    }
+
+    /// ⚠ Before keeps the camera rendering and the lens correction: an untouched RAW must show
+    /// the same picture in both halves, or "before" is a frame the user never saw (P-08).
+    #[test]
+    fn before_keeps_the_rendering_and_the_lens_state() {
+        let edits = Edits {
+            rendering: Some(edit_model::Rendering::Camera),
+            lens_correction: Some(edit_model::LensCorrection::default()),
+            exposure: 1.0,
+            ..Default::default()
+        };
+        let before = super::before_edits(&edits);
+        assert_eq!(before.rendering, Some(edit_model::Rendering::Camera));
+        assert_eq!(
+            before.lens_correction,
+            Some(edit_model::LensCorrection::default())
+        );
+        assert_eq!(before.exposure, 0.0);
     }
 
     /// ⚠⚠ **The bug this reproduces: a thumbnail reverted the moment you navigated away.**

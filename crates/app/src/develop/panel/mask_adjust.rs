@@ -157,11 +157,7 @@ pub fn show(
                 // ⚠ M9.6, Lightroom's meaning: negative protects this area from the global
                 // defringe (a real purple object), positive adds defringe here.
                 theme::sub_label(ui, "Defringe");
-                ed.slider(ui, &mut a.defringe, -100.0..=100.0, "Defringe", 0.0)
-                    .on_hover_text(
-                        "Negative protects this area from the Lens panel's defringe; positive \
-                         removes purple and green fringes here with its hue ranges",
-                    );
+                ed.slider(ui, &mut a.defringe, -100.0..=100.0, "Defringe", 0.0);
             }
         });
         if out.reset {

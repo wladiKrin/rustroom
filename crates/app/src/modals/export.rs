@@ -430,6 +430,23 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                         }
                                     });
                                 ui.end_row();
+                            });
+                        // ⚠ Hidden, not disabled, for a lossless format: at this size a disabled
+                        // slider reads the same as an enabled one (P-05).
+                        if opts.format.is_lossy() {
+                            ui.add(
+                                egui::Slider::new(&mut opts.quality, 1..=100).text("JPEG quality"),
+                            );
+                        }
+                    });
+                    // ⚠ Its own collapsed section: colour space and rendering intent are the two
+                    // terms a first export has no use for, and they sat between Format and the
+                    // quality slider (A-25). sRGB and Clip are the silent defaults.
+                    section(ui, "Colour", &export_summary::colour(&opts), false, |ui| {
+                        egui::Grid::new("export_colour")
+                            .num_columns(2)
+                            .spacing([12.0, 4.0])
+                            .show(ui, |ui| {
                                 ui.label("Colour space");
                                 // ⚠ Disabled for DNG, which is always linear ProPhoto — the
                                 // opening application converts (`ExportFormat::fixed_space`).
@@ -476,10 +493,6 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                  unless its workflow is set to \"none\".",
                             );
                         }
-                        ui.add_enabled(
-                            opts.format.is_lossy(),
-                            egui::Slider::new(&mut opts.quality, 1..=100).text("JPEG quality"),
-                        );
                     });
                     section(ui, "Size", &export_summary::size(&opts), false, |ui| {
                         let mut resize = opts.max_edge.is_some();

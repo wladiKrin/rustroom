@@ -66,6 +66,7 @@ pub mod safe_name;
 pub mod selection;
 pub mod settings;
 pub mod sidecar;
+pub mod slider_help;
 pub mod slider_map;
 pub mod spot_source;
 pub mod spot_tool;

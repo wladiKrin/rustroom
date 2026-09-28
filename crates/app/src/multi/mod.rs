@@ -198,7 +198,8 @@ pub(crate) fn tile(
         p.rect_stroke(
             rect,
             egui::CornerRadius::same(3),
-            egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 160, 240)),
+            // The accent, not a colour of its own (P-09).
+            egui::Stroke::new(2.0, ui.visuals().selection.bg_fill),
             egui::StrokeKind::Inside,
         );
     }

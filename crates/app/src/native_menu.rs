@@ -156,6 +156,16 @@ pub fn refresh(ctx: &egui::Context, recent: &[std::path::PathBuf]) {
 }
 
 pub fn poll() -> Vec<Command> {
+    // ⚠ AppKit adds AutoFill, Emoji & Symbols and Enter Full Screen *after* `install` has
+    // stripped the menu — lazily, in the first moments of the run — so the strip repeats on
+    // every poll for a while and then stops. Measured: they were back by the first frame that
+    // could be inspected; a few seconds covers a slow launch.
+    static STRIP_UNTIL: OnceLock<std::time::Instant> = OnceLock::new();
+    let until =
+        *STRIP_UNTIL.get_or_init(|| std::time::Instant::now() + std::time::Duration::from_secs(5));
+    if std::time::Instant::now() < until {
+        strip_injected_items();
+    }
     let mut out = Vec::new();
     let Ok(rx) = events().rx.lock() else {
         return out;

@@ -144,9 +144,16 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
         .ctx()
         .input(|i| i.pointer.press_origin())
         .is_some_and(|p| ui.max_rect().contains(p));
+    // ⚠ Left-drag pans in the Edit tool once the view is zoomed in — see `pan_button_down`.
+    // Not while an eyedropper is armed: that click picks.
+    let primary_pans = app.tool == Tool::Edit
+        && app
+            .session
+            .as_ref()
+            .is_some_and(|s| s.zoom > view_region::MIN_ZOOM && !s.picking_wb && !s.picking_fringe);
     let panning = ui
         .ctx()
-        .input(|i| navigation::pan_button_down(i, app_pan_drag, text_focused));
+        .input(|i| navigation::pan_button_down(i, app_pan_drag, text_focused, primary_pans));
     let view_only_gesture = press_on_canvas && (panning || app_suppressed_mask);
     // ⚠⚠ **`press_origin.is_some()` as well as `is_decidedly_dragging()`, and it was found by
     // instrumenting.** On the RELEASE frame egui still reports a decided drag while the press
@@ -663,8 +670,23 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                             let scroll = ui.input(|i| i.smooth_scroll_delta);
                             let space_down = ui.input(|i| i.key_down(egui::Key::Space));
                             let text_focused = ui.ctx().memory(|m| m.focused().is_some());
-                            s.pan +=
-                                pan_delta(&resp, scroll, space_down, app_pan_drag, text_focused);
+                            s.pan += pan_delta(
+                                &resp,
+                                scroll,
+                                space_down,
+                                app_pan_drag,
+                                text_focused,
+                                primary_pans,
+                            );
+                            if primary_pans {
+                                resp.clone().on_hover_cursor(
+                                    if resp.dragged_by(egui::PointerButton::Primary) {
+                                        egui::CursorIcon::Grabbing
+                                    } else {
+                                        egui::CursorIcon::Grab
+                                    },
+                                );
+                            }
 
                             // ⚠ Unconditional, where the old code reset only inside the scroll
                             // branch — so a left-drag at fit really could push a fitting image

@@ -63,8 +63,12 @@ impl eframe::App for RustroomApp {
         self.handle_clipboard_keys(&ctx);
         // ⚠ After `handle_clipboard_keys`, which owns ⌘C / ⌘V for the reason in
         // `pressed_command`'s doc comment.
-        if let Some(cmd) = pressed_command(&ctx) {
-            commands::execute(self, &ctx, cmd);
+        // ⚠ Not while a dialog is open: ⌘1 zoomed the canvas and `\` toggled Before/After behind
+        // the Export dialog (P-04). The dialog owns the keyboard until it closes.
+        if matches!(self.modal, crate::modals::Modal::None) {
+            if let Some(cmd) = pressed_command(&ctx) {
+                commands::execute(self, &ctx, cmd);
+            }
         }
         // ⚠ After the shortcuts, so a digit some menu item claimed would win — none does now that
         // the tools sit on letters, which is the point: rating in Develop.

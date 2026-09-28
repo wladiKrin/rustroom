@@ -160,7 +160,12 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             (
                 icon(ui, icons::ZOOM_OUT, "Zoom out", true),
                 icon(ui, icons::ZOOM_FIT, "Zoom to fit", true),
-                icon(ui, icons::ZOOM_ACTUAL, "Zoom to 1:1", true),
+                icon(
+                    ui,
+                    icons::ZOOM_ACTUAL,
+                    "Zoom to 1:1 — then drag or scroll to look around",
+                    true,
+                ),
                 icon(ui, icons::ZOOM_IN, "Zoom in", true),
             )
         });

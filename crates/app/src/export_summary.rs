@@ -40,18 +40,24 @@ fn folder(o: &ExportOptions) -> String {
 
 /// `JPEG · sRGB · 92` — the quality only for a lossy format.
 pub fn file(o: &ExportOptions) -> String {
+    let mut s = o.format.label().to_string();
+    if o.format.is_lossy() {
+        s.push_str(&format!(" · {}", o.quality));
+    }
+    s
+}
+
+/// The colour space and, where it applies, the rendering intent — the Colour section's trailer.
+pub fn colour(o: &ExportOptions) -> String {
     // ⚠ DNG names its own fixed space: the dialog's choice does not apply to it.
     if let Some(fixed) = o.format.fixed_space() {
-        return format!("{} · linear {}", o.format.label(), fixed.label());
+        return format!("linear {}", fixed.label());
     }
-    let mut s = format!("{} · {}", o.format.label(), o.space.label());
+    let mut s = o.space.label().to_string();
     // ⚠ Not for ProPhoto: it is the working space and maps nothing, so naming an intent there
     // would describe a choice that has no effect.
     if o.space != color::OutputSpace::ProPhoto {
         s.push_str(&format!(" · {}", o.intent.label()));
-    }
-    if o.format.is_lossy() {
-        s.push_str(&format!(" · {}", o.quality));
     }
     s
 }
@@ -161,6 +167,10 @@ mod tests {
         assert_eq!(watermark(&o).chars().count(), 24);
 
         assert!(file(&o).contains(" · "));
+        assert!(colour(&o).contains(" · "), "{}", colour(&o));
+        o.format = export::ExportFormat::Dng;
+        assert!(colour(&o).starts_with("linear "), "{}", colour(&o));
+        assert!(!file(&o).contains(" · "), "{}", file(&o));
         assert_eq!(demosaic(&o), o.demosaic.label());
         assert_eq!(metadata(&o), o.metadata.scope.label().to_lowercase());
     }
