@@ -158,6 +158,29 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-28 — M9.13 AI masks: the brainstorm and the runtime spike (branch `m9.13-ai-masks`)
+
+**Chosen (the author):** build it — for skies, people and subjects of any kind; models **downloaded on
+first use**; the AI result a **mask component with a Refine slider**, computed once from the unedited
+photo and cached; approach **A — Select Subject + Select by click** (a converted ADE20K sky model was
+declined over the dataset's research/education terms). Licences verified at the source: BiRefNet MIT
+(code and weights), MobileSAM Apache-2.0, SAM Apache-2.0, ONNX Runtime MIT; ⛔ BRIA RMBG (non-commercial),
+NVIDIA SegFormer (non-commercial), `onnx-community/ISNet-ONNX` (re-tagged AGPL).
+
+**The spike** (full table in the spec): on the author's M2, `tract` runs BiRefNet_lite in **23.6 s**,
+IS-Net in **1.9 s**, the MobileSAM encoder in **1.6 s** and a click in **0.10 s**; `ort` is 2.7–2.8×
+faster on CPU; ⚠ **CoreML cannot compile BiRefNet** (MLProgram rejects its deformable-conv export; the
+older format hung 26 minutes). By the spec's own "within ~3×" rule **`tract` won**. The author then
+chose **both subject models** — IS-Net fast by default, BiRefNet_lite as a Settings choice — having
+been told IS-Net's weights carry no explicit licence.
+
+⚠⚠ **Three confidently-wrong masks on the way, each a real trap for the implementation:** (1) the SAM
+decoder's full-size output is cropped to a **frozen landscape shape** — a click on the tower selected
+a column at 0.42 of the width where the tower is at 0.60 (0.42/0.60 ≈ 683/1024); `low_res_masks` plus
+SAM's own resize/crop/resize is right. (2) A guessed "stretched square" hypothesis made it *closer and
+still wrong* — stopped guessing and read `samexporter`, which documents (1). (3) The spike's loader
+ignored EXIF orientation, so the first BiRefNet mask was sideways.
+
 ### 2026-09-27 — M9.12 import from a card (branch `m9.12-import`)
 
 **3,129 tests** (+29), 82 goldens unmoved, gate green. Spec `2026-09-27-m9.12-import-design.md`,
