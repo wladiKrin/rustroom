@@ -167,7 +167,7 @@ declined over the dataset's research/education terms). Licences verified at the 
 (code and weights), MobileSAM Apache-2.0, SAM Apache-2.0, ONNX Runtime MIT; ⛔ BRIA RMBG (non-commercial),
 NVIDIA SegFormer (non-commercial), `onnx-community/ISNet-ONNX` (re-tagged AGPL).
 
-**What shipped** (🟡 built, awaiting use). A new zero-GUI crate **`ai-mask`**: the registry (four
+**What shipped** (✅ confirmed by use and merged 2026-09-28, after the performance fix below). A new zero-GUI crate **`ai-mask`**: the registry (four
 files pinned by size and SHA-256, with licences), a hash-verified download (a mismatch is deleted,
 never used), preprocessing, `ProbMap`, and `tract` inference for IS-Net, BiRefNet_lite and MobileSAM.
 `Mask::Ai(AiMask { prompt: Subject | Click{point}, threshold, invert })` — **no pixels in the

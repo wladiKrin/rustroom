@@ -168,7 +168,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-27)
 
-**3159 tests**, **82 goldens**, gate green on branch `m9.13-ai-masks` (unmerged — awaiting use). ⚠⚠ **Run the git command above rather than
+**3159 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -176,7 +176,7 @@ trusting any count here** — this block has been wrong about the push state bef
 one line with a `grep` pointer; its story is in `docs/JOURNAL.md`. (Compacted 2026-09-27 from a block
 that had grown to ~170 lines by appending.)
 
-**Phase 9 so far — all merged and confirmed by use** (`grep -n '<id>' docs/JOURNAL.md` for each):
+**Phase 9 — complete, all merged and confirmed by use** (`grep -n '<id>' docs/JOURNAL.md` for each):
 
 | Id | What | The thing to remember |
 |---|---|---|
@@ -190,7 +190,7 @@ that had grown to ~170 lines by appending.)
 | M9.10 | DNG export: the finished picture as a linear DNG | `export::lj92` + `export::dng`; darktable workflow "none" renders it intact (0.00 mean), its default adds +0.66 EV; ⚠ `ColorMatrix1` at D65 (libraw ignores the illuminant tag) |
 | M9.11 | Red eye + pet eye, one click each | detected ONCE at the click, stored as a circle; `RedEyeStage` after spots corrects by `pipeline::redness` = `(R−max(G,B))/R` plus a fringe pass within 0.3 r of the red core (the reported halo); real cores measure 0.44–0.57; Retouch modes Heal·Clone·Red eye·Pet eye. ⚠ Also fixed: a placed/moved spot now pushes ONE undo step |
 | M9.12 | Import from a card: File → Import… ⇧⌘I | `ingest::{source,plan,copy,options,worker,entry}` (no egui) + `import_flow`/`modals::import`; cards = volumes with `DCIM`; already-imported = catalog size + capture time; layout `YYYY/YYYY-MM-DD` (default) · `YYYY/MM/DD` · `YYYY-MM-DD` · one folder; metadata merged only when non-empty; ⚠ the survey reads only the EXIF block (`image_decode::quick_look`, 0.5 ms / ≤70 KB vs 113 ms / 31 MB a RAF) |
-| M9.13 | AI masks: Subject + Select by click (🟡 built, awaiting use) | crate `ai-mask` on **`tract`** (measured: 2.7–2.8× of ort; CoreML cannot compile BiRefNet); IS-Net default / BiRefNet_lite in Settings, MobileSAM for clicks; maps in **decode space**, cached on disk, fed through the brush side channel; ⚠ SAM decoder: use `low_res_masks` (the full-size output's crop is frozen landscape) |
+| M9.13 | AI masks: Subject + Select by click | crate `ai-mask` on **`tract`** (measured: 2.7–2.8× of ort; CoreML cannot compile BiRefNet); IS-Net default / BiRefNet_lite in Settings, MobileSAM for clicks; maps in **decode space**, cached on disk, fed through the brush side channel; ⚠ SAM decoder: use `low_res_masks` (the full-size output's crop is frozen landscape); ⚠ the lens warp is done ONCE per map (`post_lens`) — per pixel per frame cost 117 ms a rotation frame |
 
 **Earlier, still worth knowing** (all merged, all confirmed by use):
 - **The GPU stack** (2026-09-26): timestamps (`RUSTROOM_DEBUG_GPU_TIME=1`; ⚠ an encoder timestamp
@@ -212,8 +212,7 @@ that had grown to ~170 lines by appending.)
 
 ### ▶ Next action
 
-**M9.13 — AI masks** is built on `m9.13-ai-masks`, awaiting the author's use (Masks → Subject /
-Select by click; the first use downloads the model). It closes Phase 9.
+✅ **Phase 9 is complete** (M9.13 merged 2026-09-28). Next is **Phase 10**:
 **Phase 10** (was 9) is integration and release: M10.2
 Windows + the Linux GUI (never run), M10.3 contributor docs, M10.4 `v0.1`, M10.5 plugins. ⛔ **M10.1 was
 WITHDRAWN — it was never real** (the licence has been committed since `e71330d`); do not re-open it.
