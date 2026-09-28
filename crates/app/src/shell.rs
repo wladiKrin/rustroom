@@ -19,6 +19,17 @@ use rustroom_app::render_engine::RegionRect;
 impl eframe::App for RustroomApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // ⚠ A folder or photos dropped on the window open, the way the empty Library promises.
+        let dropped: Vec<std::path::PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.clone())
+                .collect()
+        });
+        if !dropped.is_empty() {
+            self.open_dropped(&ctx, dropped);
+        }
 
         // Workaround for an upstream winit/macOS teardown bug: when the window closes,
         // AppKit's Touch Bar responder tracking (`_NSTouchBarFinderObservation`) removes a
@@ -63,9 +74,16 @@ impl eframe::App for RustroomApp {
         self.handle_clipboard_keys(&ctx);
         // ⚠ After `handle_clipboard_keys`, which owns ⌘C / ⌘V for the reason in
         // `pressed_command`'s doc comment.
-        if let Some(cmd) = pressed_command(&ctx) {
-            commands::execute(self, &ctx, cmd);
+        // ⚠ Not while a dialog is open: ⌘1 zoomed the canvas and `\` toggled Before/After behind
+        // the Export dialog (P-04). The dialog owns the keyboard until it closes.
+        if matches!(self.modal, crate::modals::Modal::None) {
+            if let Some(cmd) = pressed_command(&ctx) {
+                commands::execute(self, &ctx, cmd);
+            }
         }
+        // ⚠ After the shortcuts, so a digit some menu item claimed would win — none does now that
+        // the tools sit on letters, which is the point: rating in Develop.
+        self.handle_develop_culling(&ctx);
         self.pump_export(&ctx);
         self.pump_import(&ctx);
         self.pump_ai(&ctx);
@@ -91,6 +109,11 @@ impl eframe::App for RustroomApp {
                     frame.width,
                     frame.height,
                 ));
+                s.clip_texture = if self.show_clipping {
+                    clipping_texture(&ctx, &frame.srgb, frame.width, frame.height)
+                } else {
+                    None
+                };
                 // ⚠ Timed under `RUSTROOM_DEBUG_RENDER` (2026-09-26): the worker's `render:` line
                 // cannot see what the UI thread spends turning a frame into a texture, and the
                 // in-app drag ran ~11 ms slower than the headless probe with no line saying where.
@@ -258,7 +281,7 @@ impl eframe::App for RustroomApp {
             // ⚠ macOS gets the real system menu bar instead; drawing this one too would put a
             // redundant row under a nearly-empty system menu.
             if !cfg!(target_os = "macos") {
-                if let Some(cmd) = menu_bar::show(ui) {
+                if let Some(cmd) = menu_bar::show(ui, &self.settings.recent_folders) {
                     pending_command = Some(cmd);
                 }
             }
@@ -282,7 +305,9 @@ impl eframe::App for RustroomApp {
                 // ⚠ Panel order is load-bearing: egui allocates side panels in call order and
                 // the central panel takes what is left, so the collections panel must be drawn
                 // *before* the grid.
-                crate::collections_panel::show(self, ui, &ctx);
+                if self.show_panels {
+                    crate::collections_panel::show(self, ui, &ctx);
+                }
                 // ⚠ Exhaustive, so a fourth Library layout is a compile error here rather than
                 // a mode that silently shows the grid — the rule `commands::execute`'s match
                 // already follows.
@@ -295,6 +320,7 @@ impl eframe::App for RustroomApp {
             }
         }
 
+        develop::ambient::draw(self, &ctx);
         modals::draw(self, &ctx);
     }
 }
@@ -458,6 +484,10 @@ impl RustroomApp {
                                             )
                                             .monospace(),
                                         ),
+                                    )
+                                    .on_hover_text(
+                                        "The colour under the pointer as displayed: red, green, \
+                                         blue, 0–255",
                                     );
                                     let (patch, painter) = ui.allocate_painter(
                                         egui::vec2(READOUT_SWATCH, READOUT_SWATCH),
@@ -519,31 +549,64 @@ fn pressed_command(ctx: &egui::Context) -> Option<Command> {
     if ctx.memory(|m| m.focused()).is_some() {
         return None;
     }
+    let mut hit = None;
     for section in menu::model() {
-        for item in section.items {
+        menu::walk(&section.items, &mut |item| {
+            if hit.is_some() {
+                return;
+            }
             let menu::Item::Action {
                 command,
                 shortcut: Some(sc),
                 ..
             } = item
             else {
-                continue;
+                return;
             };
             if sc.cmd && matches!(sc.key, 'C' | 'V') {
-                continue;
+                return;
             }
             let Some(key) = egui_key(sc.key) else {
-                continue;
+                return;
             };
-            let hit = ctx.input(|i| {
+            let pressed = ctx.input(|i| {
                 i.key_pressed(key) && i.modifiers.command == sc.cmd && i.modifiers.shift == sc.shift
             });
-            if hit {
-                return Some(command);
+            if pressed {
+                hit = Some(*command);
+            }
+        });
+        if hit.is_some() {
+            break;
+        }
+    }
+    if hit.is_none() {
+        for (key, cmd) in menu::ALIASES {
+            let Some(k) = egui_key(*key) else { continue };
+            let pressed =
+                ctx.input(|i| i.key_pressed(k) && !i.modifiers.command && !i.modifiers.shift);
+            if pressed {
+                hit = Some(*cmd);
+                break;
             }
         }
     }
-    None
+    hit
+}
+
+/// The clipping overlay for a displayed frame, or `None` when nothing clips.
+pub(crate) fn clipping_texture(
+    ctx: &egui::Context,
+    rgba: &[u8],
+    w: usize,
+    h: usize,
+) -> Option<egui::TextureHandle> {
+    let overlay = rustroom_app::clipping::overlay(rgba, w, h, 4);
+    if rustroom_app::clipping::is_empty(&overlay) {
+        return None;
+    }
+    let img = egui::ColorImage::from_rgba_premultiplied([w, h], &overlay);
+    Some(ctx.load_texture("clipping", img, egui::TextureOptions::NEAREST))
 }
 
 /// The model's key character as an egui key.
@@ -566,6 +629,14 @@ fn egui_key(c: char) -> Option<egui::Key> {
         'G' => egui::Key::G,
         'D' => egui::Key::D,
         'N' => egui::Key::N,
+        'R' => egui::Key::R,
+        'K' => egui::Key::K,
+        'Q' => egui::Key::Q,
+        'T' => egui::Key::T,
+        'L' => egui::Key::L,
+        'J' => egui::Key::J,
+        'Y' => egui::Key::Y,
+        '\t' => egui::Key::Tab,
         '+' => egui::Key::Plus,
         '-' => egui::Key::Minus,
         '0' => egui::Key::Num0,

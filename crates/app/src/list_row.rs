@@ -104,6 +104,10 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
     let mut action = None;
     let mut right = rect.right();
     let mut colours: Vec<egui::Color32> = Vec::with_capacity(spec.actions.len());
+    // ⚠ The actions exist on every row — a screen reader or a test finds them by name — but
+    // they are **drawn only under the pointer**: a "×" on every folder row at all times read as
+    // a standing threat (P-13). A click is always under the pointer, so nothing is lost.
+    let pointer_here = ui.rect_contains_pointer(rect);
     for (i, a) in spec.actions.iter().enumerate() {
         let cell = egui::Rect::from_min_max(
             egui::pos2(right - ROW_HEIGHT, rect.top()),
@@ -171,15 +175,18 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
             .as_ref()
             .map(|g| g.size().x + 8.0)
             .unwrap_or(0.0);
-        let name_painter = painter.with_clip_rect(egui::Rect::from_min_max(
-            rect.left_top(),
-            egui::pos2(name_right - count_w, rect.bottom()),
-        ));
-        name_painter.text(
-            egui::pos2(rect.left() + spec.indent + 8.0, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            spec.name,
-            font,
+        // ⚠ Elided with "…", not clipped mid-glyph: "immich (downloaded" and "concert/Krinitsi"
+        // were what a clip left of two folder names (P-13). The full name is the row's hover.
+        let name_left = rect.left() + spec.indent + 8.0;
+        let mut job = egui::text::LayoutJob::simple_singleline(spec.name.to_owned(), font, text);
+        job.wrap.max_width = (name_right - count_w - name_left).max(0.0);
+        job.wrap.max_rows = 1;
+        job.wrap.break_anywhere = true;
+        job.wrap.overflow_character = Some('…');
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        painter.galley(
+            egui::pos2(name_left, rect.center().y - galley.size().y / 2.0),
+            galley,
             text,
         );
         if let Some(g) = count_galley {
@@ -191,6 +198,9 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
         }
         let mut cell_x = rect.right() - ROW_HEIGHT / 2.0;
         for (a, colour) in spec.actions.iter().zip(colours) {
+            if !pointer_here {
+                break;
+            }
             painter.text(
                 egui::pos2(cell_x, rect.center().y),
                 egui::Align2::CENTER_CENTER,

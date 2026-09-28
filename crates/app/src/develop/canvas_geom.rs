@@ -165,6 +165,34 @@ pub fn corner_brackets(rect: egui::Rect, arm: f32) -> Vec<(egui::Pos2, egui::Pos
     out
 }
 
+/// A short bar centred on each edge of `rect`, the handle for dragging that edge alone. Clamped
+/// like the brackets so a tiny crop keeps its four bars apart.
+pub fn edge_bars(rect: egui::Rect, len: f32) -> Vec<(egui::Pos2, egui::Pos2)> {
+    let half = (len / 2.0)
+        .min(rect.width() / 6.0)
+        .min(rect.height() / 6.0)
+        .max(1.0);
+    let c = rect.center();
+    vec![
+        (
+            egui::pos2(c.x - half, rect.top()),
+            egui::pos2(c.x + half, rect.top()),
+        ),
+        (
+            egui::pos2(c.x - half, rect.bottom()),
+            egui::pos2(c.x + half, rect.bottom()),
+        ),
+        (
+            egui::pos2(rect.left(), c.y - half),
+            egui::pos2(rect.left(), c.y + half),
+        ),
+        (
+            egui::pos2(rect.right(), c.y - half),
+            egui::pos2(rect.right(), c.y + half),
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod bracket_tests {
     use super::*;

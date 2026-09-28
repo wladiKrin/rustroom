@@ -388,6 +388,29 @@ fn confirm_merge_keyword(app: &mut RustroomApp, ctx: &egui::Context) {
 /// ⚠ **Generated from `menu::model()`, never hand-written.** A shortcuts dialog listing a
 /// chord the app does not have is worse than no dialog at all, and a hand-written one drifts
 /// the first time a shortcut moves.
+/// The keys that are not menu items, for the shortcuts dialog. Also swept by
+/// `theme::every_menu_string_is_renderable`.
+pub(crate) const EXTRA_KEYS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "Rating and flags — in the grid, Compare, Survey and Develop",
+        &[
+            ("Stars", "0–5"),
+            ("Colour label", "6–9"),
+            ("Pick", "P"),
+            ("Reject", "X"),
+            ("Unflag", "U"),
+        ],
+    ),
+    (
+        "Sliders",
+        &[
+            ("Reset one", "double-click the slider or its name"),
+            ("Nudge a focused one", "← →"),
+        ],
+    ),
+    ("Also", &[("Compare", "Y")]),
+];
+
 fn shortcuts(app: &mut RustroomApp, ctx: &egui::Context) {
     // ⚠ Through the shared funnel like every other dialog. It built its own `egui::Modal` before,
     // which meant it missed the frame padding and the sizing entirely — and it is one of the
@@ -411,7 +434,7 @@ fn shortcuts(app: &mut RustroomApp, ctx: &egui::Context) {
                     Header::new(section.title),
                 );
                 h.state.show_body_unindented(ui, |ui| {
-                    for item in section.items {
+                    rustroom_app::menu::walk(&section.items, &mut |item| {
                         if let rustroom_app::menu::Item::Action {
                             label,
                             shortcut: Some(sc),
@@ -423,6 +446,22 @@ fn shortcuts(app: &mut RustroomApp, ctx: &egui::Context) {
                                 theme::hint(ui, &sc.label());
                             });
                         }
+                    });
+                });
+            }
+            for (title, lines) in EXTRA_KEYS {
+                let mut h = header(
+                    ui,
+                    egui::Id::new(("shortcuts", *title)),
+                    true,
+                    Header::new(title),
+                );
+                h.state.show_body_unindented(ui, |ui| {
+                    for (what, key) in *lines {
+                        ui.horizontal(|ui| {
+                            ui.label(*what);
+                            theme::hint(ui, key);
+                        });
                     }
                 });
             }

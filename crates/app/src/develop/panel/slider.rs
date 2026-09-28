@@ -49,6 +49,8 @@ pub struct Slider<'a> {
     formatter: Option<Formatter<'a>>,
     parser: Option<Parser<'a>>,
     reset: Option<f32>,
+    /// One sentence shown when the pointer rests on the label — see `rustroom_app::slider_help`.
+    help: Option<String>,
 }
 
 impl<'a> Slider<'a> {
@@ -61,6 +63,7 @@ impl<'a> Slider<'a> {
             formatter: None,
             parser: None,
             reset: None,
+            help: None,
         }
     }
 
@@ -68,6 +71,12 @@ impl<'a> Slider<'a> {
     /// nothing.
     pub fn reset_to(mut self, value: f32) -> Self {
         self.reset = Some(value);
+        self
+    }
+
+    /// What the label says when hovered.
+    pub fn help(mut self, text: Option<String>) -> Self {
+        self.help = text;
         self
     }
 
@@ -104,6 +113,7 @@ impl egui::Widget for Slider<'_> {
             formatter,
             parser,
             reset,
+            help,
         } = self;
         let (min, max) = (*range.start(), *range.end());
         let height = ui.spacing().interact_size.y;
@@ -158,10 +168,13 @@ impl egui::Widget for Slider<'_> {
                 galley,
                 colour,
             );
-            let label_resp = if elided {
-                label_resp.on_hover_text(label)
-            } else {
-                label_resp
+            // ⚠ The help sits on the **name**, where a reader looks for it; an elided name shows
+            // itself in full first.
+            let label_resp = match (&help, elided) {
+                (Some(h), true) => label_resp.on_hover_text(format!("{label}\n{h}")),
+                (Some(h), false) => label_resp.on_hover_text(h.as_str()),
+                (None, true) => label_resp.on_hover_text(label),
+                (None, false) => label_resp,
             };
 
             // ── rail ──

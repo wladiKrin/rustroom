@@ -40,6 +40,9 @@ pub struct Edited {
     pub changed: bool,
     /// A drag ended or a discrete control was used; push one history entry.
     pub settled: bool,
+    /// One line for the status bar about what a button just did — Auto says which sliders it
+    /// set and by how much, so two sliders pinned at +100 read as a result, not a fault (A-17).
+    pub note: Option<String>,
 }
 
 /// Whether `r`'s gesture is over, so its change is one undo step.
@@ -72,10 +75,15 @@ impl Edited {
         // compile error; getting it wrong fails `every_slider_resets_to_its_fields_default`.
         default: f32,
     ) -> egui::Response {
+        // ⚠ Every slider explains itself on hover, from one table, with the reset hint appended
+        // once here. A label the table does not know draws no help; the panel tests fail on it.
+        let help =
+            rustroom_app::slider_help::text(label).map(|h| format!("{h} Double-click resets it."));
         let r = ui.add(
             slider::Slider::new(value, range)
                 .text(label)
-                .reset_to(default),
+                .reset_to(default)
+                .help(help),
         );
         self.absorb(&r);
         // ⚠ Returned so a caller can attach hover text. Every existing call site ignores it,
@@ -138,6 +146,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
         // ⚠⚠ egui's panel state is **not persisted** here, so this default is the width every launch
         // actually gets — not merely a first-run hint.
         .default_size(320.0)
+        // ⚠ `default_size` is a *wrapping* width under egui 0.35: on a fresh profile the panel came
+        // up at ~214 pt, which left every slider rail 60 pt long — a 40-pt drag took Exposure
+        // from 0 to +5 (both first-use reviews). The floor is what keeps the rails usable.
+        .min_size(300.0)
         .frame(theme::panel_frame(ui.style()))
         .show(ui, |ui| {
             if app.pending.is_some() {
@@ -342,6 +354,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     if ed.settled {
                         photo_edited |= s.history.push(s.edits.clone());
                     }
+                    if let Some(note) = ed.note.take() {
+                        app.status = note;
+                    }
 
                     // ⚠ No footer (2026-09-20, user's call): the filename, the copy-label field
                     // and the camera used to sit here. The top bar names the photo now, and
@@ -370,7 +385,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
 }
 
 /// The histogram well's height.
-const HIST_HEIGHT: f32 = 72.0;
+const HIST_HEIGHT: f32 = 120.0;
 
 /// The histogram's channel colours. ⚠ Hand-painted constants outside the accent system, as
 /// everything painted by hand is (visual identity spec, caveat 7).
@@ -491,8 +506,8 @@ fn camera_profile_row(app: &mut RustroomApp, ui: &mut egui::Ui) {
     if app.camera_profiles_cache.is_empty() {
         theme::hint(
             ui,
-            "No profiles installed. Rustroom ships none — drop .dcp files into the profiles \
-             folder beside your settings to use them.",
+            "Colours come from Rustroom's built-in camera data. To use a profile from your camera \
+             maker instead, put its .dcp file in the profiles folder next to your settings.",
         );
     }
     // ⚠ A change guard like its neighbours: this body runs every frame, and `apply_camera_profile`

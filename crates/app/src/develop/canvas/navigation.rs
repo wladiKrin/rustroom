@@ -89,6 +89,10 @@ pub(crate) fn pan_button_down(
     binding: PanDrag,
     text_focused: bool,
 ) -> bool {
+    // ⚠ No plain left-drag panning, by the author's decision (2026-09-28, declining A-06): the
+    // left button belongs to the brush, the crop handles and the guides, and a mode that pans
+    // with it in one tool and paints with it in the next is the collision the binding setting
+    // exists to avoid. Middle, right or Space+left, chosen in Settings → Input.
     match binding {
         PanDrag::Middle => input.pointer.button_down(egui::PointerButton::Middle),
         PanDrag::Secondary => input.pointer.button_down(egui::PointerButton::Secondary),

@@ -5,6 +5,7 @@
 //! native macOS NSMenu — which is exactly why the model must not know about either.
 
 use crate::tool::Tool;
+use std::path::{Path, PathBuf};
 
 /// Everything the app can be asked to do from a menu, a key, or the rail.
 ///
@@ -14,6 +15,8 @@ use crate::tool::Tool;
 pub enum Command {
     OpenFile,
     OpenFolder,
+    /// Open the n-th remembered folder, most recent first (`Settings::recent_folders`).
+    OpenRecent(usize),
     Import,
     Export,
     Settings,
@@ -37,6 +40,14 @@ pub enum Command {
     ZoomActual,
     ToggleBeforeAfter,
     ToggleFilmstrip,
+    /// Hide or show the panels, the rail and the filmstrip — Tab, as in Lightroom.
+    TogglePanels,
+    /// Cycle the surround: normal → dimmed → black, the picture alone — L, as in Lightroom.
+    LightsOut,
+    /// A capture-info card over the picture's corner — I, as in Lightroom.
+    ToggleInfoOverlay,
+    /// Clipped highlights in red and clipped shadows in blue over the picture — J, as in Lightroom.
+    ToggleClipping,
     ToggleMaskOverlay,
     CycleCompositionGuide,
     SelectTool(Tool),
@@ -117,7 +128,7 @@ impl Shortcut {
                 "{}{}{}",
                 if self.shift { "⇧" } else { "" },
                 if self.cmd { "⌘" } else { "" },
-                self.key
+                key_name(self.key)
             )
         } else {
             let mut s = String::new();
@@ -127,13 +138,22 @@ impl Shortcut {
             if self.shift {
                 s.push_str("Shift+");
             }
-            s.push(self.key);
+            s.push_str(&key_name(self.key));
             s
         }
     }
 }
 
 /// One entry in a menu.
+/// How a key character reads in a chord label: itself, except the one control character the
+/// model uses, which has a name.
+fn key_name(c: char) -> String {
+    match c {
+        '\t' => "Tab".to_owned(),
+        c => c.to_string(),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Item {
     Action {
@@ -146,6 +166,12 @@ pub enum Item {
         shortcut: Option<Shortcut>,
     },
     Separator,
+    /// A nested menu. ⚠ Every consumer recurses through [`walk`], the one traversal, so an
+    /// item inside a submenu cannot be reachable from one renderer and invisible to another.
+    Submenu {
+        label: String,
+        items: Vec<Item>,
+    },
 }
 
 /// One top-level menu.
@@ -169,22 +195,15 @@ fn action(label: impl Into<String>, command: Command, shortcut: Option<Shortcut>
 /// Lightroom numbers its modules. Those are bare keys, so they never become native
 /// accelerators — see [`Shortcut::safe_as_native_accelerator`].
 pub fn model() -> Vec<Section> {
+    model_with(&[])
+}
+
+/// The model with "Open recent" filled from the remembered folders, most recent first.
+pub fn model_with(recent: &[PathBuf]) -> Vec<Section> {
     vec![
         Section {
             title: "File",
-            items: vec![
-                action("Open file…", Command::OpenFile, Some(Shortcut::cmd('O'))),
-                action(
-                    "Open folder…",
-                    Command::OpenFolder,
-                    Some(Shortcut::cmd_shift('O')),
-                ),
-                Item::Separator,
-                action("Import…", Command::Import, Some(Shortcut::cmd_shift('I'))),
-                action("Export…", Command::Export, Some(Shortcut::cmd('E'))),
-                Item::Separator,
-                action("Settings…", Command::Settings, Some(Shortcut::cmd(','))),
-            ],
+            items: file_items(recent),
         },
         Section {
             title: "Edit",
@@ -218,27 +237,27 @@ pub fn model() -> Vec<Section> {
                 action(
                     "Edit",
                     Command::SelectTool(Tool::Edit),
-                    Some(Shortcut::bare('1')),
+                    Some(Shortcut::bare('E')),
                 ),
                 action(
                     "Crop & Geometry",
                     Command::SelectTool(Tool::Crop),
-                    Some(Shortcut::bare('2')),
+                    Some(Shortcut::bare('R')),
                 ),
                 action(
                     "Masks",
                     Command::SelectTool(Tool::Masks),
-                    Some(Shortcut::bare('3')),
+                    Some(Shortcut::bare('K')),
                 ),
                 action(
                     "Retouch",
                     Command::SelectTool(Tool::Retouch),
-                    Some(Shortcut::bare('4')),
+                    Some(Shortcut::bare('Q')),
                 ),
                 action(
                     "Presets",
                     Command::SelectTool(Tool::Presets),
-                    Some(Shortcut::bare('5')),
+                    Some(Shortcut::bare('T')),
                 ),
                 Item::Separator,
                 // ⚠ ⌘' **is** safe as a native accelerator, and it is worth knowing why: the
@@ -314,6 +333,22 @@ fn view_items() -> Vec<Item> {
             Command::CycleCompositionGuide,
             Some(Shortcut::bare('O')),
         ),
+        action(
+            "Hide panels",
+            Command::TogglePanels,
+            Some(Shortcut::bare('\t')),
+        ),
+        action("Lights out", Command::LightsOut, Some(Shortcut::bare('L'))),
+        action(
+            "Info overlay",
+            Command::ToggleInfoOverlay,
+            Some(Shortcut::bare('I')),
+        ),
+        action(
+            "Clipping overlay",
+            Command::ToggleClipping,
+            Some(Shortcut::bare('J')),
+        ),
     ];
 
     // ⚠⚠ **Appended, never inserted.** `PARALLEL-WORK.md` lists this menu among the surfaces any
@@ -323,9 +358,12 @@ fn view_items() -> Vec<Item> {
     // ⚠ Built from `DISPLAYS`, not `ALL`: no ProPhoto monitor exists, and proofing into the
     // working space is the identity, so the entry would be a control that does nothing.
     items.push(Item::Separator);
-    items.push(action("Soft proof: off", Command::SoftProof(None), None));
+    // ⚠ One submenu for the lot: soft proofing and rendering intents are colour-management
+    // terms a first-time user has no use for, and seven of them at the top level of View were
+    // the first thing both first-use reviews called jargon.
+    let mut colour = vec![action("Soft proof: off", Command::SoftProof(None), None)];
     for space in color::OutputSpace::DISPLAYS {
-        items.push(action(
+        colour.push(action(
             format!("Soft proof: {}", space.label()),
             Command::SoftProof(Some(space)),
             None,
@@ -333,15 +371,19 @@ fn view_items() -> Vec<Item> {
     }
     // ⚠ A separate entry from the proof itself, deliberately: proofing without the warning is the
     // common case, and a warning you cannot switch off is chrome.
-    items.push(action("Gamut warning", Command::GamutWarning, None));
-    items.push(Item::Separator);
+    colour.push(action("Gamut warning", Command::GamutWarning, None));
+    colour.push(Item::Separator);
     for intent in color::RenderingIntent::ALL {
-        items.push(action(
+        colour.push(action(
             format!("Rendering intent: {}", intent.label()),
             Command::RenderingIntent(intent),
             None,
         ));
     }
+    items.push(Item::Submenu {
+        label: "Colour management".to_owned(),
+        items: colour,
+    });
 
     // ⚠ **No shortcuts on any of these.** A bare key is stolen from every text field and a
     // text-editing chord breaks editing inside one — `Shortcut::safe_as_native_accelerator`
@@ -349,16 +391,71 @@ fn view_items() -> Vec<Item> {
     items
 }
 
-/// Every command the model contains, in menu order.
+fn file_items(recent: &[PathBuf]) -> Vec<Item> {
+    let mut items = vec![
+        action("Open file…", Command::OpenFile, Some(Shortcut::cmd('O'))),
+        action(
+            "Open folder…",
+            Command::OpenFolder,
+            Some(Shortcut::cmd_shift('O')),
+        ),
+    ];
+    if !recent.is_empty() {
+        items.push(Item::Submenu {
+            label: "Open recent".to_owned(),
+            items: recent
+                .iter()
+                .enumerate()
+                .map(|(i, p)| action(folder_name(p), Command::OpenRecent(i), None))
+                .collect(),
+        });
+    }
+    items.extend([
+        Item::Separator,
+        action("Import…", Command::Import, Some(Shortcut::cmd_shift('I'))),
+        action("Export…", Command::Export, Some(Shortcut::cmd('E'))),
+        Item::Separator,
+        action("Settings…", Command::Settings, Some(Shortcut::cmd(','))),
+    ]);
+    items
+}
+
+/// A folder's own name for a menu entry, or the whole path when it has none (a volume root).
+pub fn folder_name(p: &Path) -> String {
+    p.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| p.display().to_string())
+}
+
+/// A second bare key for a command that already has one, for a hand that knows Lightroom:
+/// `Y` is its Compare. Read by the shortcut matcher after the model, listed by the shortcuts
+/// dialog, and checked against the model and the culling keys by the tests.
+pub const ALIASES: &[(char, Command)] = &[('Y', Command::ShowCompare)];
+
+/// Visit every item in menu order, descending into submenus.
+///
+/// ⚠ **The one traversal.** The shortcut matcher, the shortcuts dialog, the glyph audit and the
+/// tests all go through it, so a nested item cannot be reached by one and missed by another.
+pub fn walk<'a, F: FnMut(&'a Item)>(items: &'a [Item], f: &mut F) {
+    for item in items {
+        f(item);
+        if let Item::Submenu { items, .. } = item {
+            walk(items, f);
+        }
+    }
+}
+
+/// Every command the model contains, in menu order, submenus included.
 pub fn commands() -> Vec<Command> {
-    model()
-        .into_iter()
-        .flat_map(|s| s.items)
-        .filter_map(|i| match i {
-            Item::Action { command, .. } => Some(command),
-            Item::Separator => None,
-        })
-        .collect()
+    let mut out = Vec::new();
+    for s in model() {
+        walk(&s.items, &mut |i| {
+            if let Item::Action { command, .. } = i {
+                out.push(*command);
+            }
+        });
+    }
+    out
 }
 
 #[cfg(test)]
@@ -369,14 +466,17 @@ mod tests {
     fn no_two_items_share_a_shortcut() {
         // ⚠ Two items on one chord means one of them is unreachable, and which one wins
         // depends on iteration order — the kind of bug that looks like "the menu is flaky".
-        let mut seen: Vec<Shortcut> = model()
-            .into_iter()
-            .flat_map(|s| s.items)
-            .filter_map(|i| match i {
-                Item::Action { shortcut, .. } => shortcut,
-                Item::Separator => None,
-            })
-            .collect();
+        let mut seen: Vec<Shortcut> = Vec::new();
+        for s in model() {
+            walk(&s.items, &mut |i| {
+                if let Item::Action {
+                    shortcut: Some(sc), ..
+                } = i
+                {
+                    seen.push(*sc);
+                }
+            });
+        }
         let total = seen.len();
         seen.sort_by_key(|s| (s.cmd, s.shift, s.key));
         seen.dedup();
@@ -485,14 +585,14 @@ mod tests {
         // ⚠ The labels come from `OutputSpace::label`, not from a second table typed out here.
         // Two tables is how the View menu and the export dropdown come to call one space by two
         // names — and the menu's would be the one nobody notices is wrong.
-        let labels: Vec<String> = model()
-            .into_iter()
-            .flat_map(|s| s.items)
-            .filter_map(|i| match i {
-                Item::Action { label, .. } => Some(label),
-                Item::Separator => None,
-            })
-            .collect();
+        let mut labels: Vec<String> = Vec::new();
+        for s in model() {
+            walk(&s.items, &mut |i| {
+                if let Item::Action { label, .. } = i {
+                    labels.push(label.clone());
+                }
+            });
+        }
         for s in color::OutputSpace::DISPLAYS {
             assert!(
                 labels.iter().any(|l| l.contains(s.label())),
@@ -530,5 +630,95 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// ⚠⚠ Digits and P, X, U are the culling keys in every view, Develop included, so no menu
+    /// item may sit on one as a bare shortcut — the tools used to, and rating a photo in
+    /// Develop switched tools instead.
+    #[test]
+    fn no_bare_shortcut_is_a_culling_key() {
+        for s in model() {
+            walk(&s.items, &mut |i| {
+                if let Item::Action {
+                    label,
+                    shortcut: Some(sc),
+                    ..
+                } = i
+                {
+                    assert!(
+                        sc.cmd || !(sc.key.is_ascii_digit() || matches!(sc.key, 'P' | 'X' | 'U')),
+                        "{label} sits on the culling key {}",
+                        sc.key
+                    );
+                }
+            });
+        }
+    }
+
+    /// The File menu names the remembered folders, most recent first, and drops the submenu
+    /// when there are none.
+    #[test]
+    fn open_recent_names_the_folders_in_order() {
+        let recent = [PathBuf::from("/p/Katzen"), PathBuf::from("/p/Concert 2026")];
+        let file = &model_with(&recent)[0];
+        let sub = file
+            .items
+            .iter()
+            .find_map(|i| match i {
+                Item::Submenu { label, items } if label == "Open recent" => Some(items),
+                _ => None,
+            })
+            .expect("an Open recent submenu");
+        let names: Vec<(&str, Command)> = sub
+            .iter()
+            .filter_map(|i| match i {
+                Item::Action { label, command, .. } => Some((label.as_str(), *command)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("Katzen", Command::OpenRecent(0)),
+                ("Concert 2026", Command::OpenRecent(1))
+            ]
+        );
+        assert!(!model()[0]
+            .items
+            .iter()
+            .any(|i| matches!(i, Item::Submenu { .. })));
+    }
+
+    /// An alias must be a bare key nothing else uses — not a model shortcut, not a culling key —
+    /// and must name a command the model has.
+    #[test]
+    fn aliases_collide_with_nothing() {
+        let mut bare: Vec<char> = Vec::new();
+        for s in model() {
+            walk(&s.items, &mut |i| {
+                if let Item::Action {
+                    shortcut: Some(sc), ..
+                } = i
+                {
+                    if !sc.cmd {
+                        bare.push(sc.key);
+                    }
+                }
+            });
+        }
+        let cmds = commands();
+        for (key, cmd) in ALIASES {
+            assert!(!bare.contains(key), "{key} is already a menu shortcut");
+            assert!(
+                !(key.is_ascii_digit() || matches!(key, 'P' | 'X' | 'U')),
+                "{key} is a culling key"
+            );
+            assert!(cmds.contains(cmd), "{cmd:?} is not in the menu");
+        }
+    }
+
+    #[test]
+    fn tab_reads_as_tab() {
+        assert_eq!(Shortcut::bare('\t').label(), "Tab");
     }
 }

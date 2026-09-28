@@ -149,7 +149,15 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                 0 => grid(ui, "info_file", |ui| {
                     row(ui, "Name", &shown);
                     row(ui, "Path", &id.path.to_string_lossy());
-                    row(ui, "Copy", &id.copy.to_string());
+                    row(
+                        ui,
+                        "Version",
+                        &if id.copy == 0 {
+                            "Original".to_string()
+                        } else {
+                            format!("Copy {}", id.copy)
+                        },
+                    );
                     row(
                         ui,
                         "Size",

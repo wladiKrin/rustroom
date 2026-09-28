@@ -27,6 +27,11 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
     match cmd {
         Command::OpenFile => app.open_dialog(ctx),
         Command::OpenFolder => app.open_folder(ctx),
+        Command::OpenRecent(i) => {
+            if let Some(dir) = app.settings.recent_folders.get(i).cloned() {
+                app.open_folder_at(ctx, dir);
+            }
+        }
         Command::Import => app.open_import(),
         Command::Export => {
             if !app.export_jobs().is_empty() {
@@ -115,6 +120,22 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
             }
         }
         Command::ToggleFilmstrip => app.show_filmstrip = !app.show_filmstrip,
+        Command::TogglePanels => app.show_panels = !app.show_panels,
+        Command::LightsOut => app.lights_out = (app.lights_out + 1) % 3,
+        Command::ToggleInfoOverlay => app.show_info_overlay = !app.show_info_overlay,
+        Command::ToggleClipping => {
+            app.show_clipping = !app.show_clipping;
+            // Built now from the frame already on screen; the next frame rebuilds it anyway.
+            if let Some(s) = app.session.as_mut() {
+                s.clip_texture = if app.show_clipping {
+                    s.readout_bytes
+                        .as_ref()
+                        .and_then(|(b, w, h)| crate::shell::clipping_texture(ctx, b, *w, *h))
+                } else {
+                    None
+                };
+            }
+        }
         // ⚠ Every mask's eye at once — the keyboard twin of the panel's "Show all / Hide all".
         Command::ToggleMaskOverlay => {
             if let Some(s) = &mut app.session {

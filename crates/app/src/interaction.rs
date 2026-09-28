@@ -151,28 +151,63 @@ impl RustroomApp {
     /// ←/→ move to the previous/next photo in the loaded folder — but only when no egui
     /// widget has keyboard focus, so arrows still fine-tune a focused slider.
     pub(crate) fn handle_develop_arrows(&mut self, ctx: &egui::Context) {
+        if ctx.memory(|m| m.focused().is_some()) {
+            return;
+        }
+        let forward = ctx.input(|i| {
+            if i.key_pressed(egui::Key::ArrowRight) {
+                Some(true)
+            } else if i.key_pressed(egui::Key::ArrowLeft) {
+                Some(false)
+            } else {
+                None
+            }
+        });
+        if let Some(forward) = forward {
+            self.step_open_photo(ctx, forward);
+        }
+    }
+
+    /// Open the neighbouring photo in the filmstrip's order; nothing happens at either end.
+    pub(crate) fn step_open_photo(&mut self, ctx: &egui::Context, forward: bool) {
         let nav = {
             let Some(lib) = &self.library else { return };
-            if lib.visible.is_empty() || ctx.memory(|m| m.focused().is_some()) {
+            if lib.visible.is_empty() {
                 return;
             }
             // ⚠ `cur` may not itself be visible: hiding the open photo's format does not close
             // it, so `step` has to cope with starting from a hidden index.
             let cur = lib.selection.active().unwrap_or(0);
-            ctx.input(|i| {
-                if i.key_pressed(egui::Key::ArrowRight) {
-                    format_filter::step(&lib.visible, cur, true)
-                } else if i.key_pressed(egui::Key::ArrowLeft) {
-                    format_filter::step(&lib.visible, cur, false)
-                } else {
-                    None
-                }
-            })
+            format_filter::step(&lib.visible, cur, forward)
         };
         if let Some(i) = nav {
             if self.library.as_ref().and_then(|l| l.selection.active()) != Some(i) {
                 self.open_entry(ctx, i);
             }
+        }
+    }
+
+    /// Digits, P, X and U rate the open photo in Develop as they do in the grid, and move on
+    /// when the auto-advance setting asks — Lightroom's daily habit, and the reason the tools
+    /// sit on letters rather than digits.
+    ///
+    /// ⚠ Only with no dialog open and nothing focused: a digit typed into a name field is text.
+    pub(crate) fn handle_develop_culling(&mut self, ctx: &egui::Context) {
+        if self.view != crate::AppView::Develop
+            || !matches!(self.modal, crate::modals::Modal::None)
+            || ctx.memory(|m| m.focused().is_some())
+        {
+            return;
+        }
+        let Some(action) = ctx.input(culling_key) else {
+            return;
+        };
+        let Some(id) = self.open_photo() else {
+            return;
+        };
+        self.apply_mark_to(&[id], action);
+        if self.settings.auto_advance && action.advances() {
+            self.step_open_photo(ctx, true);
         }
     }
 

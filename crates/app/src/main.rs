@@ -345,6 +345,14 @@ struct RustroomApp {
     histories: HistoryStash,
     status: String,
     show_filmstrip: bool,
+    /// Tab: the panels, the rail and the filmstrip out of the way, the picture alone.
+    show_panels: bool,
+    /// L: 0 normal, 1 the surround dimmed, 2 the surround black — the picture alone.
+    lights_out: u8,
+    /// I: the capture-info card over the picture's corner.
+    show_info_overlay: bool,
+    /// J: clipped highlights red and clipped shadows blue, over the picture.
+    show_clipping: bool,
     /// Brush radius in **screen points**.
     ///
     /// ⚠ Not persisted, and not in `Settings`. A screen-point size is view-dependent, so
@@ -627,8 +635,6 @@ impl RustroomApp {
         // ⚠ Installed here rather than lazily per frame: `init_for_nsapp` must run once, on
         // the main thread, after NSApplication exists — which it does by the time eframe
         // builds the app.
-        #[cfg(target_os = "macos")]
-        native_menu::install(ctx);
         // ⚠ Once is enough: `wgpu_hal`'s `configure()` never touches `colorspace`, so the value
         // survives every resize and surface rebuild. The result decides whether *we* convert or
         // the OS does — never both, which would double-convert.
@@ -649,6 +655,8 @@ impl RustroomApp {
         let export_preset_list = export_preset_store.list();
         let settings_store = SettingsStore::user_default();
         let settings = settings_store.load();
+        #[cfg(target_os = "macos")]
+        native_menu::install(ctx, &settings.recent_folders);
         // ⚠ Before any UI runs: `add_font` rebuilds the glyph atlas, so installing later would
         // throw away the first frame's cache for nothing. Unlike `apply`, this does not depend
         // on the settings, so it does not have to wait for the load.
@@ -720,6 +728,10 @@ impl RustroomApp {
             histories: HistoryStash::default(),
             status: String::new(),
             show_filmstrip: true,
+            show_panels: true,
+            lights_out: 0,
+            show_info_overlay: false,
+            show_clipping: false,
             spot_tool: Default::default(),
             eye_tool: Default::default(),
             brush_size: rustroom_app::brush_tool::DEFAULTS.size,
@@ -1145,6 +1157,12 @@ pub struct Session {
     ///
     /// ⚠ An `Arc`, so retaining it costs nothing beyond the memory the frame already held.
     readout_bytes: Option<(std::sync::Arc<Vec<u8>>, usize, usize)>,
+    /// The clipping overlay for the frame `readout_bytes` describes, when `J` is on and
+    /// something clips; painted at the preview's own rectangle.
+    clip_texture: Option<egui::TextureHandle>,
+    /// Where the whole photo sat on screen last frame — what lights-out cuts its hole around
+    /// and the info card anchors to.
+    canvas_frame_rect: Option<egui::Rect>,
     /// The sampled value under the cursor, or `None`.
     ///
     /// ⚠ The **value**, not a formatted string: the swatch and the numbers are two renderings of

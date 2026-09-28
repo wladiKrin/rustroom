@@ -92,14 +92,23 @@ impl RustroomApp {
             }
         }
         catalog::sort(&mut scan, self.settings.library_sort);
+        let files = scan.len();
         let n = self.open_scan(ctx, LibrarySource::Folder(dir.clone()), scan);
+        // ⚠ Both numbers when stacking hides some: the rail counts files and the grid counts
+        // stacks, and "Katzen 18" beside "9 photos" read as a disagreement (A-10).
         let mut status = if n == 0 {
             "No supported images in this folder.".to_string()
-        } else {
+        } else if n == files {
             format!("{n} photos")
+        } else {
+            format!("{n} photos · {files} files")
         };
         status.push_str(&rustroom_app::move_tracking::recognised(relinked));
         self.status = status;
+        self.settings.remember_folder(&dir);
+        self.save_settings();
+        #[cfg(target_os = "macos")]
+        crate::native_menu::refresh(ctx, &self.settings.recent_folders);
     }
 
     /// Show every photo the catalog knows, from every folder ever opened.
@@ -109,6 +118,20 @@ impl RustroomApp {
     /// 10,000 photos, and is what `mtime` was captured for in M4.1 (nothing had read it until
     /// now). Consequence: a file changed outside Rustroom since its folder was last scanned shows
     /// a stale time here. Clicking that folder in the panel re-scans it and refreshes them.
+    /// A drop on the window: the first folder opens as a folder; failing that, the first
+    /// supported photo opens in Develop, as File → Open file… would.
+    pub(crate) fn open_dropped(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>) {
+        if let Some(dir) = paths.iter().find(|p| p.is_dir()) {
+            self.open_folder_at(ctx, dir.clone());
+            return;
+        }
+        if let Some(file) = paths.iter().find(|p| catalog::is_supported(p)) {
+            self.open_path(ctx, rustroom_app::photo_id::PhotoId::original(file.clone()));
+            self.library = None;
+            self.view = AppView::Develop;
+        }
+    }
+
     pub(crate) fn open_all_photos(&mut self, ctx: &egui::Context) {
         // ⚠ Read before `cat` borrows `self`.
         let immich_root = self.immich_cache_root();

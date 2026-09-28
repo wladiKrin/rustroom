@@ -443,6 +443,22 @@ impl ThumbLoader {
         cv.notify_all();
     }
 
+    /// Add to the wanted list without replacing it — for a caller that is not the grid, such as
+    /// the Presets tool asking for one thumbnail per starter look. ⚠ `want` clears the list,
+    /// because the grid's window is the list; a second caller must not take it over.
+    pub fn also_want(&self, wanted: &[ThumbRequest]) {
+        let (lock, cv) = &*self.queue;
+        let mut q = lock.lock().unwrap();
+        for r in wanted {
+            let key = r.key();
+            if !q.in_flight.contains(&key) && !q.wanted.iter().any(|w| w.key() == key) {
+                q.wanted.push_back(r.clone());
+            }
+        }
+        drop(q);
+        cv.notify_all();
+    }
+
     /// Take all thumbnails finished since the last call.
     ///
     /// ⚠ Results arrive **out of order**, since several threads share the queue. Every one

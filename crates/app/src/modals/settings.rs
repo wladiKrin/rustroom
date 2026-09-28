@@ -38,6 +38,7 @@ pub struct SettingsDraft {
     export_width: u32,
     theme_choice: ThemeChoice,
     accent: Accent,
+    ui_scale: rustroom_app::settings::UiScale,
     pan_drag: PanDrag,
     erase_drag: EraseDrag,
     parametric_drag: ParametricDrag,
@@ -97,6 +98,7 @@ impl SettingsDraft {
             export_width: s.export_concurrency,
             theme_choice: s.theme,
             accent: s.accent,
+            ui_scale: s.ui_scale,
             pan_drag: s.pan_drag,
             erase_drag: s.erase_drag,
             parametric_drag: s.parametric_drag,
@@ -239,8 +241,13 @@ impl SettingsDraft {
         if plain {
             app.save_settings();
         }
-        if self.theme_choice != app.settings.theme || self.accent != app.settings.accent {
-            app.apply_appearance(self.theme_choice, self.accent, ctx);
+        // ⚠ The size is part of the appearance: a size-only change used to be dropped here, and
+        // Apply did nothing (reported 2026-09-28).
+        if self.theme_choice != app.settings.theme
+            || self.accent != app.settings.accent
+            || self.ui_scale != app.settings.ui_scale
+        {
+            app.apply_appearance(self.theme_choice, self.accent, self.ui_scale, ctx);
         }
         if self.tier != app.settings.view_demosaic {
             app.apply_view_demosaic(self.tier, ctx);
@@ -359,6 +366,20 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                     "The accent marks active controls; Neutral turns it off.",
                                 );
                             ui.end_row();
+                            ui.label("Interface size");
+                            egui::ComboBox::from_id_salt("ui_scale_pick")
+                                .selected_text(d.ui_scale.label())
+                                .show_ui(ui, |ui| {
+                                    for z in rustroom_app::settings::UiScale::ALL {
+                                        ui.selectable_value(&mut d.ui_scale, z, z.label());
+                                    }
+                                })
+                                .response
+                                .on_hover_text(
+                                    "Everything larger or smaller, text and controls alike — \
+                                     for a big screen sat far away, or small type.",
+                                );
+                            ui.end_row();
 
                             // ⚠ In Appearance because stacking is a **browsing** decision, the same
                             // reasoning that keeps the format filter out of the Develop toolbar.
@@ -391,8 +412,8 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                             .response
                                             .on_hover_text(
                                                 "Which file a collapsed stack shows and opens. \
-                                                 With “Edited, else RAW” a pair you have worked \
-                                                 on shows the file you worked on; if both are \
+                                                 With “Edited file, otherwise RAW” a pair you have \
+                                                 worked on shows the file you worked on; if both are \
                                                  edited it shows the RAW.",
                                             );
                                     });
@@ -635,6 +656,11 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                     // tab holds a switch and nothing else.
                     // ⚠ A switch rather than a tick box: enabling or disabling a whole integration
                     // is a decision, not one preference among many (user's call, 2026-09-24).
+                    theme::hint(
+                        ui,
+                        "Immich is a self-hosted photo server (immich.app). With a server and an API \
+                         key, its albums appear in the Library and exports can upload to it.",
+                    );
                     crate::segmented::switch(ui, &mut d.immich_enabled, "Enable Immich")
                         .on_hover_text(
                             "When off, Immich disappears from the rest of Rustroom — the left \

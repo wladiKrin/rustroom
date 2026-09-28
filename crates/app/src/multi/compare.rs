@@ -52,7 +52,9 @@ struct Outcome {
 /// arrows. A literal inside a `RichText::new(..)` call cannot be probed by a test.
 ///
 /// ⚠ `<-` and `->` as ASCII, not `←`/`→`: neither arrow is in any bundled font.
-const INSTRUCTION: &str = "<- -> move the bordered photo · Enter or a click moves the border · \
+/// Also swept by `theme::every_menu_string_is_renderable`.
+pub(crate) const INSTRUCTION: &str =
+    "← → move the bordered photo · Enter or a click moves the border · \
                            digits, P, X and U rate it · scroll pans and pinch zooms, each pane \
                            on its own";
 
@@ -282,7 +284,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         });
 
         // ── Draw ─────────────────────────────────────────────────────────────────────────
-        ui.label(egui::RichText::new(INSTRUCTION).small().weak());
+        ui.label(egui::RichText::new(INSTRUCTION).weak());
 
         let stage = multi::stage(ui);
         // ⚠ `pair`, never `survey(2, ..)`: Compare is side by side at every window shape,

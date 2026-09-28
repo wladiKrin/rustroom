@@ -293,8 +293,31 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
         } else if out.clicked {
             pick = Some(i);
         }
+        // ⚠ An AI mask whose map has not landed yet says so on its own row, where the user is
+        // looking, and keeps its sliders quiet until it has — the top bar's "Finding the
+        // subject…" was thirteen seconds away from where the click happened (P-12).
+        let waiting = match &s.edits.masks[i].mask {
+            edit_model::Mask::Ai(a) => {
+                let store = s.engine.ai_maps();
+                let missing = store.read().expect("ai maps").get(&a.prompt).is_none();
+                missing.then_some(match a.prompt {
+                    edit_model::AiPrompt::Subject => "Finding the subject…",
+                    edit_model::AiPrompt::Click { .. } => "Outlining what you clicked…",
+                })
+            }
+            _ => None,
+        };
+        if let Some(text) = waiting {
+            ui.horizontal(|ui| {
+                ui.add_space(18.0);
+                ui.spinner();
+                crate::theme::hint(ui, text);
+            });
+        }
         if picked {
-            mask_components::rows(ui, s, i, ed);
+            ui.add_enabled_ui(waiting.is_none(), |ui| {
+                mask_components::rows(ui, s, i, ed);
+            });
         }
     }
     if let Some(i) = pick {
@@ -461,11 +484,7 @@ fn shape_block(
     // M9.13: an AI mask's one control. The network's soft map is thresholded; Refine moves the
     // threshold, so the edge grows or shrinks without computing anything again.
     if let edit_model::Mask::Ai(a) = shape {
-        ed.slider(ui, &mut a.threshold, -100.0..=100.0, "Refine", 0.0)
-            .on_hover_text(
-                "Grows (+) or shrinks (−) the selection's edge. The network's answer is kept, so \
-                 this is instant.",
-            );
+        ed.slider(ui, &mut a.threshold, -100.0..=100.0, "Refine", 0.0);
         if let edit_model::AiPrompt::Click { .. } = a.prompt {
             crate::theme::hint(ui, "Click the photo to choose what to select.");
         }

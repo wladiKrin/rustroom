@@ -158,6 +158,99 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-28 — First-use review fixes (branch `first-use-fixes`, merged 2026-09-28)
+
+**Input:** two first-session reviews written the same day, an amateur photographer's and a
+professional's (`docs/reviews/`, **transient and never committed** — the author deletes them when
+this lands; ids A-01…A-27 and P-01…P-31). The plan with every id's status, the declines and the
+two decisions left to the author is `docs/superpowers/plans/2026-09-28-first-use-review-fixes.md`.
+Seven groups, seven commits, the gate green at **3173 tests**.
+
+**What shipped, by group.** *Strings and glyphs:* Inter 4.1 Regular is the text face (Ubuntu Light
+lacked ⇧ → ←, which is why the empty Library said "File □ Open folder…" and the shortcuts dialog
+wrote "□⌘O"), Hack is the proportional fallback for ▸ ▾ ▴, and `every_menu_string_is_renderable`
+sweeps every menu label, shortcut label, tool name and fixed hint through the installed fonts —
+proven to fail on ✕, which no bundled font has. *Menus and keys:* `&` escaped for muda ("Crop  Geometry"),
+AppKit's injected items stripped (window tabbing off; AutoFill, Emoji & Symbols and Enter Full Screen
+by title), `Item::Submenu` with `menu::walk` as the one traversal (Colour management; Open recent from
+`Settings::recent_folders`), tools on E R K Q T so the digits rate in Develop too, Tab hides the
+panels. *Panel:* `min_size(300)` — `default_size` is a **wrapping** width under egui 0.35 and a
+fresh profile came up at **~214 pt**, 60-pt rails, Exposure 0 → +5 in a 40-pt drag; `slider_help`
+gives every slider one hover sentence with coverage tests over the Edit and Geometry panels;
+histogram 120 pt; Scale resets to −100 (the Edit-panel sweep never sees Geometry); Auto reports what
+it set; Export gets a default folder and a collapsed Colour section; Escape read before a dialog's
+body draws; shortcuts skipped while a modal is open. *Canvas:* left-drag pans the zoomed Edit view;
+Before keeps `rendering` and `lens_correction`; Compare's border is the accent. *Library:* an
+empty-state card with two buttons, drag-and-drop, 224-pt cells, "9 photos · 18 files", ▴ on an
+expanded stack, Rating/Flag/Colour/Export/copy/Show-in-Finder in the context menu, elided folder
+names with hover-only actions, a waiting row on an AI mask. *Scale:* Interface size 100/125/150 %.
+*Presets:* nine built-in starters above the user's own.
+
+**Declined or left to the author:** A-04 (bare keys as native accelerators fire while typing);
+P-14 (the 932×650 Settings box was a persisted resize); P-06 guides-only-in-Geometry and P-07 the
+red crop frame **reverse recorded decisions** and wait for a word; the Immich gate stays on by
+default because `the_immich_gate_defaults_to_on` pins the upgrade case — read the test before
+"fixing" a default. ⚠ A preset replaces the groups it carries, so a starter that sets contrast also
+sets exposure to 0, like every user preset.
+
+⚠⚠ **Not verified in use, and why:** the interactive pass ran through a driver posting real mouse
+events to the window, and stopped when three clicks landed in the author's VS Code, which sat in
+front of Rustroom on that display — a coordinate click goes to whatever is frontmost. The driver
+now refuses to click unless Rustroom is frontmost, but raising it steals the author's focus, so
+the rest is his to look at: the panel width and hover help, the taller histogram, the Auto status
+line, the context menu, the starter presets, Interface size, and whether "Enter Full Screen" is
+gone (its strip now runs for thirty seconds after launch; five was too few under load). The empty
+Library card, the Inter face, "Crop & Geometry", the Colour management submenu and the Edit menu
+without AutoFill were seen. P-31 (the light theme) was not looked at.
+
+**The author's first look (same day):** *(1) the icons.* Grid, Compare, Survey, Filter, Crop &
+Geometry, Retouch, undo and redo "looked weird" — Inter, first in the proportional family, owns
+**10 of the 26 icon codepoints** in Phosphor's private-use block and drew them itself; Hack owns
+one more; and egui's emoji font has owned U+E626 (zoom to fit) all along, which is why that icon
+was a blob before today. Measured by parsing every font's cmap (`pua.swift`). Fix: Inter ships
+**subset without U+E000–F8FF** (`pyftsubset`), the families are set explicitly with Phosphor
+ahead of the emoji font (it cannot go first — it has a space and an `a`), and
+`no_bundled_font_shadows_an_icon` reads the real cmap tables through `read-fonts` (a dev-dep
+already in the tree) — ⚠ not `Fonts::has_glyph`, which in egui 0.35 compares the resolving face
+with the *replacement* face and so answers `false` for everything in a single-font stack.
+*(2) A-06 reverted:* left-drag panning was decided against before — the left button belongs to
+the brush, the crop handles and the guides, which is what the pan-binding setting is for. *(3)*
+P-06 stays; P-07 done: the crop frame is a light neutral over its halo, the corner brackets are
+longer and bolder, and each edge has a bar for its handle.
+
+**The second round, "let's continue with the small fixes":** a segmented control now shrinks
+its labels by 15 % to stay on one row before it wraps (`segmented::plan`, pure); stars appear on
+a hovered thumbnail and rate on a click; each starter preset shows the open photo through it,
+rendered by the thumbnail loader — `also_want` adds to the loader's list, because `want` replaces
+it and a second caller would have fought the grid for it every frame; the ambient keys: `Y` for
+Compare (`menu::ALIASES`, a second bare key for a command that has one), `L` lights-out, `I` an
+info card, `J` a clipping overlay computed from the displayed frame (`clipping.rs`: any channel
+at 254+ is a clipped highlight, all three at 1 or below a clipped shadow) and painted at the
+preview's own rectangle. The light theme, looked at on a fresh profile: the interface reads
+fine; the macOS **title bar stayed dark** over it — `ViewportCommand::SetTheme` now follows the
+choice — and the empty Develop still told the user to press an "Open file… button" that has not
+existed since the menus took the toolbar's place.
+
+**The author's third look:** *(1)* "the interface size doesn't do anything" — the Settings dialog
+reached `apply_appearance` only when the theme or the accent had changed, so a size-only Apply was
+written to the draft and dropped; the size is part of the comparison now. *(2)* Hover stars lit
+only the one under the pointer; they light up to it. *(3)* ⚠⚠ **"Settings do not persist — I
+changed it to dark theme but it opened light again" was not a bug in the app; it was a window of
+mine.** A scratch-profile instance (`HOME` pointed at the scratchpad, launched to look at the light
+theme) outlived a menu Quit I never verified. Its window is indistinguishable from his, and the
+scratch profile shows he used it: his own folders in its recent list, its catalog and thumbnails
+written at 21:43–21:45, its theme set to Dark at 21:45 while nothing of mine ran. His own file was
+untouched until he set Dark again in his own instance at 22:01. Reproduced the literal sequence in
+one instance — Light applied, Dark applied, quit, relaunch — and it holds at every step. ⚠ The rule
+that came out of it, in memory: **prove every quit with `pgrep -x Rustroom`**, and say when a window
+of mine is on his display. ⚠ A latent cousin, not hit here: two instances on the *same* profile
+overwrite each other's settings, last writer wins, since every save writes the whole file.
+
+**Merged 2026-09-28** at **3,179 tests**, `--no-ff`, branch deleted, `docs/reviews/` deleted with its
+`.git/info/exclude` line. The reviews' milestone-sized findings (P-20…P-30) are carried in
+`docs/BACKLOG.md` under "First-session reviews"; **P-20, background 1:1 previews, is next** by the
+author's word at the merge.
+
 ### 2026-09-28 — M9.13 AI masks: the brainstorm and the runtime spike (branch `m9.13-ai-masks`)
 
 **Chosen (the author):** build it — for skies, people and subjects of any kind; models **downloaded on

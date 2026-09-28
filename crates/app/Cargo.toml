@@ -67,6 +67,12 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSView",
     "NSResponder",
     "objc2-quartz-core",
+    # For `native_menu::strip_injected_items` — the same features muda already enables, so
+    # nothing new compiles.
+    "NSApplication",
+    "NSMenu",
+    "NSMenuItem",
+    "NSWindow",
 ] }
 objc2-quartz-core = { version = "0.3", default-features = false, features = [
     "std",
@@ -82,3 +88,7 @@ objc2-core-graphics = { version = "0.3", default-features = false, features = [
 [dev-dependencies]
 # For examples that stand up their own wgpu device (probe_gpu_contention).
 pollster = { workspace = true }
+# For `theme::no_bundled_font_shadows_an_icon`: the fonts' real cmap tables, not egui's
+# face resolution (which cannot answer for a single-font stack). Already in the tree through
+# epaint's shaper, same version, so nothing new compiles.
+read-fonts = "0.39"

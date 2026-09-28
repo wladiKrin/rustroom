@@ -87,6 +87,10 @@ pub fn dialog(
     footer: Footer<'_>,
     content: impl FnOnce(&mut egui::Ui),
 ) -> DialogOut {
+    // ⚠ Read **before** the content draws: a focused text field consumes Escape when it runs,
+    // so a check after the body saw nothing while the Export dialog's naming field had focus
+    // (P-04). One press closes the dialog from anywhere inside it.
+    let escaped = ctx.input(|i| i.key_pressed(egui::Key::Escape));
     let min = size.min();
     let seed = settings.dialog_size(id, min, size.default_size());
     let vp = ctx.viewport_rect().size();
@@ -131,7 +135,7 @@ pub fn dialog(
         })
         .backdrop_response
         .clicked();
-    out.dismissed |= backdrop;
+    out.dismissed |= backdrop || escaped;
 
     settings.remember_dialog_size(id, measured);
     out

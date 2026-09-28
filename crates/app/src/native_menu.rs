@@ -68,17 +68,24 @@ fn suppress_injected_edit_items() {
     let keys = [
         ns_string!("NSDisabledDictationMenuItem"),
         ns_string!("NSDisabledCharacterPaletteMenuItem"),
+        // "Enter Full Screen" in the View menu; the window's own green button still works.
+        ns_string!("NSFullScreenMenuItemEverywhere"),
     ];
     // ⚠ `&**` twice: `ns_string!` gives `&NSString`, which derefs to `&NSObject` and then to
     // `&AnyObject` — the value type `registerDefaults` insists on.
-    let yes: [&AnyObject; 2] = [&**ns_string!("YES"), &**ns_string!("YES")];
+    let yes: [&AnyObject; 3] = [
+        &**ns_string!("YES"),
+        &**ns_string!("YES"),
+        &**ns_string!("NO"),
+    ];
     let dict = NSDictionary::from_slices(&keys, &yes);
     unsafe { NSUserDefaults::standardUserDefaults().registerDefaults(&dict) };
 }
 
 /// Build and install the menu. Call once, from the app's constructor.
-pub fn install(ctx: &egui::Context) {
+pub fn install(ctx: &egui::Context, recent: &[std::path::PathBuf]) {
     suppress_injected_edit_items();
+    forbid_window_tabbing();
     let menu = Menu::new();
     let mut by_id = HashMap::new();
 
@@ -105,47 +112,14 @@ pub fn install(ctx: &egui::Context) {
     let _ = app_menu.append(&PredefinedMenuItem::quit(None));
     let _ = menu.append(&app_menu);
 
-    for section in menu::model() {
+    for section in menu::model_with(recent) {
         let sub = Submenu::new(section.title, true);
-        for item in section.items {
-            match item {
-                Item::Separator => {
-                    let _ = sub.append(&PredefinedMenuItem::separator());
-                }
-                // ⚠ About and Settings live in the application menu on macOS, where users
-                // look for them — so they are skipped here rather than shown twice. The model
-                // keeps both in their cross-platform places for the in-window bar, which has
-                // no application menu.
-                Item::Action {
-                    command: Command::About | Command::Settings,
-                    ..
-                } => {}
-                Item::Action {
-                    label,
-                    command,
-                    shortcut,
-                } => {
-                    // ⚠ Only *safe* chords become real accelerators. A bare key would steal
-                    // every such character typed into a text field, and ⌘C/⌘V/⌘Z would break
-                    // editing inside one — see `Shortcut::safe_as_native_accelerator`. The
-                    // rest are shown in the label and handled by egui, focus-gated.
-                    let (text, accel) = match shortcut {
-                        Some(sc) if sc.safe_as_native_accelerator() => {
-                            (label.to_string(), accelerator(sc))
-                        }
-                        Some(sc) => (format!("{label}   {}", sc.label()), None),
-                        None => (label.to_string(), None),
-                    };
-                    let mi = MenuItem::new(text, true, accel);
-                    by_id.insert(mi.id().clone(), command);
-                    let _ = sub.append(&mi);
-                }
-            }
-        }
+        append_items(&sub, section.items, &mut by_id);
         let _ = menu.append(&sub);
     }
 
     menu.init_for_nsapp();
+    strip_injected_items();
 
     // ⚠ egui does not redraw an idle window, and a menu click generates no winit event — so
     // without an explicit repaint the command would sit in the channel until the user happened
@@ -172,7 +146,27 @@ pub fn install(ctx: &egui::Context) {
 }
 
 /// Drain any menu activations since the last frame.
+/// Rebuild the menu with a new "Open recent" list — a no-op until [`install`] has run, which is
+/// what keeps the headless tests (and any second window) away from AppKit.
+pub fn refresh(ctx: &egui::Context, recent: &[std::path::PathBuf]) {
+    if MENU.with(|m| m.borrow().is_none()) {
+        return;
+    }
+    install(ctx, recent);
+}
+
 pub fn poll() -> Vec<Command> {
+    // ⚠ AppKit adds AutoFill, Emoji & Symbols and Enter Full Screen *after* `install` has
+    // stripped the menu — lazily, in the first moments of the run — so the strip repeats on
+    // every poll for a while and then stops. Measured: Edit's two were back by the first frame
+    // that could be inspected, and "Enter Full Screen" arrived later still, once the window had
+    // grown to its remembered size; thirty seconds covers a slow launch under load.
+    static STRIP_UNTIL: OnceLock<std::time::Instant> = OnceLock::new();
+    let until =
+        *STRIP_UNTIL.get_or_init(|| std::time::Instant::now() + std::time::Duration::from_secs(30));
+    if std::time::Instant::now() < until {
+        strip_injected_items();
+    }
     let mut out = Vec::new();
     let Ok(rx) = events().rx.lock() else {
         return out;
@@ -216,4 +210,148 @@ fn accelerator(sc: menu::Shortcut) -> Option<muda::accelerator::Accelerator> {
         mods |= Modifiers::SHIFT;
     }
     Some(Accelerator::new(Some(mods), code))
+}
+
+/// muda reads `&` as a mnemonic marker on every platform and drops it, which turned "Crop &
+/// Geometry" into "Crop  Geometry" in the Photo menu; `&&` is its escape for a literal ampersand.
+fn native_label(label: &str) -> String {
+    label.replace('&', "&&")
+}
+
+/// The items AppKit adds to any main menu on its own — "AutoFill" and "Emoji & Symbols" into a
+/// menu titled Edit, tab-bar items and "Enter Full Screen" into one titled View. To a new user
+/// they read as features that do nothing.
+///
+/// ⚠ English titles, on purpose: the `NSUserDefaults` keys in
+/// [`suppress_injected_edit_items`] are the language-independent half of this and stop most of
+/// the injection before it happens; this list is the fallback for the ones AppKit keeps adding
+/// (AutoFill has no documented default). A non-English system keeps only that first half.
+const INJECTED_TITLES: [&str; 6] = [
+    "AutoFill",
+    "Emoji & Symbols",
+    "Start Dictation…",
+    "Show Tab Bar",
+    "Show All Tabs",
+    "Enter Full Screen",
+];
+
+/// Remove AppKit's injected items from every top-level menu, and the separators they leave
+/// dangling at either end. Runs once, right after `init_for_nsapp`, when they are already there.
+fn strip_injected_items() {
+    use objc2_app_kit::NSApplication;
+    use objc2_foundation::MainThreadMarker;
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(main) = NSApplication::sharedApplication(mtm).mainMenu() else {
+        return;
+    };
+    for i in 0..main.numberOfItems() {
+        if let Some(sub) = main.itemAtIndex(i).and_then(|it| it.submenu()) {
+            strip_from(&sub);
+        }
+    }
+}
+
+fn strip_from(menu: &objc2_app_kit::NSMenu) {
+    let mut i = menu.numberOfItems();
+    while i > 0 {
+        i -= 1;
+        let Some(item) = menu.itemAtIndex(i) else {
+            continue;
+        };
+        let title = item.title().to_string();
+        if INJECTED_TITLES.contains(&title.as_str()) {
+            menu.removeItem(&item);
+        }
+    }
+    // A separator that now leads or trails the menu belonged to a removed item.
+    for at_end in [true, false] {
+        loop {
+            let n = menu.numberOfItems();
+            if n == 0 {
+                break;
+            }
+            let idx = if at_end { n - 1 } else { 0 };
+            match menu.itemAtIndex(idx) {
+                Some(it) if it.isSeparatorItem() => menu.removeItem(&it),
+                _ => break,
+            }
+        }
+    }
+}
+
+/// Stop AppKit offering "Show Tab Bar" / "Show All Tabs" in the View menu: window tabbing is an
+/// AppKit feature this single-window app never uses.
+fn forbid_window_tabbing() {
+    use objc2_app_kit::NSWindow;
+    use objc2_foundation::MainThreadMarker;
+    if let Some(mtm) = MainThreadMarker::new() {
+        NSWindow::setAllowsAutomaticWindowTabbing(false, mtm);
+    }
+}
+
+/// Append the model's items to a native submenu, recursing into nested submenus.
+///
+/// ⚠ About and Settings are skipped: they live in the application menu, where macOS expects
+/// them, and the app menu is built by hand above.
+fn append_items(sub: &Submenu, items: Vec<Item>, by_id: &mut HashMap<MenuId, Command>) {
+    for item in items {
+        match item {
+            Item::Separator => {
+                let _ = sub.append(&PredefinedMenuItem::separator());
+            }
+            Item::Submenu { label, items } => {
+                let nested = Submenu::new(native_label(&label), true);
+                append_items(&nested, items, by_id);
+                let _ = sub.append(&nested);
+            }
+            Item::Action {
+                command: Command::About | Command::Settings,
+                ..
+            } => {}
+            Item::Action {
+                label,
+                command,
+                shortcut,
+            } => {
+                // ⚠ The chord is part of the label for the unsafe ones — see
+                // `Shortcut::safe_as_native_accelerator`: a bare key or a text-editing chord as a
+                // real accelerator would fire while typing in a field.
+                let (text, accel) = match shortcut {
+                    Some(sc) if sc.safe_as_native_accelerator() => {
+                        (label.to_string(), accelerator(sc))
+                    }
+                    Some(sc) => (format!("{label}   {}", sc.label()), None),
+                    None => (label.to_string(), None),
+                };
+                let mi = MenuItem::new(native_label(&text), true, accel);
+                by_id.insert(mi.id().clone(), command);
+                let _ = sub.append(&mi);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_ampersand_is_escaped_for_muda() {
+        assert_eq!(native_label("Crop & Geometry"), "Crop && Geometry");
+        assert_eq!(native_label("Open file…"), "Open file…");
+    }
+
+    /// The model's own labels all survive the escape: none contains a literal `&&`.
+    #[test]
+    fn no_menu_label_already_uses_mudas_escape() {
+        for section in menu::model() {
+            for item in section.items {
+                if let Item::Action { label, .. } = item {
+                    assert!(!label.contains("&&"), "{label:?}");
+                }
+            }
+        }
+    }
 }

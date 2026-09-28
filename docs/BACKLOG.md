@@ -64,6 +64,43 @@ filmstrip, and the nicer decode placeholder. These stay here as recorded reasoni
 
 ---
 
+## First-session reviews — the milestone-sized findings (recorded 2026-09-28)
+
+Two reviews of a first session, an amateur's and a professional's, were written on 2026-09-28 and
+deleted when their fix pass merged (`grep -n 'First-use review fixes' docs/JOURNAL.md`). Everything
+small shipped; these are the items that are a milestone each, kept here with the numbers the
+reviews measured so the deletion loses nothing. Ids are the professional review's.
+
+- **P-20 · No pre-rendered full-size previews — SCHEDULED, the author's pick at the merge.** A RAW
+  opens editable at half size in ~1 s; true 1:1 waits for the full decode, which costs **1.3 s
+  (Fastest) · 3.0 s (Fast) · 7.4 s (Better, the default)** on X-T4 frames
+  (`specs/2026-09-10-demosaic-decision.md`), and the session saw "Full resolution ready" ~11 s after
+  opening. A focus check across a 500-frame shoot is a wall of seconds per frame. Lightroom hides the
+  cost by building 1:1 previews in the background at import. The review's ask: a background
+  full-size preview build after import or folder open, bounded by a disk budget like the thumbnail
+  cache (`ThumbStore`, 5 GB default), with the grid and Compare able to zoom into it.
+- **P-21 · Catalog scale is unproven at archive size.** Documented testing reached ~830 files a folder
+  and ~1,700 rows; the author's catalog holds 6,235 and opened a 398-photo folder without trouble. A
+  working archive is 100k–1M. Ask: a synthetic 100k-row benchmark for All Photos, search, smart
+  collections and the folder tree, with the numbers written down.
+- **P-22 · No camera-matching colour out of the box.** No camera profiles ship; without a user `.dcp`
+  a camera gets the matrix rendering, a Fuji shooter gets no film simulations, no LUTs ship. Ask: a
+  legal route to profiles (community DCP/ICC sets, a ColorChecker workflow) — the *starter looks*
+  half of this shipped in the fix pass (nine built-in presets).
+- **P-23 · No AI denoise.** The guided-filter NR is pre-AI; `ai-mask` already brings `tract` and a
+  model registry, so a denoise model is the natural next tenant.
+- **P-24 · No HDR merge, no panorama merge.** Unplanned rather than unbuilt — neither appears anywhere
+  else in this file or the journal.
+- **P-25 · Scope: tethering, GPS/map, people tagging, publish services, print** — out of scope by
+  declaration (tethering is on the target list, untouched). Recorded so the scope statement is explicit.
+- **P-26 · Small professional gaps:** text-only watermark; rename one photo at a time (the import
+  template exists); export resizes by pixel long edge only (no cm/in, PPI or file-size target); no
+  content-aware remove; no Grain slider.
+- **P-28 · Cross-platform is a promise so far** — the GUI has only run on this Mac; already M10.2.
+- **P-29 / P-30 · Decisions, recorded not disputed:** the tool panel is exclusive (Masks hides the
+  global sliders; tried the other way and reversed 2026-08-24), and the panel groups follow the edit
+  groups rather than Lightroom's Basic panel (consistent with Sync and Paste, the stated reason).
+
 ## Blocked on a design question
 
 These are **not** small jobs waiting for a free afternoon. Each needs a decision made before any

@@ -177,6 +177,10 @@ pub(crate) fn white_balance(
     let r = ui.add(
         super::slider::Slider::new(&mut mired, MIRED_MIN..=MIRED_MAX)
             .text("Temp")
+            .help(
+                rustroom_app::slider_help::text("Temp")
+                    .map(|h| format!("{h} Double-click resets it.")),
+            )
             .custom_formatter(|m| format!("{:.0} K", 1.0e6 / m))
             .custom_parser(|s| {
                 s.trim()
@@ -301,6 +305,12 @@ pub(crate) fn tone(
         .clicked()
     {
         rustroom_app::auto_tone_tool::apply(edits, buffer, baseline_ev);
+        // Said out loud in the status bar: two sliders pinned at +100 read as a fault to a
+        // first-time user unless the app says it did that on purpose (A-17).
+        ed.note = Some(format!(
+            "Auto set exposure {:+.2}, whites {:+.0} and blacks {:+.0}",
+            edits.exposure, edits.whites, edits.blacks
+        ));
         // ⚠ `mark_changed`, not a slider's `changed()`: a click is a complete act, so it is one
         // history entry immediately rather than waiting for a `drag_stopped` that never comes.
         // That is what makes Auto exactly one Ctrl+Z — the model the WB presets already follow.
@@ -1157,6 +1167,63 @@ mod tests {
 
     /// The Edit panel with the state the range view reads and writes, held together so a
     /// click's borrows end when the click does.
+    /// ⚠⚠ Every slider the Edit panel draws explains itself on hover, from `slider_help`. A
+    /// slider whose label the table does not know draws no help at all — which is how the
+    /// first-use review found forty mute sliders next to three explained buttons (A-24).
+    /// The collapsed sections are opened first, the way the reset sweep does it, so the
+    /// count covers the whole panel and not the eleven sliders that show by default.
+    #[test]
+    fn every_edit_slider_has_hover_help() {
+        let ctx = crate::test_ui::ctx();
+        let buf = tone_fixture();
+        let mut edits = edit_model::Edits::default();
+        let mut channel = HslChannel::default();
+        let mut curve = tone_curve::CurveChannel::Parametric;
+        let mut grade = color_wheel::GradeRange::default();
+        let (mut show_range, mut view) = (true, None);
+        let mut ed = Edited::default();
+        let mut body = |ui: &mut egui::Ui| {
+            ed = Edited::default();
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                show(
+                    ui,
+                    &mut edits,
+                    Channels {
+                        hsl: &mut channel,
+                        curve: &mut curve,
+                        parametric_drag: Default::default(),
+                    },
+                    GradeUi {
+                        range: &mut grade,
+                        show_range: &mut show_range,
+                        view: &mut view,
+                    },
+                    SourceInfo {
+                        lens: Some("XF23mmF2 R WR"),
+                        lens_profile_found: true,
+                        wb_baseline: color::wb::Illuminant::default(),
+                        baseline_ev: None,
+                        buffer: &buf,
+                        hist: None,
+                    },
+                    Pickers::default(),
+                    &mut ed,
+                );
+            });
+        };
+        for h in ["Color", "Detail", "Lens", "Vignette"] {
+            crate::test_ui::click(&ctx, h, &mut body);
+        }
+        crate::test_ui::click(&ctx, "Advanced color", &mut body);
+        let labels = crate::test_ui::slider_labels(&ctx, &mut body);
+        assert!(labels.len() > 30, "only {} sliders found", labels.len());
+        let mute: Vec<&String> = labels
+            .iter()
+            .filter(|l| rustroom_app::slider_help::text(l).is_none())
+            .collect();
+        assert!(mute.is_empty(), "sliders without help: {mute:?}");
+    }
+
     struct RangePanel {
         edits: edit_model::Edits,
         channel: HslChannel,

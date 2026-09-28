@@ -342,8 +342,7 @@ fn straighten(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
             egui::vec2(w.max(60.0), ui.spacing().interact_size.y),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                ed.slider(ui, &mut s.edits.geometry.angle, -45.0..=45.0, "Angle", 0.0)
-                    .on_hover_text("Degrees. Editing it by hand clears any perspective guides.");
+                ed.slider(ui, &mut s.edits.geometry.angle, -45.0..=45.0, "Angle", 0.0);
             },
         );
         if level_button(ui, s.straighten_armed).clicked() {
@@ -418,20 +417,18 @@ fn perspective(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited, auto: &mut b
         s.edits.geometry.angle,
     );
     let p = &mut s.edits.perspective;
-    ed.slider(ui, &mut p.vertical, -100.0..=100.0, "Vertical", 0.0)
-        .on_hover_text(
-            "Keystone about the horizontal axis — for a subject leaning back or forward.",
-        );
-    ed.slider(ui, &mut p.horizontal, -100.0..=100.0, "Horizontal", 0.0)
-        .on_hover_text("Keystone about the vertical axis — for a subject turned left or right.");
-    ed.slider(ui, &mut p.aspect, -100.0..=100.0, "Aspect ⬍ ⬌", 0.0)
-        .on_hover_text("Stretches the frame: negative taller ⬍, positive wider ⬌. Counteracts the squashing a keystone correction causes.");
-    ed.slider(ui, &mut p.scale, -100.0..=100.0, "Scale", 0.0)
-        .on_hover_text(
-            "−100 fits the whole corrected image inside the frame; 0 leaves it raw, which \
-             clips whatever the correction pushes off the edges; +100 zooms in until no black \
-             corners remain.",
-        );
+    ed.slider(ui, &mut p.vertical, -100.0..=100.0, "Vertical", 0.0);
+    ed.slider(ui, &mut p.horizontal, -100.0..=100.0, "Horizontal", 0.0);
+    ed.slider(ui, &mut p.aspect, -100.0..=100.0, "Aspect ⬍ ⬌", 0.0);
+    // ⚠ The field's own default, −100, not 0: a double-click used to land on the raw,
+    // clipping view (P-11). Its help text lives in `slider_help` with every other slider's.
+    ed.slider(
+        ui,
+        &mut p.scale,
+        -100.0..=100.0,
+        "Scale",
+        edit_model::Perspective::default().scale,
+    );
     if (
         s.edits.perspective.vertical,
         s.edits.perspective.horizontal,
@@ -1112,6 +1109,78 @@ mod tests {
 
     /// ⚠ That the sliders are actually drawn. A section added to the wrong branch compiles, runs,
     /// and is simply never on screen — which no other test in this file would notice.
+    /// ⚠ Scale is the one slider whose neutral is not zero: −100 fits the corrected image. A
+    /// double-click used to send it to 0, the raw clipping view (P-11); the Edit panel's sweep
+    /// never saw it because Geometry is another tool.
+    #[test]
+    fn scale_resets_to_its_own_default_on_double_click() {
+        let ctx = test_ui::ctx();
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            ctx.style_mut_of(theme, |s| s.animation_time = 0.0);
+        }
+        let mut s = session();
+        let mut aspect = None;
+        let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
+        let mut ed = Edited::default();
+        // The body owns `s` for as long as it lives, so the value is read out through a cell.
+        let scale = std::cell::Cell::new(f32::NAN);
+        let mut body = |ui: &mut egui::Ui| {
+            show(
+                ui,
+                &mut s,
+                AspectLock {
+                    lock: &mut aspect,
+                    custom: &mut custom,
+                },
+                &mut CompositionGuide::Off,
+                false,
+                &mut ed,
+                &mut false,
+            );
+            scale.set(s.edits.perspective.scale);
+        };
+        let sliders = test_ui::slider_centres(&ctx, &mut body);
+        let (_, at) = sliders
+            .iter()
+            .find(|(l, _)| l == "Scale")
+            .expect("a Scale slider");
+        let off = *at + egui::vec2(40.0, 0.0);
+        test_ui::click_at(&ctx, off, false, &mut body);
+        assert_ne!(scale.get(), -100.0, "the click must move it first");
+        test_ui::click_at(&ctx, off, true, &mut body);
+        assert_eq!(scale.get(), -100.0);
+    }
+
+    /// Every slider the Geometry tool draws has a help sentence — see the Edit panel's twin.
+    #[test]
+    fn every_geometry_slider_has_hover_help() {
+        let ctx = test_ui::ctx();
+        let mut s = session();
+        let mut aspect = None;
+        let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
+        let mut ed = Edited::default();
+        let labels = test_ui::slider_labels(&ctx, |ui| {
+            show(
+                ui,
+                &mut s,
+                AspectLock {
+                    lock: &mut aspect,
+                    custom: &mut custom,
+                },
+                &mut CompositionGuide::Off,
+                false,
+                &mut ed,
+                &mut false,
+            );
+        });
+        assert!(labels.len() >= 5, "only {} sliders found", labels.len());
+        let mute: Vec<&String> = labels
+            .iter()
+            .filter(|l| rustroom_app::slider_help::text(l).is_none())
+            .collect();
+        assert!(mute.is_empty(), "sliders without help: {mute:?}");
+    }
+
     #[test]
     fn the_perspective_sliders_are_drawn() {
         let ctx = test_ui::ctx();
@@ -1145,8 +1214,8 @@ mod tests {
     /// ⚠ The rail must say what the tool now does. Asserted on `Tool::label` rather than by
     /// finding the widget, because the rail is drawn by a different module entirely.
     #[test]
-    fn the_rail_calls_the_crop_tool_geometry() {
-        assert_eq!(rustroom_app::tool::Tool::Crop.label(), "Geometry");
+    fn the_rail_calls_the_crop_tool_crop_and_geometry() {
+        assert_eq!(rustroom_app::tool::Tool::Crop.label(), "Crop & Geometry");
     }
 
     /// ⚠⚠ The reset button covers the whole Geometry group, perspective included. Without this

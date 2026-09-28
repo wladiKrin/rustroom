@@ -254,6 +254,158 @@ impl PresetStore {
     }
 }
 
+/// The groups a starter preset carries: tone and colour, never anything tied to one photo.
+///
+/// ⚠ A preset *replaces* the groups it carries, so a starter that sets contrast also sets
+/// exposure back to 0 — the same rule every user preset follows. Worth knowing before adding a
+/// starter that touches only one slider.
+fn starter_groups() -> EditGroups {
+    EditGroups {
+        white_balance: false,
+        tone: true,
+        color: true,
+        detail: false,
+        lens: false,
+        vignette: false,
+        geometry: false,
+        masks: false,
+        retouch: false,
+        rendering: false,
+    }
+}
+
+/// The presets Rustroom ships, so the Presets tool is never empty on first run — the one thing
+/// both first-use reviews called a blocker for an amateur (A-23, P-22).
+///
+/// ⚠ Modest on purpose: a starter is a nudge a beginner builds on, not a filter. The author
+/// retunes the values; the test pins only that each one changes something and that no two are
+/// alike.
+pub fn builtin() -> Vec<Preset> {
+    use edit_model::{ColorGrading, GradeWheel, LocalContrast, ParametricCurve};
+    let wheel = |hue: f32, saturation: f32| GradeWheel {
+        hue,
+        saturation,
+        luminance: 0.0,
+    };
+    let starter = |name: &str, edits: Edits| Preset {
+        name: name.to_string(),
+        groups: starter_groups(),
+        edits,
+    };
+    vec![
+        starter(
+            "Natural",
+            Edits {
+                contrast: 8.0,
+                vibrance: 12.0,
+                local_contrast: LocalContrast {
+                    clarity: 5.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ),
+        starter(
+            "Punchy",
+            Edits {
+                contrast: 20.0,
+                whites: 10.0,
+                blacks: -10.0,
+                vibrance: 25.0,
+                local_contrast: LocalContrast {
+                    clarity: 15.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ),
+        starter(
+            "Soft",
+            Edits {
+                contrast: -15.0,
+                highlights: -15.0,
+                shadows: 15.0,
+                local_contrast: LocalContrast {
+                    clarity: -20.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ),
+        starter(
+            "Warm",
+            Edits {
+                vibrance: 5.0,
+                color_grading: ColorGrading {
+                    shadows: wheel(40.0, 12.0),
+                    highlights: wheel(45.0, 8.0),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ),
+        starter(
+            "Cool",
+            Edits {
+                color_grading: ColorGrading {
+                    shadows: wheel(220.0, 12.0),
+                    highlights: wheel(210.0, 6.0),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ),
+        starter(
+            "Black & white",
+            Edits {
+                saturation: -100.0,
+                contrast: 10.0,
+                local_contrast: LocalContrast {
+                    clarity: 10.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ),
+        starter(
+            "Matte",
+            Edits {
+                contrast: -5.0,
+                saturation: -10.0,
+                tone_curve_parametric: ParametricCurve {
+                    shadows: 25.0,
+                    highlights: -10.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ),
+        starter(
+            "High key",
+            Edits {
+                exposure: 0.7,
+                contrast: -10.0,
+                highlights: -20.0,
+                whites: 15.0,
+                blacks: 15.0,
+                ..Default::default()
+            },
+        ),
+        starter(
+            "Faded",
+            Edits {
+                contrast: -20.0,
+                saturation: -25.0,
+                tone_curve_parametric: ParametricCurve {
+                    shadows: 20.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,5 +802,35 @@ mod panel_helpers_tests {
             scoped.matches(&edits),
             "a group it does not carry must not count"
         );
+    }
+
+    /// Every starter changes the default photo, no two starters are alike, and none carries a
+    /// group tied to one photo (crop, masks, retouch) — the property, not the values, which are
+    /// the author's to tune.
+    #[test]
+    fn the_starter_presets_each_do_something_different() {
+        let set = builtin();
+        assert!(set.len() >= 8, "sample: {}", set.len());
+        let mut results: Vec<Edits> = Vec::new();
+        for p in &set {
+            assert!(
+                !p.groups.geometry && !p.groups.masks && !p.groups.retouch,
+                "{}",
+                p.name
+            );
+            let mut e = Edits::default();
+            e.merge_from(&p.edits, p.groups);
+            assert_ne!(e, Edits::default(), "{} changes nothing", p.name);
+            assert!(
+                !results.contains(&e),
+                "{} duplicates another starter",
+                p.name
+            );
+            results.push(e);
+        }
+        let mut names: Vec<&str> = set.iter().map(|p| p.name.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), set.len(), "two starters share a name");
     }
 }

@@ -9,40 +9,47 @@ use eframe::egui;
 use rustroom_app::menu::{self, Command, Item};
 
 /// Draw the bar. Returns the command the user picked, if any.
-pub fn show(ui: &mut egui::Ui) -> Option<Command> {
+pub fn show(ui: &mut egui::Ui, recent: &[std::path::PathBuf]) -> Option<Command> {
     let mut picked = None;
     egui::containers::menu::MenuBar::new().ui(ui, |ui| {
-        for section in menu::model() {
-            ui.menu_button(section.title, |ui| {
-                for item in section.items {
-                    match item {
-                        Item::Separator => {
-                            ui.separator();
-                        }
-                        Item::Action {
-                            label,
-                            command,
-                            shortcut,
-                        } => {
-                            // ⚠ The chord is part of the label rather than egui shortcut text,
-                            // so this bar and the native one read the same way — the native bar
-                            // cannot use a real accelerator for the unsafe chords either. One
-                            // presentation, both platforms.
-                            let text = match shortcut {
-                                Some(sc) => format!("{label}   {}", sc.label()),
-                                None => label.to_string(),
-                            };
-                            if ui.button(text).clicked() {
-                                picked = Some(command);
-                                ui.close();
-                            }
-                        }
-                    }
-                }
-            });
+        for section in menu::model_with(recent) {
+            ui.menu_button(section.title, |ui| items(ui, &section.items, &mut picked));
         }
     });
     picked
+}
+
+/// One level of a menu; a submenu opens a nested one.
+fn items(ui: &mut egui::Ui, items: &[Item], picked: &mut Option<Command>) {
+    for item in items {
+        match item {
+            Item::Separator => {
+                ui.separator();
+            }
+            Item::Submenu {
+                label,
+                items: nested,
+            } => {
+                ui.menu_button(label, |ui| self::items(ui, nested, picked));
+            }
+            Item::Action {
+                label,
+                command,
+                shortcut,
+            } => {
+                // ⚠ The chord is part of the label rather than egui shortcut text, so this bar
+                // and the native one read the same way. One presentation, both platforms.
+                let text = match shortcut {
+                    Some(sc) => format!("{label}   {}", sc.label()),
+                    None => label.clone(),
+                };
+                if ui.button(text).clicked() {
+                    *picked = Some(*command);
+                    ui.close();
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -57,7 +64,7 @@ mod tests {
         // the renderer cannot rot unnoticed.
         let ctx = egui::Context::default();
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let picked = show(ui);
+            let picked = show(ui, &[]);
             assert!(picked.is_none(), "nothing was clicked");
         });
     }
