@@ -167,6 +167,32 @@ declined over the dataset's research/education terms). Licences verified at the 
 (code and weights), MobileSAM Apache-2.0, SAM Apache-2.0, ONNX Runtime MIT; ⛔ BRIA RMBG (non-commercial),
 NVIDIA SegFormer (non-commercial), `onnx-community/ISNet-ONNX` (re-tagged AGPL).
 
+**What shipped** (🟡 built, awaiting use). A new zero-GUI crate **`ai-mask`**: the registry (four
+files pinned by size and SHA-256, with licences), a hash-verified download (a mismatch is deleted,
+never used), preprocessing, `ProbMap`, and `tract` inference for IS-Net, BiRefNet_lite and MobileSAM.
+`Mask::Ai(AiMask { prompt: Subject | Click{point}, threshold, invert })` — **no pixels in the
+sidecar**. The pipeline's `CoverageSource::Raster` reads a prebuilt map from the **brush side
+channel** (`RenderSpec` stays `Copy`) and covers **nothing** without one; the GPU uploads it as a
+prebuilt map. The app lib: maps live in **decode space** (`ai_space::DecodeMap` = `SpotMap` + the lens
+corrector), so a cached map survives every crop, rotation, perspective and lens change;
+`ai_coverage::refine/to_frame`, the disk cache keyed on the file + model + prompt, and the
+`ai_worker` that turns the photo **upright** before a network sees it (the spike's sideways trap).
+Preview: a shared `AiMaps` store read by `BrushCache`, keyed on the map's identity. Export: the tail is
+now built **after** the prefix so the coverage fits the final frame, and `maps_for` reads the same
+cache the preview does. UI: *Subject* and *Select by click* in the Masks panel, a click re-aims a Select
+mask, a **Refine** slider, the tint, a download dialog listing each file's size and licence, and the
+subject model in Settings → Performance.
+
+⚠⚠ **The flow re-checks every frame, and that is structural, not cosmetic**: the full-resolution
+handover REPLACES the render engine, and a fresh engine's map store is empty — so the per-frame
+`ensure_ai_maps` refills it from the disk cache. A pending/failed/offered set keeps that cheap and
+stops a broken model from looping or the dialog from nagging.
+
+Measured through the production code (`examples/ai_mask_probe.rs`, release, M2): a sky click on
+`DSCF6760.JPG` — encode **2.1 s**, first click **0.31 s**, second **0.18 s**; the selection is the sky
+right of the tower, bounded by the tower and the tree line (15.8% of the frame). Real-model unit tests
+(`--ignored real_`) pass on the same photo. **3,157 tests** (+28), gate green.
+
 **The spike** (full table in the spec): on the author's M2, `tract` runs BiRefNet_lite in **23.6 s**,
 IS-Net in **1.9 s**, the MobileSAM encoder in **1.6 s** and a click in **0.10 s**; `ort` is 2.7–2.8×
 faster on CPU; ⚠ **CoreML cannot compile BiRefNet** (MLProgram rejects its deformable-conv export; the
