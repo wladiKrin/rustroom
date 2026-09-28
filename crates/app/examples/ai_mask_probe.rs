@@ -54,7 +54,10 @@ fn main() {
             println!("embed {:.2} s", t.elapsed().as_secs_f64());
             let t = Instant::now();
             let m = sam.click(&e, p).unwrap();
-            println!("click {:.3} s (first, includes the decoder build)", t.elapsed().as_secs_f64());
+            println!(
+                "click {:.3} s (first, includes the decoder build)",
+                t.elapsed().as_secs_f64()
+            );
             let t = Instant::now();
             let _ = sam.click(&e, p).unwrap();
             println!("click {:.3} s (second)", t.elapsed().as_secs_f64());
@@ -81,5 +84,8 @@ fn main() {
     });
     overlay.save(format!("{stem}.overlay.png")).unwrap();
     let covered = map.data.iter().filter(|&&v| v > 128).count() as f32 / map.data.len() as f32;
-    println!("covered {:.1}% — wrote {stem}.mask.png and {stem}.overlay.png", covered * 100.0);
+    println!(
+        "covered {:.1}% — wrote {stem}.mask.png and {stem}.overlay.png",
+        covered * 100.0
+    );
 }
