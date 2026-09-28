@@ -218,6 +218,19 @@ the brush, the crop handles and the guides, which is what the pan-binding settin
 P-06 stays; P-07 done: the crop frame is a light neutral over its halo, the corner brackets are
 longer and bolder, and each edge has a bar for its handle.
 
+**The second round, "let's continue with the small fixes":** a segmented control now shrinks
+its labels by 15 % to stay on one row before it wraps (`segmented::plan`, pure); stars appear on
+a hovered thumbnail and rate on a click; each starter preset shows the open photo through it,
+rendered by the thumbnail loader — `also_want` adds to the loader's list, because `want` replaces
+it and a second caller would have fought the grid for it every frame; the ambient keys: `Y` for
+Compare (`menu::ALIASES`, a second bare key for a command that has one), `L` lights-out, `I` an
+info card, `J` a clipping overlay computed from the displayed frame (`clipping.rs`: any channel
+at 254+ is a clipped highlight, all three at 1 or below a clipped shadow) and painted at the
+preview's own rectangle. The light theme, looked at on a fresh profile: the interface reads
+fine; the macOS **title bar stayed dark** over it — `ViewportCommand::SetTheme` now follows the
+choice — and the empty Develop still told the user to press an "Open file… button" that has not
+existed since the menus took the toolbar's place.
+
 ### 2026-09-28 — M9.13 AI masks: the brainstorm and the runtime spike (branch `m9.13-ai-masks`)
 
 **Chosen (the author):** build it — for skies, people and subjects of any kind; models **downloaded on

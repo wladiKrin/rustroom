@@ -30,6 +30,12 @@ use rustroom_app::view_region;
 use spot_overlay::{draw_spot_overlay, sampler_for};
 use straighten_overlay::draw_straighten_overlay;
 
+/// What an empty Develop says. ⚠ There has been no "Open file… button" since the menus took the
+/// toolbar's place; the old text still named one. Also swept by
+/// `theme::every_menu_string_is_renderable`.
+pub(crate) const EMPTY_DEVELOP_HINT: &str =
+    "Open a photo from the Library, or File → Open file… (⌘O).";
+
 /// Whether `RUSTROOM_DEBUG_PLACE` is set. Read once: the placement log runs per frame, where
 /// the render engine's equivalent runs per render.
 static DEBUG_PLACE: std::sync::LazyLock<bool> =
@@ -378,6 +384,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                             pk,
                             pscale,
                         );
+                        s.canvas_frame_rect = Some(frame_rect);
 
                         // ⚠ Env-gated instrumentation, the `RUSTROOM_DEBUG_BRUSH` precedent: this
                         // file's own record says reasoning about placement has been wrong twice, and
@@ -432,6 +439,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                             }
                         }
                         egui::Image::new(shown).paint_at(ui, resp.rect);
+                        // ⚠ The same rectangle as the frame it was computed from — `J`.
+                        if let Some(clip) = &s.clip_texture {
+                            egui::Image::new(clip).paint_at(ui, resp.rect);
+                        }
                         // ⚠ The grade range view, over the photograph and under every tool overlay.
                         // `resp.rect` is `img_rect` — the rendered slice — and this texture covers
                         // exactly that, whether the frame was whole or a region; the readout's
@@ -720,10 +731,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                 }
                 None => {
                     ui.centered_and_justified(|ui| {
-                        crate::theme::empty_state(
-                            ui,
-                            "Open an image to begin (Open file… button).",
-                        );
+                        crate::theme::empty_state(ui, EMPTY_DEVELOP_HINT);
                     });
                 }
             }

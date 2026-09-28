@@ -42,6 +42,12 @@ pub enum Command {
     ToggleFilmstrip,
     /// Hide or show the panels, the rail and the filmstrip — Tab, as in Lightroom.
     TogglePanels,
+    /// Cycle the surround: normal → dimmed → black, the picture alone — L, as in Lightroom.
+    LightsOut,
+    /// A capture-info card over the picture's corner — I, as in Lightroom.
+    ToggleInfoOverlay,
+    /// Clipped highlights in red and clipped shadows in blue over the picture — J, as in Lightroom.
+    ToggleClipping,
     ToggleMaskOverlay,
     CycleCompositionGuide,
     SelectTool(Tool),
@@ -332,6 +338,17 @@ fn view_items() -> Vec<Item> {
             Command::TogglePanels,
             Some(Shortcut::bare('\t')),
         ),
+        action("Lights out", Command::LightsOut, Some(Shortcut::bare('L'))),
+        action(
+            "Info overlay",
+            Command::ToggleInfoOverlay,
+            Some(Shortcut::bare('I')),
+        ),
+        action(
+            "Clipping overlay",
+            Command::ToggleClipping,
+            Some(Shortcut::bare('J')),
+        ),
     ];
 
     // ⚠⚠ **Appended, never inserted.** `PARALLEL-WORK.md` lists this menu among the surfaces any
@@ -409,6 +426,11 @@ pub fn folder_name(p: &Path) -> String {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| p.display().to_string())
 }
+
+/// A second bare key for a command that already has one, for a hand that knows Lightroom:
+/// `Y` is its Compare. Read by the shortcut matcher after the model, listed by the shortcuts
+/// dialog, and checked against the model and the culling keys by the tests.
+pub const ALIASES: &[(char, Command)] = &[('Y', Command::ShowCompare)];
 
 /// Visit every item in menu order, descending into submenus.
 ///
@@ -665,6 +687,34 @@ mod tests {
             .items
             .iter()
             .any(|i| matches!(i, Item::Submenu { .. })));
+    }
+
+    /// An alias must be a bare key nothing else uses — not a model shortcut, not a culling key —
+    /// and must name a command the model has.
+    #[test]
+    fn aliases_collide_with_nothing() {
+        let mut bare: Vec<char> = Vec::new();
+        for s in model() {
+            walk(&s.items, &mut |i| {
+                if let Item::Action {
+                    shortcut: Some(sc), ..
+                } = i
+                {
+                    if !sc.cmd {
+                        bare.push(sc.key);
+                    }
+                }
+            });
+        }
+        let cmds = commands();
+        for (key, cmd) in ALIASES {
+            assert!(!bare.contains(key), "{key} is already a menu shortcut");
+            assert!(
+                !(key.is_ascii_digit() || matches!(key, 'P' | 'X' | 'U')),
+                "{key} is a culling key"
+            );
+            assert!(cmds.contains(cmd), "{cmd:?} is not in the menu");
+        }
     }
 
     #[test]

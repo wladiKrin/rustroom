@@ -135,6 +135,13 @@ pub fn apply(ctx: &egui::Context, settings: &Settings) {
         ThemeChoice::Light => egui::ThemePreference::Light,
         ThemeChoice::System => egui::ThemePreference::System,
     });
+    // ⚠ The window's own chrome too: with the light theme applied the macOS title bar stayed
+    // dark, a black band over a light interface (P-31, the first look at the light theme).
+    ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(match settings.theme {
+        ThemeChoice::Dark => egui::SystemTheme::Dark,
+        ThemeChoice::Light => egui::SystemTheme::Light,
+        ThemeChoice::System => egui::SystemTheme::SystemDefault,
+    }));
     for (theme, dark) in [(egui::Theme::Dark, true), (egui::Theme::Light, false)] {
         let accent = accent_color(settings.accent, dark);
         ctx.style_mut_of(theme, |style| {
@@ -567,6 +574,7 @@ mod tests {
             crate::multi::compare::INSTRUCTION.to_owned(),
             crate::multi::survey::INSTRUCTION.to_owned(),
             crate::library::EMPTY_LIBRARY_HINT.to_owned(),
+            crate::develop::canvas::EMPTY_DEVELOP_HINT.to_owned(),
         ];
         strings.extend(
             rustroom_app::tool::Tool::ALL

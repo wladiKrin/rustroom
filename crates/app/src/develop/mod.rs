@@ -1,5 +1,6 @@
 //! The Develop view: toolbar, preset panel, adjustments panel, canvas.
 
+pub mod ambient;
 pub mod canvas;
 pub mod canvas_geom;
 pub mod panel;

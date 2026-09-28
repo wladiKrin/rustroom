@@ -408,6 +408,7 @@ pub(crate) const EXTRA_KEYS: &[(&str, &[(&str, &str)])] = &[
             ("Nudge a focused one", "← →"),
         ],
     ),
+    ("Also", &[("Compare", "Y")]),
 ];
 
 fn shortcuts(app: &mut RustroomApp, ctx: &egui::Context) {

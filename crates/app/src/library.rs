@@ -374,6 +374,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ Declared out here like `open_index`: the empty state's buttons run a command that needs
     // `&mut RustroomApp`, which the closure cannot have while it borrows fields of it.
     let mut empty_pick: Option<rustroom_app::menu::Command> = None;
+    // ⚠ Same shape: a star clicked on a thumbnail rates through `apply_mark_to`, which needs
+    // `&mut RustroomApp` once the closure has let go of the library.
+    let mut star_click: Option<(PhotoId, u8)> = None;
     // ⚠ Collected and applied after the closure, the shape every action in this file uses: the
     // closure holds `lib`, and all three of these need `&mut app`.
     let mut menu: Option<(usize, CellAction)> = None;
@@ -663,7 +666,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             .unwrap_or_default();
                                         // ⚠ The marks go in a row under the picture, not over
                                         // it — see `thumb::marks_row`.
-                                        thumb::cell_with(
+                                        let cell_resp = thumb::cell_with(
                                             ui,
                                             box_size,
                                             // ⚠ The exact render if it is there, else this
@@ -815,6 +818,49 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             marks,
                                             name_size * MARK_SCALE,
                                         );
+                                        // ⚠ Stars under the pointer, on the thumbnail itself:
+                                        // rating from the mouse where the eye already is (A-12).
+                                        // Clicking the current rating clears it, like `0`.
+                                        let thumb_rect = cell_resp.rect;
+                                        if ui.rect_contains_pointer(thumb_rect) {
+                                            let size = (name_size * MARK_SCALE).clamp(12.0, 18.0);
+                                            let base = egui::pos2(
+                                                thumb_rect.left() + 6.0,
+                                                thumb_rect.bottom() - size * 0.75,
+                                            );
+                                            for k in 1..=5u8 {
+                                                let c = egui::pos2(
+                                                    base.x + (k as f32 - 0.5) * size,
+                                                    base.y,
+                                                );
+                                                let hit = egui::Rect::from_center_size(
+                                                    c,
+                                                    egui::vec2(size, size),
+                                                );
+                                                let r = ui.interact(
+                                                    hit,
+                                                    ui.id().with(("star", i, k)),
+                                                    egui::Sense::click(),
+                                                );
+                                                let lit = k <= marks.rating || r.hovered();
+                                                ui.painter().text(
+                                                    c,
+                                                    egui::Align2::CENTER_CENTER,
+                                                    if lit { "★" } else { "☆" },
+                                                    egui::FontId::proportional(size),
+                                                    if lit {
+                                                        egui::Color32::WHITE
+                                                    } else {
+                                                        egui::Color32::from_white_alpha(170)
+                                                    },
+                                                );
+                                                if r.clicked() {
+                                                    let stars =
+                                                        if k == marks.rating { 0 } else { k };
+                                                    star_click = Some((e.id.clone(), stars));
+                                                }
+                                            }
+                                        }
                                     });
                                 })
                                 .response
@@ -986,6 +1032,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     }
     if let Some(cmd) = empty_pick {
         crate::commands::execute(app, ctx, cmd);
+    }
+    if let Some((id, stars)) = star_click {
+        app.apply_mark_to(&[id], rustroom_app::marks::MarkAction::Rating(stars));
     }
     if let Some(i) = open_index {
         app.open_entry(ctx, i);

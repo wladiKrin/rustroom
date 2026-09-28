@@ -53,6 +53,44 @@ pub const SEGMENTED_HEIGHT: f32 = 18.0;
 /// as many rows as that takes (four items at the panel's default 240 pt become a 2 × 2 block).
 /// The first version drew four body-face labels into one row and they overlapped at the
 /// default width — seen in use, 2026-09-19.
+/// How much a segmented control's labels shrink to stay on one row.
+const SHRINK: f32 = 0.85;
+
+/// Where a segmented control's items go: how many per row, and whether the labels shrank.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Plan {
+    pub cols: usize,
+    pub shrink: bool,
+}
+
+/// The layout for `n` items in `inner_w` points: one row at full size if it fits, else one row
+/// at the shrunken size if *that* fits, else as many columns as fit at full size.
+pub fn plan(inner_w: f32, n: usize, widest: f32, widest_small: f32) -> Plan {
+    const PAD: f32 = 10.0;
+    const PAD_SMALL: f32 = 6.0;
+    let n = n.max(1);
+    if inner_w / n as f32 >= widest + PAD {
+        return Plan {
+            cols: n,
+            shrink: false,
+        };
+    }
+    if inner_w / n as f32 >= widest_small + PAD_SMALL {
+        return Plan {
+            cols: n,
+            shrink: true,
+        };
+    }
+    let cols = (1..=n)
+        .rev()
+        .find(|&c| inner_w / c as f32 >= widest + PAD)
+        .unwrap_or(1);
+    Plan {
+        cols,
+        shrink: false,
+    }
+}
+
 pub fn segmented_sized<T: PartialEq + Copy>(
     ui: &mut egui::Ui,
     current: &mut T,
@@ -61,7 +99,6 @@ pub fn segmented_sized<T: PartialEq + Copy>(
     font: egui::FontId,
 ) -> egui::Response {
     /// Horizontal room around a label inside its cell.
-    const PAD: f32 = 10.0;
     const GAP: f32 = 2.0;
     let n = items.len().max(1);
     let width = ui.available_width();
@@ -76,10 +113,24 @@ pub fn segmented_sized<T: PartialEq + Copy>(
             .fold(0.0, f32::max)
     });
     let inner_w = (width - 4.0).max(1.0);
-    let cols = (1..=n)
-        .rev()
-        .find(|&c| inner_w / c as f32 >= widest + PAD)
-        .unwrap_or(1);
+    // ⚠ Shrink before wrapping: at the panel's floor width the five-tab curve selector, the
+    // four Retouch modes, the four mask modes and Tint by tone each spilled onto a second row,
+    // which both first-use reviews read as a broken control (A-20, P-02). A slightly smaller
+    // label that keeps one row beats a second row every time; only when even that does not
+    // fit do the items wrap.
+    let small = egui::FontId::new(font.size * SHRINK, font.family.clone());
+    let widest_small = ui.fonts_mut(|f| {
+        items
+            .iter()
+            .map(|(_, l, _)| {
+                f.layout_no_wrap((*l).to_owned(), small.clone(), egui::Color32::WHITE)
+                    .size()
+                    .x
+            })
+            .fold(0.0, f32::max)
+    });
+    let Plan { cols, shrink } = plan(inner_w, n, widest, widest_small);
+    let font = if shrink { small } else { font };
     let rows = n.div_ceil(cols);
     let total = rows as f32 * height + (rows as f32 - 1.0) * GAP;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, total), egui::Sense::hover());
@@ -420,6 +471,45 @@ pub fn switch(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
         text_color,
     );
     r
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+
+    /// Wide enough: one row at full size. Narrow: one row at the shrunken size. Narrower still:
+    /// it wraps at full size — never a wrapped *and* shrunken control.
+    #[test]
+    fn labels_shrink_before_they_wrap() {
+        assert_eq!(
+            plan(400.0, 5, 60.0, 50.0),
+            Plan {
+                cols: 5,
+                shrink: false
+            }
+        );
+        assert_eq!(
+            plan(300.0, 5, 60.0, 50.0),
+            Plan {
+                cols: 5,
+                shrink: true
+            }
+        );
+        let wrapped = plan(200.0, 5, 60.0, 50.0);
+        assert!(!wrapped.shrink);
+        assert!(wrapped.cols < 5 && wrapped.cols >= 1, "{wrapped:?}");
+    }
+
+    #[test]
+    fn a_single_item_never_wraps() {
+        assert_eq!(
+            plan(10.0, 1, 60.0, 50.0),
+            Plan {
+                cols: 1,
+                shrink: false
+            }
+        );
+    }
 }
 
 #[cfg(test)]

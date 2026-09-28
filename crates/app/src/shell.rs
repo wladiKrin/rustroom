@@ -109,6 +109,11 @@ impl eframe::App for RustroomApp {
                     frame.width,
                     frame.height,
                 ));
+                s.clip_texture = if self.show_clipping {
+                    clipping_texture(&ctx, &frame.srgb, frame.width, frame.height)
+                } else {
+                    None
+                };
                 // ⚠ Timed under `RUSTROOM_DEBUG_RENDER` (2026-09-26): the worker's `render:` line
                 // cannot see what the UI thread spends turning a frame into a texture, and the
                 // in-app drag ran ~11 ms slower than the headless probe with no line saying where.
@@ -315,6 +320,7 @@ impl eframe::App for RustroomApp {
             }
         }
 
+        develop::ambient::draw(self, &ctx);
         modals::draw(self, &ctx);
     }
 }
@@ -574,7 +580,33 @@ fn pressed_command(ctx: &egui::Context) -> Option<Command> {
             break;
         }
     }
+    if hit.is_none() {
+        for (key, cmd) in menu::ALIASES {
+            let Some(k) = egui_key(*key) else { continue };
+            let pressed =
+                ctx.input(|i| i.key_pressed(k) && !i.modifiers.command && !i.modifiers.shift);
+            if pressed {
+                hit = Some(*cmd);
+                break;
+            }
+        }
+    }
     hit
+}
+
+/// The clipping overlay for a displayed frame, or `None` when nothing clips.
+pub(crate) fn clipping_texture(
+    ctx: &egui::Context,
+    rgba: &[u8],
+    w: usize,
+    h: usize,
+) -> Option<egui::TextureHandle> {
+    let overlay = rustroom_app::clipping::overlay(rgba, w, h, 4);
+    if rustroom_app::clipping::is_empty(&overlay) {
+        return None;
+    }
+    let img = egui::ColorImage::from_rgba_premultiplied([w, h], &overlay);
+    Some(ctx.load_texture("clipping", img, egui::TextureOptions::NEAREST))
 }
 
 /// The model's key character as an egui key.
@@ -601,6 +633,9 @@ fn egui_key(c: char) -> Option<egui::Key> {
         'K' => egui::Key::K,
         'Q' => egui::Key::Q,
         'T' => egui::Key::T,
+        'L' => egui::Key::L,
+        'J' => egui::Key::J,
+        'Y' => egui::Key::Y,
         '\t' => egui::Key::Tab,
         '+' => egui::Key::Plus,
         '-' => egui::Key::Minus,

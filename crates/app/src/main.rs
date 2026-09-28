@@ -347,6 +347,12 @@ struct RustroomApp {
     show_filmstrip: bool,
     /// Tab: the panels, the rail and the filmstrip out of the way, the picture alone.
     show_panels: bool,
+    /// L: 0 normal, 1 the surround dimmed, 2 the surround black — the picture alone.
+    lights_out: u8,
+    /// I: the capture-info card over the picture's corner.
+    show_info_overlay: bool,
+    /// J: clipped highlights red and clipped shadows blue, over the picture.
+    show_clipping: bool,
     /// Brush radius in **screen points**.
     ///
     /// ⚠ Not persisted, and not in `Settings`. A screen-point size is view-dependent, so
@@ -723,6 +729,9 @@ impl RustroomApp {
             status: String::new(),
             show_filmstrip: true,
             show_panels: true,
+            lights_out: 0,
+            show_info_overlay: false,
+            show_clipping: false,
             spot_tool: Default::default(),
             eye_tool: Default::default(),
             brush_size: rustroom_app::brush_tool::DEFAULTS.size,
@@ -1148,6 +1157,12 @@ pub struct Session {
     ///
     /// ⚠ An `Arc`, so retaining it costs nothing beyond the memory the frame already held.
     readout_bytes: Option<(std::sync::Arc<Vec<u8>>, usize, usize)>,
+    /// The clipping overlay for the frame `readout_bytes` describes, when `J` is on and
+    /// something clips; painted at the preview's own rectangle.
+    clip_texture: Option<egui::TextureHandle>,
+    /// Where the whole photo sat on screen last frame — what lights-out cuts its hole around
+    /// and the info card anchors to.
+    canvas_frame_rect: Option<egui::Rect>,
     /// The sampled value under the cursor, or `None`.
     ///
     /// ⚠ The **value**, not a formatted string: the swatch and the numbers are two renderings of
