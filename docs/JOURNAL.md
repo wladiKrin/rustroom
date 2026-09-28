@@ -158,7 +158,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-09-28 — First-use review fixes (branch `first-use-fixes`, awaiting use)
+### 2026-09-28 — First-use review fixes (branch `first-use-fixes`, merged 2026-09-28)
 
 **Input:** two first-session reviews written the same day, an amateur photographer's and a
 professional's (`docs/reviews/`, **transient and never committed** — the author deletes them when
@@ -230,6 +230,26 @@ preview's own rectangle. The light theme, looked at on a fresh profile: the inte
 fine; the macOS **title bar stayed dark** over it — `ViewportCommand::SetTheme` now follows the
 choice — and the empty Develop still told the user to press an "Open file… button" that has not
 existed since the menus took the toolbar's place.
+
+**The author's third look:** *(1)* "the interface size doesn't do anything" — the Settings dialog
+reached `apply_appearance` only when the theme or the accent had changed, so a size-only Apply was
+written to the draft and dropped; the size is part of the comparison now. *(2)* Hover stars lit
+only the one under the pointer; they light up to it. *(3)* ⚠⚠ **"Settings do not persist — I
+changed it to dark theme but it opened light again" was not a bug in the app; it was a window of
+mine.** A scratch-profile instance (`HOME` pointed at the scratchpad, launched to look at the light
+theme) outlived a menu Quit I never verified. Its window is indistinguishable from his, and the
+scratch profile shows he used it: his own folders in its recent list, its catalog and thumbnails
+written at 21:43–21:45, its theme set to Dark at 21:45 while nothing of mine ran. His own file was
+untouched until he set Dark again in his own instance at 22:01. Reproduced the literal sequence in
+one instance — Light applied, Dark applied, quit, relaunch — and it holds at every step. ⚠ The rule
+that came out of it, in memory: **prove every quit with `pgrep -x Rustroom`**, and say when a window
+of mine is on his display. ⚠ A latent cousin, not hit here: two instances on the *same* profile
+overwrite each other's settings, last writer wins, since every save writes the whole file.
+
+**Merged 2026-09-28** at **3,179 tests**, `--no-ff`, branch deleted, `docs/reviews/` deleted with its
+`.git/info/exclude` line. The reviews' milestone-sized findings (P-20…P-30) are carried in
+`docs/BACKLOG.md` under "First-session reviews"; **P-20, background 1:1 previews, is next** by the
+author's word at the merge.
 
 ### 2026-09-28 — M9.13 AI masks: the brainstorm and the runtime spike (branch `m9.13-ai-masks`)
 

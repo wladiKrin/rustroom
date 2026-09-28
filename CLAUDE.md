@@ -166,9 +166,9 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 94 dated sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-09-27)
+### State (2026-09-28)
 
-**3173 tests**, **82 goldens**, gate green on `first-use-fixes` (unmerged — awaiting use; `grep -n 'First-use review fixes' docs/JOURNAL.md`). ⚠⚠ **Run the git command above rather than
+**3179 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -212,10 +212,10 @@ that had grown to ~170 lines by appending.)
 
 ### ▶ Next action
 
-**Branch `first-use-fixes`** (2026-09-28) carries the fixes from the two first-session reviews and is
-awaiting the author's use; two items in its plan wait for his word (P-06 guides only in Geometry,
-P-07 the red crop frame — both reverse recorded decisions). ⚠ `docs/reviews/` is transient input for
-that pass, listed in `.git/info/exclude`: never commit it, delete it when the branch lands.
+✅ **The first-use review fixes are merged and confirmed by use** (2026-09-28; `grep -n 'First-use
+review fixes' docs/JOURNAL.md`). The reviews themselves were transient and are deleted; their
+milestone-sized findings sit in `docs/BACKLOG.md` under "First-session reviews". **In progress:
+P-20, background 1:1 previews** — the author's pick at the merge; brainstorm first.
 ✅ **Phase 9 is complete** (M9.13 merged 2026-09-28). Next is **Phase 10** (was 9), integration and
 release: M10.2
 Windows + the Linux GUI (never run), M10.3 contributor docs, M10.4 `v0.1`, M10.5 plugins. ⛔ **M10.1 was
