@@ -1,0 +1,12 @@
+//! AI masks (M9.13): the models behind *Select Subject* and *Select by click*, how they arrive, and
+//! how they run.
+//!
+//! ⚠ Zero GUI, zero pipeline dependency — the app maps the result into the pipeline's coverage.
+//! ⚠⚠ Runs on **`tract`** (pure Rust), chosen by measurement in the M9.13 spike: 2.7–2.8× slower than
+//! ONNX Runtime on CPU, within the spec's "~3×" rule, and CoreML could not compile BiRefNet at all.
+//! No native library, identical on every platform. The spike's table is in the spec.
+
+pub mod download;
+pub mod registry;
+
+pub use registry::{ModelId, ModelSpec, SubjectModel};
