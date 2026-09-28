@@ -7,6 +7,11 @@
 //! No native library, identical on every platform. The spike's table is in the spec.
 
 pub mod download;
+pub mod infer;
+pub mod map;
+pub mod prep;
 pub mod registry;
 
+pub use infer::{Embedding, InferError, Sam, Subject};
+pub use map::ProbMap;
 pub use registry::{ModelId, ModelSpec, SubjectModel};
