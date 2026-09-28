@@ -207,19 +207,34 @@ fn coverage(
                 b, geometry, tw, th, None, as_base,
             )),
             // M9.13: the AI map on this grid, through the same decode mapping the render uses.
+            // ⚠ The same once-per-map lens warp the render uses — a tint miss no longer builds a
+            // lens corrector (43 ms) or looks one up per pixel.
             edit_model::Mask::Ai(a) => ai.maps.get(&a.prompt).map(|p| {
+                let lensed = rustroom_app::ai_coverage::post_lens(
+                    p,
+                    rustroom_app::ai_space::lens_key(ai.lens, ai.edits, ai.decode.0, ai.decode.1),
+                    ai.decode,
+                    || {
+                        ai.lens.and_then(|l| {
+                            rustroom_app::ai_space::corrector_for(
+                                l,
+                                ai.edits,
+                                ai.decode.0,
+                                ai.decode.1,
+                            )
+                        })
+                    },
+                );
                 let dm = rustroom_app::ai_space::DecodeMap::new(
                     geometry,
                     ai.edits.perspective,
                     tw,
                     th,
-                    ai.lens.and_then(|l| {
-                        rustroom_app::ai_space::corrector_for(l, ai.edits, ai.decode.0, ai.decode.1)
-                    }),
+                    None,
                     ai.decode.0,
                     ai.decode.1,
                 );
-                rustroom_app::ai_coverage::to_frame(p, a, &dm, None)
+                rustroom_app::ai_coverage::to_frame(&lensed, a, &dm, None)
             }),
             _ => None,
         })
@@ -353,7 +368,10 @@ pub(super) fn paint_tint(
                 && c.geometry == *geometry
                 && c.mask == m.mask
                 && c.refine == m.refine
-                && c.base == base_id
+                // ⚠ The displayed frame matters only to a mask that READS it (a gating brush, a
+                // range). Keyed for every mask, each pan's new frame missed — and an AI component's
+                // rebuild made that sluggish (M9.13 follow-up).
+                && (c.base == base_id || !needs_base(m))
                 && c.ai_gen == ai.maps.generation()
         });
         if found.is_none() {

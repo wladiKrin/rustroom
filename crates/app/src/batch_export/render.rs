@@ -304,10 +304,11 @@ fn ai_coverage_for(
         edits.perspective,
         frame.width(),
         frame.height(),
-        lens.and_then(|l| crate::ai_space::corrector_for(l, edits, decode.0, decode.1)),
+        None,
         decode.0,
         decode.1,
     );
+    let key = crate::ai_space::lens_key(lens, edits, decode.0, decode.1);
     let maps: Vec<Vec<Option<std::sync::Arc<pipeline::brush::CoverageMap>>>> = edits
         .masks
         .iter()
@@ -316,7 +317,12 @@ fn ai_coverage_for(
                 .chain(m.refine.iter().map(|r| &r.mask))
                 .map(|mask| match mask {
                     edit_model::Mask::Ai(a) => maps.get(&a.prompt).map(|p| {
-                        std::sync::Arc::new(crate::ai_coverage::to_frame(p, a, &dm, None))
+                        let lensed = crate::ai_coverage::post_lens(p, key, decode, || {
+                            lens.and_then(|l| {
+                                crate::ai_space::corrector_for(l, edits, decode.0, decode.1)
+                            })
+                        });
+                        std::sync::Arc::new(crate::ai_coverage::to_frame(&lensed, a, &dm, None))
                     }),
                     // ⚠ Every other component builds its own coverage exactly as before.
                     _ => None,

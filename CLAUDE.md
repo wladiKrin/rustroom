@@ -168,7 +168,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-27)
 
-**3157 tests**, **82 goldens**, gate green on branch `m9.13-ai-masks` (unmerged — awaiting use). ⚠⚠ **Run the git command above rather than
+**3159 tests**, **82 goldens**, gate green on branch `m9.13-ai-masks` (unmerged — awaiting use). ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 

@@ -32,6 +32,21 @@ pub fn corrector_for(
     )
 }
 
+/// A stable identity for "this lens, these corrections, this decode size" — what a map warped by
+/// [`crate::ai_coverage::post_lens`] was warped for. `0` means no correction applies.
+pub fn lens_key(
+    shot: Option<&lens_profile::LensShot>,
+    edits: &edit_model::Edits,
+    w: usize,
+    h: usize,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let Some(shot) = shot else { return 0 };
+    let mut hsh = std::collections::hash_map::DefaultHasher::new();
+    format!("{shot:?}|{:?}|{w}x{h}", edits.applied_lens_correction()).hash(&mut hsh);
+    hsh.finish().max(1)
+}
+
 /// Frame pixels → decode-normalised coordinates.
 pub struct DecodeMap {
     spot: SpotMap,

@@ -183,6 +183,17 @@ cache the preview does. UI: *Subject* and *Select by click* in the Masks panel, 
 mask, a **Refine** slider, the tint, a download dialog listing each file's size and licence, and the
 subject model in Settings → Performance.
 
+⚠⚠ **The author's first use: "with an AI mask on, rotations become very slow and sluggish — and
+zooming and panning with the red tint on, but only for the AI masks."** Measured on an X-T4 RAF with
+lens correction (`examples/ai_coverage_bench.rs`): building the lens corrector cost **43 ms**, and
+every frame pixel then paid a lens lookup — a fitted rotation frame **117 ms**, a tint miss **69 ms**.
+A brush never showed it because it rasterises only its own bounding box. Three fixes: (1) the map is
+warped through the lens **once per map and lens setting** (`ai_coverage::post_lens`, memoised; 55 ms,
+once) so a frame pays only the geometry's inverse; (2) coverage is sampled on a grid no finer than
+1024 px and interpolated (the maps are ≤1024 px, so nothing is lost — pinned at ≤2 levels); (3) the
+tint keys on the displayed frame only for a mask that READS it, so a pan no longer misses. After:
+rotation frame **7.8 ms**, tint miss **3.6 ms**, full resolution **26 ms**.
+
 ⚠⚠ **The flow re-checks every frame, and that is structural, not cosmetic**: the full-resolution
 handover REPLACES the render engine, and a fresh engine's map store is empty — so the per-frame
 `ensure_ai_maps` refills it from the disk cache. A pending/failed/offered set keeps that cheap and
@@ -191,7 +202,7 @@ stops a broken model from looping or the dialog from nagging.
 Measured through the production code (`examples/ai_mask_probe.rs`, release, M2): a sky click on
 `DSCF6760.JPG` — encode **2.1 s**, first click **0.31 s**, second **0.18 s**; the selection is the sky
 right of the tower, bounded by the tower and the tree line (15.8% of the frame). Real-model unit tests
-(`--ignored real_`) pass on the same photo. **3,157 tests** (+28), gate green.
+(`--ignored real_`) pass on the same photo. **3,159 tests** (+30), gate green.
 
 **The spike** (full table in the spec): on the author's M2, `tract` runs BiRefNet_lite in **23.6 s**,
 IS-Net in **1.9 s**, the MobileSAM encoder in **1.6 s** and a click in **0.10 s**; `ort` is 2.7–2.8×
