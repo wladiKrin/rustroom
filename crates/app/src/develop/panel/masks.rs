@@ -300,7 +300,7 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
             edit_model::Mask::Ai(a) => {
                 let store = s.engine.ai_maps();
                 let missing = store.read().expect("ai maps").get(&a.prompt).is_none();
-                missing.then(|| match a.prompt {
+                missing.then_some(match a.prompt {
                     edit_model::AiPrompt::Subject => "Finding the subject…",
                     edit_model::AiPrompt::Click { .. } => "Outlining what you clicked…",
                 })

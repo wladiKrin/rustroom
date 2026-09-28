@@ -158,11 +158,12 @@ pub fn refresh(ctx: &egui::Context, recent: &[std::path::PathBuf]) {
 pub fn poll() -> Vec<Command> {
     // ⚠ AppKit adds AutoFill, Emoji & Symbols and Enter Full Screen *after* `install` has
     // stripped the menu — lazily, in the first moments of the run — so the strip repeats on
-    // every poll for a while and then stops. Measured: they were back by the first frame that
-    // could be inspected; a few seconds covers a slow launch.
+    // every poll for a while and then stops. Measured: Edit's two were back by the first frame
+    // that could be inspected, and "Enter Full Screen" arrived later still, once the window had
+    // grown to its remembered size; thirty seconds covers a slow launch under load.
     static STRIP_UNTIL: OnceLock<std::time::Instant> = OnceLock::new();
-    let until =
-        *STRIP_UNTIL.get_or_init(|| std::time::Instant::now() + std::time::Duration::from_secs(5));
+    let until = *STRIP_UNTIL
+        .get_or_init(|| std::time::Instant::now() + std::time::Duration::from_secs(30));
     if std::time::Instant::now() < until {
         strip_injected_items();
     }
@@ -290,29 +291,6 @@ fn forbid_window_tabbing() {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_ampersand_is_escaped_for_muda() {
-        assert_eq!(native_label("Crop & Geometry"), "Crop && Geometry");
-        assert_eq!(native_label("Open file…"), "Open file…");
-    }
-
-    /// The model's own labels all survive the escape: none contains a literal `&&`.
-    #[test]
-    fn no_menu_label_already_uses_mudas_escape() {
-        for section in menu::model() {
-            for item in section.items {
-                if let Item::Action { label, .. } = item {
-                    assert!(!label.contains("&&"), "{label:?}");
-                }
-            }
-        }
-    }
-}
-
 /// Append the model's items to a native submenu, recursing into nested submenus.
 ///
 /// ⚠ About and Settings are skipped: they live in the application menu, where macOS expects
@@ -350,6 +328,29 @@ fn append_items(sub: &Submenu, items: Vec<Item>, by_id: &mut HashMap<MenuId, Com
                 let mi = MenuItem::new(native_label(&text), true, accel);
                 by_id.insert(mi.id().clone(), command);
                 let _ = sub.append(&mi);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_ampersand_is_escaped_for_muda() {
+        assert_eq!(native_label("Crop & Geometry"), "Crop && Geometry");
+        assert_eq!(native_label("Open file…"), "Open file…");
+    }
+
+    /// The model's own labels all survive the escape: none contains a literal `&&`.
+    #[test]
+    fn no_menu_label_already_uses_mudas_escape() {
+        for section in menu::model() {
+            for item in section.items {
+                if let Item::Action { label, .. } = item {
+                    assert!(!label.contains("&&"), "{label:?}");
+                }
             }
         }
     }

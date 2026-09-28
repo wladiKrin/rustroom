@@ -158,6 +158,51 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-28 — First-use review fixes (branch `first-use-fixes`, awaiting use)
+
+**Input:** two first-session reviews written the same day, an amateur photographer's and a
+professional's (`docs/reviews/`, **transient and never committed** — the author deletes them when
+this lands; ids A-01…A-27 and P-01…P-31). The plan with every id's status, the declines and the
+two decisions left to the author is `docs/superpowers/plans/2026-09-28-first-use-review-fixes.md`.
+Seven groups, seven commits, the gate green at **3173 tests**.
+
+**What shipped, by group.** *Strings and glyphs:* Inter 4.1 Regular is the text face (Ubuntu Light
+lacked ⇧ → ←, which is why the empty Library said "File □ Open folder…" and the shortcuts dialog
+wrote "□⌘O"), Hack is the proportional fallback for ▸ ▾ ▴, and `every_menu_string_is_renderable`
+sweeps every menu label, shortcut label, tool name and fixed hint through the installed fonts —
+proven to fail on ✕, which no bundled font has. *Menus and keys:* `&` escaped for muda ("Crop  Geometry"),
+AppKit's injected items stripped (window tabbing off; AutoFill, Emoji & Symbols and Enter Full Screen
+by title), `Item::Submenu` with `menu::walk` as the one traversal (Colour management; Open recent from
+`Settings::recent_folders`), tools on E R K Q T so the digits rate in Develop too, Tab hides the
+panels. *Panel:* `min_size(300)` — `default_size` is a **wrapping** width under egui 0.35 and a
+fresh profile came up at **~214 pt**, 60-pt rails, Exposure 0 → +5 in a 40-pt drag; `slider_help`
+gives every slider one hover sentence with coverage tests over the Edit and Geometry panels;
+histogram 120 pt; Scale resets to −100 (the Edit-panel sweep never sees Geometry); Auto reports what
+it set; Export gets a default folder and a collapsed Colour section; Escape read before a dialog's
+body draws; shortcuts skipped while a modal is open. *Canvas:* left-drag pans the zoomed Edit view;
+Before keeps `rendering` and `lens_correction`; Compare's border is the accent. *Library:* an
+empty-state card with two buttons, drag-and-drop, 224-pt cells, "9 photos · 18 files", ▴ on an
+expanded stack, Rating/Flag/Colour/Export/copy/Show-in-Finder in the context menu, elided folder
+names with hover-only actions, a waiting row on an AI mask. *Scale:* Interface size 100/125/150 %.
+*Presets:* nine built-in starters above the user's own.
+
+**Declined or left to the author:** A-04 (bare keys as native accelerators fire while typing);
+P-14 (the 932×650 Settings box was a persisted resize); P-06 guides-only-in-Geometry and P-07 the
+red crop frame **reverse recorded decisions** and wait for a word; the Immich gate stays on by
+default because `the_immich_gate_defaults_to_on` pins the upgrade case — read the test before
+"fixing" a default. ⚠ A preset replaces the groups it carries, so a starter that sets contrast also
+sets exposure to 0, like every user preset.
+
+⚠⚠ **Not verified in use, and why:** the interactive pass ran through a driver posting real mouse
+events to the window, and stopped when three clicks landed in the author's VS Code, which sat in
+front of Rustroom on that display — a coordinate click goes to whatever is frontmost. The driver
+now refuses to click unless Rustroom is frontmost, but raising it steals the author's focus, so
+the rest is his to look at: the panel width and hover help, the taller histogram, the Auto status
+line, the context menu, the starter presets, Interface size, and whether "Enter Full Screen" is
+gone (its strip now runs for thirty seconds after launch; five was too few under load). The empty
+Library card, the Inter face, "Crop & Geometry", the Colour management submenu and the Edit menu
+without AutoFill were seen. P-31 (the light theme) was not looked at.
+
 ### 2026-09-28 — M9.13 AI masks: the brainstorm and the runtime spike (branch `m9.13-ai-masks`)
 
 **Chosen (the author):** build it — for skies, people and subjects of any kind; models **downloaded on
