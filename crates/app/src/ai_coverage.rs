@@ -6,6 +6,85 @@ use edit_model::AiMask;
 use pipeline::brush::CoverageMap;
 use rayon::prelude::*;
 
+/// The probability maps a photo's AI masks have, by prompt — what the render reads.
+///
+/// ⚠ Keyed by the PROMPT, not the cache key: the render has the edits, not the file, and a prompt
+/// is exactly what a mask names. The session fills it from the worker and the disk cache (with the
+/// Settings' subject model), and asks for a render; a prompt with no entry renders as nothing.
+#[derive(Debug, Default, Clone)]
+pub struct AiMaps {
+    entries: Vec<(edit_model::AiPrompt, std::sync::Arc<ProbMap>)>,
+}
+
+impl AiMaps {
+    pub fn get(&self, prompt: &edit_model::AiPrompt) -> Option<&std::sync::Arc<ProbMap>> {
+        self.entries
+            .iter()
+            .find(|(p, _)| p == prompt)
+            .map(|(_, m)| m)
+    }
+
+    pub fn insert(&mut self, prompt: edit_model::AiPrompt, map: std::sync::Arc<ProbMap>) {
+        self.entries.retain(|(p, _)| *p != prompt);
+        self.entries.push((prompt, map));
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// Every prompt `edits` asks, in mask then component order.
+pub fn prompts(edits: &edit_model::Edits) -> Vec<edit_model::AiPrompt> {
+    let mut out: Vec<edit_model::AiPrompt> = Vec::new();
+    for m in &edits.masks {
+        for mask in std::iter::once(&m.mask).chain(m.refine.iter().map(|r| &r.mask)) {
+            if let edit_model::Mask::Ai(a) = mask {
+                if !out.contains(&a.prompt) {
+                    out.push(a.prompt);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The model that answers `prompt` — the Settings' subject model, or MobileSAM for a click.
+pub fn model_for(
+    prompt: &edit_model::AiPrompt,
+    subject: ai_mask::SubjectModel,
+) -> ai_mask::ModelId {
+    match prompt {
+        edit_model::AiPrompt::Subject => subject.model(),
+        edit_model::AiPrompt::Click { .. } => ai_mask::ModelId::SamDecoder,
+    }
+}
+
+/// The maps `edits` needs for `photo`, from the disk cache — what an export renders with, and what
+/// the session loads when a photo opens. A prompt with no cached map is simply absent.
+pub fn maps_for(
+    photo: &std::path::Path,
+    edits: &edit_model::Edits,
+    subject: ai_mask::SubjectModel,
+    cache: &std::path::Path,
+) -> AiMaps {
+    let mut maps = AiMaps::default();
+    for p in prompts(edits) {
+        let key = crate::ai_cache::key(photo, model_for(&p, subject), &p);
+        if let Some(m) = crate::ai_cache::load(cache, &key) {
+            maps.insert(p, std::sync::Arc::new(m));
+        }
+    }
+    maps
+}
+
+/// The store the session writes and the render worker reads.
+pub type SharedAiMaps = std::sync::Arc<std::sync::RwLock<AiMaps>>;
+
 /// How far either side of the threshold the soft edge reaches, on the probability scale.
 const SOFTNESS: f32 = 0.15;
 

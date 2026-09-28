@@ -49,6 +49,7 @@ pub(crate) fn flat(w: usize, h: usize) -> ImageBuf {
 /// A decode with no lens profile, standing in for a JPEG or an unlisted lens.
 pub(crate) fn source(image: ImageBuf) -> ExportSource {
     ExportSource {
+        ai: Default::default(),
         image,
         baseline: color::wb::Illuminant::default(),
         lens: None,
@@ -63,6 +64,7 @@ pub(crate) fn source(image: ImageBuf) -> ExportSource {
 
 /// The render settings every test but the seam's own uses: the default kernel, CPU.
 pub(crate) const CPU: ExportRender = ExportRender {
+    ai_subject: ai_mask::SubjectModel::IsNet,
     resampler: pipeline::Resampler::CatmullRom,
     gpu_tail: false,
 };

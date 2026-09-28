@@ -9,6 +9,29 @@
 use edit_model::{Geometry, Perspective};
 use pipeline::brush::SpotMap;
 
+/// The lens corrector a decode of `w × h` gets under `edits` — the one construction, shared with
+/// spot healing's sampler, so the two cannot disagree about where a post-lens point came from.
+pub fn corrector_for(
+    shot: &lens_profile::LensShot,
+    edits: &edit_model::Edits,
+    w: usize,
+    h: usize,
+) -> Option<lens_profile::Corrector> {
+    let c = edits.applied_lens_correction();
+    lens_profile::Corrector::new(
+        &shot.profile,
+        &shot.shot,
+        w,
+        h,
+        lens_profile::Corrections {
+            distortion: c.distortion,
+            tca: c.tca,
+            vignetting: c.vignetting,
+            scale: c.scale,
+        },
+    )
+}
+
 /// Frame pixels → decode-normalised coordinates.
 pub struct DecodeMap {
     spot: SpotMap,

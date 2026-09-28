@@ -77,6 +77,7 @@ fn decode(path: &Path, demosaic: raw_decode::Demosaic) -> Result<ExportSource, S
                     })
             });
             ExportSource {
+                ai: Default::default(),
                 lens,
                 baseline: d.metadata.as_shot.unwrap_or_default(),
                 image: d.image,
@@ -90,6 +91,7 @@ fn decode(path: &Path, demosaic: raw_decode::Demosaic) -> Result<ExportSource, S
     } else {
         image_decode::decode(path)
             .map(|d| ExportSource {
+                ai: Default::default(),
                 image: d.image,
                 baseline: color::wb::Illuminant::default(),
                 lens: None,
@@ -125,6 +127,7 @@ fn one_run(files: &[PathBuf], dest: &Path, width: usize, demosaic: raw_decode::D
         ..Default::default()
     };
     let render = ExportRender {
+        ai_subject: ai_mask::SubjectModel::IsNet,
         resampler: Default::default(),
         gpu_tail: false,
     };

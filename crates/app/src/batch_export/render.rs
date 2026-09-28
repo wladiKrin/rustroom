@@ -138,6 +138,8 @@ pub fn export_one(
         None => source.image,
     };
     let scale = scale_for(source_long, opts.max_edge);
+    // The buffer the prefix's lens stage corrects — what an AI map's decode mapping must match.
+    let (decode_w, decode_h) = (scaled.width(), scaled.height());
     // ⚠⚠ The export must use the SAME airlight definition as the preview, or a dehazed photo
     // would render one way on screen and another in the file — by up to 5.6 of an 8-bit level,
     // measured. `prefix_airlight` replays the prefix at a fixed 256 px, so it is a deterministic
@@ -172,19 +174,6 @@ pub fn export_one(
     // `examples/probe_export_rendering.rs` measures.
     //
     // ⚠ `curve` and `baseline_ev` travel on `ExportSource` because this struct **borrows** them.
-    let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
-        edits,
-        scale,
-        None,
-        None,
-        spec,
-        source.lens.clone(),
-        pipeline::ProfileRendering {
-            curve: source.curve.as_deref(),
-            baseline_ev: source.baseline_ev,
-            look,
-        },
-    );
 
     // ⚠ Resolved once and only when the setting is on: `shared()` acquires an adapter on first
     // call, and the CPU arm below would otherwise ask for it per step.
@@ -258,6 +247,28 @@ pub fn export_one(
             }
         };
     }
+    // ⚠ Built AFTER the prefix since M9.13: an AI mask's coverage is resampled to the final frame,
+    // whose size only the geometry step decides.
+    let coverage = ai_coverage_for(
+        edits,
+        &source.ai,
+        &img,
+        (decode_w, decode_h),
+        source.lens.as_ref(),
+    );
+    let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
+        edits,
+        scale,
+        None,
+        coverage.as_ref(),
+        spec,
+        source.lens.clone(),
+        pipeline::ProfileRendering {
+            curve: source.curve.as_deref(),
+            baseline_ev: source.baseline_ev,
+            look,
+        },
+    );
     let mut rendered = tail.run(img);
 
     // ⚠⚠ **THE ORDER OF THESE THREE IS THE FEATURE, NOT AN ARRANGEMENT.**
@@ -274,6 +285,50 @@ pub fn export_one(
     export::save(&rendered, dest, opts.format, opts.quality, opts.space)
         .map_err(|e| e.to_string())?;
     export::metadata::embed(dest, opts.format, meta).map_err(|e| e.to_string())
+}
+
+/// The brush side channel carrying `edits`' AI masks for a frame the size of `frame`, or `None`
+/// when there are no AI masks — every other mask builds its own coverage, as it always did.
+fn ai_coverage_for(
+    edits: &Edits,
+    maps: &crate::ai_coverage::AiMaps,
+    frame: &core_image::ImageBuf,
+    decode: (usize, usize),
+    lens: Option<&lens_profile::LensShot>,
+) -> Option<std::sync::Arc<pipeline::BrushCoverage>> {
+    if crate::ai_coverage::prompts(edits).is_empty() {
+        return None;
+    }
+    let dm = crate::ai_space::DecodeMap::new(
+        &edits.geometry,
+        edits.perspective,
+        frame.width(),
+        frame.height(),
+        lens.and_then(|l| crate::ai_space::corrector_for(l, edits, decode.0, decode.1)),
+        decode.0,
+        decode.1,
+    );
+    let maps: Vec<Vec<Option<std::sync::Arc<pipeline::brush::CoverageMap>>>> = edits
+        .masks
+        .iter()
+        .map(|m| {
+            std::iter::once(&m.mask)
+                .chain(m.refine.iter().map(|r| &r.mask))
+                .map(|mask| match mask {
+                    edit_model::Mask::Ai(a) => maps.get(&a.prompt).map(|p| {
+                        std::sync::Arc::new(crate::ai_coverage::to_frame(p, a, &dm, None))
+                    }),
+                    // ⚠ Every other component builds its own coverage exactly as before.
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect();
+    let built = maps
+        .iter()
+        .map(|row| row.iter().map(|_| std::sync::Mutex::new(None)).collect())
+        .collect();
+    Some(std::sync::Arc::new(pipeline::BrushCoverage { maps, built }))
 }
 
 /// What a decode hands the exporter.
@@ -316,6 +371,9 @@ pub struct ExportSource {
     /// 100% of samples differing**, which is what a preview/export divergence reported by use
     /// looked like. `examples/probe_jpeg_rendering_gap.rs`.
     pub scene_referred: bool,
+    /// The photo's cached AI mask maps (M9.13) — `ai_coverage::maps_for`, the preview's own
+    /// lookup. A prompt with no map renders as nothing and is reported.
+    pub ai: crate::ai_coverage::AiMaps,
 }
 
 /// What the *render* needs that [`ExportOptions`] deliberately does not carry.
@@ -333,6 +391,9 @@ pub struct ExportSource {
 pub struct ExportRender {
     pub resampler: pipeline::Resampler,
     pub gpu_tail: bool,
+    /// Which network's cached map a *Subject* mask reads (M9.13) — the Settings' choice, the same
+    /// one the preview used.
+    pub ai_subject: ai_mask::SubjectModel,
 }
 
 #[cfg(test)]
@@ -357,6 +418,74 @@ mod tests {
             .collect()
     }
 
+    /// M9.13: an export applies a photo's cached AI map exactly where it covers — and without the
+    /// map the mask covers nothing, so the file equals one exported with no mask at all.
+    #[test]
+    fn an_exported_ai_mask_applies_its_map_and_only_there() {
+        let export = |tag: &str, masks: bool, map: bool| -> image::RgbImage {
+            let d = TempDir::new(tag);
+            let mut o = opts(&d, None);
+            o.format = ExportFormat::Tiff8;
+            let dest = d.0.join("out.tif");
+            let e = Edits {
+                masks: if masks {
+                    vec![edit_model::MaskedAdjustment {
+                        mask: edit_model::Mask::Ai(edit_model::AiMask::default()),
+                        refine: Vec::new(),
+                        adjustments: edit_model::LocalAdjustments {
+                            exposure: -2.0,
+                            ..Default::default()
+                        },
+                        disabled: false,
+                    }]
+                } else {
+                    Vec::new()
+                },
+                ..Default::default()
+            };
+            let mut src = source(flat(80, 40));
+            if map {
+                // The subject is the LEFT half of the decode.
+                src.ai.insert(
+                    edit_model::AiPrompt::Subject,
+                    std::sync::Arc::new(ai_mask::ProbMap::from_fn(40, 20, |x, _| {
+                        if x < 20 {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    })),
+                );
+            }
+            export_one(
+                src,
+                &e,
+                &dest,
+                &o,
+                CPU,
+                &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
+                None,
+            )
+            .unwrap();
+            image::open(&dest).unwrap().to_rgb8()
+        };
+        let with = export("ai_on", true, true);
+        let (l, r) = (with.get_pixel(10, 20)[0], with.get_pixel(70, 20)[0]);
+        assert!(l + 20 < r, "the covered half is not darker: {l} vs {r}");
+        let plain = export("ai_none", false, false);
+        assert_eq!(
+            with.get_pixel(70, 20),
+            plain.get_pixel(70, 20),
+            "the uncovered half changed"
+        );
+        let no_map = export("ai_nomap", true, false);
+        assert_eq!(
+            no_map.as_raw(),
+            plain.as_raw(),
+            "a mask without its map changed the file"
+        );
+    }
+
     /// Export one photo with a given rendering and return the file's bytes.
     fn rendered(tag: &str, curve: Option<Vec<[f32; 2]>>, baseline_ev: Option<f32>) -> Vec<u8> {
         let d = TempDir::new(tag);
@@ -374,6 +503,7 @@ mod tests {
         };
         export_one(
             ExportSource {
+                ai: Default::default(),
                 image: edged(160, 120),
                 baseline: color::wb::Illuminant::default(),
                 lens: None,
@@ -444,6 +574,7 @@ mod tests {
             let dest = d.0.join("out.tif");
             export_one(
                 ExportSource {
+                    ai: Default::default(),
                     image: edged(160, 120),
                     baseline: color::wb::Illuminant::default(),
                     lens: None,
@@ -479,6 +610,7 @@ mod tests {
         let dest = d.0.join("off.tif");
         export_one(
             ExportSource {
+                ai: Default::default(),
                 image: edged(160, 120),
                 baseline: color::wb::Illuminant::default(),
                 lens: None,
@@ -545,6 +677,7 @@ mod tests {
             let dest = d.0.join(name);
             export_one(
                 ExportSource {
+                    ai: Default::default(),
                     image: edged(160, 120),
                     baseline: color::wb::Illuminant::default(),
                     lens: None,
@@ -700,6 +833,7 @@ mod tests {
         let write = |lens: Option<lens_profile::LensShot>| {
             export_one(
                 ExportSource {
+                    ai: Default::default(),
                     image: edged(160, 120),
                     baseline: color::wb::Illuminant::default(),
                     lens,
@@ -753,6 +887,7 @@ mod tests {
                     &dest,
                     &opts(&d, None),
                     ExportRender {
+                        ai_subject: ai_mask::SubjectModel::IsNet,
                         resampler: pipeline::Resampler::CatmullRom,
                         gpu_tail,
                     },
