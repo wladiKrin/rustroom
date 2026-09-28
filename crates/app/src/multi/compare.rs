@@ -21,6 +21,7 @@ use crate::{LibraryMode, RustroomApp};
 use eframe::egui;
 use rustroom_app::compare_pair;
 use rustroom_app::photo_id::PhotoId;
+use rustroom_app::preview_loader::PreviewRequest;
 use rustroom_app::thumb_loader::ThumbRequest;
 use rustroom_app::tile_layout;
 
@@ -153,12 +154,22 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠⚠ **The panes are settled BEFORE the panel is drawn**, because building one needs the
     // decode cache and the decode worker while the draw closure is holding `app.library`.
     let plan = plan(app, &stored);
-    let display_space = app.settings.effective_display_space(app.os_manages_colour);
-    let intent = app.settings.canvas_intent;
+    // M9.14: the panes draw previews, not decodes — one request per pane, the reference first,
+    // in `plan.want`'s order (`the_two_shown_photos_are_the_two_panes_asked_for`).
+    let reqs: Vec<PreviewRequest> = plan
+        .as_ref()
+        .map(|p| {
+            p.want
+                .iter()
+                .map(|(id, e)| app.preview_request(id.clone(), e.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
     if let Some(p) = &plan {
-        app.compare_view
-            .sync(&p.want, &mut app.cache, &mut app.decoder, ctx);
+        let ids: Vec<PhotoId> = p.want.iter().map(|(id, _)| id.clone()).collect();
+        app.compare_view.sync(&ids);
     }
+    let previews = &app.preview_textures;
     // Two disjoint `&mut` fields, which is legal where a closure capturing `app` twice is E0499 —
     // the shape `masks::BrushTool` already uses.
     let view = &mut app.compare_view;
@@ -353,26 +364,24 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             // does not exist yet, and `contains` is the same question asked of the rect that
             // will be drawn. It is what keeps a scroll over one pane out of the other.
             let over = pointer.is_some_and(|p| rect.contains(p));
-            let pane_img = view.pane_mut(&lib.entries[row].id).map(|pane| {
+            let preview = reqs
+                .get(slot)
+                .and_then(|r| previews.get(&r.key()))
+                .map(|(t, _)| t);
+            let pane_img = view.pane_mut(&lib.entries[row].id).and_then(|pane| {
                 if over {
                     pane.navigate(img_area, zoom_factor, pointer, scroll);
                 }
-                pane.update(img_area, pane.zoom, display_space, intent, ui.ctx());
-                (
-                    pane.texture().cloned(),
-                    pane.draw_scale(img_area, pane.zoom),
-                    pane.pan,
-                )
+                preview.map(|t| (t, pane.draw_scale(img_area, t.size_vec2()), pane.pan))
             });
-            let image = match &pane_img {
-                Some((Some(t), scale, offset)) => multi::TileImage::Pane {
+            let image = match pane_img {
+                Some((t, scale, offset)) => multi::TileImage::Pane {
                     tex: t,
-                    scale: *scale,
-                    offset: *offset,
+                    scale,
+                    offset,
                 },
-                // ⚠ `Placeholder`, not `Thumb`: it must occupy exactly the rect the render will,
-                // or the photo jumps in size the moment the decode lands.
-                _ => match tex {
+                // The thumbnail, until the preview lands or builds.
+                None => match tex {
                     Some(t) => multi::TileImage::Placeholder(t),
                     None => multi::TileImage::Thumb(None),
                 },
@@ -424,6 +433,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // two photos unpinned and evictable while they are the only thing on screen.
         lib.sync_thumb_window(&window);
     });
+    app.sync_preview_window(&reqs);
 
     if let Some(c) = out.candidate {
         app.compare_candidate = c;
@@ -542,8 +552,10 @@ mod tests {
 
     /// ⚠⚠ Leaving Compare must drop the panes: each holds a ~78 MB decode and a render worker,
     /// and nothing else in the app would notice them being kept.
+    /// M9.14: a pane is view state over a preview; no decode is asked for, and the preview
+    /// loader is asked for exactly the two photos on screen.
     #[test]
-    fn leaving_compare_drops_its_panes() {
+    fn compare_builds_its_panes_from_the_want_list_without_a_decode_and_drops_them_on_leaving() {
         let ctx = crate::test_ui::ctx();
         let mut app = app_with(4);
         {
@@ -551,13 +563,18 @@ mod tests {
             lib.selection.select_indices(&[0, 1]);
         }
         let id = app.library.as_ref().unwrap().entries[0].id.clone();
-        app.cache
-            .insert(id.path.clone(), crate::test_app::fake_decode());
         frame(&mut app, &ctx, Vec::new());
         assert!(
             app.compare_view.pane_mut(&id).is_some(),
-            "no pane was built from the cached buffer"
+            "no pane for the reference"
         );
+        assert!(app.cache.is_empty(), "Compare decoded something");
+        assert_eq!(
+            app.preview_want.len(),
+            2,
+            "Compare asked the preview loader for its two photos"
+        );
+        assert_eq!(app.preview_want[0].id, id, "the reference comes first");
         app.library_mode = LibraryMode::Grid;
         app.release_compare_panes();
         assert!(

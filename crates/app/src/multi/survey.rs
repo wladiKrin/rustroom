@@ -17,11 +17,17 @@ use crate::multi;
 use crate::{LibraryMode, RustroomApp};
 use eframe::egui;
 use rustroom_app::photo_id::PhotoId;
+use rustroom_app::preview_key::is_untouched;
+use rustroom_app::preview_loader::PreviewRequest;
 use rustroom_app::selection::Selection;
 use rustroom_app::thumb_loader::ThumbRequest;
 use rustroom_app::tile_layout;
 
 /// The hint line under the toolbar. Also swept by `theme::every_menu_string_is_renderable`.
+/// A cell whose image area exceeds this on either side draws the preview rather than the
+/// 512-px thumbnail (M9.14).
+pub(crate) const PREVIEW_CELL_PX: f32 = 512.0;
+
 pub(crate) const INSTRUCTION: &str =
     "Arrows move · digits rate · P and X decide it and take it off the wall · \
      Enter opens · pinch or ctrl+scroll resizes";
@@ -79,9 +85,16 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         app.save_settings();
     }
     let cell = app.settings.clamped_survey_cell();
+    // M9.14: a cell larger than a thumbnail draws the preview at fit. Shaped here, where the
+    // settings are reachable; the closure below holds the library.
+    let fresh = app.settings.initial_edits(None);
+    let tier = app.settings.preview_tier();
+    let previews = &app.preview_textures;
+    let mut preview_reqs: Vec<PreviewRequest> = Vec::new();
+    let library = &mut app.library;
 
     egui::CentralPanel::default().show(ui, |ui| {
-        let Some(lib) = &mut app.library else {
+        let Some(lib) = library else {
             ui.centered_and_justified(|ui| {
                 crate::theme::empty_state(ui, "Open a folder to survey photos.");
             });
@@ -220,11 +233,36 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         // silently detaches every widget's state from its photo. The
                         // Library grid records the same trap.
                         let base = ui.id().with(&lib.entries[row].id);
-                        let resp = multi::photo_tile(
+                        // ⚠ Only a cell the thumbnail cannot fill asks for a preview, so a wall
+                        // of two dozen small cells costs nothing new.
+                        let img_area = multi::image_area(rect);
+                        let preview = if img_area.width().max(img_area.height()) > PREVIEW_CELL_PX {
+                            let preq = PreviewRequest {
+                                untouched: is_untouched(&req.edits, &fresh),
+                                tier,
+                                id: req.id.clone(),
+                                edits: req.edits.clone(),
+                            };
+                            let found = previews.get(&preq.key()).map(|(t, _)| t);
+                            preview_reqs.push(preq);
+                            found
+                        } else {
+                            None
+                        };
+                        let image = match preview {
+                            Some(t) => multi::TileImage::Pane {
+                                tex: t,
+                                scale: (img_area.width() / t.size_vec2().x.max(1.0))
+                                    .min(img_area.height() / t.size_vec2().y.max(1.0)),
+                                offset: egui::Vec2::ZERO,
+                            },
+                            None => multi::TileImage::Thumb(tex),
+                        };
+                        let resp = multi::tile(
                             ui,
                             rect,
                             base.with("tile"),
-                            tex,
+                            image,
                             &lib.entries[row].caption(),
                             marks,
                             focused == Some(row),
@@ -259,6 +297,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // while they are the only thing on screen.
         lib.sync_thumb_window(&window);
     });
+    app.sync_preview_window(&preview_reqs);
 
     if let Some(y) = out.scroll {
         app.survey_scroll = y;
@@ -442,6 +481,27 @@ mod tests {
         lib.selection.select_indices(selected);
         app.library = Some(lib);
         app
+    }
+
+    /// M9.14: only a cell the thumbnail cannot fill asks the preview loader for anything.
+    #[test]
+    fn a_large_survey_cell_asks_for_a_preview_and_a_small_one_does_not() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = app_with(2, &[0, 1]);
+        app.settings.survey_cell = rustroom_app::settings::SURVEY_CELL_RANGE.0;
+        frame(&mut app, &ctx, Vec::new());
+        assert!(
+            app.preview_want.is_empty(),
+            "a {}-pt cell asked for a preview",
+            rustroom_app::settings::SURVEY_CELL_RANGE.0
+        );
+        app.settings.survey_cell = rustroom_app::settings::SURVEY_CELL_RANGE.1;
+        frame(&mut app, &ctx, Vec::new());
+        assert!(
+            !app.preview_want.is_empty(),
+            "a {}-pt cell did not ask for a preview",
+            rustroom_app::settings::SURVEY_CELL_RANGE.1
+        );
     }
 
     /// ⚠⚠ **The act that makes Survey a culling view rather than a smaller grid.** Rejecting a

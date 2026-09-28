@@ -4,11 +4,15 @@
 //! the grid can only do it by clicking back and forth and comparing from memory. These two views
 //! put the candidates on screen together.
 //!
-//! ⚠⚠ **Both draw from the thumbnail cache, never from a decode.** A RAW decode is ~1 s and
-//! 78 MB, and Survey can put two dozen photos on screen; thumbnails are already
-//! *edit-accurate* — `ThumbKey` carries a fingerprint of the edits — so a black-and-white
-//! virtual copy already shows in black and white. The consequence, stated so it is not later
-//! found as a bug: **neither view can judge sharpness at 1:1**, which would need real decodes.
+//! ⚠⚠ **Both draw from the thumbnail cache, and from the preview textures — never from a
+//! decode.** A RAW decode is ~1 s and 78 MB, and Survey can put two dozen photos on screen;
+//! thumbnails are already *edit-accurate* — `ThumbKey` carries a fingerprint of the edits — so a
+//! black-and-white virtual copy already shows in black and white. Since M9.14 a **preview** (the
+//! camera's own JPEG for an untouched photo, Rustroom's rendering for an edited one) takes the
+//! thumbnail's place where the thumbnail's 512 px fall short: in Compare's two panes, which zoom
+//! into it, and in a Survey cell larger than a thumbnail, at fit. ⚠ Survey does not zoom a cell:
+//! its pinch resizes the wall and its scroll scrolls it; Enter opens the photo in Develop, where
+//! the same preview stands in at 1:1.
 //!
 //! ⚠⚠ **Both go through `Library::sync_thumb_window`, exactly as the grid and the filmstrip do.**
 //! `retain_window` **pins** what is on screen and never evicts it, so a view that drew from the
@@ -24,7 +28,7 @@
 //! without a window; only the drawing and the egui wiring are here.
 
 pub mod compare;
-pub(crate) mod pane;
+pub(crate) mod preview_pane;
 pub mod survey;
 
 use crate::thumb;
@@ -35,28 +39,6 @@ const GAP: f32 = 10.0;
 
 /// How tall the caption strip under a photo is.
 const CAPTION_H: f32 = 20.0;
-
-/// Draw one photo into `rect`: the image fitted and centred, a caption strip under it, its
-/// marks, and a border when it is the focused tile.
-///
-/// ⚠ Painted into the rect it is handed rather than allocated through the layout cursor —
-/// `tile_layout` has already decided where every tile goes, and re-deriving that from egui's
-/// cursor is how the two would come to disagree.
-///
-/// Returns the tile's response so the caller can add whatever interaction it wants; this
-/// function senses `click` only, following `thumb::cell`'s rule that painting and interaction
-/// are separate concerns.
-pub(crate) fn photo_tile(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    id: egui::Id,
-    tex: Option<&egui::TextureHandle>,
-    caption: &str,
-    marks: catalog::db::Marks,
-    focused: bool,
-) -> egui::Response {
-    tile(ui, rect, id, TileImage::Thumb(tex), caption, marks, focused)
-}
 
 /// The part of a tile the photo occupies: everything above the caption strip.
 ///
