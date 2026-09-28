@@ -203,6 +203,21 @@ gone (its strip now runs for thirty seconds after launch; five was too few under
 Library card, the Inter face, "Crop & Geometry", the Colour management submenu and the Edit menu
 without AutoFill were seen. P-31 (the light theme) was not looked at.
 
+**The author's first look (same day):** *(1) the icons.* Grid, Compare, Survey, Filter, Crop &
+Geometry, Retouch, undo and redo "looked weird" — Inter, first in the proportional family, owns
+**10 of the 26 icon codepoints** in Phosphor's private-use block and drew them itself; Hack owns
+one more; and egui's emoji font has owned U+E626 (zoom to fit) all along, which is why that icon
+was a blob before today. Measured by parsing every font's cmap (`pua.swift`). Fix: Inter ships
+**subset without U+E000–F8FF** (`pyftsubset`), the families are set explicitly with Phosphor
+ahead of the emoji font (it cannot go first — it has a space and an `a`), and
+`no_bundled_font_shadows_an_icon` reads the real cmap tables through `read-fonts` (a dev-dep
+already in the tree) — ⚠ not `Fonts::has_glyph`, which in egui 0.35 compares the resolving face
+with the *replacement* face and so answers `false` for everything in a single-font stack.
+*(2) A-06 reverted:* left-drag panning was decided against before — the left button belongs to
+the brush, the crop handles and the guides, which is what the pan-binding setting is for. *(3)*
+P-06 stays; P-07 done: the crop frame is a light neutral over its halo, the corner brackets are
+longer and bolder, and each edge has a bar for its handle.
+
 ### 2026-09-28 — M9.13 AI masks: the brainstorm and the runtime spike (branch `m9.13-ai-masks`)
 
 **Chosen (the author):** build it — for skies, people and subjects of any kind; models **downloaded on

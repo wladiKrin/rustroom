@@ -396,14 +396,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             //
             // ⚠ `egui::Vec2::ZERO` for the scroll: it was already applied above, and passing it
             // again would pan at twice the rate.
-            let drag = pan_delta(
-                &resp,
-                egui::Vec2::ZERO,
-                space_down,
-                pan_binding,
-                typing,
-                false,
-            );
+            let drag = pan_delta(&resp, egui::Vec2::ZERO, space_down, pan_binding, typing);
             if drag != egui::Vec2::ZERO {
                 if let Some(pane) = view.pane_mut(&lib.entries[row].id) {
                     pane.navigate(img_area, 1.0, None, drag);

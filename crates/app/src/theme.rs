@@ -53,51 +53,69 @@ const ICON_FONT: &[u8] = include_bytes!("../assets/Phosphor.ttf");
 /// weight is the cheapest single change toward a finished-looking tool. Inter also carries the
 /// keyboard glyphs (⇧ ⌘ ⌥ ⌃ → ←) Ubuntu Light lacks, which is what had the shortcuts dialog and
 /// the Library's empty state drawing tofu boxes. Coverage was checked by parsing its cmap.
+///
+/// ⚠ Subset: the private-use block U+E000–U+F8FF is stripped (`pyftsubset --unicodes=
+/// "U+0000-U+DFFF,U+F900-U+10FFFF"`), because the original claims ten of the icon codepoints
+/// and would draw them instead of Phosphor — see `PROPORTIONAL`.
 const TEXT_FONT: &[u8] = include_bytes!("../assets/Inter-Regular.ttf");
 
+/// The proportional family, first to last.
+///
+/// ⚠⚠ **The order is the whole point.** egui takes the first font that has a glyph, and both
+/// Inter and egui's `emoji-icon-font` define codepoints inside Phosphor's private-use block —
+/// Inter's own U+E08A drew where the undo arrow belonged, and the emoji font's U+E626 had been
+/// drawing the "zoom to fit" frame as a blob since the day it was added. So Phosphor sits
+/// **ahead** of every font that claims one of its codepoints and behind only the fonts that
+/// claim none, and Inter ships here with its private-use block removed (`pyftsubset`, 4.1).
+/// `no_bundled_font_shadows_an_icon` checks the real fonts, not this comment.
+///
+/// ⚠ Phosphor cannot go first: it has glyphs for the space and the letter `a`.
+const PROPORTIONAL: [&str; 6] = [
+    "Inter",
+    "Ubuntu-Light",
+    "NotoEmoji-Regular",
+    "phosphor",
+    "emoji-icon-font",
+    "Hack",
+];
+
+/// The monospace family. Hack first, so it keeps its text; nothing draws an icon in monospace.
+const MONOSPACE: [&str; 5] = [
+    "Hack",
+    "Ubuntu-Light",
+    "NotoEmoji-Regular",
+    "phosphor",
+    "emoji-icon-font",
+];
+
 /// Install the text face, the fallbacks and the icon font. Call once, at startup.
-///
-/// The proportional stack, in the order egui consults it: **Inter**, then egui's own fonts
-/// (Ubuntu Light and the two emoji faces), then **Hack** — egui's monospace face, added as a
-/// last resort because it is the only bundled font with ▸ ▾ ▴ — and finally Phosphor for the
-/// icons.
-///
-/// ⚠ **Starts from `FontDefinitions::default()`, never from an empty one.** An empty one would
-/// discard egui's fonts and leave the emoji and arrow fallbacks unrenderable.
-///
-/// ⚠ Phosphor stays a `FontPriority::Lowest` fallback on **both** families: its codepoints are
-/// all in the Private Use Area, so nothing else can reach it, and call sites stay ordinary text —
-/// `ui.button(icons::UNDO)` needs no `FontId`.
-///
-/// ⚠⚠ Every non-ASCII character a label uses must be in this stack. `every_menu_string_is_renderable`
-/// below sweeps the menus, the tool names and the fixed hint strings; a new symbol in a string
-/// that the menus do not already use belongs in that test's list.
 pub fn install_fonts(ctx: &egui::Context) {
-    use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
+    ctx.set_fonts(font_definitions());
+}
+
+/// The whole stack as one value, so the tests can take it apart font by font.
+///
+/// ⚠ Starts from `FontDefinitions::default()` for the font *data* — egui's four faces — and then
+/// sets both families explicitly, because the order is what `PROPORTIONAL` documents.
+pub(crate) fn font_definitions() -> egui::FontDefinitions {
     let mut defs = egui::FontDefinitions::default();
     defs.font_data.insert(
         "Inter".to_owned(),
         std::sync::Arc::new(egui::FontData::from_static(TEXT_FONT)),
     );
-    if let Some(family) = defs.families.get_mut(&egui::FontFamily::Proportional) {
-        family.insert(0, "Inter".to_owned());
-        family.push("Hack".to_owned());
-    }
-    ctx.set_fonts(defs);
-    ctx.add_font(FontInsert::new(
-        "phosphor",
-        egui::FontData::from_static(ICON_FONT),
-        vec![
-            InsertFontFamily {
-                family: egui::FontFamily::Proportional,
-                priority: FontPriority::Lowest,
-            },
-            InsertFontFamily {
-                family: egui::FontFamily::Monospace,
-                priority: FontPriority::Lowest,
-            },
-        ],
-    ));
+    defs.font_data.insert(
+        "phosphor".to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(ICON_FONT)),
+    );
+    defs.families.insert(
+        egui::FontFamily::Proportional,
+        PROPORTIONAL.iter().map(|n| (*n).to_owned()).collect(),
+    );
+    defs.families.insert(
+        egui::FontFamily::Monospace,
+        MONOSPACE.iter().map(|n| (*n).to_owned()).collect(),
+    );
+    defs
 }
 
 /// Apply Rustroom's style, at startup and whenever the appearance settings change.
@@ -594,6 +612,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// ⚠⚠ Every icon must come from Phosphor, not from a text font that happens to define the
+    /// same private-use codepoint — Inter drew the undo and redo arrows, the crop, the retouch and
+    /// the filter glyphs as its own shapes the day it became the text face, and egui's emoji
+    /// font had been drawing "zoom to fit" wrong all along. Checked against the **real cmap
+    /// tables** of the fonts in production order: the first that maps the codepoint must be
+    /// Phosphor. The letter `a` is the positive control (Phosphor has one; Inter must win), and
+    /// ▴ pins that Hack is still reachable behind the icons.
+    ///
+    /// ⚠ Not `Fonts::has_glyph`: in egui 0.35 that compares the resolving *face* with the
+    /// replacement face, so a single-font stack answers `false` for every character it has.
+    #[test]
+    fn no_bundled_font_shadows_an_icon() {
+        use read_fonts::{FontRef, TableProvider};
+        let defs = font_definitions();
+        let order = &defs.families[&egui::FontFamily::Proportional];
+        let maps = |name: &str, c: char| {
+            let data = &defs.font_data[name].font;
+            let font = FontRef::new(data).unwrap_or_else(|e| panic!("{name}: {e}"));
+            font.cmap()
+                .is_ok_and(|cmap| cmap.map_codepoint(c as u32).is_some())
+        };
+        let first_with = |c: char| order.iter().find(|n| maps(n, c)).map(String::as_str);
+        assert!(rustroom_app::icons::ALL.len() > 20, "sample");
+        for c in rustroom_app::icons::ALL {
+            assert_eq!(
+                first_with(c),
+                Some("phosphor"),
+                "U+{:04X} would be drawn by the wrong font",
+                c as u32
+            );
+        }
+        assert_eq!(first_with('a'), Some("Inter"));
+        assert_eq!(first_with('▴'), Some("Hack"));
+        assert_eq!(
+            first_with('\u{2715}'),
+            None,
+            "✕ is in no bundled font — the control"
+        );
     }
 
     #[test]

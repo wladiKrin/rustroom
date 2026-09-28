@@ -305,6 +305,7 @@ dependencies = [
  "raw-decode",
  "raw-window-handle",
  "rayon",
+ "read-fonts",
  "rfd",
  "serde",
  "serde_json",

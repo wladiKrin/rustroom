@@ -10,7 +10,7 @@ Status: ☐ open · ✅ done · ⛔ declined (reason) · ❓ waiting on the auth
 
 | Id | Fix | Where | |
 |---|---|---|---|
-| A-01/P-01 | no glyph outside the bundled cmaps: Inter is the text face (it has ⇧ ⌘ → ←), Hack is the proportional fallback for ▸ ▾ ▴; the Compare hint reads "← →" again | `theme.rs` `install_fonts`, `multi/compare.rs` | ✅ |
+| A-01/P-01 | no glyph outside the bundled cmaps: Inter is the text face (it has ⇧ ⌘ → ←), Hack is the proportional fallback for ▸ ▾ ▴; the Compare hint reads "← →" again. ⚠ Inter ships **subset without its private-use block** and Phosphor sits ahead of the emoji font: the original Inter owned 10 of the 26 icon codepoints and drew undo/redo/crop/retouch/filter/grid itself; `no_bundled_font_shadows_an_icon` reads the real cmaps | `theme.rs` `font_definitions`, `multi/compare.rs` | ✅ |
 | A-01 | `every_menu_string_is_renderable`: every menu label, shortcut label, tool name, hint string and shortcuts-dialog line through the installed fonts; proven to fail on ✕ | `theme.rs` tests | ✅ |
 | A-07 | the RGB readout has hover text (the swatch stays; it replaced the letters on purpose) | `shell.rs` | ✅ |
 | A-16 | "Copy 0" → "Version: Original" / "Copy n" | `modals/info.rs` | ✅ |
@@ -53,11 +53,11 @@ Status: ☐ open · ✅ done · ⛔ declined (reason) · ❓ waiting on the auth
 
 | Id | Fix | Where | |
 |---|---|---|---|
-| A-06 | left-drag pans in the Edit tool when zoomed and no eyedropper is armed; grab cursor; the 1:1 tooltip says so; `a_left_drag_pans_only_when_the_edit_tool_allows_it` | `canvas/navigation.rs`, `canvas/mod.rs`, `develop/mod.rs` | ✅ |
+| A-06 | left-drag panning | — | ⛔ the author's call (2026-09-28): the left button belongs to the brush, the crop handles and the guides; the binding setting exists for this. Reverted; the 1:1 tooltip names the configured binding instead |
 | P-08 | Before keeps `rendering` and `lens_correction` | `session_flow.rs` + test | ✅ |
 | P-09 | Compare's border is the accent; Survey's green and red are the Pick/Reject colours (semantic, kept) | `multi/mod.rs` | ✅ |
-| P-06 | composition guide only in Geometry by default | `canvas/mod.rs` | ❓ reverses a recorded decision (guides under every tool so `O` works everywhere); off by default on a fresh profile either way |
-| A-19/P-07 | crop frame colour and handles | `crop_overlay.rs` | ❓ red is a recorded decision (legible on any photo, independent of the accent); corner brackets already exist |
+| P-06 | composition guide only in Geometry by default | — | ⛔ the author keeps it as it is |
+| A-19/P-07 | crop frame a light neutral over its dark halo; corner brackets longer and bolder; a bar at the middle of each edge for the four edge handles | `crop_overlay.rs`, `canvas_geom::edge_bars` | ✅ the author's call; look at it in use |
 
 ## G5 · Library
 
@@ -75,7 +75,7 @@ Status: ☐ open · ✅ done · ⛔ declined (reason) · ❓ waiting on the auth
 
 | Id | Fix | Where | |
 |---|---|---|---|
-| P-18 | Inter 4.1 Regular bundled as the proportional face (OFL, licence beside it) | `theme.rs`, `assets/` | ✅ verify in use |
+| P-18 | Inter 4.1 Regular bundled as the proportional face (OFL, licence beside it), subset without U+E000–F8FF | `theme.rs`, `assets/` | ✅ seen in use |
 | A-22 | Settings → Appearance → Interface size 100 / 125 / 150 % (`UiScale`, egui zoom factor) | `settings.rs`, `theme.rs`, `modals/settings.rs`, `settings_apply.rs` | ✅ |
 | P-31 | the light theme, looked at | — | ☐ |
 

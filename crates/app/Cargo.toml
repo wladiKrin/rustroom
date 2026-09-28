@@ -88,3 +88,7 @@ objc2-core-graphics = { version = "0.3", default-features = false, features = [
 [dev-dependencies]
 # For examples that stand up their own wgpu device (probe_gpu_contention).
 pollster = { workspace = true }
+# For `theme::no_bundled_font_shadows_an_icon`: the fonts' real cmap tables, not egui's
+# face resolution (which cannot answer for a single-font stack). Already in the tree through
+# epaint's shaper, same version, so nothing new compiles.
+read-fonts = "0.39"

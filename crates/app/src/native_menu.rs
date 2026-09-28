@@ -162,8 +162,8 @@ pub fn poll() -> Vec<Command> {
     // that could be inspected, and "Enter Full Screen" arrived later still, once the window had
     // grown to its remembered size; thirty seconds covers a slow launch under load.
     static STRIP_UNTIL: OnceLock<std::time::Instant> = OnceLock::new();
-    let until = *STRIP_UNTIL
-        .get_or_init(|| std::time::Instant::now() + std::time::Duration::from_secs(30));
+    let until =
+        *STRIP_UNTIL.get_or_init(|| std::time::Instant::now() + std::time::Duration::from_secs(30));
     if std::time::Instant::now() < until {
         strip_injected_items();
     }

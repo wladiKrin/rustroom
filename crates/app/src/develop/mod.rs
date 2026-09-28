@@ -123,6 +123,13 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 /// high-frequency (undo, zoom, before/after) or a mode switch. Each also appears in a menu, on
 /// purpose: a menu is for reach and discovery, a button is for speed.
 pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+    // ⚠ Names the *configured* pan binding, never "drag": the left button belongs to the tools
+    // (the author's call, 2026-09-28), so a hint saying "drag" would be wrong for every binding
+    // but Space+left.
+    let zoom_actual_hint = format!(
+        "Zoom to 1:1 — scroll to look around, or {}",
+        app.settings.pan_drag.label()
+    );
     // Undo/Redo drive the unified `ActionLog`, so one control walks back through photo edits
     // and preset deletions in the order they actually happened. ⚠ The *tooltip* says which,
     // so an icon button never silently does the surprising one — that wording used to be the
@@ -160,12 +167,7 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             (
                 icon(ui, icons::ZOOM_OUT, "Zoom out", true),
                 icon(ui, icons::ZOOM_FIT, "Zoom to fit", true),
-                icon(
-                    ui,
-                    icons::ZOOM_ACTUAL,
-                    "Zoom to 1:1 — then drag or scroll to look around",
-                    true,
-                ),
+                icon(ui, icons::ZOOM_ACTUAL, &zoom_actual_hint, true),
                 icon(ui, icons::ZOOM_IN, "Zoom in", true),
             )
         });

@@ -11,7 +11,9 @@ use rustroom_app::crop_tool;
 /// How far each corner bracket reaches along its two edges, in screen points.
 ///
 /// ⚠ Shrinks for a small crop — see `canvas_geom::corner_brackets`.
-const CROP_BRACKET_ARM: f32 = 22.0;
+const CROP_BRACKET_ARM: f32 = 26.0;
+/// The length of the bar at the middle of each crop edge.
+const CROP_EDGE_BAR: f32 = 22.0;
 
 /// The compositional guides' light stroke and the dark halo under it, in screen points.
 ///
@@ -142,17 +144,16 @@ pub(super) fn draw_crop_marks(
     // they are context rather than the tool in hand (0.8 over a 2.0 halo, 190 at alpha 150).
     let muted = how == Marks::Muted;
     let halo = egui::Color32::from_black_alpha(if muted { 110 } else { 180 });
-    // ⚠ Red, not white and not the theme accent. White vanishes against a bright photograph, and
-    // the accent is user-switchable — including a `Neutral` setting whose whole point is to have
-    // no colour, which would defeat this. A fixed red is legible on essentially all photographic
-    // content and reads unmistakably as a control rather than part of the picture.
-    //
-    // ⚠ The crop overlay was already painted by hand with fixed colours and deliberately does not
-    // follow the accent; this keeps that, rather than introducing a second rule.
+    // ⚠ A light neutral over a dark halo, not red and not the theme accent (the author's call,
+    // 2026-09-28, closing P-07: red was the one loud colour on an otherwise neutral surround).
+    // The halo is what keeps a light line visible on a bright photograph — see above — and the
+    // accent is user-switchable, including a `Neutral` setting whose whole point is to have no
+    // colour. The **handles** carry the affordance instead: corner brackets and edge bars, bold
+    // enough to read as "grab me" at a glance.
     let mark = if muted {
-        egui::Color32::from_rgba_unmultiplied(255, 60, 60, 150)
+        egui::Color32::from_rgba_unmultiplied(235, 235, 235, 150)
     } else {
-        egui::Color32::from_rgb(255, 60, 60)
+        egui::Color32::from_rgb(235, 235, 235)
     };
     let (halo_w, mark_w) = if muted { (2.0, 0.8) } else { (4.0, 1.5) };
     // ⚠⚠ The guides are **no longer drawn here.** They moved to `canvas::show` so every tool
@@ -182,14 +183,34 @@ pub(super) fn draw_crop_marks(
                 if muted {
                     3.0
                 } else {
-                    canvas_geom::CROP_HALO_WIDTH
+                    canvas_geom::CROP_HALO_WIDTH + 3.0
                 },
                 halo,
             ),
         );
         marks.line_segment(
             [a, b],
-            egui::Stroke::new(if muted { 1.6 } else { 3.5 }, mark),
+            egui::Stroke::new(if muted { 1.6 } else { 5.0 }, mark),
+        );
+    }
+    // ⚠ Edge bars too: `Handle::{Left, Right, Top, Bottom}` have always been draggable and
+    // nothing said so. Drawn in both states, like the brackets — the muted treatment is the
+    // same marks, thinner and dimmer, so guide mode and the straighten tool show the same crop.
+    for (a, b) in canvas_geom::edge_bars(crop_rect, CROP_EDGE_BAR) {
+        marks.line_segment(
+            [a, b],
+            egui::Stroke::new(
+                if muted {
+                    2.5
+                } else {
+                    canvas_geom::CROP_HALO_WIDTH + 1.0
+                },
+                halo,
+            ),
+        );
+        marks.line_segment(
+            [a, b],
+            egui::Stroke::new(if muted { 1.2 } else { 3.5 }, mark),
         );
     }
 }
