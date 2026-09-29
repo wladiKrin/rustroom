@@ -214,6 +214,62 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // is exactly what happened when this function right-aligned it itself.
 }
 
+/// How far [`toolbar`] advances the bar's cursor, measured rather than drawn — the seed the top bar
+/// uses to centre the photo's name identically in both views before Develop has been drawn once
+/// (`shell::shared_gap`).
+///
+/// ⚠ Mirrors `toolbar`'s sequence: undo, redo, a separator, the zoom well (spacing 2 inside), a
+/// separator, Before / After. `shell`'s `the_centred_name_sits_at_the_same_x_in_both_views` fails
+/// if this and the drawn toolbar drift apart.
+pub fn toolbar_width(ui: &egui::Ui) -> f32 {
+    let pad = ui.spacing().button_padding.x * 2.0;
+    let gap = ui.spacing().item_spacing.x;
+    let sep = 6.0;
+    let glyph = |c: char| {
+        let w = ui
+            .painter()
+            .layout_no_wrap(
+                c.to_string(),
+                egui::FontId::proportional(ICON_SIZE),
+                egui::Color32::PLACEHOLDER,
+            )
+            .size()
+            .x;
+        (w + pad).max(TOOL_WIDTH)
+    };
+    let body = egui::TextStyle::Button.resolve(ui.style());
+    let before_after = ui
+        .painter()
+        .layout_no_wrap(
+            format!("{} Before / After", icons::BEFORE_AFTER),
+            body,
+            egui::Color32::PLACEHOLDER,
+        )
+        .size()
+        .x
+        + pad;
+    let well: f32 = [
+        icons::ZOOM_OUT,
+        icons::ZOOM_FIT,
+        icons::ZOOM_ACTUAL,
+        icons::ZOOM_IN,
+    ]
+    .iter()
+    .map(|c| glyph(*c) + 2.0)
+    .sum();
+    glyph(icons::UNDO)
+        + gap
+        + glyph(icons::REDO)
+        + gap
+        + sep
+        + gap
+        + well
+        + sep
+        + gap
+        + before_after
+        + gap
+}
+
 /// A toolbar icon button with a tooltip. Returns whether it was clicked.
 ///
 /// ⚠ The tooltip is not decoration: it is the only thing naming the action once the label is a

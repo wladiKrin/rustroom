@@ -314,12 +314,8 @@ impl eframe::App for RustroomApp {
                     crate::collections_panel::show(self, ui, &ctx);
                 }
                 // ⚠ After the rail and before the view, so it spans the content column — the
-                // status row informs and sets the view (`docs/DESIGN.md` §6). Its rename (the
-                // selected photo's name is its centre) commits after the panel, like the bar's.
-                let status_rename = crate::status_bar::library(self, ui, &ctx);
-                if let Some((id, r)) = status_rename {
-                    name_edit::commit(self, &ctx, &id, r);
-                }
+                // status row informs and sets the view (`docs/DESIGN.md` §6).
+                crate::status_bar::library(self, ui, &ctx);
                 // ⚠ Exhaustive, so a fourth Library layout is a compile error here rather than
                 // a mode that silently shows the grid — the rule `commands::execute`'s match
                 // already follows.
@@ -369,36 +365,44 @@ impl RustroomApp {
                 // §6. Everything that informs or sets the view (the count, the sort, the size, the
                 // format chips, Reindex, a running job) lives in the status row, because this row
                 // overprinted itself at 1440 pt when it carried all of it.
-                let plan = (self.view == AppView::Library && self.library.is_some())
+                //
+                // ⚠ Both views share one shape (2026-09-29, the author's call): navigation at the
+                // left, the photo's name and facts in the centre, the view's own tools at the right
+                // edge — the Library's search and Filter, Develop's Export.
+                let view = self.view;
+                let plan = (view == AppView::Library && self.library.is_some())
                     .then(|| plan_library_bar(self, ui));
                 view_switch(ui, &mut self.view);
-                if self.view == AppView::Develop && self.session.is_some() {
+                if view == AppView::Develop && self.session.is_some() {
                     ui.separator();
                     let decoding = self.pending.is_some();
                     ui.add_enabled_ui(!decoding, |ui| develop::toolbar(self, ui, ctx));
                 }
-                if let Some(plan) = plan.filter(|_| self.view == AppView::Library) {
+                if let Some(plan) = &plan {
                     ui.separator();
                     // ⚠ A visible control, not keys alone. `C` and `N` are the fast route and
                     // are what a photographer culling a shoot will use — but a feature reachable
                     // only by a key nothing on screen mentions is a feature nobody finds, and
                     // the Filter button's `Filter: ` prefix exists for the same reason.
                     mode_switch(ui, &mut self.library_mode, plan.mode_icons_only);
-                    ui.separator();
-                    search_field(self, ui, plan.search_width);
-                    // ⚠ Beside the search field: they are one idea — "narrow what I am looking at".
-                    mark_filter(self, ui, plan.filter_compact);
                 }
                 let row = ui.max_rect();
                 let gap_left = ui.cursor().left();
-                // ⚠ Develop's right end: Export, its one accent-filled control — the same rule that
-                // gives the Library its accent-filled app mode: one per bar.
+                // ⚠ The right end, rightmost first: Develop's Export (its one accent-filled control,
+                // the rule that gives the Library its accent-filled app mode — one per bar), or the
+                // Library's Filter with the search field beside it — one idea, "narrow what I am
+                // looking at", so they sit together.
                 let gap_right = ui
                     .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if self.view == AppView::Develop && self.session.is_some() {
+                        if view == AppView::Develop && self.session.is_some() {
                             if export_button(ui).clicked() {
                                 command = Some(Command::Export);
                             }
+                            ui.separator();
+                        }
+                        if let Some(plan) = &plan {
+                            mark_filter(self, ui, plan.filter_compact);
+                            search_field(self, ui, plan.search_width);
                             ui.separator();
                         }
                         let used = ui.min_rect().left();
@@ -409,11 +413,12 @@ impl RustroomApp {
                         }
                     })
                     .inner;
-                // ⚠ The open photo's name and facts, centred: Develop only. The Library's
-                // selected photo is named in the status row.
-                if self.view == AppView::Develop {
-                    rename = centre_info(self, ui, row, egui::Rangef::new(gap_left, gap_right));
-                }
+                // ⚠⚠ **The name sits in the same place in both views** (the author's call,
+                // 2026-09-29): centred on the bar, and clamped into the gap BOTH views leave, not
+                // this one's alone — Develop's tools reach further right than the Library's, and a
+                // name clamped only into its own view's gap jumped sideways on every switch.
+                let gap = shared_gap(ui, view, row, gap_left, gap_right, self);
+                rename = centre_info(self, ui, row, gap);
             },
         );
         (rename, command, r.response.rect)
@@ -967,6 +972,63 @@ fn search_field(app: &mut RustroomApp, ui: &mut egui::Ui, width: f32) {
     }
 }
 
+/// The gap the centred name may use: this view's own, intersected with the other view's.
+///
+/// ⚠ Each view records its cluster edges **as distances from the bar's edges** (so a resized
+/// window does not stale them) every frame it is drawn; the other view's are read back. Develop's
+/// left cluster is the one that binds, so until Develop has been drawn once its width is seeded
+/// from `develop::toolbar_width` — the first switch of a session must not jump either.
+/// `the_centred_name_sits_at_the_same_x_in_both_views` pins it.
+fn shared_gap(
+    ui: &egui::Ui,
+    view: AppView,
+    row: egui::Rect,
+    left: f32,
+    right: f32,
+    app: &RustroomApp,
+) -> egui::Rangef {
+    let key = |v: AppView| egui::Id::new(("top_bar_edges", v == AppView::Develop));
+    let own = (left - row.left(), row.right() - right);
+    ui.ctx().data_mut(|d| d.insert_temp(key(view), own));
+    let other_view = if view == AppView::Library {
+        AppView::Develop
+    } else {
+        AppView::Library
+    };
+    let recorded: Option<(f32, f32)> = ui.ctx().data(|d| d.get_temp(key(other_view)));
+    let other = recorded.or_else(|| {
+        (other_view == AppView::Develop && app.session.is_some()).then(|| {
+            let gap = ui.spacing().item_spacing.x;
+            let pad = ui.spacing().button_padding.x * 2.0;
+            let export = ui
+                .painter()
+                .layout_no_wrap(
+                    format!("{} Export…", icons::EXPORT),
+                    egui::TextStyle::Button.resolve(ui.style()),
+                    egui::Color32::PLACEHOLDER,
+                )
+                .size()
+                .x
+                + pad;
+            (
+                segmented::pill_width(ui, &VIEW_ITEMS, &view_style())
+                    + gap
+                    + SEPARATOR
+                    + gap
+                    + develop::toolbar_width(ui),
+                export + gap + SEPARATOR + gap,
+            )
+        })
+    });
+    match other {
+        Some((ol, or)) => egui::Rangef::new(left.max(row.left() + ol), right.min(row.right() - or)),
+        None => egui::Rangef::new(left, right),
+    }
+}
+
+/// A separator's own width in a horizontal row (egui's default `Separator` spacing).
+const SEPARATOR: f32 = 6.0;
+
 /// The centred line naming the current photo: its name, then in weak small text its camera,
 /// decoded size and file size.
 ///
@@ -1146,31 +1208,61 @@ mod tests {
     fn the_centred_name_is_the_same_in_both_views() {
         // ⚠ Seen in use: the line said different things about one photo depending on the
         // view. The name is the caption widget's label; it must be there, and be the same.
-        // ⚠ Since 2026-09-29 the Library names its selected photo in the **status row** (the top
-        // row only navigates and narrows), so the Library half draws that row; and the top row
-        // must no longer carry it, or the name would show twice.
+        // ⚠ And only there: the status row must not name the photo a second time.
         let (ctx, mut app) = app_with_photo();
         let name = app.library.as_ref().unwrap().entries[1].caption();
-        let (_, lib_top) = bar(&ctx, &mut app, AppView::Library);
-        assert!(
-            !lib_top.contains(&name),
-            "the Library's top row still names the photo: {lib_top:?}"
-        );
+        let (_, lib) = bar(&ctx, &mut app, AppView::Library);
+        let (_, dev) = bar(&ctx, &mut app, AppView::Develop);
+        assert!(lib.contains(&name), "Library bar lacks the name: {lib:?}");
+        assert!(dev.contains(&name), "Develop bar lacks the name: {dev:?}");
         app.view = AppView::Library;
         let wide = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 200.0));
-        let lib: Vec<String> = crate::test_ui::labelled_centres_on(&ctx, wide, Vec::new(), |ui| {
-            let ctx = ui.ctx().clone();
-            let _ = crate::status_bar::library_row(&mut app, ui, &ctx);
-        })
-        .into_iter()
-        .map(|(l, _)| l)
-        .collect();
-        let (_, dev) = bar(&ctx, &mut app, AppView::Develop);
+        let status: Vec<String> =
+            crate::test_ui::labelled_centres_on(&ctx, wide, Vec::new(), |ui| {
+                let ctx = ui.ctx().clone();
+                crate::status_bar::library_row(&mut app, ui, &ctx);
+            })
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect();
         assert!(
-            lib.contains(&name),
-            "the Library status row lacks the name: {lib:?}"
+            !status.contains(&name),
+            "the status row names the photo too: {status:?}"
         );
-        assert!(dev.contains(&name), "Develop bar lacks the name: {dev:?}");
+    }
+
+    /// ⚠⚠ **Reported in use 2026-09-29: the name should be "in the center of the top row, same as
+    /// in Develop, so the position doesn't change when you switch."** Drawn with the real theme at
+    /// the 13-inch width, **Library first** — Develop never drawn, so its edges come from the
+    /// measured seed — then Develop, then the Library again; the name's centre must not move.
+    /// ⚠ The first draw is the case the seed exists for: without it the Library clamps into its own
+    /// wider gap and the name jumps on the first switch of a session.
+    #[test]
+    fn the_centred_name_sits_at_the_same_x_in_both_views() {
+        let (ctx, mut app) = app_with_photo();
+        crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+        let name = app.library.as_ref().unwrap().entries[1].caption();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 200.0));
+        let mut x_in = |view: AppView| -> f32 {
+            app.view = view;
+            let found = crate::test_ui::labelled_centres_on(&ctx, screen, Vec::new(), |ui| {
+                let ctx = ui.ctx().clone();
+                let _ = app.top_bar(ui, &ctx);
+            });
+            found
+                .iter()
+                .find(|(l, _)| *l == name)
+                .unwrap_or_else(|| panic!("{} lacks the name: {found:?}", view == AppView::Develop))
+                .1
+                .x
+        };
+        let lib_first = x_in(AppView::Library);
+        let dev = x_in(AppView::Develop);
+        let lib_again = x_in(AppView::Library);
+        assert!(
+            (lib_first - dev).abs() < 1.0 && (lib_again - dev).abs() < 1.0,
+            "the name moved: Library first {lib_first}, Develop {dev}, Library again {lib_again}"
+        );
     }
 
     #[test]

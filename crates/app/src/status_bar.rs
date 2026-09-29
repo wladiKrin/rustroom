@@ -13,12 +13,11 @@
 
 use crate::segmented;
 use crate::theme::{self, tokens};
-use crate::{name_edit, AppView, LibrarySource, RustroomApp};
+use crate::{AppView, LibrarySource, RustroomApp};
 use eframe::egui;
 use rustroom_app::bar_plan::{self, Form, Item};
 use rustroom_app::format_filter;
 use rustroom_app::icons;
-use rustroom_app::photo_id::PhotoId;
 
 /// The row's height.
 pub const HEIGHT: f32 = 32.0;
@@ -40,17 +39,12 @@ fn frame(style: &egui::Style) -> egui::Frame {
 ///
 /// ⚠ Called **after** the collections panel and **before** the view's central panel: egui gives
 /// side and bottom panels their space in call order, so this spans the content column only.
-pub fn library(
-    app: &mut RustroomApp,
-    ui: &mut egui::Ui,
-    ctx: &egui::Context,
-) -> Option<(PhotoId, name_edit::Rename)> {
+pub fn library(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     egui::Panel::bottom("status")
         .exact_size(HEIGHT)
         .resizable(false)
         .frame(frame(ui.style()))
-        .show(ui, |ui| library_row(app, ui, ctx))
-        .inner
+        .show(ui, |ui| library_row(app, ui, ctx));
 }
 
 /// The Develop status row, between the canvas and the filmstrip.
@@ -157,11 +151,7 @@ fn chip_labels(app: &RustroomApp) -> Vec<String> {
 }
 
 /// The Library row. `pub(crate)` for the shell's tests, which draw it without the panel.
-pub(crate) fn library_row(
-    app: &mut RustroomApp,
-    ui: &mut egui::Ui,
-    ctx: &egui::Context,
-) -> Option<(PhotoId, name_edit::Rename)> {
+pub(crate) fn library_row(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let row = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), HEIGHT));
     let shown = plan_library(app, ui, (row.width() - STATUS_MIN).max(0.0));
     let has_library = app.library.is_some();
@@ -195,33 +185,17 @@ pub(crate) fn library_row(
         row.right()
     };
     // ── the left-hand text: the running job or the status, truncated into what is left ──
-    let selected = app
-        .library
-        .as_ref()
-        .is_some_and(|l| l.selection.active().is_some());
+    // ⚠ The selected photo's name is NOT here: it is centred in the top row, where Develop has
+    // it too, so it does not move on a switch (the author's call, 2026-09-29).
     let free = (right - row.left()).max(0.0);
-    // ⚠ With a photo selected the centre carries its name, so the status keeps under half.
-    let left_w = if selected { free * 0.45 } else { free };
-    let left_rect = egui::Rect::from_min_size(row.min, egui::vec2(left_w, row.height()));
-    let left_end = ui
-        .scope_builder(
-            egui::UiBuilder::new()
-                .max_rect(left_rect)
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
-            |ui| {
-                job_or_status(app, ui);
-                ui.min_rect().right()
-            },
-        )
-        .inner;
-    let left_end = if left_end.is_finite() {
-        left_end
-    } else {
-        row.left()
-    };
+    let left_rect = egui::Rect::from_min_size(row.min, egui::vec2(free, row.height()));
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(left_rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        |ui| job_or_status(app, ui),
+    );
     ui.allocate_rect(row, egui::Sense::hover());
-    // ── the centre: the selected photo's name and facts, in whatever gap remains ──
-    crate::shell::centre_info(app, ui, row, egui::Rangef::new(left_end, right))
 }
 
 /// The Develop row: the colour under the pointer at the left, the running job or the status at
@@ -728,7 +702,7 @@ mod tests {
                 let ctx = ui.ctx().clone();
                 let _ = app.top_bar(ui, &ctx);
                 ui.add_space(40.0);
-                let _ = library_row(&mut app, ui, &ctx);
+                library_row(&mut app, ui, &ctx);
             },
         )
     }
