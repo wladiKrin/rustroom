@@ -675,8 +675,8 @@ mod tests {
         let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {});
         let id = egui::FontId::proportional(14.0);
         let mut strings: Vec<String> = vec![
-            crate::library::EMPTY_LIBRARY_HINT.to_owned(),
-            crate::develop::canvas::EMPTY_DEVELOP_HINT.to_owned(),
+            crate::library::EMPTY_LIBRARY_TEXT.to_owned(),
+            crate::develop::canvas::EMPTY_DEVELOP_TEXT.to_owned(),
         ];
         strings.extend(
             rustroom_app::tool::Tool::ALL
@@ -1241,14 +1241,18 @@ mod tests {
                 let rel = p.strip_prefix(&root).unwrap().display().to_string();
                 // ⚠ The named hover constants too — the retouch modes, the profile note, the DNG note —
                 // which read exactly like call-site hovers once drawn.
+                // ⚠⚠ No space after `=`: rustfmt moves a long literal to the next line, and the
+                // pattern with the space was blind to every such constant — seven of them, the DNG
+                // and profile notes included, until a full-stop sabotage on a new one went green.
+                // An empty state's prose is `*_TEXT`, not a hover (DESIGN.md §7.14).
                 for pat in [
                     "on_hover_text(",
                     "hover: ",
-                    "HINT: &str = ",
-                    "HELP: &str = ",
-                    "NOTE: &str = ",
-                    "HOVER: &str = ",
-                    "NOTHING: &str = ",
+                    "HINT: &str =",
+                    "HELP: &str =",
+                    "NOTE: &str =",
+                    "HOVER: &str =",
+                    "NOTHING: &str =",
                 ] {
                     let mut from = 0;
                     while let Some(at) = code[from..].find(pat) {

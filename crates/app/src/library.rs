@@ -117,7 +117,7 @@ const MARK_NONE: &str = "☐ ";
 /// small. They are what a culling pass actually reads, so they are not tied to the caption's size.
 /// ⚠ `thumb::marks_row` clamps the result, so this cannot make them absurd on a huge cell.
 /// What an empty Library says. Also swept by `theme::every_menu_string_is_renderable`.
-pub(crate) const EMPTY_LIBRARY_HINT: &str =
+pub(crate) const EMPTY_LIBRARY_TEXT: &str =
     "You can also drop a folder or some photos onto this window. Nothing is copied or changed: \
      Rustroom reads your photos where they are and keeps its edits beside them.";
 
@@ -150,7 +150,7 @@ fn empty_library(ui: &mut egui::Ui) -> Option<rustroom_app::menu::Command> {
         }
         ui.add_space(14.0);
         ui.set_max_width(460.0);
-        crate::theme::hint(ui, EMPTY_LIBRARY_HINT);
+        crate::theme::hint(ui, EMPTY_LIBRARY_TEXT);
     });
     picked
 }

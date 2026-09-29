@@ -33,7 +33,7 @@ use straighten_overlay::draw_straighten_overlay;
 /// What an empty Develop says. ⚠ There has been no "Open file… button" since the menus took the
 /// toolbar's place; the old text still named one. Also swept by
 /// `theme::every_menu_string_is_renderable`.
-pub(crate) const EMPTY_DEVELOP_HINT: &str =
+pub(crate) const EMPTY_DEVELOP_TEXT: &str =
     "Open a photo from the Library, or File → Open file… (⌘O).";
 
 /// Whether `RUSTROOM_DEBUG_PLACE` is set. Read once: the placement log runs per frame, where
@@ -829,7 +829,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                 }
                 None => {
                     ui.centered_and_justified(|ui| {
-                        crate::theme::empty_state(ui, EMPTY_DEVELOP_HINT);
+                        crate::theme::empty_state(ui, EMPTY_DEVELOP_TEXT);
                     });
                 }
             }
