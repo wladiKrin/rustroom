@@ -1,7 +1,9 @@
 # Rustroom design language
 
 **Status:** the rulebook, chosen by the author on 2026-09-29 from three directions
-(canvas: <https://claude.ai/artifact/JK6A3tSpaXPo427cHZTZ7h>, direction **B · Layered**).
+(canvas: <https://claude.ai/artifact/JK6A3tSpaXPo427cHZTZ7h>, direction **B · Layered**), and
+**implemented the same day** on branch `design-language` — what follows describes the app as built;
+where the build settled something the first draft left open, the text says so.
 **Read this before adding or changing anything the user can see.** It is the answer to "what
 should this look like"; `docs/JOURNAL.md` holds why each earlier decision was taken.
 
@@ -158,8 +160,8 @@ control never changes shape on hover (the existing rule).
 │ (Library)  │                                              │ 316  │ rail │
 │            │                                              │(Dev.)│  48  │
 │            ├ status row 32 ───────────────────────────────┤      │      │
-│            │ Library: count · chips        | sort · size · ⋯     │      │
-│            │ Develop: zoom · readout       | progress / ready    │      │
+│            │ Library: count │ name · facts │ chips · sort · size · ⋯ │   │
+│            │ Develop: readout               progress / ready      │      │
 │            ├ filmstrip 92 (Develop only) ──────────────────┤      │      │
 └────────────┴──────────────────────────────────────────────┴──────┴──────┘
 ```
@@ -169,16 +171,24 @@ control never changes shape on hover (the existing rule).
   Before/After · name and camera line · Export (Develop). When a lower item does not fit, first
   its labels drop to icons (mode switch, Filter, Before/After), then it folds into ⋯. Search
   shrinks from 240 to 120 before anything folds.
-- **The status row informs and sets the view.** Library: photo and file count (or the running
-  export/preview/download with its Cancel) and the format chips at the left; sort, thumbnail
-  size and ⋯ (Stack all, Expand all, Reindex, Show in Finder) at the right. Develop: zoom
-  percentage and the readout swatch with its numbers at the left; "Full resolution ready" or the
-  running job at the right. Priority: count · sort · size · chips; chips fold first, then size.
-- **A bar is laid out by a plan, not by hope.** A pure function (the `segmented::plan` shape,
-  in the lib crate, tested at 1440 / 1000 / 800) decides what shows; the bin module only draws
-  the result. A centred label is drawn only if the plan measured room for it after both ends.
-- **Rail and panel are cards on the panel surface** with 12 padding; the rail's groups are
-  collapsible cards, the panel's sections are cards (§7.5).
+- **The status row informs and sets the view** (`status_bar.rs`). Library: at the left the photo
+  and file count, or the running export / preview build / Immich download with its Cancel, or the
+  last status message — truncated into whatever is left, never pushing; in the centre the selected
+  photo's name and facts (click to rename — it moved here from the top row); at the right the
+  format chips, Download / Remove downloads (Immich sources with a selection), the sort, the size
+  slider and ⋯ (Reindex, Expand all / Stack all, and anything folded). Develop: the readout swatch
+  and numbers at the left; "Full resolution ready" or the running job at the right. Folding
+  order: chips first, then the Immich buttons, then the size slider; the sort drops its label.
+  ⚠ The first draft put the chips at the left and a zoom percentage in Develop's row; the chips
+  sit with the view settings they are, and the zoom percentage was not built.
+- **A bar is laid out by a plan, not by hope.** `rustroom_app::bar_plan` (pure, tested with a
+  sweep from 100 to 2000 pt) decides what shows, what drops its label and what folds; the bin
+  measures with the widgets' own fonts (`segmented::pill_width`, `chip_width`) and draws the
+  result. Every row draws its right-hand cluster first and gives the left-hand text what is left.
+  `nothing_in_either_library_row_overlaps` draws both rows at 1440, 1000 and 800 with a status
+  longer than any row and fails on any two intersecting widgets.
+- **The panel's sections are cards on the panel surface** (§7.5); the Library rail's groups
+  are uppercase headers without cards, so the rail reads as a list and the panel as controls.
 
 ## 7. Components
 
@@ -193,8 +203,11 @@ accessibility label; **Disabled** 40 % opacity, never hidden. No outline variant
 (the kit's outline is for documentation).
 
 ### 7.2 Segmented control
-A pill well on the `canvas` colour, 28 tall, 2 px inset, segments full-radius; the lit segment
-is `raised` with a 1 px shadow and `text`; unlit segments `text2`. **The app switch is the only
+A pill well on the `canvas` colour, 2 px inset, segments full-radius; the lit segment is `raised`
+with a 1 px shadow and `text`; unlit segments `text2`. **Two sizes of one shape:** 28 tall with
+Body labels for a primary switch (app, mode, mask mode, dialog tabs), 24 with Caption labels for a
+compact view switch in the panel (curve channels, HSL, grading range) — five Body labels do not fit
+the panel's width. **The app switch is the only
 segment lit with the accent.** Icon + label when there is room, icon only (with tooltip) when
 there is not; labels shrink 15 % before wrapping (`segmented::plan`). Used for: app switch,
 mode switch, zoom group, curve channels, Retouch modes, mask modes, Interface size, dialog tabs.
@@ -219,7 +232,12 @@ from neutral; trailing text in Caption `text2` (the lens name, "9 built-in"); `r
 quiet at the right while modified. The body is unindented (existing). Sub-labels inside a card
 (Tone curve, Presence, Noise reduction) are Caption `text2` Medium, sentence case, 8 above.
 The Library rail's group names (Folders, Collections…) use the same header but **uppercase
-Caption**, so the rail reads as a table of contents and the panel as controls.
+Caption** (`Header::rail`), so the rail reads as a table of contents and the panel as controls.
+A card is painted **behind** its header and body (`HeaderOut::show_body`) — never for a body that
+fills its container, whose card gap would grow a resizable panel every frame (the snapshot strip
+did). Names are sentence-cased when painted (`header_text`), not renamed: they are also the
+accessible labels and the Sync dialog's rows. ⚠ Headers render Regular until Inter Medium is
+bundled (§3).
 
 ### 7.6 List row
 30 tall, 6 radius, name in Body, count or meta in Caption `text3` at the right; indent 14 per
@@ -235,7 +253,7 @@ shown, `text3` for one that is hidden. Chips are filters and states, never butto
 left, × icon button right, hairline under. Body padding 16, rows on a 130-pt label column.
 Foot 52 with a hairline above: extras left, then **Cancel, then the primary verb at the far
 right**; no note text. Escape cancels, Return presses the primary (existing). Width by class
-(Compact 340, Standard 520, Wide 680); a remembered resize applies to Wide only.
+(Compact 340, Standard 520, Wide 680); a dialog the user resized opens at that size next time.
 Tabs inside a dialog are a segmented control (§7.2) under the head.
 
 ### 7.9 Tooltip
@@ -245,7 +263,9 @@ as a kbd chip ("Crop & Geometry  R"). Every control has one (§8).
 
 ### 7.10 Thumbnail cell
 8 radius, letterboxed on `raised`. **Selected** = 2 px accent outline, 2 px offset. **Hover** =
-the star row at the bottom left (existing). Badge: Caption white on 55 % black, top right.
+the star row at the bottom left (existing). Badges are Caption white on 55 % black: a copy's label
+at the picture's top left, the stack count at the **picture's** top right (`thumb::image_rect`) —
+never the cell's corner, where a portrait's badge floated beside it.
 Caption under the cell in Caption `text3`, elided at the cell width. In the filmstrip the same
 cell at 70 tall without a caption.
 
@@ -279,10 +299,17 @@ export, preview builds and Immich downloads (existing rule).
   note, the curve's "click to add a point", the Compare and Survey key lines, dialog footer
   notes, the Settings explanations. `theme::error_hint` stays, shown only while the field is
   invalid, in `error_fg_color`.
-- **Every control gets one hover sentence**, held in one table per panel or dialog with a
-  coverage test that fails when a control is added without one — the `slider_help` shape.
-  Buttons, sliders, combos, checkboxes, chips, rail entries, list-row actions, tool-rail entries,
-  segments.
+- **Every control gets one hover sentence.** Sliders take theirs from the `slider_help` table,
+  whose coverage tests fail when a slider is added without one — **the shape to copy**; every other
+  control carries its sentence at the call site (`.on_hover_text`) today. ⚠ Tabling the rest per
+  panel, with the same coverage test, is the open half of this rule.
+- **What moved on 2026-09-29:** the camera-profile note (the combo), the curve's gestures (the
+  curve; a value still shows while a point is in play), the parametric and defringe instructions,
+  the Settings tier / resampler / Immich paragraphs (their controls, the chosen option's line
+  first), the Import and Export token lines (`filename_template::token_hover`), the DNG note (the
+  Format combo), the Information note (its field labels), and Compare's and Survey's key lines (their
+  mode segments). What stayed, at Caption: values and readouts, chosen paths, ticked counts,
+  empty-list notes, transient states (an AI mask waiting), warnings, and dialog body sentences.
 - **Keyboard shortcuts are discoverable three ways and no more:** the menu bar, the tooltip's
   kbd chip, and Help → Keyboard shortcuts. Never as prose in a bar.
 - **Placeholders are not hints.** A field's placeholder names what goes in it ("Search photos",
@@ -308,17 +335,16 @@ segment is also lighter).
 
 | Rule | Code |
 |---|---|
-| Text styles (§3) | `theme::tune`: `Small` 11, `Body`/`Button`/`Monospace` 13, `Heading` 20, named `"title"` 15; `theme::title_font` |
-| Surfaces, text greys, tooltip (§4.1) | `theme::surfaces`, per theme; a `Tokens` struct so hand-painters (`thumb`, `list_row`, `rail`, `section`, `segmented`, `modals::shell`) read the same values |
-| Accent pairs, on-accent text (§4.2) | `settings::Accent` + `theme::accent_color`; a new `theme::on_accent(dark)`; `every_accent_has_usable_contrast` gains the text check |
-| Spacing, row heights, radii (§5) | `theme::tune`: `item_spacing` 8 × 6, `interact_size.y` 28, `slider_rail_height` 4, `corner_radius` 6; the row constants move from `list_row`, `section`, `rail`, `shell::BAR_HEIGHT` into `theme` |
-| Two rows and the plan (§6) | `shell::top_bar` slims down; a new bin module `status_bar` draws; a new lib module `bar_plan` (pure, tested) decides what fits |
-| Segmented control (§7.2) | `segmented.rs`: pill well, lit segment raised, accent only on the app switch |
-| Section card (§7.5) | `develop/panel/section.rs` header 26 and the card frame; `theme::sub_label` sentence case |
-| Dialog anatomy (§7.8) | `modals/shell.rs`: title in `"title"`, × as an icon button, no footer note |
-| Tooltips (§7.9, §8) | `theme::help(ui, resp, text)` as the one entry point; per-panel help tables with coverage tests |
-| Thumbnails (§7.10) | `thumb.rs` badge and caption at Caption; `library.rs` gap 12 |
-| Fonts (§3) | bundle Inter Medium beside Regular, subset the same way; `no_bundled_font_shadows_an_icon` covers it |
+| Text styles (§3) | `theme::tune`: `Small` 11, `Body`/`Button`/`Monospace` 13, `Heading` 20, named `"section"` 11 and `"title"` 15; `theme::title_font`; `no_literal_font_size_outside_theme` sweeps the sources |
+| Surfaces, text greys, sizes, radii (§4.1, §5) | `theme::tokens` (`tokens::of(ui)` for a painter); `theme::surfaces` maps them onto egui's slots, per theme |
+| Accent pairs, text on the accent (§4.2) | `settings::Accent` + `theme::accent_color`; `theme::on_accent`; `text_on_every_accent_is_readable` |
+| Metrics (§5) | `theme::tune`: `interact_size.y` 28, `item_spacing` 8 × 2, `button_padding` 10 × 4, radius 6, dialogs and menus 12, `tooltip_delay` 0.4, `tooltip_width` 280 |
+| Two rows and the plan (§6) | `shell::top_bar` + `plan_library_bar`; `status_bar.rs` (bin); `bar_plan.rs` (lib, pure) |
+| Segmented, pill, chip, swatches (§7.2, §7.7) | `segmented.rs`: the well, `pill` / `pill_width` / `icons_only`, `chip` / `chip_width`, `swatches` |
+| Section card (§7.5) | `develop/panel/section.rs`: `Header::rail`, `HeaderOut::show_body`, `header_text` |
+| Dialog anatomy (§7.8) | `modals/shell.rs`: head 44 with the title in `title_font`, foot 52; `theme::DialogSize` |
+| Thumbnails (§7.10) | `thumb.rs` (`image_rect`, badge, radius 8); `library.rs` gap 12 and the stack badge |
+| Checking a width | `RUSTROOM_DEBUG_WINDOW=1440x875` opens the window at that size (the author runs AeroSpace, which tiles windows — float the window first; see the drive memory) |
 
 **Zero-GUI rule still applies:** plans, priority orders, help tables and token values are plain
 data in the lib crate and testable headless; only the drawing lives in the bin modules.
@@ -347,3 +373,4 @@ data in the lib crate and testable headless; only the drawing lives in the bin m
 | 2026-09-19 | Icon-only tool rail at 26; chevron left, actions right on section headers | labelled rail, chevron right |
 | 2026-09-28 | Inter Regular as the text face; panel floor 300; segments shrink before wrapping; Interface size setting | Ubuntu Light |
 | 2026-09-29 | **Direction B · Layered** chosen from three; four text sizes, nothing below 11; a status row and the two-row priority rule; hover text replaces every on-screen hint; seven accents including Orange and Sage at the author's request (default stays Steel blue); dark text on the dark-theme accent | ten sizes; one overloaded bar; persistent hints; four accents; white on accent |
+| 2026-09-29 | **Built.** Reindex moved back behind ⋯ with Expand all / Stack all — the 2026-09-23 call took it out of a one-item menu and set the condition "if a second Library action ever wants this corner, reconsider the menu then"; that happened | Reindex as a bar button |

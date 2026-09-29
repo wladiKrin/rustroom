@@ -159,7 +159,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-09-29 — The design language: three directions, B chosen (branch `design-language`, docs only)
+### 2026-09-29 — The design language: three directions, B chosen, and built (branch `design-language`, awaiting use)
 
 **Input:** the author asked for one cohesive, minimal design language with mockups to choose from,
 naming two irritants — inconsistent font sizes (some tiny with lots of text, hard to read on the 5K;
@@ -188,6 +188,44 @@ colour-temperature axis; offered now at the author's request, with the caveat ke
 **Output:** `docs/DESIGN.md` — the rulebook (type, colour, spacing, the shell and its two rows,
 sixteen components, the hints rule, where every token lives in code, a checklist, a decisions log)
 — and a bullet in `CLAUDE.md`. No code changed. The implementation pass is planned next.
+
+**Built the same day** (plan `docs/superpowers/plans/2026-09-29-design-language.md`, six commits,
+gate green at **3230**). `theme/tokens.rs` holds every surface, grey, size and radius as dark/light
+pairs; `tune` installs 11 / 13 / 15 / 20 and every literal size in the bin modules became a token,
+kept out by `no_literal_font_size_outside_theme` (a source sweep with a positive control). Section
+headers became cards painted **behind** their bodies (`HeaderOut::show_body` fills a shape reserved
+before the header drew — one word per call site, no layout change); segmented wells and pills sit on
+the canvas colour with a raised lit segment. `bar_plan` (lib, pure) decides what a bar shows; the
+Library's top row is app switch · mode · search · Filter, and `status_bar.rs` draws a 32-pt row under
+the content (count or job, the selected photo's name, chips, sort, size, ⋯) and above Develop's
+filmstrip (readout, job). Explanations moved onto hover; the accent is seven swatches.
+
+⚠⚠ *What the gate and the look caught:* **(1)** the light theme's tertiary grey `#9a9aa0` measured
+**2.55:1** on the panel — the test found it, the value moved to `#8a8a90` (3.12:1), and the test's own
+floor (written as 2.4 beside a comment saying 3:1) was corrected rather than the colour excused.
+**(2)** The overlap test's first adversary — a long status line — still **fit** beside the cluster, so a
+sabotage that let the status claim the whole row **passed**; lengthened past any row, the same sabotage
+fails. **(3)** The snapshot strip's body fills its resizable panel on purpose, and the gap a card leaves
+under itself made the content 10 pt taller than the panel **every frame** — the strip grew to its
+half-height cap and squeezed the sliders to two sections. Seen in the first screenshot, not by a test;
+it keeps a plain header, and `show_body`'s doc now says never for a filling body. **(4)** Two more doc
+blocks were found on the wrong item (`format_chips`', sitting on `stack_buttons`; `pressed_command`'s,
+on a constant) — the removed-`///` audit after the scripted move accounted for every line.
+**(5)** A commit went in with clippy red because the chain used `;` — amended before anything else
+landed, and the one earlier commit gated on tests alone was re-checked in a worktree (green).
+
+⚠ *Reversed on its own terms:* Reindex went back behind ⋯, with Expand all / Stack all. The
+2026-09-23 call took it out of a one-item menu and wrote down when to reconsider — "if a second Library
+action ever wants this corner"; two did.
+
+⚠ *Left open:* Title and Display want **Inter Medium**, which is not bundled (it needs a download from
+the Inter release, OFL); hover sentences outside the sliders are not yet tabled with coverage tests.
+
+⚠ *Checking the 13-inch width:* the author runs **AeroSpace**, a tiling window manager, which sized every
+window to the external display and ignored both Accessibility resizes and the initial size — the reason
+`drive resize` "did nothing" on 2026-09-29. `aerospace layout floating --window-id <id>` on the scratch
+window (a runtime change to that window only), then `drive resize 1440 875`. `RUSTROOM_DEBUG_WINDOW`
+sets the initial size for untiled setups.
 
 ⚠ *Process notes, in memory too:* three Rustroom instances were up at once (the author's, another
 session's, mine) and the drive tool picked the largest window of any of them — it now honours

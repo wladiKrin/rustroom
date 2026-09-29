@@ -173,7 +173,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-28)
 
-**3211 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
+**3211 tests**, **82 goldens**, gate green on `main`; **3230** on `design-language` (unmerged). ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -222,6 +222,9 @@ that had grown to ~170 lines by appending.)
 review fixes' docs/JOURNAL.md`). The reviews themselves were transient and are deleted; their
 milestone-sized findings sit in `docs/BACKLOG.md` under "First-session reviews". ✅ **M9.14
 Previews** (P-20) merged 2026-09-29, confirmed by use — in the table above.
+🟡 **The design language** (`docs/DESIGN.md`, direction B) is **built on branch `design-language`,
+awaiting use** — tokens, four text sizes, section cards, a status row under the Library and above the
+filmstrip, hover text instead of hints, seven accents. `grep -n 'design language' docs/JOURNAL.md`.
 ✅ **Phase 9 is complete** (M9.13 merged 2026-09-28). Next is **Phase 10** (was 9), integration and
 release: M10.2
 Windows + the Linux GUI (never run), M10.3 contributor docs, M10.4 `v0.1`, M10.5 plugins. ⛔ **M10.1 was
