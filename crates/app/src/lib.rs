@@ -53,6 +53,7 @@ pub mod library_filter;
 pub mod looks;
 pub mod marks;
 pub mod mask_kind;
+pub mod mask_order;
 pub mod mask_tool;
 pub mod menu;
 pub mod metadata_scanner;

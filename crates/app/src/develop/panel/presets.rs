@@ -145,6 +145,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     indent: 0.0,
                     eye: None,
                     hold: None,
+                    reorder: None,
                 },
             );
             if out.delete {

@@ -7,7 +7,7 @@ use crate::develop::panel::{mask_glyph, Edited};
 use crate::Session;
 use eframe::egui;
 use rustroom_app::mask_kind::MaskKind;
-use rustroom_app::mask_tool;
+use rustroom_app::{mask_order, mask_tool};
 
 /// The mask at component `j` — `0` is the base, `j > 0` the `j-1`th refinement.
 ///
@@ -35,6 +35,12 @@ pub fn component_mut(
 
 /// Row height in points.
 pub const ROW_HEIGHT: f32 = crate::theme::tokens::LIST_ROW;
+/// A mask row's hover.
+pub const MASK_ROW_HOVER: &str =
+    "Selects this mask, and a drag moves it to change the order the masks apply in";
+/// A mask's component row's hover.
+pub const COMPONENT_ROW_HOVER: &str =
+    "Selects this shape, and a drag moves it to change the order the shapes combine in";
 /// How far a component row sits in from its mask.
 pub const INDENT: f32 = 18.0;
 const GLYPH: f32 = crate::theme::tokens::ICON_INLINE;
@@ -82,6 +88,9 @@ pub struct RowSpec<'a> {
     /// The second toggle, left of the eye: `Some((on, verb, hover))`. A mask's is "Disable"
     /// (an edit: off in the export too); a patch's is "Hold out" (view only).
     pub hold: Option<(bool, &'a str, &'a str)>,
+    /// `Some(hover)` makes the row draggable to reorder and says so on hover; `None` keeps it
+    /// click-only (patches, eyes, presets).
+    pub reorder: Option<&'a str>,
 }
 
 pub struct RowOut {
@@ -91,6 +100,12 @@ pub struct RowOut {
     pub eye: bool,
     /// The hold-out toggle was clicked.
     pub hold: bool,
+    /// The row's rect, for the drop slots.
+    pub rect: egui::Rect,
+    /// Being dragged this frame.
+    pub dragging: bool,
+    /// A drag of this row ended this frame.
+    pub released: bool,
 }
 
 /// Draw one row.
@@ -98,10 +113,14 @@ pub struct RowOut {
 /// ⚠ The `×` and the eye are registered **after** the row so they win the hit-test tie, and a
 /// click on either is not a click on the row.
 pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), ROW_HEIGHT),
-        egui::Sense::click(),
-    );
+    // ⚠ Drag is sensed only where a reorder exists: egui separates a click from a drag by its
+    // threshold, so a reorderable row still selects on a click.
+    let sense = if spec.reorder.is_some() {
+        egui::Sense::click_and_drag()
+    } else {
+        egui::Sense::click()
+    };
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), sense);
     let enabled = ui.is_enabled();
     let lit = spec.selected || spec.current;
     resp.widget_info(|| {
@@ -112,6 +131,10 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
             spec.accessible,
         )
     });
+    let resp = match spec.reorder {
+        Some(hover) => resp.on_hover_text(hover),
+        None => resp,
+    };
     let v = ui.visuals().clone();
     let mut delete = false;
     let mut right = rect.right();
@@ -276,7 +299,31 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         delete,
         eye,
         hold,
+        rect,
+        dragging: resp.dragged(),
+        released: resp.drag_stopped(),
     }
+}
+
+/// The slot a row dragged to the pointer would land in, and the y of its insertion line.
+///
+/// ⚠ The boundaries are the rows' **midpoints**, not their tops: the upper half of a row is
+/// "before it", the lower half "after it". The Library's past-the-top rule suits its tall section
+/// headers; on a 30-pt row it made a drop on the row above land where the row started.
+pub fn drop_slot(ui: &egui::Ui, rects: &[egui::Rect]) -> Option<(usize, f32)> {
+    let y = ui.ctx().pointer_interact_pos()?.y;
+    let mids: Vec<f32> = rects.iter().map(|r| r.center().y).collect();
+    let at = rustroom_app::panel_order::drop_index(&mids, y);
+    // ⚠ Past the last row the line sits at the cursor — below anything drawn under that row (a
+    // selected mask's components), which is where such a drop lands.
+    let line = rects.get(at).map_or(ui.cursor().top(), |r| r.top());
+    Some((at, line))
+}
+
+/// The insertion line: the Library rail's, in the accent.
+pub fn paint_drop_line(ui: &egui::Ui, x: egui::Rangef, y: f32) {
+    ui.painter()
+        .hline(x, y, egui::Stroke::new(2.0, ui.visuals().selection.bg_fill));
 }
 
 /// The component rows of mask `i`, if it has any refinements.
@@ -308,6 +355,9 @@ pub fn rows(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
     let selected = s.component_index();
     let mut remove: Option<usize> = None;
     let mut pick: Option<usize> = None;
+    let mut rects = Vec::with_capacity(names.len());
+    // The row being dragged, and whether it was released this frame.
+    let mut drag: Option<(usize, bool)> = None;
     for (j, (kind, op, accessible, name)) in names.iter().enumerate() {
         let out = row(
             ui,
@@ -323,12 +373,41 @@ pub fn rows(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
                 indent: INDENT,
                 eye: None,
                 hold: None,
+                reorder: Some(COMPONENT_ROW_HOVER),
             },
         );
+        rects.push(out.rect);
+        if out.dragging || out.released {
+            drag = Some((j, out.released));
+        }
         if out.delete {
             remove = Some(j);
         } else if out.clicked {
             pick = Some(j);
+        }
+    }
+    if let (Some((from, released)), None, None) = (drag, pick, remove) {
+        if let Some((to, line)) = drop_slot(ui, &rects) {
+            // ⚠ A refused slot draws no line, and a release there does nothing — the only signal,
+            // and enough: the line is what says where the row would go.
+            let offered = s
+                .edits
+                .masks
+                .get(i)
+                .is_some_and(|m| mask_order::component_drop_allowed(m, from, to));
+            if offered {
+                if released {
+                    let mut sel = s.component_index();
+                    if mask_order::move_component(&mut s.edits.masks[i], &mut sel, from, to) {
+                        s.selected_component = sel;
+                        s.active_mask_handle = None;
+                        ed.discrete();
+                    }
+                } else {
+                    let r = ui.max_rect();
+                    paint_drop_line(ui, egui::Rangef::new(r.left() + INDENT, r.right()), line);
+                }
+            }
         }
     }
     if let Some(j) = pick {

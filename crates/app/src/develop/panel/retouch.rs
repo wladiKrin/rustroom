@@ -103,6 +103,7 @@ fn list(ui: &mut egui::Ui, s: &mut Session, tool: &SpotTool, ed: &mut Edited) {
             indent: 0.0,
             eye: None,
             hold: None,
+            reorder: None,
         },
     );
     if out.clicked {
@@ -133,6 +134,7 @@ fn list(ui: &mut egui::Ui, s: &mut Session, tool: &SpotTool, ed: &mut Edited) {
                     "Holds this patch out of the view so you can see what it covers. Its \
                      outline stays. Affects only what you see — never the render or the export.",
                 )),
+                reorder: None,
             },
         );
         if out.delete {

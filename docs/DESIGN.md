@@ -394,6 +394,10 @@ export, preview builds and Immich downloads (existing rule).
 - Cursor: the arrow everywhere except the I-beam in fields, the hand over links, the tool
   cursors on the canvas. Labels are not selectable text (the `empty_state` lesson).
 - Double-click resets a slider; a click on the rail is an undo step (existing).
+- Reorder by dragging the row itself (Library sections, masks, a mask's components): a 2-pt accent
+  line marks the slot, and a slot that is not allowed shows no line. For list rows the slot is
+  decided by the rows' midpoints — upper half before, lower half after. Where the order is an
+  edit (masks), one drop is one undo step.
 
 ## 10. Accessibility floors
 

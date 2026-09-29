@@ -1,11 +1,9 @@
-//! Where a dragged panel section lands.
+//! Where a dragged row lands — a panel section, a mask, a mask's component.
 //!
 //! ⚠⚠ Pure functions with no `egui` in sight, deliberately. The alternative — egui's
 //! `dnd_drag_source`/`dnd_drop_zone` — puts this logic inside the framework, where none of it can
 //! be tested; and the standing warning in `CLAUDE.md` is that canvas and panel code is untested
 //! territory. This is the one part of the gesture that can be made otherwise.
-
-use crate::settings::PanelSection;
 
 /// Which slot a section dragged to `pointer_y` should land in.
 ///
@@ -14,31 +12,42 @@ use crate::settings::PanelSection;
 ///
 /// ⚠ A section is claimed by the slot whose header it has been dragged **past the top of**, so
 /// dropping anywhere above the first header gives 0 and anywhere below the last gives the end.
+///
+/// ⚠ Any ascending boundaries work: the mask rows pass their **midpoints** instead
+/// (`mask_components::drop_slot`), since a 30-pt row is too short for the past-the-top rule.
 pub fn drop_index(header_tops: &[f32], pointer_y: f32) -> usize {
     header_tops.iter().filter(|top| pointer_y >= **top).count()
 }
 
-/// The order after moving the section at `from` into position `to`.
+/// The order after moving the item at `from` into position `to`.
 ///
 /// ⚠ Both indices are clamped rather than trusted: `from` comes from a drag that may have started
 /// before a re-sort, and `to` from a pointer position. An out-of-range index must not panic in a
 /// paint loop.
-pub fn moved(order: &[PanelSection], from: usize, to: usize) -> Vec<PanelSection> {
+pub fn moved<T: Clone>(order: &[T], from: usize, to: usize) -> Vec<T> {
     let mut out = order.to_vec();
-    if out.is_empty() || from >= out.len() {
-        return out;
+    move_in_place(&mut out, from, to);
+    out
+}
+
+/// [`moved`] without the copy — for lists whose items are expensive to clone (a mask's strokes).
+///
+/// ⚠ The one implementation of the rule; `moved` calls it, so the two cannot disagree.
+pub fn move_in_place<T>(v: &mut Vec<T>, from: usize, to: usize) {
+    if v.is_empty() || from >= v.len() {
+        return;
     }
-    let item = out.remove(from);
+    let item = v.remove(from);
     // ⚠ `to` is an *insertion* index into the list **including** the item being moved, so removing
     // it first shifts every later slot down by one.
     let to = if to > from { to.saturating_sub(1) } else { to };
-    out.insert(to.min(out.len()), item);
-    out
+    v.insert(to.min(v.len()), item);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::PanelSection;
 
     const TOPS: [f32; 3] = [10.0, 50.0, 90.0];
 
@@ -123,6 +132,6 @@ mod tests {
     fn out_of_range_indices_do_not_panic() {
         assert_eq!(moved(&order(), 99, 0), order());
         assert_eq!(moved(&order(), 0, 99).len(), PanelSection::ALL.len());
-        assert!(moved(&[], 0, 0).is_empty());
+        assert!(moved::<PanelSection>(&[], 0, 0).is_empty());
     }
 }
