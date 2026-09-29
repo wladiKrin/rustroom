@@ -128,7 +128,7 @@ pub fn show(
         // disappears is harder to learn than one that greys out.
         let r = ui
             .add_enabled(!curve.points.is_empty(), egui::Button::new("Reset"))
-            .on_hover_text("Return the curve to a straight line");
+            .on_hover_text("Resets the curve to a straight line");
         if r.clicked() {
             // ⚠ Cleared to *empty*, not to the two identity endpoints: empty is what keeps
             // `ToneCurveStage` out of the pipeline entirely.
@@ -329,7 +329,7 @@ pub fn show(
 }
 
 /// How the point editor is worked — its hover, and the only place the gestures are named.
-const GESTURE_HELP: &str = "Click to add a point · drag one to move it · right-click removes it";
+const GESTURE_HELP: &str = "Click to add a point, drag to move one, right-click to remove one";
 
 /// The line under the editor: a control point's input and output when one is in play, else
 /// nothing — how to work the editor is its hover ([`GESTURE_HELP`]).

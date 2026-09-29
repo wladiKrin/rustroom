@@ -124,7 +124,7 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         let name = format!("Delete {}", spec.accessible);
         let r = ui
             .interact(cell, resp.id.with("delete"), egui::Sense::click())
-            .on_hover_text("Delete");
+            .on_hover_text("Deletes this mask");
         r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
         delete = r.clicked();
         if r.hovered() {
@@ -142,10 +142,7 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         let name = format!("Show {}", spec.accessible);
         let r = ui
             .interact(cell, resp.id.with("eye"), egui::Sense::click())
-            .on_hover_text(
-                "Shows the overlay on the image, so you can see what it covers. Any number can \
-                 be shown at once.",
-            );
+            .on_hover_text("Shows this mask's overlay on the photo");
         r.widget_info(|| {
             egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, &name)
         });

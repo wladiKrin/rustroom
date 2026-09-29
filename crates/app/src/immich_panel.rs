@@ -31,15 +31,13 @@ fn row_actions(downloaded: Option<(usize, usize)>) -> Vec<list_row::RowAction<'s
     let download = list_row::RowAction {
         glyph: '\u{2b07}',
         verb: "Download",
-        hover: "Download every photo here now, so they are available offline",
+        hover: "Downloads every photo here for offline use",
         enabled: true,
     };
     let remove = list_row::RowAction {
         glyph: '\u{d7}',
         verb: "Remove downloads",
-        hover:
-            "Deletes only the local copies. The photos stay on your Immich server, and your edits \
-                and ratings are kept.",
+        hover: "Deletes the local copies only, keeping the photos on your Immich server",
         enabled: true,
     };
     match downloaded {
@@ -171,7 +169,7 @@ pub fn body(app: &RustroomApp, ui: &mut egui::Ui) -> Action {
                         meta: "",
                         selected,
                         indent: 0.0,
-                        hover: "Photos are downloaded when you open them",
+                        hover: "Shows these photos, downloading each one when you open it",
                         actions: &acts,
                     },
                 );
@@ -248,7 +246,7 @@ pub fn body(app: &RustroomApp, ui: &mut egui::Ui) -> Action {
                                         meta: "",
                                         selected,
                                         indent: 8.0,
-                                        hover: "Photos are downloaded when you open them",
+                                        hover: "Shows these photos, downloading each one when you open it",
                                         actions: &[],
                                     },
                                 );

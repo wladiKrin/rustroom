@@ -32,6 +32,16 @@ impl HslChannel {
         }
     }
 
+    /// The tab the band sliders' hover sentences describe.
+    pub fn help_tab(self) -> rustroom_app::slider_help::HslTab {
+        use rustroom_app::slider_help::HslTab;
+        match self {
+            Self::Hue => HslTab::Hue,
+            Self::Saturation => HslTab::Saturation,
+            Self::Luminance => HslTab::Luminance,
+        }
+    }
+
     /// The band field this channel edits.
     pub fn value_mut(self, band: &mut HslBand) -> &mut f32 {
         match self {
@@ -177,10 +187,10 @@ pub(crate) fn white_balance(
     let r = ui.add(
         super::slider::Slider::new(&mut mired, MIRED_MIN..=MIRED_MAX)
             .text("Temp")
-            .help(
-                rustroom_app::slider_help::text("Temp")
-                    .map(|h| format!("{h} Double-click resets it.")),
-            )
+            .help(rustroom_app::slider_help::text(
+                rustroom_app::slider_help::Scope::Global,
+                "Temp",
+            ))
             .custom_formatter(|m| format!("{:.0} K", 1.0e6 / m))
             .custom_parser(|s| {
                 s.trim()
@@ -215,7 +225,9 @@ pub(crate) fn white_balance(
             // saying so.
             if ui
                 .selectable_label(*picking, "Pick a neutral")
-                .on_hover_text("Click something in the photo that should be grey")
+                .on_hover_text(
+                    "Sets white balance from a spot you click that should be neutral grey",
+                )
                 .clicked()
             {
                 *picking = !*picking;
@@ -243,7 +255,9 @@ pub(crate) fn white_balance(
             }
         })
         .response
-        .on_hover_text("Named illuminants — each one just moves the Temp slider");
+        .on_hover_text(
+            "Sets the temperature for a common light source such as daylight or tungsten",
+        );
     });
 }
 
@@ -301,7 +315,7 @@ pub(crate) fn tone(
     // its Auto on its own row in the Tone panel for the same reason.
     if ui
         .button("Auto")
-        .on_hover_text("Sets Exposure, Whites and Blacks from the histogram")
+        .on_hover_text("Sets Exposure, Whites and Blacks automatically from the histogram")
         .clicked()
     {
         rustroom_app::auto_tone_tool::apply(edits, buffer, baseline_ev);
@@ -365,8 +379,7 @@ pub(crate) fn tone(
         -100.0..=100.0,
         "Texture",
         0.0,
-    )
-    .on_hover_text("Fine surface detail. Negative smooths texture while keeping edges sharp; positive crisps detail along edges too.");
+    );
     ed.slider(
         ui,
         &mut edits.local_contrast.clarity,
@@ -510,8 +523,7 @@ pub fn show(
             theme::sub_label_hover(
                 ui,
                 "Adjust individual colors",
-                "HSL — shift the hue, saturation or brightness of one color at a time, leaving the \
-                 others alone.",
+                "Adjusts the hue, saturation and brightness of each colour separately (HSL)",
             );
             // ⚠ Shared with a mask's own HSL block — see `hsl_bands`. One layout learned once.
             hsl_bands::show(ui, &mut edits.hsl, hsl_channel, ed);
@@ -531,8 +543,7 @@ pub fn show(
             // grading" is carried by the checkbox's hover rather than half-added here.
             theme::sub_label_with(ui, "Tint by tone", |ui| {
                 ui.checkbox(show_grade_range, "Show range").on_hover_text(
-                    "Tints the photograph where the selected range reaches. Affects only what you \
-                 see — never the render, the export or the histogram.",
+                    "Tints the preview where the selected range applies, without changing the photo",
                 );
             });
             theme::segmented(
@@ -546,6 +557,7 @@ pub fn show(
                 // which need the struct itself.
                 color_wheel::show(ui, &mut edits.color_grading, *grade_range, diameter, ed);
                 let w = grade_range.wheel_mut(&mut edits.color_grading);
+                ed.help_scope = rustroom_app::slider_help::Scope::TintByTone;
                 ed.slider(ui, &mut w.hue, 0.0..=360.0, "Hue", 0.0);
                 // ⚠⚠ `Strength`, not `Saturation`: the global Saturation slider and HSL's Saturation channel both
                 // mean **the image's chroma**, while this means **how much tint is applied** — the same word
@@ -574,6 +586,7 @@ pub fn show(
                 edit_model::ColorGrading::default().blending,
             );
             ed.slider(ui, &mut g.balance, -100.0..=100.0, "Balance", 0.0);
+            ed.help_scope = rustroom_app::slider_help::Scope::Global;
             // ⚠ Two inputs, one value on the wire, derived here because this is the one place the
             // checkbox and the selector are both in scope. Change-guarded: this body runs every
             // frame, and an unguarded write would request a render sixty times a second.
@@ -590,6 +603,7 @@ pub fn show(
         // sharpening, and it is the pipeline's own order. A deliberate divergence from
         // Lightroom, which puts Sharpening first.
         theme::sub_label(ui, "Noise reduction");
+        ed.help_scope = rustroom_app::slider_help::Scope::NoiseReduction;
         let nr = &mut edits.noise_reduction;
         ed.slider(ui, &mut nr.luminance, 0.0..=100.0, "Luminance", 0.0);
         ed.slider(
@@ -608,6 +622,7 @@ pub fn show(
             edit_model::NoiseReduction::default().smoothness,
         );
         theme::sub_label(ui, "Sharpening");
+        ed.help_scope = rustroom_app::slider_help::Scope::Sharpening;
         let sh = &mut edits.sharpening;
         ed.slider(ui, &mut sh.amount, 0.0..=100.0, "Amount", 0.0);
         // The one slider not on a 0..100 scale: a physical quantity in full-resolution
@@ -627,6 +642,7 @@ pub fn show(
             edit_model::Sharpening::default().detail,
         );
         ed.slider(ui, &mut sh.masking, 0.0..=100.0, "Masking", 0.0);
+        ed.help_scope = rustroom_app::slider_help::Scope::Global;
     });
 
     // ⚠ Its own section rather than a block inside Detail, and its own edit group with it. They
@@ -664,6 +680,7 @@ pub fn show(
             //
             // ⚠ "Scale", not "Crop": only *pincushion* correction empties the frame, and barrel
             // correction's autoscale is exactly 1, so on many photos this does nothing at all.
+            ed.help_scope = rustroom_app::slider_help::Scope::Lens;
             let scaled = ed
                 .slider(
                     ui,
@@ -673,6 +690,7 @@ pub fn show(
                     edit_model::LensCorrection::default().scale,
                 )
                 .changed();
+            ed.help_scope = rustroom_app::slider_help::Scope::Global;
             if touched || scaled {
                 edits.lens_correction = Some(l);
             }
@@ -688,6 +706,7 @@ pub fn show(
 
     section(ui, SECTIONS[5], false, edits, ed, |ui, edits, ed| {
         let v = &mut edits.vignette;
+        ed.help_scope = rustroom_app::slider_help::Scope::Vignette;
         ed.slider(ui, &mut v.amount, -100.0..=100.0, "Amount", 0.0);
         ed.slider(
             ui,
@@ -704,6 +723,7 @@ pub fn show(
             "Feather",
             edit_model::Vignette::default().feather,
         );
+        ed.help_scope = rustroom_app::slider_help::Scope::Global;
     });
 }
 
@@ -1217,11 +1237,13 @@ mod tests {
         crate::test_ui::click(&ctx, "Advanced color", &mut body);
         let labels = crate::test_ui::slider_labels(&ctx, &mut body);
         assert!(labels.len() > 30, "only {} sliders found", labels.len());
-        let mute: Vec<&String> = labels
-            .iter()
-            .filter(|l| rustroom_app::slider_help::text(l).is_none())
-            .collect();
-        assert!(mute.is_empty(), "sliders without help: {mute:?}");
+        // ⚠ What the sliders actually looked up — scope and label — not the labels alone: "Detail"
+        // is two different sentences, and only the drawn pair says which one a slider got.
+        assert!(
+            ed.missing_help.is_empty(),
+            "sliders without help: {:?}",
+            ed.missing_help
+        );
     }
 
     struct RangePanel {

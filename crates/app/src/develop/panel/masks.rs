@@ -151,22 +151,22 @@ fn add_controls(
         (
             None,
             "New mask",
-            "Starts a fresh mask with the next kind you pick.",
+            "Starts a new mask with the next kind you pick",
         ),
         (
             Some(edit_model::MaskOp::Add),
             edit_model::MaskOp::Add.label(),
-            "Adds the next shape to the selected mask, widening it.",
+            "Adds the next shape to the selected mask",
         ),
         (
             Some(edit_model::MaskOp::Subtract),
             edit_model::MaskOp::Subtract.label(),
-            "Cuts the next shape out of the selected mask.",
+            "Cuts the next shape out of the selected mask",
         ),
         (
             Some(edit_model::MaskOp::Intersect),
             edit_model::MaskOp::Intersect.label(),
-            "Keeps only where the selected mask and the next shape both reach.",
+            "Keeps only where the selected mask and the next shape overlap",
         ),
     ];
     // ⚠ Taller and in the body face: this is the panel's primary control, and the compact
@@ -235,7 +235,7 @@ fn show_all_row(ui: &mut egui::Ui, s: &mut Session) {
         |ui| {
             clicked = ui
                 .small_button(label)
-                .on_hover_text("Every mask's eye at once: show all the overlays, or none")
+                .on_hover_text("Shows or hides every mask's overlay at once")
                 .clicked();
         },
     );
@@ -354,6 +354,25 @@ fn shape_block(
     brush: &mut BrushTool<'_>,
     ed: &mut Edited,
 ) {
+    // ⚠ The shape decides what "Size" and "Feather" mean in the hover (`slider_help::Scope`).
+    ed.help_scope = match shape {
+        edit_model::Mask::Brush(_) => rustroom_app::slider_help::Scope::Brush,
+        edit_model::Mask::Radial(_) => rustroom_app::slider_help::Scope::Radial,
+        edit_model::Mask::Luminance(_) => rustroom_app::slider_help::Scope::LuminanceRange,
+        edit_model::Mask::Colour(_) => rustroom_app::slider_help::Scope::ColourRange,
+        _ => rustroom_app::slider_help::Scope::Global,
+    };
+    shape_controls(ui, shape, brush, ed);
+    ed.help_scope = rustroom_app::slider_help::Scope::Global;
+}
+
+/// [`shape_block`]'s body, inside its scope.
+fn shape_controls(
+    ui: &mut egui::Ui,
+    shape: &mut edit_model::Mask,
+    brush: &mut BrushTool<'_>,
+    ed: &mut Edited,
+) {
     if matches!(shape, edit_model::Mask::Brush(_)) {
         ed.slider(
             ui,
@@ -361,10 +380,6 @@ fn shape_block(
             4.0..=300.0,
             "Size",
             rustroom_app::brush_tool::DEFAULTS.size,
-        )
-        .on_hover_text(
-            "Brush diameter, in pixels of the full-resolution photo. Drag on the image to \
-                 paint.",
         );
         ed.slider(
             ui,
@@ -372,24 +387,19 @@ fn shape_block(
             0.0..=100.0,
             "Hardness",
             rustroom_app::brush_tool::DEFAULTS.hardness,
-        )
-        .on_hover_text("Shapes the edge: hard is a crisp stroke, soft fades out.");
+        );
         ed.slider(
             ui,
             &mut *brush.flow,
             1.0..=100.0,
             "Flow",
             rustroom_app::brush_tool::DEFAULTS.flow,
-        )
-        .on_hover_text("Strength of one pass; repeated passes build up.");
+        );
         invert_box(ui, shape, ed);
         ui.checkbox(&mut *brush.erase, "Erase")
-            .on_hover_text("Strokes remove coverage instead of adding it.");
+            .on_hover_text("Paints away from the mask instead of adding to it");
         ui.checkbox(&mut *brush.auto_mask, "Auto mask")
-            .on_hover_text(
-                "Paints only what matches the pixel under the brush centre. Applies to new \
-                 strokes.",
-            );
+            .on_hover_text("Paints only where the colour matches the one under the brush's centre");
         ui.add_enabled_ui(*brush.auto_mask, |ui| {
             ed.slider(
                 ui,
@@ -397,8 +407,7 @@ fn shape_block(
                 0.0..=100.0,
                 "Tolerance",
                 rustroom_app::brush_tool::DEFAULTS.tolerance,
-            )
-            .on_hover_text("How far from the centre pixel's colour auto mask still paints.");
+            );
         });
         return;
     }
@@ -410,74 +419,59 @@ fn shape_block(
             0.0..=100.0,
             "Feather",
             edit_model::RadialGradient::default().feather,
-        )
-        .on_hover_text("How softly the edge falls off.");
+        );
     }
     if let edit_model::Mask::Luminance(r) = shape {
-        const SCALE: &str = "Selects tones by brightness — 0 is black, 100 is white, the same \
-                             scale as the histogram.";
         ed.slider(
             ui,
             &mut r.low,
             0.0..=100.0,
             "Range low",
             edit_model::LuminanceRange::default().low,
-        )
-        .on_hover_text(SCALE);
+        );
         ed.slider(
             ui,
             &mut r.high,
             0.0..=100.0,
             "Range high",
             edit_model::LuminanceRange::default().high,
-        )
-        .on_hover_text(SCALE);
+        );
         ed.slider(
             ui,
             &mut r.feather,
             0.0..=100.0,
             "Feather",
             edit_model::LuminanceRange::default().feather,
-        )
-        .on_hover_text("Widens the range with a soft shoulder either side.");
+        );
     }
     if let edit_model::Mask::Colour(r) = shape {
-        const WHEEL: &str = "Degrees around the wheel. The band wraps, so 340 to 20 selects \
-                             the reds either side of zero.";
         ed.slider(
             ui,
             &mut r.low,
             0.0..=360.0,
             "Hue low",
             edit_model::ColourRange::default().low,
-        )
-        .on_hover_text(WHEEL);
+        );
         ed.slider(
             ui,
             &mut r.high,
             0.0..=360.0,
             "Hue high",
             edit_model::ColourRange::default().high,
-        )
-        .on_hover_text(WHEEL);
+        );
         ed.slider(
             ui,
             &mut r.feather,
             0.0..=100.0,
             "Feather",
             edit_model::ColourRange::default().feather,
-        )
-        .on_hover_text("Widens the band with a soft shoulder either side.");
+        );
         ed.slider(
             ui,
             &mut r.min_chroma,
             0.0..=0.15,
             "Min chroma",
             edit_model::ColourRange::default().min_chroma,
-        )
-        .on_hover_text(
-            "Stops a near-neutral sky being selected: below it a pixel has no reliable \
-                 hue, only sensor noise.",
         );
     }
     // M9.13: an AI mask's one control. The network's soft map is thresholded; Refine moves the
@@ -494,7 +488,7 @@ fn shape_block(
 fn invert_box(ui: &mut egui::Ui, shape: &mut edit_model::Mask, ed: &mut Edited) {
     if ui
         .checkbox(shape.invert_mut(), "Invert")
-        .on_hover_text("Flips the shape: where it reached becomes where it does not.")
+        .on_hover_text("Inverts the mask so it covers everything it did not")
         .changed()
     {
         ed.discrete();

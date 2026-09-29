@@ -237,7 +237,7 @@ fn now_row(ui: &mut egui::Ui, drift: &str, action: &mut Action) {
                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
             |ui| {
                 ui.add(egui::Button::new("+ Save").min_size(egui::vec2(0.0, 22.0)))
-                    .on_hover_text("Save the current settings as a snapshot")
+                    .on_hover_text("Saves the current settings as a snapshot")
             },
         )
         .inner;
@@ -371,13 +371,13 @@ fn row(
                 RowAction {
                     glyph: '×',
                     verb: "Delete",
-                    hover: "Delete this snapshot",
+                    hover: "Deletes this snapshot",
                     enabled: true,
                 },
                 RowAction {
                     glyph: icons::COPY,
                     verb: "Make a virtual copy from",
-                    hover: "Make a virtual copy with these settings",
+                    hover: "Makes a virtual copy with this snapshot's settings",
                     enabled: true,
                 },
             ],

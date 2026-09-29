@@ -54,9 +54,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             egui::vec2(ui.available_width(), ui.spacing().interact_size.y + 4.0),
             egui::Layout::right_to_left(egui::Align::Center),
             |ui| {
-                let r = ui.button("+ Save current…").on_hover_text(
-                    "Keeps this photo's settings as a preset, under a name you give it",
-                );
+                let r = ui
+                    .button("+ Save current…")
+                    .on_hover_text("Saves this photo's settings as a new preset");
                 // ⚠ The accessible name is the old sentence: the harness and a screen reader
                 // get what the button does, not its short form.
                 let enabled = ui.is_enabled();

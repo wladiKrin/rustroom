@@ -23,14 +23,9 @@ use rustroom_app::selection::Selection;
 use rustroom_app::thumb_loader::ThumbRequest;
 use rustroom_app::tile_layout;
 
-/// The hint line under the toolbar. Also swept by `theme::every_menu_string_is_renderable`.
 /// A cell whose image area exceeds this on either side draws the preview rather than the
 /// 512-px thumbnail (M9.14).
 pub(crate) const PREVIEW_CELL_PX: f32 = 512.0;
-
-pub(crate) const INSTRUCTION: &str =
-    "Arrows move · digits rate · P and X decide it and take it off the wall · \
-     Enter opens · pinch or ctrl+scroll resizes";
 
 /// What one frame of Survey decided, applied after the closure that borrows `app.library`.
 #[derive(Default)]
@@ -358,13 +353,13 @@ fn tile_buttons(
             "⚑",
             TileAction::Pick,
             egui::Color32::from_rgb(120, 200, 130),
-            "Pick — flag it as a keeper",
+            "Flags this photo as a pick",
         ),
         (
             "×",
             TileAction::Remove,
             egui::Color32::from_rgb(230, 110, 110),
-            "Take it off the wall without rejecting it",
+            "Takes this photo out of the survey without rejecting it",
         ),
     ]
     .into_iter()

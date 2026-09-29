@@ -408,6 +408,26 @@ pub(crate) const EXTRA_KEYS: &[(&str, &[(&str, &str)])] = &[
             ("Nudge a focused one", "← →"),
         ],
     ),
+    // ⚠ Compare's and Survey's keys were a line of 11-pt text across the top of each view until
+    // 2026-09-29; explanations do not stand on screen any more (`docs/DESIGN.md` §8), so they are
+    // listed here with every other key.
+    (
+        "Compare",
+        &[
+            ("Move the bordered photo", "← →"),
+            ("Move the border", "Enter or a click"),
+            ("Pan or zoom one pane", "scroll or pinch"),
+        ],
+    ),
+    (
+        "Survey",
+        &[
+            ("Move", "arrow keys"),
+            ("Pick or reject, and take it off the wall", "P or X"),
+            ("Open in Develop", "Enter"),
+            ("Resize the tiles", "pinch or ⌃ scroll"),
+        ],
+    ),
     ("Also", &[("Compare", "Y")]),
 ];
 

@@ -1,125 +1,375 @@
 //! One plain sentence for every Develop slider, shown when the pointer rests on its name.
 //!
-//! ⚠ Keyed on the **label** alone, because that is all `Edited::slider` knows. A handful of
-//! labels serve two sections ("Amount", "Detail", "Luminance"); their sentences name both
-//! meanings rather than guessing. The panel tests assert that every slider they draw has an
-//! entry here, so a new slider without one fails the gate instead of shipping mute.
+//! ⚠⚠ **Keyed on the slider's scope as well as its label** (2026-09-29, the author's call). A label
+//! alone could not say what "Detail" does: noise reduction and sharpening both have one, and the
+//! old sentence described both ("hovering over Detail in Noise reduction also tells me about the
+//! Detail in Sharpening"). Each block now sets its [`Scope`] on `Edited` before drawing, and a
+//! label that means different things in different blocks lives **only** in the scoped tables —
+//! never in [`GLOBAL`] — so a block that forgets its scope shows no help, and the panel tests
+//! (which assert that no slider went without help) fail instead of shipping the wrong sentence.
 //!
-//! ⚠ Every sentence ends with the period and nothing else: `Edited::slider` appends the reset
-//! hint, so it is written once, not fifty times.
+//! The house style, checked by `every_sentence_is_one_short_sentence`: one sentence that says what
+//! the control does, starting with the verb, no full stop, no reset hint (double-click to reset is
+//! the same for every slider and is not repeated on each), no warnings, no history.
 
-/// The help sentence for a slider label, if it has one.
-pub fn text(label: &str) -> Option<&'static str> {
-    Some(match label {
-        // White balance
-        "Temp" => "Warmer or cooler overall, in kelvin — the colour of the light the photo was taken in.",
-        "Tint" => "Green to magenta, the other axis of white balance.",
-        // Tone
-        "Exposure" => "Overall brightness, in stops: +1 is twice as bright.",
-        "Contrast" => "Spreads the tones apart (bright brighter, dark darker) or pulls them together.",
-        "Highlights" => "Brings the bright parts down or up without touching the rest.",
-        "Shadows" => "Lifts the dark parts or deepens them, leaving the bright parts alone.",
-        "Whites" => "Where pure white sits: down to recover a blown sky, up for more punch.",
-        "Blacks" => "Where pure black sits: up for a lifted, softer look, down for depth.",
-        // Presence
-        "Texture" => "Fine detail — pores, grain, fabric — sharper or smoother, without haloes.",
-        "Clarity" => "Punch in the mid-sized detail; negative gives a soft, dreamy look.",
-        "Dehaze" => "Cuts through haze and mist, or adds it. Also raises contrast and saturation.",
-        // Colour
-        "Vibrance" => "Boosts the muted colours most and protects skin tones — the safer saturation.",
-        "Saturation" => "All colours stronger or weaker alike; −100 is black and white.",
-        // Tint by tone
-        "Hue" => "Which colour the tint leans toward, around the wheel.",
-        "Strength" => "How much of the tint or the look is applied.",
-        "Blending" => "How far the shadow and highlight tints overlap in the midtones.",
-        "Balance" => "Shifts the crossover between the shadow tint and the highlight tint.",
-        // HSL bands
-        "Red" | "Orange" | "Yellow" | "Green" | "Aqua" | "Blue" | "Purple" | "Magenta" => {
-            "Just this colour: its hue, saturation or brightness, whichever tab is open."
+/// Where a slider sits, when its label alone does not say what it does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Scope {
+    /// Labels that mean one thing everywhere.
+    #[default]
+    Global,
+    /// The tone curve's Parametric sliders.
+    Parametric,
+    /// The HSL bands, on one of the three tabs.
+    Hsl(HslTab),
+    /// Tint by tone (color grading).
+    TintByTone,
+    /// A creative look's strength.
+    Look,
+    NoiseReduction,
+    Sharpening,
+    Vignette,
+    /// The Lens section's own scale.
+    Lens,
+    /// A brush mask's tool settings.
+    Brush,
+    /// A radial mask's edge.
+    Radial,
+    /// A luminance-range mask.
+    LuminanceRange,
+    /// A colour-range mask.
+    ColourRange,
+    /// A heal or clone patch.
+    Patch,
+    /// A red-eye or pet-eye correction.
+    Eye,
+}
+
+/// The HSL bands' three tabs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HslTab {
+    Hue,
+    Saturation,
+    Luminance,
+}
+
+/// Labels that mean the same thing wherever they are drawn.
+const GLOBAL: &[(&str, &str)] = &[
+    // White balance
+    ("Temp", "Shifts the colour balance warmer or cooler, in kelvin"),
+    ("Tint", "Shifts the colour balance toward green or magenta"),
+    // Tone
+    ("Exposure", "Brightens or darkens the picture, in stops"),
+    ("Contrast", "Pushes the bright and dark tones apart, or pulls them together"),
+    ("Highlights", "Darkens or brightens the brightest areas"),
+    ("Shadows", "Brightens or darkens the darkest areas"),
+    ("Whites", "Sets how bright the brightest tones get"),
+    ("Blacks", "Sets how dark the darkest tones get"),
+    // Presence
+    ("Texture", "Sharpens or smooths fine surface detail such as skin, grain and fabric"),
+    ("Clarity", "Adds or removes contrast in mid-sized detail"),
+    ("Dehaze", "Removes haze, or adds it when negative"),
+    // Colour
+    ("Vibrance", "Strengthens muted colours more than vivid ones, sparing skin tones"),
+    ("Saturation", "Makes every colour stronger or weaker by the same amount"),
+    // Lens and defringe
+    ("Lens scale", "Zooms in to hide the edges that lens correction pulls in"),
+    ("Purple amount", "Removes purple fringes along high-contrast edges"),
+    ("Green amount", "Removes green fringes along high-contrast edges"),
+    ("Min chroma", "Ignores colours too faint to be a fringe"),
+    (
+        "Defringe",
+        "Removes colour fringes inside this mask, or shields it from the global defringe when negative",
+    ),
+    // Geometry
+    ("Angle", "Rotates the photo to straighten it, in degrees"),
+    ("Vertical", "Corrects verticals that converge, as when a building leans back"),
+    ("Horizontal", "Corrects a subject that is turned to the left or right"),
+    ("Aspect ⬍ ⬌", "Stretches the photo taller or wider to undo a keystone's squashing"),
+    ("Scale", "Shrinks the corrected photo to fit the frame, or enlarges it to fill the corners"),
+    // Masks
+    ("Refine", "Grows or shrinks the edge of the selection"),
+];
+
+const PARAMETRIC: &[(&str, &str)] = &[
+    (
+        "Highlights",
+        "Raises or lowers the brightest part of the curve",
+    ),
+    ("Lights", "Raises or lowers the upper midtones of the curve"),
+    ("Darks", "Raises or lowers the lower midtones of the curve"),
+    ("Shadows", "Raises or lowers the darkest part of the curve"),
+];
+
+const TINT_BY_TONE: &[(&str, &str)] = &[
+    ("Hue", "Sets the colour of this range's tint"),
+    ("Strength", "Sets how strongly this range is tinted"),
+    ("Luminance", "Brightens or darkens this range"),
+    (
+        "Blending",
+        "Sets how far the shadow and highlight tints overlap",
+    ),
+    (
+        "Balance",
+        "Moves the boundary between the shadow and highlight tints",
+    ),
+];
+
+const LOOK: &[(&str, &str)] = &[("Strength", "Sets how much of the look is applied")];
+
+const NOISE_REDUCTION: &[(&str, &str)] = &[
+    ("Luminance", "Smooths the grain in brightness"),
+    (
+        "Detail",
+        "Keeps fine texture from being smoothed away with the grain",
+    ),
+    ("Color", "Removes coloured speckles from the noise"),
+    ("Smoothness", "Blends away larger blotches of colour noise"),
+];
+
+const SHARPENING: &[(&str, &str)] = &[
+    ("Amount", "Sets how strongly edges are sharpened"),
+    (
+        "Radius (px)",
+        "Sets how wide each sharpened edge is, in pixels",
+    ),
+    ("Detail", "Sharpens fine texture as well as edges"),
+    (
+        "Masking",
+        "Limits sharpening to edges, sparing smooth areas like sky and skin",
+    ),
+];
+
+const VIGNETTE: &[(&str, &str)] = &[
+    (
+        "Amount",
+        "Darkens the corners, or lightens them when positive",
+    ),
+    (
+        "Midpoint",
+        "Sets how far the vignette reaches toward the centre",
+    ),
+    (
+        "Roundness",
+        "Makes the vignette rounder or more rectangular",
+    ),
+    ("Feather", "Softens the vignette's edge"),
+];
+
+const LENS: &[(&str, &str)] = &[(
+    "Scale",
+    "Zooms in to hide the edges that lens correction pulls in",
+)];
+
+const BRUSH: &[(&str, &str)] = &[
+    ("Size", "Sets the brush diameter, in pixels of the photo"),
+    ("Hardness", "Makes the brush's edge crisp or soft"),
+    (
+        "Flow",
+        "Sets how much each stroke adds, so low values build up gradually",
+    ),
+    (
+        "Tolerance",
+        "Sets how different a colour may be from the one under the brush and still be painted",
+    ),
+];
+
+const RADIAL: &[(&str, &str)] = &[("Feather", "Softens the edge of the ellipse")];
+
+const LUMINANCE_RANGE: &[(&str, &str)] = &[
+    (
+        "Range low",
+        "Sets the darkest tone the mask selects, from 0 black to 100 white",
+    ),
+    (
+        "Range high",
+        "Sets the brightest tone the mask selects, from 0 black to 100 white",
+    ),
+    ("Feather", "Softens the ends of the tonal range"),
+];
+
+const COLOUR_RANGE: &[(&str, &str)] = &[
+    (
+        "Hue low",
+        "Sets where the selected band of colours starts, in degrees around the wheel",
+    ),
+    (
+        "Hue high",
+        "Sets where the selected band of colours ends, in degrees around the wheel",
+    ),
+    ("Feather", "Softens the ends of the colour band"),
+    (
+        "Min chroma",
+        "Leaves out colours too faint to have a reliable hue",
+    ),
+];
+
+const PATCH: &[(&str, &str)] = &[
+    ("Size", "Sets the patch's radius, in pixels of the photo"),
+    ("Feather", "Softens the patch's edge"),
+];
+
+const EYE: &[(&str, &str)] = &[
+    (
+        "Pupil Size",
+        "Sets how far the correction reaches into the eye",
+    ),
+    ("Darken", "Sets how dark the corrected pupil becomes"),
+];
+
+fn table(scope: Scope) -> &'static [(&'static str, &'static str)] {
+    match scope {
+        Scope::Global | Scope::Hsl(_) => &[],
+        Scope::Parametric => PARAMETRIC,
+        Scope::TintByTone => TINT_BY_TONE,
+        Scope::Look => LOOK,
+        Scope::NoiseReduction => NOISE_REDUCTION,
+        Scope::Sharpening => SHARPENING,
+        Scope::Vignette => VIGNETTE,
+        Scope::Lens => LENS,
+        Scope::Brush => BRUSH,
+        Scope::Radial => RADIAL,
+        Scope::LuminanceRange => LUMINANCE_RANGE,
+        Scope::ColourRange => COLOUR_RANGE,
+        Scope::Patch => PATCH,
+        Scope::Eye => EYE,
+    }
+}
+
+fn find(t: &[(&str, &'static str)], label: &str) -> Option<&'static str> {
+    t.iter().find(|(l, _)| *l == label).map(|(_, s)| *s)
+}
+
+/// The HSL band names, as the panel labels them.
+const BANDS: [&str; 8] = [
+    "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta",
+];
+
+/// The help sentence for a slider, if it has one: the scope's own table first, then [`GLOBAL`].
+pub fn text(scope: Scope, label: &str) -> Option<String> {
+    if let Scope::Hsl(tab) = scope {
+        if BANDS.contains(&label) {
+            // The band as a plural — "the reds", "the aquas" — which is how a colour range is said.
+            let band = format!("{}s", label.to_lowercase());
+            return Some(match tab {
+                HslTab::Hue => format!("Shifts the {band} toward the neighbouring hues"),
+                HslTab::Saturation => format!("Makes the {band} stronger or weaker"),
+                HslTab::Luminance => format!("Makes the {band} brighter or darker"),
+            });
         }
-        // Parametric curve
-        "Lights" => "The brighter midtones, without moving the extremes.",
-        "Darks" => "The darker midtones, without moving the extremes.",
-        // Detail — noise reduction and sharpening share three labels
-        "Luminance" => "In noise reduction, how much grain is smoothed; under Tint by tone, how bright that range is.",
-        "Detail" => "How much fine texture survives: in noise reduction, texture kept; in sharpening, texture sharpened.",
-        "Color" => "Smooths the coloured speckle in noise, without blurring the picture.",
-        "Smoothness" => "How gently colour noise is blended; higher hides blotches.",
-        "Amount" => "How strong it is: the sharpening in Detail, the darkened corners in Vignette.",
-        "Radius (px)" => "How wide a halo sharpening may draw; small for fine detail, larger for soft photos.",
-        "Masking" => "Sharpens edges only; higher leaves smooth areas such as sky and skin alone.",
-        // Lens and defringe
-        "Lens scale" => "Zooms in slightly to hide the edges lens correction pulls in.",
-        "Purple amount" => "How much purple colour fringing along dark edges is removed.",
-        "Green amount" => "How much green colour fringing along dark edges is removed.",
-        "Defringe" => "Negative protects this area from the Lens panel's defringe; positive removes purple and green fringes here with its hue ranges.",
-        "Min chroma" => "How saturated a colour must be before defringing treats it as a fringe.",
-        // Vignette
-        "Midpoint" => "How far from the corners the darkening starts.",
-        "Roundness" => "Rounder or squarer corners of the vignette.",
-        "Feather" => "How soft the edge is: of the vignette, or of a retouch patch.",
-        // Geometry
-        "Angle" => "Rotates to straighten a tilted horizon, in degrees. Editing it by hand clears any perspective guides.",
-        "Vertical" => "Keystone about the horizontal axis — for a subject leaning back or forward.",
-        "Horizontal" => "Keystone about the vertical axis — for a subject turned left or right.",
-        "Aspect ⬍ ⬌" => "Stretches the frame: negative taller ⬍, positive wider ⬌. Counteracts the squashing a keystone correction causes.",
-        "Scale" => "−100 fits the whole corrected image inside the frame; 0 leaves it raw, which clips whatever the correction pushes off the edges; +100 zooms in until no black corners remain.",
-        // Masks
-        "Refine" => "Grows (+) or shrinks (−) the selection's edge. The network's answer is kept, so this is instant.",
-        "Size" => "How big the brush or the patch is, in pixels of the photo.",
-        "Flow" => "How much each brush stroke adds; low builds up gradually.",
-        "Hardness" => "A crisp or a soft brush edge.",
-        "Tolerance" => "How different a colour may be and still count as the one you picked.",
-        "Range low" => "The darkest brightness the mask includes.",
-        "Range high" => "The brightest brightness the mask includes.",
-        "Hue low" => "The start of the colour range the mask includes.",
-        "Hue high" => "The end of the colour range the mask includes.",
-        // Retouch
-        "Darken" => "How dark the corrected pupil becomes.",
-        "Pupil Size" => "How large the corrected pupil is drawn.",
-        _ => return None,
-    })
+    }
+    find(table(scope), label)
+        .or_else(|| find(GLOBAL, label))
+        .map(str::to_owned)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The labels the panels that have no rendering harness use; the harnessed panels assert
-    /// coverage of what they actually draw.
+    const SCOPES: [Scope; 16] = [
+        Scope::Global,
+        Scope::Parametric,
+        Scope::Hsl(HslTab::Hue),
+        Scope::Hsl(HslTab::Saturation),
+        Scope::Hsl(HslTab::Luminance),
+        Scope::TintByTone,
+        Scope::Look,
+        Scope::NoiseReduction,
+        Scope::Sharpening,
+        Scope::Vignette,
+        Scope::Lens,
+        Scope::Brush,
+        Scope::Radial,
+        Scope::LuminanceRange,
+        Scope::ColourRange,
+        Scope::Patch,
+    ];
+
+    /// Every sentence the table can produce, with where it came from.
+    fn all() -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for scope in SCOPES.iter().copied().chain([Scope::Eye]) {
+            for (label, _) in table(scope).iter().chain(GLOBAL) {
+                out.push((
+                    format!("{scope:?}/{label}"),
+                    text(scope, label).expect("listed"),
+                ));
+            }
+            for band in BANDS {
+                if let Some(t) = text(scope, band) {
+                    out.push((format!("{scope:?}/{band}"), t));
+                }
+            }
+        }
+        out
+    }
+
+    /// ⚠⚠ The author's rule (2026-09-29): "it should simply state what it does exactly in one,
+    /// clear sentence", and no "Double-click to reset" on each. Checked over every sentence the
+    /// table can produce, so a new entry cannot drift back into paragraphs.
     #[test]
-    fn the_unharnessed_labels_have_help() {
-        for label in [
-            "Refine",
-            "Size",
-            "Flow",
-            "Hardness",
-            "Tolerance",
-            "Range low",
-            "Range high",
-            "Hue low",
-            "Hue high",
-            "Min chroma",
-            "Darken",
-            "Pupil Size",
-            "Purple amount",
-            "Green amount",
-            "Defringe",
-            "Lens scale",
-            "Lights",
-            "Darks",
-        ] {
-            let t = text(label).unwrap_or_else(|| panic!("{label} has no help"));
-            assert!(t.ends_with('.'), "{label}: {t:?} should end with a period");
+    fn every_sentence_is_one_short_sentence() {
+        let all = all();
+        assert!(all.len() > 60, "sample: {}", all.len());
+        for (at, t) in &all {
+            assert!(!t.ends_with('.'), "{at}: no full stop — {t:?}");
             assert!(
-                !t.contains("Double-click"),
-                "{label}: the reset hint is appended once, by the slider"
+                !t.contains(". ") && !t.contains("; "),
+                "{at}: one sentence — {t:?}"
+            );
+            assert!(
+                t.chars().count() <= 100,
+                "{at}: short — {} chars",
+                t.chars().count()
+            );
+            assert!(!t.to_lowercase().contains("double-click"), "{at}: {t:?}");
+            assert!(!t.contains('⚠'), "{at}: {t:?}");
+            assert!(t.starts_with(char::is_uppercase), "{at}: {t:?}");
+        }
+    }
+
+    /// ⚠ The reported case, both halves: each "Detail" names its own block and not the other.
+    #[test]
+    fn a_shared_label_says_what_it_does_where_it_is() {
+        let nr = text(Scope::NoiseReduction, "Detail").unwrap();
+        let sh = text(Scope::Sharpening, "Detail").unwrap();
+        assert_ne!(nr, sh);
+        assert!(!nr.to_lowercase().contains("sharpen"), "{nr}");
+        assert!(sh.to_lowercase().contains("sharpen"), "{sh}");
+        let hue = text(Scope::Hsl(HslTab::Hue), "Red").unwrap();
+        let lum = text(Scope::Hsl(HslTab::Luminance), "Red").unwrap();
+        assert!(
+            hue.contains("reds") && lum.contains("brighter"),
+            "{hue} / {lum}"
+        );
+    }
+
+    /// ⚠⚠ A label that means different things must have **no** global sentence, so a block that
+    /// forgets to set its scope gets nothing — and the panel tests fail — rather than a sentence
+    /// about somewhere else. Only the labels a scope overrides on purpose may appear in both.
+    #[test]
+    fn an_ambiguous_label_needs_its_scope() {
+        for label in [
+            "Detail",
+            "Amount",
+            "Luminance",
+            "Color",
+            "Feather",
+            "Size",
+            "Hue",
+            "Strength",
+        ] {
+            assert_eq!(
+                text(Scope::Global, label),
+                None,
+                "{label} has a global sentence"
             );
         }
     }
 
     #[test]
     fn an_unknown_label_has_none() {
-        assert_eq!(text("Flux capacitor"), None);
+        assert_eq!(text(Scope::Global, "Flux capacitor"), None);
     }
 }

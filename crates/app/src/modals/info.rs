@@ -9,8 +9,8 @@ use crate::RustroomApp;
 use eframe::egui;
 
 /// The description fields' hover. ⚠ It was a paragraph under them (`docs/DESIGN.md` §8).
-const SHARED_NOTE: &str = "Shared by every copy of this file. Written into exports and, for RAW \
-                           files, the XMP sidecar. The original is never modified.";
+const SHARED_NOTE: &str =
+    "Applies to every copy of this file and is written into exports and the XMP sidecar";
 
 /// A shutter speed as a photographer writes it.
 ///

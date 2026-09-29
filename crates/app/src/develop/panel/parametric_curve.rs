@@ -44,7 +44,7 @@ pub fn show(
                 *param != edit_model::ParametricCurve::default(),
                 egui::Button::new("Reset"),
             )
-            .on_hover_text("Return the four regions to zero and the splits to their defaults");
+            .on_hover_text("Resets the four regions and their boundaries");
         if r.clicked() {
             *param = edit_model::ParametricCurve::default();
             ed.mark_changed();
@@ -67,10 +67,9 @@ pub fn show(
     // ⚠ How to work it is the hover (`docs/DESIGN.md` §8); the line under it carries only a value.
     let resp = resp.on_hover_text(match binding {
         ParametricDrag::Left => {
-            "Drag the handles under the curve to move the regions · drag up or down on the curve \
-             to set the region under the pointer"
+            "Drag the handles below to move the region boundaries, or drag on the curve to adjust a region"
         }
-        ParametricDrag::Off => "Drag the handles under the curve to move the regions",
+        ParametricDrag::Off => "Drag the handles below to move the region boundaries",
     });
     let norm_x = |x: f32| ((x - rect.left()) / rect.width()).clamp(0.0, 1.0);
     let at = |n: [f32; 2]| {
@@ -175,7 +174,9 @@ pub fn show(
 
     // ---- the four sliders ---------------------------------------------------------------------
     for r in Region::ALL {
+        ed.help_scope = rustroom_app::slider_help::Scope::Parametric;
         ed.slider(ui, r.amount(param), -100.0..=100.0, r.label(), 0.0);
+        ed.help_scope = rustroom_app::slider_help::Scope::Global;
     }
     theme::hint(
         ui,

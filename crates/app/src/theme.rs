@@ -675,8 +675,6 @@ mod tests {
         let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {});
         let id = egui::FontId::proportional(14.0);
         let mut strings: Vec<String> = vec![
-            crate::multi::compare::INSTRUCTION.to_owned(),
-            crate::multi::survey::INSTRUCTION.to_owned(),
             crate::library::EMPTY_LIBRARY_HINT.to_owned(),
             crate::develop::canvas::EMPTY_DEVELOP_HINT.to_owned(),
         ];
@@ -1189,6 +1187,119 @@ mod tests {
             offenders.is_empty(),
             "literal font sizes outside theme (use a TextStyle or theme::tokens):\n{}",
             offenders.join("\n")
+        );
+    }
+
+    /// The string literal starting at `s[i]` (which is `"`), with `\` line continuations and the
+    /// common escapes resolved — enough to read a hover sentence out of the source.
+    fn literal_at(s: &str, i: usize) -> String {
+        let b: Vec<char> = s[i + 1..].chars().collect();
+        let (mut out, mut k) = (String::new(), 0);
+        while k < b.len() {
+            match b[k] {
+                '\\' if b.get(k + 1) == Some(&'\n') => {
+                    k += 2;
+                    while k < b.len() && (b[k] == ' ' || b[k] == '\t') {
+                        k += 1;
+                    }
+                }
+                '\\' => {
+                    out.push(match b.get(k + 1) {
+                        Some('n') => '\n',
+                        Some(c) => *c,
+                        None => '\\',
+                    });
+                    k += 2;
+                }
+                '"' => break,
+                c => {
+                    out.push(c);
+                    k += 1;
+                }
+            }
+        }
+        out
+    }
+
+    /// Every literal hover sentence in the app's sources, with where it is.
+    fn literal_hovers() -> Vec<(String, String)> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![root.clone()];
+        let mut found = Vec::new();
+        while let Some(dir) = stack.pop() {
+            for e in std::fs::read_dir(&dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                if p.extension().is_none_or(|x| x != "rs") {
+                    continue;
+                }
+                let src = std::fs::read_to_string(&p).unwrap();
+                let code = src.split("#[cfg(test)]").next().unwrap_or("");
+                let rel = p.strip_prefix(&root).unwrap().display().to_string();
+                // ⚠ The named hover constants too — the retouch modes, the profile note, the DNG note —
+                // which read exactly like call-site hovers once drawn.
+                for pat in [
+                    "on_hover_text(",
+                    "hover: ",
+                    "HINT: &str = ",
+                    "HELP: &str = ",
+                    "NOTE: &str = ",
+                    "HOVER: &str = ",
+                    "NOTHING: &str = ",
+                ] {
+                    let mut from = 0;
+                    while let Some(at) = code[from..].find(pat) {
+                        let start = from + at + pat.len();
+                        from = start;
+                        let rest = &code[start..];
+                        let lead = rest.len() - rest.trim_start().len();
+                        if rest.trim_start().starts_with('"') {
+                            let t = literal_at(code, start + lead);
+                            let line = code[..start].lines().count();
+                            found.push((format!("{rel}:{line}"), t));
+                        }
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    /// ⚠⚠ **The author's rule, 2026-09-29: a hover "should simply state what it does exactly in
+    /// one, clear sentence", and never "Double-click to reset".** Swept over every literal hover in
+    /// the sources so a paragraph cannot creep back in one reasonable-looking call at a time — the
+    /// way the 177 of them had become essays, warnings and measurements. `slider_help` checks its
+    /// own table the same way. ⚠ Sample and a positive control first.
+    #[test]
+    fn every_hover_is_one_short_sentence() {
+        assert_eq!(
+            literal_at("\"One \\\n     sentence.\"", 0),
+            "One sentence.",
+            "the reader must join a continued literal"
+        );
+        let all = literal_hovers();
+        assert!(all.len() > 80, "sample: {}", all.len());
+        let mut bad = Vec::new();
+        for (at, t) in &all {
+            let t = t.trim();
+            if t.is_empty() {
+                continue;
+            }
+            let long = t.chars().count() > 110;
+            let sentences = t.contains(". ") || t.contains('\n') || t.contains("; ");
+            let stop = t.ends_with('.') && !t.ends_with("…");
+            let noise = t.contains('⚠') || t.to_lowercase().contains("double-click to reset");
+            if long || sentences || stop || noise {
+                bad.push(format!("{at}: {t:?}"));
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "hovers that are not one short sentence:\n{}",
+            bad.join("\n")
         );
     }
 

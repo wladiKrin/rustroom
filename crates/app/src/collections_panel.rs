@@ -186,7 +186,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             meta: "",
                                             selected: showing_all,
                                             indent: 0.0,
-                                            hover: "Every photo in the catalog, from every folder ever opened",
+                                            hover: "Shows every photo in the catalog, from every folder you have opened",
                                             actions: &[],
                                         },
                                     );
@@ -269,7 +269,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                         RowAction {
                                                             glyph: '×',
                                                             verb: "Delete",
-                                                            hover: "Delete",
+                                                            hover: "Deletes this collection",
                                                             enabled: true,
                                                         },
                                                         RowAction {
@@ -347,13 +347,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                         RowAction {
                                                             glyph: '×',
                                                             verb: "Delete",
-                                                            hover: "Delete",
+                                                            hover: "Deletes this smart collection",
                                                             enabled: true,
                                                         },
                                                         RowAction {
                                                             glyph: icons::GEAR,
                                                             verb: "Edit",
-                                                            hover: "Edit the rule",
+                                                            hover: "Edits this smart collection's rule",
                                                             enabled: true,
                                                         },
                                                     ],

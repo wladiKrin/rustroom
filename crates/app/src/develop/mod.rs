@@ -129,21 +129,19 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 /// high-frequency (undo, zoom, before/after) or a mode switch. Each also appears in a menu, on
 /// purpose: a menu is for reach and discovery, a button is for speed.
 pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
-    // ⚠ Names the *configured* pan binding, never "drag": the left button belongs to the tools
-    // (the author's call, 2026-09-28), so a hint saying "drag" would be wrong for every binding
-    // but Space+left.
-    let zoom_actual_hint = format!(
-        "Zoom to 1:1 — scroll to look around, or {}",
-        app.settings.pan_drag.label()
-    );
+    // ⚠ It named the configured pan binding until 2026-09-29; a hover now says what the control
+    // does in one sentence (`docs/DESIGN.md` §8), and panning is in the shortcuts dialog.
+    let zoom_actual_hint = "Zooms to 100 %, one photo pixel per screen pixel (⌘1)";
     // Undo/Redo drive the unified `ActionLog`, so one control walks back through photo edits
     // and preset deletions in the order they actually happened. ⚠ The *tooltip* says which,
     // so an icon button never silently does the surprising one — that wording used to be the
     // button's label and must not be lost with it.
     let open = app.open_photo();
     let undo_hint = match app.actions.peek_undo(open.as_ref()) {
-        Some(ActionKind::PresetDelete { name }) => format!("Undo delete “{name}”"),
-        _ => "Undo".to_string(),
+        Some(ActionKind::PresetDelete { name }) => {
+            format!("Brings back the deleted preset “{name}” (⌘Z)")
+        }
+        _ => "Undoes the last change (⌘Z)".to_string(),
     };
     let undo_click = icon(
         ui,
@@ -151,7 +149,12 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         &undo_hint,
         app.actions.can_undo(open.as_ref()),
     );
-    let redo_click = icon(ui, icons::REDO, "Redo", app.actions.can_redo(open.as_ref()));
+    let redo_click = icon(
+        ui,
+        icons::REDO,
+        "Redoes the last undone change (⇧⌘Z)",
+        app.actions.can_redo(open.as_ref()),
+    );
     ui.separator();
     if undo_click {
         commands::execute(app, ctx, Command::Undo);
@@ -171,10 +174,15 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // the current state, and "fit" stops being true the moment you scroll.
         let (zoom_out, zoom_fit, zoom_actual, zoom_in) = well(ui, |ui| {
             (
-                icon(ui, icons::ZOOM_OUT, "Zoom out", true),
-                icon(ui, icons::ZOOM_FIT, "Zoom to fit", true),
-                icon(ui, icons::ZOOM_ACTUAL, &zoom_actual_hint, true),
-                icon(ui, icons::ZOOM_IN, "Zoom in", true),
+                icon(ui, icons::ZOOM_OUT, "Zooms out (⌘−)", true),
+                icon(
+                    ui,
+                    icons::ZOOM_FIT,
+                    "Fits the whole photo in the view (⌘0)",
+                    true,
+                ),
+                icon(ui, icons::ZOOM_ACTUAL, zoom_actual_hint, true),
+                icon(ui, icons::ZOOM_IN, "Zooms in (⌘=)", true),
             )
         });
         if zoom_out {
@@ -203,7 +211,7 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 egui::Button::selectable(before_after, label)
                     .min_size(egui::vec2(0.0, TOOL_HEIGHT)),
             )
-            .on_hover_text("Show the photo as it was decoded (\\)")
+            .on_hover_text("Shows the photo without your adjustments (\\)")
             .clicked()
         {
             commands::execute(app, ctx, Command::ToggleBeforeAfter);

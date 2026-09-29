@@ -18,10 +18,8 @@ use rustroom_app::settings::ConfirmOutcome;
 
 /// What a DNG is — the Format combo's hover. ⚠ It was a paragraph under the Colour section,
 /// shown whenever DNG was chosen (`docs/DESIGN.md` §8).
-const DNG_NOTE: &str = "DNG holds the finished picture as linear ProPhoto, 16-bit, losslessly \
-                        compressed; the application that opens it converts. ⚠ darktable adds its \
-                        own exposure and tone mapping to raw files unless its workflow is set to \
-                        \"none\".";
+const DNG_NOTE: &str =
+    "Saves the finished photo as a linear 16-bit DNG for another raw editor to open";
 
 /// The first photo of the run, as the filename preview needs it.
 ///
@@ -52,10 +50,7 @@ impl SampleName {
 
 /// The Metadata section's body.
 fn metadata_body(ui: &mut egui::Ui, opts: &mut ExportOptions) {
-    const HOVER: &str = "Written into the exported file as XMP. The original is never modified. \
-                         A photo's own title, caption, copyright and creator (Information dialog) \
-                         win over the fields above; leave a field empty to write nothing for it. \
-                         \"All metadata\" also writes the camera, exposure, keywords and rating.";
+    const HOVER: &str = "Writes these fields into every exported file unless a photo has its own";
     egui::Grid::new("export_metadata_grid")
         .num_columns(2)
         .spacing([12.0, 4.0])
@@ -91,10 +86,7 @@ fn watermark_body(ui: &mut egui::Ui, opts: &mut ExportOptions) {
         .show(ui, |ui| {
             ui.label("Text");
             ui.text_edit_singleline(&mut opts.watermark.text)
-                .on_hover_text(
-                    "Scales with the exported image, so one setting suits every output size. \
-                 Skipped on a file too small to hold it.",
-                );
+                .on_hover_text("Sets the watermark text, which scales with the exported image");
             ui.end_row();
             ui.label("Corner");
             egui::ComboBox::from_id_salt("watermark_corner")
@@ -275,7 +267,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                     actions: &[RowAction {
                                         glyph: '×',
                                         verb: "Delete",
-                                        hover: "Delete this preset",
+                                        hover: "Deletes this preset",
                                         enabled: true,
                                     }],
                                 },
@@ -289,7 +281,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                         ui.add_space(6.0);
                         let save = ui
                             .button("+ Save current…")
-                            .on_hover_text("Save these settings as a preset");
+                            .on_hover_text("Saves these export settings as a preset");
                         // ⚠ The accessible name is the sentence, as the Presets panel's.
                         save.widget_info(|| {
                             egui::WidgetInfo::labeled(
@@ -367,7 +359,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                                     egui::RichText::new(format!("→ {when}")).weak(),
                                                 )
                                                 .on_hover_text(
-                                                    "The date this photo will carry in Immich.",
+                                                    "Sets the date the photo carries in Immich",
                                                 );
                                             }
                                         });
@@ -377,9 +369,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                             // mean deleting one.
                                             ui.label(egui::RichText::new(note).weak())
                                                 .on_hover_text(
-                                                    "Uploading again adds a second photo to \
-                                                     Immich. Immich recognises a byte-identical \
-                                                     re-upload and keeps only one.",
+                                                    "Exporting again uploads a second photo unless the file is byte-identical",
                                                 );
                                         }
                                     });
@@ -477,11 +467,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                         })
                                         .response
                                         .on_hover_text(
-                                            "Clip clamps each channel: vivid, what Lightroom does, but \
-                                             it can shift hue. Perceptual and Relative colorimetric keep \
-                                             hue: perceptual compresses saturated colour to keep its \
-                                             gradation, relative leaves in-gamut colour untouched and \
-                                             cuts the rest at the gamut's edge.",
+                                            "Chooses how colours outside the output's range are brought inside it",
                                         );
                                 });
                                 ui.end_row();
@@ -513,9 +499,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                     .text("Amount"),
                             )
                             .on_hover_text(
-                                "Applied to the finished file at a fixed radius, on top of the \
-                             Detail panel's sharpening — it puts back the edge a resize takes. \
-                             Not shown in the preview.",
+                                "Sharpens the finished file to restore the edges lost in resizing",
                             );
                         },
                     );
@@ -534,9 +518,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                             })
                             .response
                             .on_hover_text(
-                                "RAW only. Higher is slower — roughly 1.2 s to 11 s per photo. \
-                                 Independent of the 1:1 view's own quality setting, so judging \
-                                 this means exporting a frame at two settings and comparing crops.",
+                                "Sets the RAW demosaic quality for this export, where higher is slower",
                             );
                         },
                     );

@@ -13,7 +13,8 @@ use rustroom_app::ingest::options::Layout;
 use std::path::PathBuf;
 
 /// The metadata fields' hover. ⚠ It was a line under them (`docs/DESIGN.md` §8).
-const EMPTY_CHANGES_NOTHING: &str = "Left empty, the imported photos keep whatever they carry.";
+const EMPTY_CHANGES_NOTHING: &str =
+    "Writes this into every imported photo, or leaves the photo's own when empty";
 
 /// The source column's width; the settings column takes the rest.
 const GRID_W: f32 = 520.0;
@@ -79,8 +80,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 if ui
                                     .button("Choose folder…")
                                     .on_hover_text(
-                                        "A card is a drive with a DCIM folder; any folder of \
-                                         photos works too.",
+                                        "Chooses a folder to import from, such as a memory card's DCIM folder",
                                     )
                                     .clicked()
                                 {
@@ -102,7 +102,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 }
                                 if ui
                                     .small_button("New only")
-                                    .on_hover_text("Untick the photos already in the catalog")
+                                    .on_hover_text("Unticks the photos already in the catalog")
                                     .clicked()
                                 {
                                     st.tick(Tick::New);
@@ -189,7 +189,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 ui.end_row();
                                 ui.label("Keywords");
                                 ui.text_edit_singleline(&mut d.keywords).on_hover_text(
-                                    "Comma-separated; created if missing. Empty changes nothing.",
+                                    "Adds these comma-separated keywords to every imported photo",
                                 );
                                 ui.end_row();
                             });
@@ -285,7 +285,7 @@ fn grid(ui: &mut egui::Ui, st: &mut crate::import_flow::ImportState) {
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default();
                     let hover = if it.known {
-                        format!("{name}\nAlready in the catalog — same size and capture time")
+                        format!("{name} is already in the catalog")
                     } else {
                         name
                     };

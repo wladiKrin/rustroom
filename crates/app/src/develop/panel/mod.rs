@@ -43,6 +43,12 @@ pub struct Edited {
     /// One line for the status bar about what a button just did — Auto says which sliders it
     /// set and by how much, so two sliders pinned at +100 read as a result, not a fault (A-17).
     pub note: Option<String>,
+    /// Which block the next sliders belong to, for their hover sentence — set before a block,
+    /// reset after (`slider_help::Scope`).
+    pub help_scope: rustroom_app::slider_help::Scope,
+    /// Every slider drawn this frame whose scope and label found no sentence, as `Scope/label`.
+    /// ⚠ The panel tests assert it stays empty — the pairs actually drawn, not a list of labels.
+    pub missing_help: Vec<String>,
 }
 
 /// Whether `r`'s gesture is over, so its change is one undo step.
@@ -75,10 +81,13 @@ impl Edited {
         // compile error; getting it wrong fails `every_slider_resets_to_its_fields_default`.
         default: f32,
     ) -> egui::Response {
-        // ⚠ Every slider explains itself on hover, from one table, with the reset hint appended
-        // once here. A label the table does not know draws no help; the panel tests fail on it.
-        let help =
-            rustroom_app::slider_help::text(label).map(|h| format!("{h} Double-click resets it."));
+        // ⚠ Every slider explains itself on hover, from one table, in its block's scope. A pair the
+        // table does not know draws no help and is recorded; the panel tests fail on it.
+        let help = rustroom_app::slider_help::text(self.help_scope, label);
+        if help.is_none() {
+            self.missing_help
+                .push(format!("{:?}/{label}", self.help_scope));
+        }
         let r = ui.add(
             slider::Slider::new(value, range)
                 .text(label)
@@ -228,7 +237,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 if ui
                                     .small_button("Reset adjustments")
                                     .on_hover_text(format!(
-                                        "Resets {}. Leaves the crop and any masks alone.",
+                                        "Resets {} to neutral, keeping the crop and masks",
                                         adjustments::SECTIONS
                                             .iter()
                                             .map(|s| s.name())
@@ -504,9 +513,8 @@ fn camera_profile_row(app: &mut RustroomApp, ui: &mut egui::Ui) {
 
     // ⚠ The explanation is the combo's hover (`docs/DESIGN.md` §8), not three lines of 9-pt text
     // under it: it said the same thing on every photo, which is what the author could not read.
-    const PROFILE_HELP: &str = "Colours come from Rustroom's built-in camera data. To use a \
-                                profile from your camera maker instead, put its .dcp file in the \
-                                profiles folder next to your settings.";
+    const PROFILE_HELP: &str =
+        "Chooses this camera's colour profile, including any .dcp file you put in the profiles folder";
     ui.horizontal(|ui| {
         ui.label("Camera profile").on_hover_text(PROFILE_HELP);
         egui::ComboBox::from_id_salt("camera_profile_pick")

@@ -566,13 +566,13 @@ const VIEW_ITEMS: [PillItem<'static, AppView>; 2] = [
         value: AppView::Library,
         icon: icons::LIBRARY,
         label: "Library",
-        hover: "Browse the catalog (G)",
+        hover: "Shows the Library, to browse and cull photos (G)",
     },
     PillItem {
         value: AppView::Develop,
         icon: icons::DEVELOP,
         label: "Develop",
-        hover: "Edit the open photo (D)",
+        hover: "Opens the selected photo for editing (D)",
     },
 ];
 
@@ -597,25 +597,14 @@ fn view_style() -> PillStyle {
 /// third of it punctuation, and the Keyboard-shortcuts dialog is generated from the menu model
 /// so it already lists all three.
 ///
-/// ⚠ **Compare's and Survey's keys are in their hovers** (2026-09-29): they were a line of 11-pt
-/// text across the top of each view, which the design language retires — explanation on hover,
-/// never standing on screen (`docs/DESIGN.md` §8).
+/// ⚠ **Compare's and Survey's keys are in the Keyboard shortcuts dialog** (2026-09-29): they were
+/// a line of 11-pt text across the top of each view, then a paragraph in these hovers; a hover says
+/// what a control does in one sentence (`docs/DESIGN.md` §8).
 ///
 /// ⚠ `icons_only`: the narrow form the bar plan picks — the names stay in the hovers and the
 /// accessible labels.
 fn mode_switch(ui: &mut egui::Ui, mode: &mut LibraryMode, icons_only: bool) {
-    let compare = format!(
-        "Two photos side by side (C)\n{}",
-        crate::multi::compare::INSTRUCTION
-    );
-    let survey = format!(
-        "The whole selection at once (N)\n{}",
-        crate::multi::survey::INSTRUCTION
-    );
-    let mut items = MODE_ITEMS;
-    items[1].hover = &compare;
-    items[2].hover = &survey;
-    segmented::pill(ui, mode, &items, mode_style(icons_only));
+    segmented::pill(ui, mode, &MODE_ITEMS, mode_style(icons_only));
 }
 
 const MODE_ITEMS: [PillItem<'static, LibraryMode>; 3] = [
@@ -623,19 +612,19 @@ const MODE_ITEMS: [PillItem<'static, LibraryMode>; 3] = [
         value: LibraryMode::Grid,
         icon: icons::GRID,
         label: "Grid",
-        hover: "Thumbnails (G)",
+        hover: "Shows the photos as a grid of thumbnails (G)",
     },
     PillItem {
         value: LibraryMode::Compare,
         icon: icons::COMPARE,
         label: "Compare",
-        hover: "",
+        hover: "Compares two photos side by side (C)",
     },
     PillItem {
         value: LibraryMode::Survey,
         icon: icons::SURVEY,
         label: "Survey",
-        hover: "",
+        hover: "Shows the whole selection at once, to narrow it down (N)",
     },
 ];
 
@@ -722,7 +711,7 @@ fn export_button(ui: &mut egui::Ui) -> egui::Response {
         theme::primary_button(ui, &format!("{} Export…", icons::EXPORT), true)
     })
     .inner
-    .on_hover_text("Export the selection (⌘E)")
+    .on_hover_text("Exports the selected photos (⌘E)")
 }
 
 /// Rating, flag and colour-label filtering, in one popup.
@@ -840,7 +829,7 @@ fn mark_filter(app: &mut RustroomApp, ui: &mut egui::Ui, compact: bool) {
     button.on_hover_text(if compact {
         label.as_str()
     } else {
-        "Show only photos with these ratings, flags, colours, cameras or lenses"
+        "Shows only the photos with the ratings, flags, labels, cameras or lenses you choose"
     });
 
     // ⚠ Guarded on an actual change: this body runs every frame, and refiltering a folder of

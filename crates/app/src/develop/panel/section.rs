@@ -230,7 +230,7 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
         );
         let r = ui
             .interact(cell, id.with("reset"), egui::Sense::click())
-            .on_hover_text(format!("Reset {} and nothing else", h.name));
+            .on_hover_text(format!("Resets {} to its defaults", h.name.to_lowercase()));
         r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, "reset"));
         reset = r.clicked();
         let colour = if r.hovered() {

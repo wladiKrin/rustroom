@@ -97,6 +97,7 @@ pub fn show(
                 {
                     color_wheel::show(ui, &mut a.color_grading, *grade, diameter, ed);
                     let w = grade.wheel_mut(&mut a.color_grading);
+                    ed.help_scope = rustroom_app::slider_help::Scope::TintByTone;
                     ed.slider(ui, &mut w.hue, 0.0..=360.0, "Hue", 0.0);
                     // ⚠ `Strength` here too — the same instrument, see `adjustments`.
                     ed.slider(ui, &mut w.saturation, 0.0..=100.0, "Strength", 0.0);
@@ -112,9 +113,11 @@ pub fn show(
                     edit_model::ColorGrading::default().blending,
                 );
                 ed.slider(ui, &mut cg.balance, -100.0..=100.0, "Balance", 0.0);
+                ed.help_scope = rustroom_app::slider_help::Scope::Global;
             }
             LocalGroup::Detail => {
                 theme::sub_label(ui, "Noise reduction");
+                ed.help_scope = rustroom_app::slider_help::Scope::NoiseReduction;
                 ed.slider(
                     ui,
                     &mut a.noise_reduction.luminance,
@@ -138,6 +141,7 @@ pub fn show(
                     edit_model::NoiseReduction::default().smoothness,
                 );
                 theme::sub_label(ui, "Sharpening");
+                ed.help_scope = rustroom_app::slider_help::Scope::Sharpening;
                 ed.slider(ui, &mut a.sharpening.amount, 0.0..=100.0, "Amount", 0.0);
                 ed.slider(
                     ui,
@@ -154,6 +158,7 @@ pub fn show(
                     edit_model::Sharpening::default().detail,
                 );
                 ed.slider(ui, &mut a.sharpening.masking, 0.0..=100.0, "Masking", 0.0);
+                ed.help_scope = rustroom_app::slider_help::Scope::Global;
                 // ⚠ M9.6, Lightroom's meaning: negative protects this area from the global
                 // defringe (a real purple object), positive adds defringe here.
                 theme::sub_label(ui, "Defringe");

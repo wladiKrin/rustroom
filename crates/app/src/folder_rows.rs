@@ -73,7 +73,7 @@ pub(crate) fn rows(
                 actions: &[RowAction {
                     glyph: '×',
                     verb: "Forget",
-                    hover: "Forget this folder and every folder beneath it",
+                    hover: "Removes this folder and everything under it from the catalog",
                     enabled: true,
                 }],
             },

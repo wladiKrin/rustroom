@@ -197,25 +197,25 @@ fn crop(
     ui.horizontal(|ui| {
         let g = &mut s.edits.geometry;
         let mut turned = false;
-        if glyph_button(ui, "⟲", "Rotate left") {
+        if glyph_button(ui, "⟲", "Rotates the photo 90° to the left") {
             g.orientation.rotate_ccw();
             for _ in 0..3 {
                 g.crop = g.crop.rotated_cw();
             }
             turned = true;
         }
-        if glyph_button(ui, "⟳", "Rotate right") {
+        if glyph_button(ui, "⟳", "Rotates the photo 90° to the right") {
             g.orientation.rotate_cw();
             g.crop = g.crop.rotated_cw();
             turned = true;
         }
         ui.add_space(6.0);
-        if glyph_button(ui, "⬌", "Flip horizontal") {
+        if glyph_button(ui, "⬌", "Flips the photo horizontally") {
             g.orientation.flip_h();
             g.crop = g.crop.flipped_h();
             turned = true;
         }
-        if glyph_button(ui, "⬍", "Flip vertical") {
+        if glyph_button(ui, "⬍", "Flips the photo vertically") {
             g.orientation.flip_v();
             g.crop = g.crop.flipped_h();
             g.crop = g.crop.rotated_cw();
@@ -233,7 +233,7 @@ fn crop(
             |ui| {
                 swap = ui
                     .add(egui::Button::new("Swap").min_size(egui::vec2(0.0, CROP_ROW)))
-                    .on_hover_text("Turn the crop between landscape and portrait")
+                    .on_hover_text("Switches the crop between landscape and portrait")
                     .clicked();
             },
         );
@@ -256,7 +256,11 @@ fn crop(
     for (label, ratio) in PRESETS {
         items.push((Some(Chip::Preset(ratio)), label, ""));
     }
-    items.push((Some(Chip::Custom), "W:H", "Lock to the ratio below"));
+    items.push((
+        Some(Chip::Custom),
+        "W:H",
+        "Locks the crop to the ratio entered below",
+    ));
     let mut cur: Option<Chip> = items
         .iter()
         .map(|(c, _, _)| c.expect("every item is Some"))
@@ -324,7 +328,9 @@ fn crop(
                         }
                     })
                     .response
-                    .on_hover_text("Drawn inside the crop rectangle. Press O to cycle.");
+                    .on_hover_text(
+                        "Chooses the guide drawn inside the crop (O cycles through them)",
+                    );
             },
         );
     });
@@ -364,8 +370,7 @@ fn level_button(ui: &mut egui::Ui, armed: bool) -> egui::Response {
         )
     });
     let resp = resp.on_hover_text(
-        "Drag along something that should be level — a horizon, a roofline. The photo rotates \
-         when you let go. Any perspective guides are cleared, as editing the angle by hand does.",
+        "Straightens the photo along a line you drag over something that should be level",
     );
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
@@ -441,10 +446,7 @@ fn perspective(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited, auto: &mut b
         if ui
             .toggle_value(&mut s.show_guides, "Guide mode")
             .on_hover_text(
-                "Draw a line along something that should be vertical or horizontal — a door \
-                 frame, a roofline. Two lines of a kind solve the tilt when you let go; \
-                 right-click a line to remove it. Editing Vertical, Horizontal or the angle by \
-                 hand clears them.",
+                "Corrects perspective from lines you draw along edges that should be vertical or horizontal",
             )
             .changed()
         {
@@ -464,7 +466,7 @@ fn perspective(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited, auto: &mut b
         }
         if ui
             .add_enabled(refining, egui::Button::new("Clear"))
-            .on_hover_text("Remove all guides. The sliders they produced are left alone.")
+            .on_hover_text("Removes the guide lines, keeping the corrections they made")
             .clicked()
         {
             clear_guides(s);
@@ -493,10 +495,6 @@ fn lens(ui: &mut egui::Ui, s: &mut Session, lens_profile_found: bool, ed: &mut E
                 0.0..=100.0,
                 "Lens scale",
                 edit_model::LensCorrection::default().scale,
-            )
-            .on_hover_text(
-                "How far the corrected frame is scaled up to hide the empty corners \
-                     distortion correction leaves. Judged here, against the uncropped frame.",
             );
         }
     } else if !lens_profile_found {
@@ -1170,11 +1168,11 @@ mod tests {
             );
         });
         assert!(labels.len() >= 5, "only {} sliders found", labels.len());
-        let mute: Vec<&String> = labels
-            .iter()
-            .filter(|l| rustroom_app::slider_help::text(l).is_none())
-            .collect();
-        assert!(mute.is_empty(), "sliders without help: {mute:?}");
+        assert!(
+            ed.missing_help.is_empty(),
+            "sliders without help: {:?}",
+            ed.missing_help
+        );
     }
 
     #[test]
