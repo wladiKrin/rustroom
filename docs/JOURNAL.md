@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [Reordering masks and a mask's components (2026-09-29)](#2026-09-29--reordering-masks-and-a-masks-components-branch-mask-reorder)
+- [Reordering masks and a mask's components (2026-09-29)](#2026-09-29--reordering-masks-and-a-masks-components-branch-mask-reorder-merged-2026-09-29)
 - [The design language: three directions, B chosen, and built (2026-09-29)](#2026-09-29--the-design-language-three-directions-b-chosen-and-built-branch-design-language-merged-2026-09-29)
 - [M9.14 Previews: instant 1:1 in Develop, Compare and Survey (2026-09-29)](#2026-09-29--m914-previews-instant-11-in-develop-compare-and-survey-branch-m914-previews-merged-2026-09-29)
 - [The resident final checkpoint: the tail's input stays on the GPU (2026-09-26)](#2026-09-26--the-resident-final-checkpoint-the-tails-input-stays-on-the-gpu-branch-resident-final)
@@ -161,7 +161,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-09-29 — Reordering masks and a mask's components (branch `mask-reorder`)
+### 2026-09-29 — Reordering masks and a mask's components (branch `mask-reorder`, merged 2026-09-29)
 
 **Input:** the backlog's *"Reorder a mask's components"* (recorded 2026-09-10, the author's *"the
 reordering is something we should do at some point"*) — the first item of the agreed order: every
@@ -184,7 +184,7 @@ clone every stroke list. Bin: `mask_components::row` senses drag where `RowSpec:
 hover; `masks::list` and `mask_components::rows` paint the Library's 2-pt accent line and apply the
 drop on release — one `Edited::discrete`, none for a drop where the row started. The eye
 (`mask_shown`) moves with its mask. Names stay positional ("Radial 2" moved up reads "Radial 1").
-**3250 → 3266 tests**, goldens unmoved; `edit-model`, the sidecar, the pipeline and the GPU untouched
+✅ **Confirmed by use and merged 2026-09-29.** **3250 → 3266 tests**, goldens unmoved; `edit-model`, the sidecar, the pipeline and the GPU untouched
 (the brush coverage cache is keyed on content with no component index, so a move cannot hit stale).
 
 **Worth keeping:**

@@ -173,7 +173,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-28)
 
-**3266 tests**, **82 goldens**, gate green on `mask-reorder` (3250 on `main`). ⚠⚠ **Run the git command above rather than
+**3266 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -228,8 +228,8 @@ accents, and four rounds of the author's fixes. `grep -n 'design language' docs/
 ✅ **Phase 9 is complete** (M9.13 merged 2026-09-28).
 ⚠⚠ **THE AGREED ORDER (the author, 2026-09-29): every other open item first, CHRONOLOGICALLY by when
 it was recorded — Phase 10 LAST.** Do not propose Phase 10 before the queue is empty.
-1. 🟡 **Reordering masks and a mask's components** — built on branch `mask-reorder`, gate green,
-   waiting for the author's try (`grep -n 'Reordering masks' docs/JOURNAL.md`).
+1. ✅ **Reordering masks and a mask's components** — merged 2026-09-29, confirmed by use
+   (`grep -n 'Reordering masks' docs/JOURNAL.md`).
 2. ⬜ **Next: sweep the open items into one dated queue** and let the author prune it — `docs/BACKLOG.md`
    has stale entries (it still lists an on-disk thumbnail cache and subfolders as missing; M8.2 and
    M9.9 built them) and "deliberately not scheduled" ones whose status is the author's call. The oldest open
