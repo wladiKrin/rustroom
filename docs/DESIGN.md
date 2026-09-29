@@ -2,7 +2,7 @@
 
 **Status:** the rulebook, chosen by the author on 2026-09-29 from three directions
 (canvas: <https://claude.ai/artifact/JK6A3tSpaXPo427cHZTZ7h>, direction **B · Layered**), and
-**implemented the same day** on branch `design-language` — what follows describes the app as built;
+**implemented and merged the same day** (branch `design-language`) — what follows describes the app as built;
 where the build settled something the first draft left open, the text says so.
 **Read this before adding or changing anything the user can see.** It is the answer to "what
 should this look like"; `docs/JOURNAL.md` holds why each earlier decision was taken.

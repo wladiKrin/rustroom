@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [The design language: three directions, B chosen, and built (2026-09-29)](#2026-09-29--the-design-language-three-directions-b-chosen-and-built-branch-design-language-awaiting-use)
+- [The design language: three directions, B chosen, and built (2026-09-29)](#2026-09-29--the-design-language-three-directions-b-chosen-and-built-branch-design-language-merged-2026-09-29)
 - [M9.14 Previews: instant 1:1 in Develop, Compare and Survey (2026-09-29)](#2026-09-29--m914-previews-instant-11-in-develop-compare-and-survey-branch-m914-previews-merged-2026-09-29)
 - [The resident final checkpoint: the tail's input stays on the GPU (2026-09-26)](#2026-09-26--the-resident-final-checkpoint-the-tails-input-stays-on-the-gpu-branch-resident-final)
 - [Per-pixel fusion: a run of per-pixel stages as one pass (2026-09-26)](#2026-09-26--per-pixel-fusion-a-run-of-per-pixel-stages-as-one-pass-branch-per-pixel-fusion)
@@ -160,7 +160,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-09-29 — The design language: three directions, B chosen, and built (branch `design-language`, awaiting use)
+### 2026-09-29 — The design language: three directions, B chosen, and built (branch `design-language`, merged 2026-09-29)
 
 **Input:** the author asked for one cohesive, minimal design language with mockups to choose from,
 naming two irritants — inconsistent font sizes (some tiny with lots of text, hard to read on the 5K;
