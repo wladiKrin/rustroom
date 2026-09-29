@@ -448,6 +448,8 @@ struct RustroomApp {
     /// Which HSL channel the Color section's selector is showing. View state, per app —
     /// like a brush size, it is a property of the tool and not of the photograph.
     hsl_channel: develop::panel::adjustments::HslChannel,
+    /// Point curve or Parametric — view state beside `curve_channel`, never an edit.
+    curve_mode: develop::panel::tone_curve::CurveMode,
     /// Which of the four tone curves the Tone section's editor is showing. View state, per app, for
     /// the same reason as `hsl_channel`.
     ///
@@ -837,6 +839,7 @@ impl RustroomApp {
             // On by default: a freshly added brush mask with no adjustment yet is otherwise
             // completely invisible, which is a poor first five minutes.
             hsl_channel: Default::default(),
+            curve_mode: Default::default(),
             curve_channel: Default::default(),
             mask_hsl_channel: Default::default(),
             mask_grade_range: Default::default(),

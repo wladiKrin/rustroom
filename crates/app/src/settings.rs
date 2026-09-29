@@ -523,6 +523,10 @@ pub struct Settings {
     /// Which Library panel sections are expanded. ⚠ Persisted because egui's own collapsing
     /// state does not survive a restart here — see [`PanelSections`].
     pub panel_sections: PanelSections,
+    /// Whether the tone curve is expanded — in the Tone section and in a mask's, one choice for
+    /// both. Open by default; collapsing it is the author's way to keep "quite large" out of the
+    /// way (2026-09-29), so it is **persisted**, for [`Self::panel_sections`]' reason.
+    pub tone_curve_open: bool,
     /// The Develop snapshot strip's outer height in whole points.
     ///
     /// ⚠ `u32`, not `f32`, for the two reasons `library_cell` already carries: `Settings` derives
@@ -974,6 +978,7 @@ impl Default for Settings {
             survey_cell: DEFAULT_SURVEY_CELL,
             custom_aspect: DEFAULT_CUSTOM_ASPECT,
             panel_sections: PanelSections::default(),
+            tone_curve_open: true,
             snapshot_strip_height: DEFAULT_STRIP_HEIGHT,
             dialog_sizes: std::collections::BTreeMap::new(),
             panel_order: PanelSection::ALL.to_vec(),
@@ -1494,6 +1499,19 @@ mod tests {
         assert!(!loaded.panel_sections.smart);
     }
 
+    /// A settings file from before the field loads with the curve open, as it always was.
+    #[test]
+    fn a_settings_file_from_before_the_curve_could_collapse_opens_it() {
+        let f = TempFile::new("tone_curve_open_absent");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete":false}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.confirm_preset_delete, "sample: the file was read");
+        assert!(
+            loaded.tone_curve_open,
+            "an absent field must give the default, open"
+        );
+    }
+
     #[test]
     fn settings_round_trip_carries_the_collapsed_sections() {
         let f = TempFile::new("panel_sections_rt");
@@ -1668,6 +1686,8 @@ mod tests {
                 folders: true,
                 ..PanelSections::default()
             },
+            // Non-default: it defaults to open, so `false` is what proves it round-trips.
+            tone_curve_open: false,
             // Likewise non-default: the preference defaults to *on*, so persisting `false` is
             // what proves it round-trips rather than being re-defaulted.
             // Not the default, so the round trip actually carries it.

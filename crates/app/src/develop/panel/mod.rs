@@ -136,6 +136,9 @@ impl Edited {
 ///
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     let mut photo_edited = false;
+    // The tone curve's open state is a setting, toggled deep inside the session borrow below;
+    // saved once out here when it changed — `collections_panel`'s `panel_sections` shape.
+    let curve_was_open = app.settings.tone_curve_open;
     // ⚠ The Geometry panel's Auto button, applied after the panel closes: `auto_guides` needs
     // `&mut RustroomApp` while the closure below still holds `&mut app.session`, which is the
     // same reason `rename` is applied out here rather than at its call site.
@@ -303,7 +306,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 &mut s.edits,
                                 adjustments::Channels {
                                     hsl: &mut app.hsl_channel,
+                                    curve_mode: &mut app.curve_mode,
                                     curve: &mut app.curve_channel,
+                                    curve_open: &mut app.settings.tone_curve_open,
                                     parametric_drag: app.settings.parametric_drag,
                                 },
                                 adjustments::GradeUi {
@@ -352,6 +357,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 hsl: &mut app.mask_hsl_channel,
                                 grade: &mut app.mask_grade_range,
                                 add_mode: &mut app.mask_add_mode,
+                                curve_open: &mut app.settings.tone_curve_open,
                             },
                             masks::BrushTool {
                                 size: &mut app.brush_size,
@@ -402,6 +408,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     // `&mut app.session` rules out — the same reason `presets::show` is drawn outside it.
     if auto {
         photo_edited |= app.auto_guides();
+    }
+
+    if app.settings.tone_curve_open != curve_was_open {
+        app.save_settings();
     }
 
     // ⚠ Applied *after* the panel closes, not inside it: the commit writes the sidecar and
@@ -666,6 +676,118 @@ mod tests {
             app.session.as_ref().unwrap().edits.lens_correction,
             fresh.lens_correction,
             "the menu's Reset adjustments must restore it too"
+        );
+    }
+
+    /// Every labelled rect the whole panel draws for `tool`, at a real window's size, after the
+    /// sections have settled — the panel's own width, not a harness's.
+    fn panel_rects(
+        app: &mut RustroomApp,
+        ctx: &egui::Context,
+        tool: Tool,
+    ) -> Vec<(String, egui::Rect)> {
+        app.tool = tool;
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 3000.0));
+        let mut found = Vec::new();
+        for _ in 0..3 {
+            found = crate::test_ui::labelled_rects_on(ctx, screen, |ui| {
+                show(app, ui);
+            });
+        }
+        found
+    }
+
+    fn rect_of(found: &[(String, egui::Rect)], label: &str) -> egui::Rect {
+        found
+            .iter()
+            .find(|(l, _)| l == label)
+            .map(|(_, r)| *r)
+            .unwrap_or_else(|| panic!("{label} was not drawn"))
+    }
+
+    /// ⚠⚠ The author's pick, 2026-09-29 (option A on the canvas): the curve's two choices on two rows
+    /// at the control row's height — its five labels on one compact row had shrunk to 9.35 pt in
+    /// 20-pt cells. Measured at the panel's real width.
+    #[test]
+    fn the_curve_selectors_are_two_full_height_rows() {
+        let ctx = crate::test_ui::ctx();
+        crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 200, 100);
+        let found = panel_rects(&mut app, &ctx, Tool::Edit);
+        let (point, param) = (
+            rect_of(&found, "Point curve"),
+            rect_of(&found, "Parametric"),
+        );
+        let chans = ["RGB", "Red", "Green", "Blue"].map(|l| rect_of(&found, l));
+        assert!(
+            (point.center().y - param.center().y).abs() < 0.5,
+            "the modes share a row"
+        );
+        assert!(
+            chans
+                .iter()
+                .all(|r| (r.center().y - chans[0].center().y).abs() < 0.5),
+            "the four channels share a row: {chans:?}"
+        );
+        assert!(
+            chans[0].top() > point.bottom(),
+            "the channels sit under the modes"
+        );
+        for r in chans.iter().chain([&point, &param]) {
+            assert!(
+                r.height() >= 24.0,
+                "a segment is shorter than the control row's: {r:?}"
+            );
+        }
+    }
+
+    /// ⚠⚠ The author's pick, 2026-09-29 (option B): the four mask modes as a 2 × 2 block with an
+    /// icon each, never three and one. Measured at the panel's real width.
+    #[test]
+    fn the_mask_modes_are_a_two_by_two_block() {
+        let ctx = crate::test_ui::ctx();
+        crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 200, 100);
+        let found = panel_rects(&mut app, &ctx, Tool::Masks);
+        let cells = ["New mask", "Add", "Subtract", "Intersect"].map(|l| rect_of(&found, l));
+        let mut ys: Vec<i32> = cells.iter().map(|r| r.center().y.round() as i32).collect();
+        let mut xs: Vec<i32> = cells.iter().map(|r| r.center().x.round() as i32).collect();
+        ys.sort_unstable();
+        ys.dedup();
+        xs.sort_unstable();
+        xs.dedup();
+        assert_eq!(
+            (ys.len(), xs.len()),
+            (2, 2),
+            "not two rows of two: {cells:?}"
+        );
+        assert!(
+            cells.iter().all(|r| r.height() >= 30.0),
+            "the cells are not the larger size: {cells:?}"
+        );
+    }
+
+    /// ⚠ The curve's open state is a **setting**, saved when it changes — collapsed to keep it out
+    /// of the way, it must stay collapsed across a restart. The file is read back, not the field.
+    #[test]
+    fn collapsing_the_tone_curve_is_saved() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 200, 100);
+        app.tool = Tool::Edit;
+        assert!(
+            app.settings.tone_curve_open,
+            "sample: the curve starts open"
+        );
+        crate::test_ui::click(&ctx, "Tone curve", |ui| {
+            show(&mut app, ui);
+        });
+        assert!(!app.settings.tone_curve_open, "the click did not close it");
+        assert!(
+            !app.settings_store.load().tone_curve_open,
+            "closed, but not saved — it would reopen on the next launch"
         );
     }
 

@@ -84,10 +84,23 @@ pub const GEAR: char = '\u{e270}';
 /// `copy` — make a virtual copy from a snapshot.
 pub const COPY: char = '\u{e1ca}';
 
+/// `plus-circle` — the mask mode that starts a new mask.
+///
+/// ⚠ This and the three below: codepoints read from Phosphor 2.1.2's `src/regular/style.css`
+/// (unpkg, 2026-09-29) — the same sheet gave `sliders-horizontal`, `crop`, `circle-half`, `star`
+/// and `bandaids` exactly as above — and each found in the bundled TTF's cmap, not assumed.
+pub const MASK_NEW: char = '\u{e3d6}';
+/// `plus` — the mask mode that adds the next shape to the selected mask.
+pub const MASK_ADD: char = '\u{e3d4}';
+/// `minus` — the mask mode that cuts the next shape out of the selected mask.
+pub const MASK_SUBTRACT: char = '\u{e32a}';
+/// `intersect` — the mask mode that keeps only where the mask and the next shape overlap.
+pub const MASK_INTERSECT: char = '\u{e2d2}';
+
 /// Every icon the app draws.
 ///
 /// ⚠ The coverage tests sweep this, so an icon missing from it is one nothing checks.
-pub const ALL: [char; 24] = [
+pub const ALL: [char; 28] = [
     EDIT,
     CROP,
     MASKS,
@@ -112,6 +125,10 @@ pub const ALL: [char; 24] = [
     THUMB_SIZE,
     GEAR,
     COPY,
+    MASK_NEW,
+    MASK_ADD,
+    MASK_SUBTRACT,
+    MASK_INTERSECT,
 ];
 
 #[cfg(test)]

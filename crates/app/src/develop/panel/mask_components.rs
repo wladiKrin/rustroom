@@ -344,6 +344,12 @@ pub fn rows(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
     }
 }
 
+/// A kind button's height: 36, up from 28 with option B of the 2026-09-29 canvas ("same modes,
+/// larger") — the buttons that make a mask read as the panel's primary controls.
+const KIND_HEIGHT: f32 = 36.0;
+/// The painted kind glyph's box, up from 15 with [`KIND_HEIGHT`].
+const KIND_GLYPH: f32 = 18.0;
+
 /// One kind as an icon button `width` wide: the glyph, and the kind's name on hover and as its
 /// accessible name.
 ///
@@ -351,7 +357,7 @@ pub fn rows(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
 /// row, and the old "Add graduated filter" buttons wrapped over three. The name is one hover
 /// away and every screen reader gets it.
 pub fn kind_button(ui: &mut egui::Ui, kind: MaskKind, width: f32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, KIND_HEIGHT), egui::Sense::click());
     let enabled = ui.is_enabled();
     resp.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, kind.menu_label())
@@ -365,9 +371,12 @@ pub fn kind_button(ui: &mut egui::Ui, kind: MaskKind, width: f32) -> egui::Respo
             &v.widgets.inactive
         };
         let painter = ui.painter();
-        painter.rect_filled(rect, 4.0, wv.weak_bg_fill);
-        let glyph = egui::Rect::from_center_size(rect.center(), egui::vec2(15.0, 15.0));
-        mask_glyph::paint(painter, glyph, kind, wv.fg_stroke.color);
+        painter.rect_filled(rect, crate::theme::tokens::RADIUS, wv.weak_bg_fill);
+        let glyph = egui::Rect::from_center_size(rect.center(), egui::vec2(KIND_GLYPH, KIND_GLYPH));
+        // ⚠ In `text`, not the widget grey: at this size the grey read as disabled beside the lit
+        // mode block above (the 2026-09-29 canvas drew them bright).
+        let colour = crate::theme::tokens::of(ui).text;
+        mask_glyph::paint(painter, glyph, kind, colour);
     }
     resp
 }

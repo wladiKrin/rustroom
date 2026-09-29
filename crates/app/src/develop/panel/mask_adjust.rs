@@ -36,6 +36,8 @@ pub fn show(
     baseline: color::wb::Illuminant,
     channel: &mut adjustments::HslChannel,
     grade: &mut color_wheel::GradeRange,
+    // `Settings::tone_curve_open` — one choice for the global curve and a mask's.
+    curve_open: &mut bool,
     ed: &mut Edited,
 ) -> egui::Rect {
     let mut curve_rect = egui::Rect::NOTHING;
@@ -64,7 +66,13 @@ pub fn show(
                 // a mask's curve acts on a region no histogram describes.
                 // ⚠ `None`: a mask's curve is composite-only by decision, so it gets no channel
                 // selector — see `build_pipeline`'s mask branch, which is the other half of that.
-                curve_rect = tone_curve::show(ui, &mut a.tone_curve, ed, None, None, None);
+                // ⚠ Collapsible like the global curve, under the same setting (2026-09-29).
+                let modified = !a.tone_curve.points.is_empty();
+                if tone_curve::header(ui, curve_open, modified, |ui| {
+                    tone_curve::reset_button(ui, &mut a.tone_curve, ed)
+                }) {
+                    curve_rect = tone_curve::show(ui, &mut a.tone_curve, ed, None, None, None);
+                }
                 theme::sub_label(ui, "Presence");
                 ed.slider(
                     ui,
@@ -213,6 +221,7 @@ mod tests {
                 color::wb::Illuminant::default(),
                 &mut self.channel,
                 &mut self.grade,
+                &mut true,
                 ed,
             );
         }

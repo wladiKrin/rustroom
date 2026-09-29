@@ -47,17 +47,55 @@ pub fn segmented_with_hover<T: PartialEq + Copy>(
 /// control row's 28 with body labels — `docs/DESIGN.md` §7.2. One shape at two sizes.
 pub const SEGMENTED_HEIGHT: f32 = 24.0;
 
-/// A segmented control at a given height and font. The Masks panel's mode control is drawn
-/// taller and in the body face (user's call, 2026-09-19: the compact one read too small for
-/// the panel's primary control).
-///
-/// ⚠⚠ **It never lets a label overflow its cell.** The columns are the most that still hold
-/// the widest label at this font; when the panel is too narrow for one row the items wrap onto
-/// as many rows as that takes (four items at the panel's default 240 pt become a 2 × 2 block).
-/// The first version drew four body-face labels into one row and they overlapped at the
-/// default width — seen in use, 2026-09-19.
 /// How much a segmented control's labels shrink to stay on one row.
 const SHRINK: f32 = 0.85;
+
+/// The size a label shrinks to: 15 % smaller, but **never below Caption** — `docs/DESIGN.md` §3's
+/// floor.
+///
+/// ⚠⚠ Until 2026-09-29 the shrink was unconditional, and 15 % off Caption is 9.35 pt: the tone
+/// curve's five channels rendered exactly there, "all very small" in the author's words. A
+/// Caption-sized control now wraps instead of shrinking.
+pub fn shrunk_size(size: f32) -> f32 {
+    (size * SHRINK).max(crate::theme::tokens::CAPTION)
+}
+
+/// What sits before a segment's label.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Mark {
+    /// The label alone.
+    None,
+    /// An icon-font glyph from `icons.rs` — verified against the bundled cmap, as every glyph must
+    /// be — drawn at `tokens::ICON` in the label's colour.
+    Icon(char),
+    /// A small dot in its own colour: the tone curve's channels.
+    Dot(egui::Color32),
+}
+
+/// A dot mark's diameter.
+const MARK_DOT: f32 = 7.0;
+/// The space between a mark and its label.
+const MARK_GAP: f32 = 6.0;
+
+impl Mark {
+    /// Its width plus the gap after it; nothing for [`Mark::None`].
+    fn width(self) -> f32 {
+        match self {
+            Mark::None => 0.0,
+            Mark::Icon(_) => crate::theme::tokens::ICON + MARK_GAP,
+            Mark::Dot(_) => MARK_DOT + MARK_GAP,
+        }
+    }
+}
+
+/// One segment: its value, its label (also its accessible name), its hover, and what sits before
+/// the label.
+pub struct Segment<'a, T> {
+    pub value: T,
+    pub label: &'a str,
+    pub hover: &'a str,
+    pub mark: Mark,
+}
 
 /// Where a segmented control's items go: how many per row, and whether the labels shrank.
 #[derive(Debug, PartialEq, Eq)]
@@ -67,7 +105,8 @@ pub struct Plan {
 }
 
 /// The layout for `n` items in `inner_w` points: one row at full size if it fits, else one row
-/// at the shrunken size if *that* fits, else as many columns as fit at full size.
+/// at the shrunken size if *that* fits, else the fewest rows that fit at full size, **balanced** —
+/// four items that would fit three to a row are drawn two and two, never three and one.
 pub fn plan(inner_w: f32, n: usize, widest: f32, widest_small: f32) -> Plan {
     const PAD: f32 = 10.0;
     const PAD_SMALL: f32 = 6.0;
@@ -84,16 +123,27 @@ pub fn plan(inner_w: f32, n: usize, widest: f32, widest_small: f32) -> Plan {
             shrink: true,
         };
     }
-    let cols = (1..=n)
+    let fit = (1..=n)
         .rev()
         .find(|&c| inner_w / c as f32 >= widest + PAD)
         .unwrap_or(1);
+    // The fewest rows, then as few columns as fill them: a 3 + 1 block reads as a broken row.
+    let rows = n.div_ceil(fit);
     Plan {
-        cols,
+        cols: n.div_ceil(rows),
         shrink: false,
     }
 }
 
+/// A segmented control at a given height and font. The Masks panel's mode control is drawn
+/// taller and in the body face (user's call, 2026-09-19: the compact one read too small for
+/// the panel's primary control).
+///
+/// ⚠⚠ **It never lets a label overflow its cell.** The columns are the most that still hold
+/// the widest label at this font; when the panel is too narrow for one row the items wrap onto
+/// as many rows as that takes (four items at the panel's default 240 pt become a 2 × 2 block).
+/// The first version drew four body-face labels into one row and they overlapped at the
+/// default width — seen in use, 2026-09-19.
 pub fn segmented_sized<T: PartialEq + Copy>(
     ui: &mut egui::Ui,
     current: &mut T,
@@ -101,37 +151,53 @@ pub fn segmented_sized<T: PartialEq + Copy>(
     height: f32,
     font: egui::FontId,
 ) -> egui::Response {
+    let segments: Vec<Segment<'_, T>> = items
+        .iter()
+        .map(|&(value, label, hover)| Segment {
+            value,
+            label,
+            hover,
+            mark: Mark::None,
+        })
+        .collect();
+    segmented_marked(ui, current, &segments, height, font)
+}
+
+/// [`segmented_sized`] with a [`Mark`] before each label — the mask modes' icons, the curve
+/// channels' dots. The mark is part of the width a cell must hold, and never shrinks.
+pub fn segmented_marked<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    current: &mut T,
+    items: &[Segment<'_, T>],
+    height: f32,
+    font: egui::FontId,
+) -> egui::Response {
     /// Horizontal room around a label inside its cell.
     const GAP: f32 = 2.0;
     let n = items.len().max(1);
     let width = ui.available_width();
-    let widest = ui.fonts_mut(|f| {
-        items
-            .iter()
-            .map(|(_, l, _)| {
-                f.layout_no_wrap((*l).to_owned(), font.clone(), egui::Color32::WHITE)
-                    .size()
-                    .x
-            })
-            .fold(0.0, f32::max)
-    });
+    let widest_at = |ui: &mut egui::Ui, font: &egui::FontId| {
+        ui.fonts_mut(|f| {
+            items
+                .iter()
+                .map(|it| {
+                    f.layout_no_wrap(it.label.to_owned(), font.clone(), egui::Color32::WHITE)
+                        .size()
+                        .x
+                        + it.mark.width()
+                })
+                .fold(0.0, f32::max)
+        })
+    };
+    let widest = widest_at(ui, &font);
     let inner_w = (width - 4.0).max(1.0);
     // ⚠ Shrink before wrapping: at the panel's floor width the five-tab curve selector, the
     // four Retouch modes, the four mask modes and Tint by tone each spilled onto a second row,
     // which both first-use reviews read as a broken control (A-20, P-02). A slightly smaller
     // label that keeps one row beats a second row every time; only when even that does not
-    // fit do the items wrap.
-    let small = egui::FontId::new(font.size * SHRINK, font.family.clone());
-    let widest_small = ui.fonts_mut(|f| {
-        items
-            .iter()
-            .map(|(_, l, _)| {
-                f.layout_no_wrap((*l).to_owned(), small.clone(), egui::Color32::WHITE)
-                    .size()
-                    .x
-            })
-            .fold(0.0, f32::max)
-    });
+    // fit do the items wrap. ⚠ Never below Caption — `shrunk_size`.
+    let small = egui::FontId::new(shrunk_size(font.size), font.family.clone());
+    let widest_small = widest_at(ui, &small);
     let Plan { cols, shrink } = plan(inner_w, n, widest, widest_small);
     let font = if shrink { small } else { font };
     let rows = n.div_ceil(cols);
@@ -147,7 +213,8 @@ pub fn segmented_sized<T: PartialEq + Copy>(
     let row_h = (inner.height() - (rows as f32 - 1.0) * GAP) / rows as f32;
     let cell_radius = row_h / 2.0;
     let mut all = resp.clone();
-    for (i, (item, label, hover)) in items.iter().enumerate() {
+    for (i, it) in items.iter().enumerate() {
+        let (item, label, hover) = (&it.value, &it.label, &it.hover);
         let (col, row) = (i % cols, i / cols);
         let cell = egui::Rect::from_min_size(
             egui::pos2(
@@ -176,12 +243,37 @@ pub fn segmented_sized<T: PartialEq + Copy>(
         } else if r.hovered() {
             painter.rect_filled(cell, cell_radius, t.hover);
         }
-        painter.text(
-            cell.center(),
-            egui::Align2::CENTER_CENTER,
-            *label,
-            font.clone(),
-            if lit { t.text } else { t.text2 },
+        let colour = if lit { t.text } else { t.text2 };
+        // The mark and the label centred together as one group.
+        let galley = painter.layout_no_wrap(label.to_string(), font.clone(), colour);
+        let group = it.mark.width() + galley.size().x;
+        let left = cell.center().x - group / 2.0;
+        match it.mark {
+            Mark::None => {}
+            Mark::Icon(glyph) => {
+                painter.text(
+                    egui::pos2(left + theme::tokens::ICON / 2.0, cell.center().y),
+                    egui::Align2::CENTER_CENTER,
+                    glyph,
+                    egui::FontId::proportional(theme::tokens::ICON),
+                    colour,
+                );
+            }
+            Mark::Dot(c) => {
+                painter.circle_filled(
+                    egui::pos2(left + MARK_DOT / 2.0, cell.center().y),
+                    MARK_DOT / 2.0,
+                    c,
+                );
+            }
+        }
+        painter.galley(
+            egui::pos2(
+                left + it.mark.width(),
+                cell.center().y - galley.size().y / 2.0,
+            ),
+            galley,
+            colour,
         );
         all = all.union(r);
     }
@@ -598,6 +690,32 @@ mod plan_tests {
         let wrapped = plan(200.0, 5, 60.0, 50.0);
         assert!(!wrapped.shrink);
         assert!(wrapped.cols < 5 && wrapped.cols >= 1, "{wrapped:?}");
+    }
+
+    /// Four that would fit three to a row are drawn two and two — a 3 + 1 block reads as a row
+    /// with a straggler. Five that fit three go three and two.
+    #[test]
+    fn a_wrapped_control_is_balanced() {
+        // 300 fits three of 90 (+10) but not four.
+        assert_eq!(plan(300.0, 4, 90.0, 90.0).cols, 2);
+        assert_eq!(plan(300.0, 5, 90.0, 90.0).cols, 3);
+        // ⚠ The positive control: a row that fits stays one row.
+        assert_eq!(plan(500.0, 4, 90.0, 90.0).cols, 4);
+    }
+
+    /// The shrink stops at Caption — `docs/DESIGN.md` §3's floor. ⚠ Both halves: a Body label
+    /// still shrinks, a Caption one does not.
+    #[test]
+    fn a_label_never_shrinks_below_caption() {
+        let caption = crate::theme::tokens::CAPTION;
+        let body = crate::theme::tokens::BODY;
+        assert!(shrunk_size(body) < body, "a body label must still shrink");
+        assert!(shrunk_size(body) >= caption);
+        assert_eq!(
+            shrunk_size(caption),
+            caption,
+            "a caption label shrank below the floor"
+        );
     }
 
     #[test]

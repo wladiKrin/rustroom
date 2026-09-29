@@ -13,7 +13,7 @@
 //! still adds a shape you did not mean, which the user accepted for the shorter panel.
 
 use crate::develop::panel::{mask_components, section, Edited};
-use crate::{theme, Session};
+use crate::Session;
 use eframe::egui;
 use rustroom_app::mask_kind::MaskKind;
 use rustroom_app::mask_tool;
@@ -44,6 +44,8 @@ pub struct MaskUi<'a> {
     pub grade: &'a mut super::color_wheel::GradeRange,
     /// `None` = New mask; `Some(op)` = the next kind button refines the selected mask.
     pub add_mode: &'a mut Option<edit_model::MaskOp>,
+    /// Whether the mask's tone curve is expanded — `Settings::tone_curve_open`, saved by the caller.
+    pub curve_open: &'a mut bool,
 }
 
 /// Draw the Masks tool's controls.
@@ -61,6 +63,7 @@ pub fn show(
         hsl: mask_hsl,
         grade: mask_grade,
         add_mode,
+        curve_open,
     } = ui_state;
     // Hoisted above every `&mut s.*` below: `Illuminant` is `Copy`, so reading it here costs
     // nothing and keeps the later mutable borrows disjoint.
@@ -122,11 +125,21 @@ pub fn show(
         out.show_body(ui, |ui| shape_block(ui, shape, &mut brush, ed));
     }
 
-    super::mask_adjust::show(ui, &mut m.adjustments, baseline, mask_hsl, mask_grade, ed);
+    super::mask_adjust::show(
+        ui,
+        &mut m.adjustments,
+        baseline,
+        mask_hsl,
+        mask_grade,
+        curve_open,
+        ed,
+    );
 }
 
-/// The mode control's height, matching the kind buttons under it.
-const MODE_HEIGHT: f32 = 28.0;
+/// The mode control's height per row: 32-pt segments once the four wrap into two rows of two,
+/// which they do at the panel's width with an icon before each label (the author's pick, option B
+/// on the 2026-09-29 canvas — "same modes, larger").
+const MODE_HEIGHT: f32 = 34.0;
 
 /// The mode control and the row of kind buttons.
 ///
@@ -147,33 +160,41 @@ fn add_controls(
     }
     // ⚠ The hint that used to sit under the buttons, split into a hover per mode (user's
     // call, 2026-09-19).
+    use crate::segmented::{Mark, Segment};
+    use rustroom_app::icons;
     let items = [
-        (
-            None,
-            "New mask",
-            "Starts a new mask with the next kind you pick",
-        ),
-        (
-            Some(edit_model::MaskOp::Add),
-            edit_model::MaskOp::Add.label(),
-            "Adds the next shape to the selected mask",
-        ),
-        (
-            Some(edit_model::MaskOp::Subtract),
-            edit_model::MaskOp::Subtract.label(),
-            "Cuts the next shape out of the selected mask",
-        ),
-        (
-            Some(edit_model::MaskOp::Intersect),
-            edit_model::MaskOp::Intersect.label(),
-            "Keeps only where the selected mask and the next shape overlap",
-        ),
+        Segment {
+            value: None,
+            label: "New mask",
+            hover: "Starts a new mask with the next kind you pick",
+            mark: Mark::Icon(icons::MASK_NEW),
+        },
+        Segment {
+            value: Some(edit_model::MaskOp::Add),
+            label: edit_model::MaskOp::Add.label(),
+            hover: "Adds the next shape to the selected mask",
+            mark: Mark::Icon(icons::MASK_ADD),
+        },
+        Segment {
+            value: Some(edit_model::MaskOp::Subtract),
+            label: edit_model::MaskOp::Subtract.label(),
+            hover: "Cuts the next shape out of the selected mask",
+            mark: Mark::Icon(icons::MASK_SUBTRACT),
+        },
+        Segment {
+            value: Some(edit_model::MaskOp::Intersect),
+            label: edit_model::MaskOp::Intersect.label(),
+            hover: "Keeps only where the selected mask and the next shape overlap",
+            mark: Mark::Icon(icons::MASK_INTERSECT),
+        },
     ];
     // ⚠ Taller and in the body face: this is the panel's primary control, and the compact
-    // selector the HSL bands use read too small here (user's call, 2026-09-19).
+    // selector the HSL bands use read too small here (user's call, 2026-09-19). ⚠ An icon before
+    // each label since 2026-09-29, which is what makes the four wrap into a 2 × 2 block at the
+    // panel's width — `segmented::plan` balances the rows, never three and one.
     let font = egui::TextStyle::Body.resolve(ui.style());
     ui.add_enabled_ui(can_refine, |ui| {
-        theme::segmented_sized(ui, mode, &items, MODE_HEIGHT, font)
+        crate::segmented::segmented_marked(ui, mode, &items, MODE_HEIGHT, font)
     })
     .response
     .on_disabled_hover_text("Select a mask to refine it");
@@ -551,6 +572,7 @@ mod tests {
                     hsl: &mut self.channel,
                     grade: &mut self.grade,
                     add_mode: &mut self.mode,
+                    curve_open: &mut true,
                 },
                 BrushTool {
                     size: &mut self.size,

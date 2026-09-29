@@ -322,6 +322,100 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
     }
 }
 
+/// A collapsible block **inside** a section — the tone curve (2026-09-29): the chevron the section
+/// headers draw, the name in the sub-label face (Caption medium, `text2`), an accent dot while the
+/// block differs from neutral, and `trailing` — the block's own Reset — at the right **while it is
+/// open**. Returns whether it is open.
+///
+/// ⚠⚠ **`open` is the caller's, never egui's collapsing state:** egui's memory does not survive a
+/// restart here, and a block the author collapsed to keep it out of the way must stay collapsed
+/// (`Settings::tone_curve_open`).
+///
+/// ⚠ The trailing controls act on what the block shows — the curve's selected channel — so they
+/// go with it when it closes; the dot still says the block is doing something.
+///
+/// ⚠ The row's click is registered **before** the trailing controls, so they win the hit test
+/// where they sit (egui takes the last widget registered at a point), and the rest of the row
+/// toggles.
+pub fn sub_header(
+    ui: &mut egui::Ui,
+    name: &str,
+    open: &mut bool,
+    modified: bool,
+    trailing: impl FnOnce(&mut egui::Ui),
+) -> bool {
+    ui.add_space(8.0);
+    let height = ui.spacing().interact_size.y;
+    let row = egui::Rect::from_min_size(
+        ui.next_widget_position(),
+        egui::vec2(ui.available_width(), height),
+    );
+    let resp = ui.interact(
+        row,
+        ui.id().with(("sub_header", name)),
+        egui::Sense::click(),
+    );
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, enabled, name)
+    });
+    if resp.clicked() {
+        *open = !*open;
+    }
+    // ⚠ The whole row's height is claimed even when nothing trails, or the next widget would be
+    // placed over this row — the empty-scope trap `list_row` records.
+    let shown = *open;
+    ui.allocate_ui_with_layout(
+        row.size(),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            ui.set_min_height(height);
+            if shown {
+                trailing(ui);
+            }
+        },
+    );
+    if ui.is_rect_visible(row) {
+        let v = ui.visuals().clone();
+        let painter = ui.painter();
+        let c = egui::pos2(row.left() + CHEVRON_W / 2.0, row.center().y);
+        let rot = if shown {
+            egui::emath::Rot2::from_angle(std::f32::consts::FRAC_PI_2)
+        } else {
+            egui::emath::Rot2::IDENTITY
+        };
+        let pts = [
+            egui::vec2(-2.0, -3.5),
+            egui::vec2(1.5, 0.0),
+            egui::vec2(-2.0, 3.5),
+        ]
+        .map(|p| c + rot * p)
+        .to_vec();
+        let colour = if resp.hovered() {
+            v.strong_text_color()
+        } else {
+            v.weak_text_color()
+        };
+        painter.add(egui::Shape::line(pts, egui::Stroke::new(1.4, colour)));
+        let font = theme::medium_font(ui.ctx(), theme::section_font(ui.style()).size);
+        let text_rect = painter.text(
+            egui::pos2(row.left() + CHEVRON_W + 2.0, row.center().y),
+            egui::Align2::LEFT_CENTER,
+            name,
+            font,
+            colour,
+        );
+        if modified {
+            painter.circle_filled(
+                egui::pos2(text_rect.right() + 8.0, row.center().y),
+                2.5,
+                v.selection.bg_fill,
+            );
+        }
+    }
+    shown
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
