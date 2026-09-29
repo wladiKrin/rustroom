@@ -6,9 +6,9 @@
 
 use crate::develop::panel::Edited;
 use crate::theme;
+use crate::theme::Hover as _;
 use eframe::egui;
 use rustroom_app::defringe_tool as tool;
-use crate::theme::Hover as _;
 
 /// The hue-range widget's height, in points.
 const STRIP_H: f32 = 18.0;

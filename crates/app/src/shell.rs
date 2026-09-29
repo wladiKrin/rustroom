@@ -5,6 +5,7 @@
 
 use crate::segmented::{self, PillItem, PillStyle};
 use crate::theme;
+use crate::theme::Hover as _;
 use crate::{
     commands, develop, library, menu_bar, modals, multi, name_edit, AppView, LibraryMode,
     RustroomApp,
@@ -14,7 +15,6 @@ use rustroom_app::icons;
 use rustroom_app::menu::{self, Command};
 use rustroom_app::photo_id::PhotoId;
 use rustroom_app::render_engine::RegionRect;
-use crate::theme::Hover as _;
 
 impl eframe::App for RustroomApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

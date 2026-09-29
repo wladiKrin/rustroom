@@ -260,7 +260,12 @@ fn confirm_forget_folder(app: &mut RustroomApp, ctx: &egui::Context) {
         "confirm_forget_folder",
         "Forget folder?",
         theme::DialogSize::Compact,
-        Footer::confirm("Forget", true, "Cancel"),
+        Footer::confirm(
+            "Forget",
+            "Removes this folder from the catalog and leaves its files on disk",
+            true,
+            "Cancel",
+        ),
         |ui| {
             ui.label(format!("Forget “{}”?", path.display()));
             crate::theme::hint(
@@ -305,7 +310,12 @@ fn confirm_delete_keyword(app: &mut RustroomApp, ctx: &egui::Context) {
         "confirm_delete_keyword",
         "Delete keyword?",
         theme::DialogSize::Compact,
-        Footer::confirm("Delete", true, "Cancel"),
+        Footer::confirm(
+            "Delete",
+            "Deletes this keyword from the catalog",
+            true,
+            "Cancel",
+        ),
         |ui| {
             ui.label(format!("Delete “{name}”?"));
             let mut what = Vec::new();
@@ -360,7 +370,12 @@ fn confirm_merge_keyword(app: &mut RustroomApp, ctx: &egui::Context) {
         "confirm_merge_keyword",
         "Merge keywords?",
         theme::DialogSize::Compact,
-        Footer::confirm("Merge", false, "Cancel"),
+        Footer::confirm(
+            "Merge",
+            "Merges this keyword into the existing one",
+            false,
+            "Cancel",
+        ),
         |ui| {
             ui.label(format!(
                 "“{into_name}” already exists here. Merge “{from_name}” into it?"

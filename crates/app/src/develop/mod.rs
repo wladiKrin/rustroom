@@ -18,8 +18,8 @@ use rustroom_app::icons;
 /// because a toolbar icon sits in a row of its own height while a rail entry has a label under
 /// it and a whole 88 pt column to fill.
 const ICON_SIZE: f32 = crate::theme::tokens::ICON;
-use rustroom_app::menu::Command;
 use crate::theme::Hover as _;
+use rustroom_app::menu::Command;
 
 /// The Develop editor body: preset panel, adjustments panel, filmstrip, canvas.
 ///

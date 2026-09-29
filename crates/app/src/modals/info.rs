@@ -5,9 +5,9 @@
 use crate::modals::shell::tabs;
 use crate::modals::{dialog, Footer, Modal};
 use crate::theme;
+use crate::theme::Hover as _;
 use crate::RustroomApp;
 use eframe::egui;
-use crate::theme::Hover as _;
 
 /// The description fields' hover. ⚠ It was a paragraph under them (`docs/DESIGN.md` §8).
 const SHARED_NOTE: &str =
@@ -148,7 +148,19 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             let tab = tabs(
                 ui,
                 egui::Id::new("info_tab"),
-                &["File", "Image", "Capture", "Description", "Marks"],
+                &[
+                    ("File", "Shows the file's name, folder and version"),
+                    ("Image", "Shows the picture's size and format"),
+                    (
+                        "Capture",
+                        "Shows the camera, lens and exposure it was taken with",
+                    ),
+                    (
+                        "Description",
+                        "Shows the title, caption, copyright and creator",
+                    ),
+                    ("Marks", "Shows the rating, flag, label and keywords"),
+                ],
             );
             match tab {
                 0 => grid(ui, "info_file", |ui| {

@@ -24,7 +24,11 @@ pub fn show(
 ) {
     // ⚠ A selector, not three nested CollapsingHeaders. Nesting cost a third level *and*
     // put a "Saturation" header under a "Saturation" slider meaning something else.
-    theme::segmented(ui, channel, &HslChannel::ALL.map(|c| (c, c.label())));
+    theme::segmented(
+        ui,
+        channel,
+        &HslChannel::ALL.map(|c| (c, c.label(), c.hover())),
+    );
     let before = ed.help_scope;
     ed.help_scope = rustroom_app::slider_help::Scope::Hsl(channel.help_tab());
     for (i, name) in edit_model::HSL_BAND_NAMES.iter().enumerate() {

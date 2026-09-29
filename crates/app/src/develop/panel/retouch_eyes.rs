@@ -5,12 +5,12 @@
 
 use super::Edited;
 use crate::develop::panel::{mask_components, section};
+use crate::theme::Hover as _;
 use crate::Session;
 use edit_model::{EyeKind, SpotMode};
 use eframe::egui;
 use rustroom_app::eye_tool::{EyeTool, FALLBACK_CATCHLIGHT};
 use rustroom_app::{mask_tool, spot_tool};
-use crate::theme::Hover as _;
 
 /// The Retouch tool's four modes. Derived, never stored: `SpotTool::mode` and `EyeTool::active`
 /// are the two facts, and this is their product.

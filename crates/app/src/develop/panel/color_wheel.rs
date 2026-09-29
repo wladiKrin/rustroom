@@ -52,6 +52,16 @@ impl GradeRange {
         }
     }
 
+    /// The selector's hover sentence (M10.6b), beside the label so the two cannot part.
+    pub fn hover(self) -> &'static str {
+        match self {
+            Self::Shadows => "Shows the wheel that tints the shadows",
+            Self::Midtones => "Shows the wheel that tints the midtones",
+            Self::Highlights => "Shows the wheel that tints the highlights",
+            Self::Global => "Shows the wheel that tints the whole picture",
+        }
+    }
+
     /// The wheel this range edits.
     pub fn wheel_mut(self, g: &mut ColorGrading) -> &mut GradeWheel {
         match self {

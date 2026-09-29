@@ -4,9 +4,9 @@
 //! shown *before* the adjustments panel or it lands between the panel and the canvas. The
 //! ordering rule is documented on `develop::body` and is load-bearing.
 
+use crate::theme::Hover as _;
 use eframe::egui;
 use rustroom_app::tool::Tool;
-use crate::theme::Hover as _;
 
 /// Rail width in points.
 ///

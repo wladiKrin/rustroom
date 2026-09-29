@@ -13,8 +13,8 @@
 //! a fourth `RowGlyph` variant: the two rows share a look, not a contract, and every action
 //! here is a momentary button while the mask row's are toggles.
 
-use eframe::egui;
 use crate::theme::Hover as _;
+use eframe::egui;
 
 /// Row height in points — the Masks list's, `docs/DESIGN.md` §5.
 pub const ROW_HEIGHT: f32 = crate::theme::tokens::LIST_ROW;

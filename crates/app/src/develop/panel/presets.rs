@@ -12,12 +12,12 @@
 //! inside the tool `match` with the others.
 
 use crate::develop::panel::{mask_components, section};
+use crate::theme::Hover as _;
 use crate::{Modal, RustroomApp};
 use edit_model::EditGroups;
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
 use rustroom_app::thumb_loader::ThumbRequest;
-use crate::theme::Hover as _;
 
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     enum Action {

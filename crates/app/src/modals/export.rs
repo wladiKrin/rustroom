@@ -6,6 +6,7 @@
 
 use super::{dialog, Footer};
 use crate::list_row::{self, RowAction, RowSpec};
+use crate::theme::Hover as _;
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
 use rustroom_app::batch_export::{banding_warning, can_export, Collision, Decision, ExportOptions};
@@ -15,7 +16,6 @@ use rustroom_app::export_presets::ExportPreset;
 use rustroom_app::export_summary;
 use rustroom_app::filename_template::{NameFacts, Template};
 use rustroom_app::settings::ConfirmOutcome;
-use crate::theme::Hover as _;
 
 /// What a DNG is — the Format combo's hover. ⚠ It was a paragraph under the Colour section,
 /// shown whenever DNG was chosen (`docs/DESIGN.md` §8).
@@ -237,6 +237,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
         theme::DialogSize::Wide,
         Footer::confirm(
             "Export",
+            "Exports the chosen photos with these settings",
             can_export(
                 &opts,
                 upload_avail == rustroom_app::immich_upload::Availability::Ready,
@@ -604,7 +605,12 @@ pub fn save_preset(app: &mut RustroomApp, ctx: &egui::Context) {
         "save_export_preset",
         "Save export preset",
         theme::DialogSize::Standard,
-        Footer::confirm("Save", !name.trim().is_empty(), "Cancel"),
+        Footer::confirm(
+            "Save",
+            "Saves these export settings as a preset under this name",
+            !name.trim().is_empty(),
+            "Cancel",
+        ),
         |ui| {
             ui.horizontal(|ui| {
                 ui.label("Name");
@@ -657,7 +663,7 @@ pub fn upload_unconfirmed(app: &mut RustroomApp, ctx: &egui::Context) {
         // ⚠ `Standard`, not `Compact`: this carries a full path and two hints, which `Compact` —
         // sized for "a sentence and two buttons" — wrapped too tightly to read (user's call, on use).
         theme::DialogSize::Standard,
-        Footer::confirm("OK", true, ""),
+        Footer::confirm("OK", "Closes this notice", true, ""),
         |ui| {
             ui.label("An upload did not confirm, so the file was kept rather than removed.");
             ui.add_space(4.0);
@@ -699,7 +705,7 @@ pub fn confirm_delete(app: &mut RustroomApp, ctx: &egui::Context) {
         "confirm_delete_export",
         "Delete export preset?",
         theme::DialogSize::Compact,
-        Footer::confirm("Delete", true, "Cancel"),
+        Footer::confirm("Delete", "Deletes this export preset", true, "Cancel"),
         |ui| {
             ui.label(format!("Delete the export preset \u{201c}{name}\u{201d}?"));
             theme::hint(ui, "This cannot be undone — export presets have no trash.");
@@ -759,7 +765,17 @@ pub fn collision(app: &mut RustroomApp, ctx: &egui::Context) {
         "export_collision",
         "File already exists",
         theme::DialogSize::Standard,
-        Footer::confirm("Keep both", true, "Cancel export").extra(&["Skip", "Overwrite"]),
+        Footer::confirm(
+            "Keep both",
+            "Exports this photo under a new name beside the existing file",
+            true,
+            "Cancel export",
+        )
+        .dismiss_says("Stops the export, keeping the files already written")
+        .extra(&[
+            ("Skip", "Leaves this photo out and goes on with the rest"),
+            ("Overwrite", "Replaces the existing file with this export"),
+        ]),
         |ui| {
             ui.label(format!("“{name}” is already in the destination folder."));
             ui.checkbox(&mut apply_all, "Apply to all remaining");

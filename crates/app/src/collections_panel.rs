@@ -9,11 +9,11 @@
 
 use crate::develop::panel::section::{header, Header};
 use crate::list_row::{self, RowAction, RowSpec};
+use crate::theme::Hover as _;
 use crate::{theme, RustroomApp};
 use eframe::egui;
 use rustroom_app::icons;
 use rustroom_app::settings::PanelSection;
-use crate::theme::Hover as _;
 
 /// One collapsible section of the panel: the Develop panel's header, draggable.
 ///

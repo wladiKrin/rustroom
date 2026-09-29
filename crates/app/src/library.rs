@@ -1,12 +1,12 @@
 //! The Library grid: a page of thumbnails, filtered by format, with selection.
 
 use crate::interaction::apply_click;
+use crate::theme::Hover as _;
 use crate::{name_edit, thumb, RustroomApp};
 use eframe::egui;
 use rustroom_app::photo_id::PhotoId;
 use rustroom_app::thumb_loader::ThumbRequest;
 use std::path::PathBuf;
-use crate::theme::Hover as _;
 
 /// The Library grid: thumbnails, selection, double-click / Enter to open in Develop.
 /// The entry indices whose cells the rubber band touches.

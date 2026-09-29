@@ -13,11 +13,11 @@
 //! still adds a shape you did not mean, which the user accepted for the shorter panel.
 
 use crate::develop::panel::{mask_components, section, Edited};
+use crate::theme::Hover as _;
 use crate::Session;
 use eframe::egui;
 use rustroom_app::mask_kind::MaskKind;
 use rustroom_app::{mask_order, mask_tool};
-use crate::theme::Hover as _;
 
 /// Brush tool settings, which live on the app rather than on the mask.
 ///

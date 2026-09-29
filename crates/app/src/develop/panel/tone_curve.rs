@@ -10,10 +10,10 @@
 
 use crate::develop::panel::Edited;
 use crate::theme;
+use crate::theme::Hover as _;
 use edit_model::ToneCurve;
 use eframe::egui;
 use rustroom_app::tone_curve_tool as tool;
-use crate::theme::Hover as _;
 
 /// Widest the editor is drawn, and it stays **fixed** while the panel grows. The widget is square —
 /// a tone curve read against a non-square box misleads about its slope.

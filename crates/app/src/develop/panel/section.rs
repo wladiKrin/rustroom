@@ -17,9 +17,9 @@
 //! colorimetric render, see `edit_model::RENDERING_GROUP`), and the Masks panel's MASKS, SHAPE
 //! (trailing = the shape's kind) and adjustment sections.
 
+use crate::theme::Hover as _;
 use crate::theme::{self, tokens};
 use eframe::egui;
-use crate::theme::Hover as _;
 
 const HEIGHT: f32 = tokens::HEADER_ROW;
 const CHEVRON_W: f32 = 14.0;

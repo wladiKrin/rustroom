@@ -9,6 +9,7 @@ use super::retouch_eyes::{self, Mode};
 use super::Edited;
 use crate::develop::panel::{mask_components, section};
 use crate::theme;
+use crate::theme::Hover as _;
 use crate::Session;
 use edit_model::SpotMode;
 use eframe::egui;
@@ -203,7 +204,11 @@ fn show_all_row(ui: &mut egui::Ui, s: &mut Session) {
         |ui| {
             clicked = ui
                 .small_button(label)
-                .on_hover_text("Every patch's outline at once, so you can see the photograph")
+                .hover(if all {
+                    "Hides every patch's outline, so you can see the photograph"
+                } else {
+                    "Shows every patch's outline"
+                })
                 .clicked();
         },
     );
@@ -334,27 +339,25 @@ fn find_dust(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
     let mut on = s.visualize.is_some();
     if ui
         .toggle_value(&mut on, "Find dust")
-        .on_hover_text(
-            "A high-contrast view that makes sensor dust visible. Affects only what you see — \
-             never the render, the export or the histogram.",
-        )
+        .hover("Shows a high-contrast view that makes sensor dust stand out, in the view only")
         .changed()
     {
         s.visualize = on.then_some(rustroom_app::visualize::DEFAULT_THRESHOLD);
         ed.changed = true;
     }
     if let Some(t) = s.visualize.as_mut() {
-        let r = ui
-            .add(
-                super::slider::Slider::new(
-                    t,
-                    rustroom_app::visualize::MIN_THRESHOLD..=rustroom_app::visualize::MAX_THRESHOLD,
-                )
-                .text("Threshold"),
+        let r = ui.add(
+            super::slider::Slider::new(
+                t,
+                rustroom_app::visualize::MIN_THRESHOLD..=rustroom_app::visualize::MAX_THRESHOLD,
             )
-            .on_hover_text(
-                "Higher shows more. It is a gain, not a cutoff, so it always shows something.",
-            );
+            .text("Threshold")
+            // ⚠ The slider's own help, not a hover on its response: that way the rail and the
+            // number carry the sentence too (M10.6b).
+            .help(Some(
+                "Raises the view's gain, so fainter dust shows".to_string(),
+            )),
+        );
         ed.changed |= r.changed();
     }
 }

@@ -6,10 +6,10 @@
 //! not fill the resize axis.
 
 use crate::interaction::apply_click;
+use crate::theme::Hover as _;
 use crate::{thumb, RustroomApp};
 use eframe::egui;
 use rustroom_app::thumb_loader::ThumbRequest;
-use crate::theme::Hover as _;
 
 /// Bottom strip of the loaded folder's thumbnails; click a cell to open that photo.
 /// The panel is resizable (drag its top border); thumbnails scale with its height.

@@ -20,10 +20,10 @@ pub mod slider;
 pub mod snapshots;
 pub mod tone_curve;
 
+use crate::theme::Hover as _;
 use crate::{theme, RustroomApp};
 use eframe::egui;
 use rustroom_app::tool::Tool;
-use crate::theme::Hover as _;
 
 /// Accumulates, over one frame of the panel, whether the photo changed and whether a drag
 /// settled into a history entry.

@@ -4,11 +4,11 @@
 //! ⚠ Its own module because `develop/panel/masks.rs` is past the ~600 marker.
 
 use crate::develop::panel::{mask_glyph, Edited};
+use crate::theme::Hover as _;
 use crate::Session;
 use eframe::egui;
 use rustroom_app::mask_kind::MaskKind;
 use rustroom_app::{mask_order, mask_tool};
-use crate::theme::Hover as _;
 
 /// The mask at component `j` — `0` is the base, `j > 0` the `j-1`th refinement.
 ///

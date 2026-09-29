@@ -9,11 +9,11 @@
 
 use crate::modals::{dialog, Footer, Modal};
 use crate::theme;
+use crate::theme::Hover as _;
 use crate::RustroomApp;
 use eframe::egui;
 use rustroom_app::rule::{Cmp, Criterion};
 use rustroom_app::rule_form::{Match, Row};
-use crate::theme::Hover as _;
 
 /// Every kind a new row can be, in the order the dropdown offers them.
 ///
@@ -314,7 +314,12 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         "edit_rule",
         &format!("Rule for “{name}”"),
         theme::DialogSize::Wide,
-        Footer::confirm("Save", !unsupported, "Cancel"),
+        Footer::confirm(
+            "Save",
+            "Saves these rules for this smart collection",
+            !unsupported,
+            "Cancel",
+        ),
         |ui| {
             if unsupported {
                 // ⚠⚠ Declining to edit, never starting from empty. An empty form that replaced a
@@ -344,11 +349,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             let mut drop_row: Option<usize> = None;
             for (ri, row) in form.rows.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
-                    if ui
-                        .button("×")
-                        .hover("Removes this condition")
-                        .clicked()
-                    {
+                    if ui.button("×").hover("Removes this condition").clicked() {
                         drop_row = Some(ri);
                     }
                     // The kind dropdown replaces every value with a prototype of the new kind.

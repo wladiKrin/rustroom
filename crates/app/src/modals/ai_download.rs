@@ -23,7 +23,17 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         "ai_download",
         "AI masks need a model",
         theme::DialogSize::Standard,
-        Footer::confirm(&primary, !busy, if busy { "Cancel" } else { "Not now" }),
+        Footer::confirm(
+            &primary,
+            "Downloads the model files once, for every photo",
+            !busy,
+            if busy { "Cancel" } else { "Not now" },
+        )
+        .dismiss_says(if busy {
+            "Stops the download"
+        } else {
+            "Closes this dialog and downloads nothing"
+        }),
         |ui| {
             theme::hint(
                 ui,

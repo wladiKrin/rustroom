@@ -14,12 +14,12 @@
 use super::shell::tabs;
 use super::{dialog, Footer};
 use crate::decode::view_quality_hint;
+use crate::theme::Hover as _;
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
 use rustroom_app::settings::{
     Accent, DragQuality, EraseDrag, PanDrag, ParametricDrag, Settings, ThemeChoice,
 };
-use crate::theme::Hover as _;
 
 /// Air between two settings on a tab.
 const GAP: f32 = 8.0;
@@ -291,18 +291,23 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         "settings",
         "Settings",
         theme::DialogSize::Standard,
-        Footer::confirm("Apply", true, "Cancel"),
+        Footer::confirm(
+            "Apply",
+            "Keeps these settings and closes the dialog",
+            true,
+            "Cancel",
+        ),
         |ui| {
             let tab = tabs(
                 ui,
                 egui::Id::new("settings_tab"),
                 &[
-                    "Behaviour",
-                    "Appearance",
-                    "Display",
-                    "Performance",
-                    "Input",
-                    "Immich",
+                    ("Behaviour", "Shows what happens when you delete, open and save"),
+                    ("Appearance", "Shows the theme, accent, text size and stacking"),
+                    ("Display", "Shows the colour space the photo is shown in"),
+                    ("Performance", "Shows preview quality, the caches, the GPU and how many photos export at once"),
+                    ("Input", "Shows which mouse buttons pan, erase and draw"),
+                    ("Immich", "Shows the connection to your Immich server"),
                 ],
             );
             ui.spacing_mut().item_spacing.y = GAP;
@@ -487,9 +492,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 }
                             })
                             .response
-                            .hover(
-                                "Sets the quality of the previews built for edited photos",
-                            );
+                            .hover("Sets the quality of the previews built for edited photos");
                     });
 
                     theme::sub_label(ui, "Preview cache");
@@ -503,9 +506,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         ui.label(format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0));
                         if ui
                             .button("Clear")
-                            .hover(
-                                "Deletes the rendered previews, which are rebuilt when needed",
-                            )
+                            .hover("Deletes the rendered previews, which are rebuilt when needed")
                             .clicked()
                         {
                             store.clear();
@@ -520,9 +521,8 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                     .hover("Sets how much disk space rendered previews may use");
 
                     theme::sub_label(ui, "Rendering");
-                    ui.checkbox(&mut d.gpu_tail, "Use the GPU").hover(
-                        "Runs editing and export on the graphics card where that is faster",
-                    );
+                    ui.checkbox(&mut d.gpu_tail, "Use the GPU")
+                        .hover("Runs editing and export on the graphics card where that is faster");
 
                     theme::sub_label(ui, "Thumbnail cache");
                     ui.horizontal(|ui| {
@@ -535,9 +535,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         ui.label(format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0));
                         if ui
                             .button("Clear")
-                            .hover(
-                                "Deletes the cached thumbnails, which are rebuilt when needed",
-                            )
+                            .hover("Deletes the cached thumbnails, which are rebuilt when needed")
                             .clicked()
                         {
                             store.clear();
@@ -615,9 +613,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             }
                         })
                         .response
-                        .hover(
-                            "Chooses the button to hold to erase while painting a brush mask",
-                        );
+                        .hover("Chooses the button to hold to erase while painting a brush mask");
                     // ⚠ A clash is a problem, not a description: it stays on the page.
                     if clash {
                         theme::error_hint(
@@ -639,9 +635,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             }
                         })
                         .response
-                        .hover(
-                            "Lets you drag on the curve to adjust a region in Parametric mode",
-                        );
+                        .hover("Lets you drag on the curve to adjust a region in Parametric mode");
 
                     theme::sub_label(ui, "Preview while dragging");
                     egui::ComboBox::from_id_salt("drag_quality_pick")

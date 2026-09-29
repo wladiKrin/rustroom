@@ -14,8 +14,8 @@
 //!   integration. A checkbox reads as one setting among many; this reads as a decision.
 
 use crate::theme;
-use eframe::egui;
 use crate::theme::Hover as _;
+use eframe::egui;
 
 /// A segmented control: one full-width well, `items.len()` equal columns, exactly one lit.
 ///
@@ -23,17 +23,11 @@ use crate::theme::Hover as _;
 /// for a list of options with its own reasons to be `selectable_label`s (aspect presets, looks,
 /// composition guides). Each column carries `WidgetInfo::selected` with its label, so
 /// `test_ui::click(ctx, "Saturation", ..)` reaches it exactly as it reached the chips.
+///
+/// ⚠ Each item is `(value, label, hover sentence)` — the sentence is part of the signature (M10.6b),
+/// so a segment cannot be added mute without writing `""` on purpose, which `hover_coverage` then
+/// reports wherever it can draw the control.
 pub fn segmented<T: PartialEq + Copy>(
-    ui: &mut egui::Ui,
-    current: &mut T,
-    items: &[(T, &str)],
-) -> egui::Response {
-    let with: Vec<(T, &str, &str)> = items.iter().map(|(t, l)| (*t, *l, "")).collect();
-    segmented_with_hover(ui, current, &with)
-}
-
-/// [`segmented`] with a hover text per item (an empty one shows nothing).
-pub fn segmented_with_hover<T: PartialEq + Copy>(
     ui: &mut egui::Ui,
     current: &mut T,
     items: &[(T, &str, &str)],
@@ -225,11 +219,7 @@ pub fn segmented_marked<T: PartialEq + Copy>(
             egui::vec2(w, row_h),
         );
         let r = ui.interact(cell, resp.id.with(i), egui::Sense::click());
-        let r = if hover.is_empty() {
-            r
-        } else {
-            r.hover(*hover)
-        };
+        let r = if hover.is_empty() { r } else { r.hover(*hover) };
         let enabled = ui.is_enabled();
         let selected = *current == *item;
         r.widget_info(|| {

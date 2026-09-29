@@ -5,9 +5,9 @@
 //! one reasonable-seeming addition at a time.
 
 use crate::develop::panel::Edited;
+use crate::theme::Hover as _;
 use eframe::egui;
 use rustroom_app::looks::LooksState;
-use crate::theme::Hover as _;
 
 /// The look dropdown, its space, and Strength.
 ///

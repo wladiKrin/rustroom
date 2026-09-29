@@ -12,11 +12,11 @@
 
 use crate::develop::panel::{section, Edited};
 use crate::theme;
+use crate::theme::Hover as _;
 use crate::Session;
 use eframe::egui;
 use rustroom_app::composition_guides::CompositionGuide;
 use rustroom_app::crop_tool;
-use crate::theme::Hover as _;
 
 /// One entry of the aspect row.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -329,9 +329,7 @@ fn crop(
                         }
                     })
                     .response
-                    .hover(
-                        "Chooses the guide drawn inside the crop (O cycles through them)",
-                    );
+                    .hover("Chooses the guide drawn inside the crop (O cycles through them)");
             },
         );
     });
@@ -370,9 +368,8 @@ fn level_button(ui: &mut egui::Ui, armed: bool) -> egui::Response {
             "Straighten by drawing a line",
         )
     });
-    let resp = resp.hover(
-        "Straightens the photo along a line you drag over something that should be level",
-    );
+    let resp = resp
+        .hover("Straightens the photo along a line you drag over something that should be level");
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
         let accent = v.selection.bg_fill;

@@ -25,7 +25,13 @@ pub fn save(app: &mut RustroomApp, ctx: &egui::Context) {
         "save_preset",
         "Save preset",
         theme::DialogSize::Standard,
-        Footer::confirm("Save", !name.trim().is_empty(), "Cancel").note(note),
+        Footer::confirm(
+            "Save",
+            "Saves this photo's settings as a preset under this name",
+            !name.trim().is_empty(),
+            "Cancel",
+        )
+        .note(note),
         |ui| {
             ui.horizontal(|ui| {
                 ui.label("Name");
@@ -94,7 +100,7 @@ pub fn confirm_delete(app: &mut RustroomApp, ctx: &egui::Context) {
         "confirm_delete",
         "Delete preset?",
         theme::DialogSize::Compact,
-        Footer::confirm("Delete", true, "Cancel"),
+        Footer::confirm("Delete", "Deletes this preset", true, "Cancel"),
         |ui| {
             ui.label(format!("Delete the preset “{name}”?"));
             ui.checkbox(&mut dont_ask, "Don't ask again");

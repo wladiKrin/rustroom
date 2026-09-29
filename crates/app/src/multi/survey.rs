@@ -14,6 +14,7 @@
 //! is actually on screen. The Library grid solved the identical problem the identical way.
 
 use crate::multi;
+use crate::theme::Hover as _;
 use crate::{LibraryMode, RustroomApp};
 use eframe::egui;
 use rustroom_app::photo_id::PhotoId;
@@ -22,7 +23,6 @@ use rustroom_app::preview_loader::PreviewRequest;
 use rustroom_app::selection::Selection;
 use rustroom_app::thumb_loader::ThumbRequest;
 use rustroom_app::tile_layout;
-use crate::theme::Hover as _;
 
 /// A cell whose image area exceeds this on either side draws the preview rather than the
 /// 512-px thumbnail (M9.14).

@@ -22,10 +22,10 @@
 //! ⚠ Not built, deliberately: a precision modifier, vertical rails, `step`, clamping modes. Only
 //! what the panel's call sites use.
 
+use crate::theme::Hover as _;
 use eframe::egui;
 use rustroom_app::slider_map;
 use std::ops::RangeInclusive;
-use crate::theme::Hover as _;
 
 /// The label column. The widest labels today ("Radius (px)", "Smoothness") fit; a wider one
 /// truncates and shows in full on hover.
@@ -333,6 +333,11 @@ impl egui::Widget for Slider<'_> {
                     },
                 )
                 .inner;
+            // ⚠ The number is its own AccessKit node — typing a value is part of the slider — so it
+            // carries the slider's sentence too (M10.6b).
+            if let Some(h) = &help {
+                crate::theme::describe(&value_resp, h);
+            }
             // ⚠ The label joins the response, so a caller reading `double_clicked()` — Temp, which
             // resets to As Shot rather than to a number — sees a double-click on the label too.
             resp.union(value_resp).union(label_resp)

@@ -12,9 +12,9 @@
 //! header is drawn by `panel/mod.rs` with `resettable: false`.
 
 use crate::develop::panel::Edited;
+use crate::theme::Hover as _;
 use eframe::egui;
 use rustroom_app::looks::LooksState;
-use crate::theme::Hover as _;
 
 /// The camera-rendering checkbox and, directly under it, the look controls.
 pub fn rendering(

@@ -6,12 +6,12 @@
 use super::{dialog, Footer};
 use crate::import_flow::Tick;
 use crate::theme;
+use crate::theme::Hover as _;
 use crate::RustroomApp;
 use eframe::egui;
 use rustroom_app::filename_template::Template;
 use rustroom_app::ingest::options::Layout;
 use std::path::PathBuf;
-use crate::theme::Hover as _;
 
 /// The metadata fields' hover. ⚠ It was a line under them (`docs/DESIGN.md` §8).
 const EMPTY_CHANGES_NOTHING: &str =
@@ -56,7 +56,18 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         "import",
         &title,
         theme::DialogSize::Wide,
-        Footer::confirm(&primary, !importing && blocker.is_none(), dismiss).note(&note),
+        Footer::confirm(
+            &primary,
+            "Copies the ticked photos into the destination",
+            !importing && blocker.is_none(),
+            dismiss,
+        )
+        .dismiss_says(if importing {
+            "Stops the import, keeping the photos already copied"
+        } else {
+            "Closes this dialog and copies nothing"
+        })
+        .note(&note),
         |ui| {
             ui.add_enabled_ui(!importing, |ui| {
                 ui.horizontal_top(|ui| {

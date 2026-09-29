@@ -9,10 +9,10 @@
 use super::tone_curve::{backdrop, CurveChannel};
 use crate::develop::panel::Edited;
 use crate::theme;
+use crate::theme::Hover as _;
 use eframe::egui;
 use rustroom_app::settings::ParametricDrag;
 use rustroom_app::tone_curve_tool::{self as tool, Region};
-use crate::theme::Hover as _;
 
 /// The widget's largest side, matching the point view so switching modes does not jump.
 const MAX_SIZE: f32 = 220.0;

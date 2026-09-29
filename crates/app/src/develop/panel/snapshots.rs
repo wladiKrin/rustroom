@@ -17,11 +17,11 @@
 
 use crate::develop::panel::section::{header, Header};
 use crate::list_row::{self, RowAction, RowSpec};
+use crate::theme::Hover as _;
 use crate::{theme, RustroomApp};
 use eframe::egui;
 use rustroom_app::icons;
 use rustroom_app::settings::STRIP_HEIGHT_RANGE;
-use crate::theme::Hover as _;
 
 /// What a click in the strip asked for, applied after the panel closes.
 ///

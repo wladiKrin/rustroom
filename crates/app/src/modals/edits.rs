@@ -14,7 +14,12 @@ pub fn paste(app: &mut RustroomApp, ctx: &egui::Context) {
         "paste_settings",
         "Paste settings",
         theme::DialogSize::Standard,
-        Footer::confirm("Paste", true, "Cancel"),
+        Footer::confirm(
+            "Paste",
+            "Pastes the ticked settings onto the selected photos",
+            true,
+            "Cancel",
+        ),
         |ui| {
             apply_section(ui, "paste", "", &mut groups);
         },
@@ -46,7 +51,12 @@ pub fn sync(app: &mut RustroomApp, ctx: &egui::Context) {
         "sync_settings",
         "Sync settings",
         theme::DialogSize::Standard,
-        Footer::confirm("Sync", true, "Cancel"),
+        Footer::confirm(
+            "Sync",
+            "Copies the ticked settings from this photo to the selected ones",
+            true,
+            "Cancel",
+        ),
         |ui| {
             apply_section(ui, "sync", &trailing, &mut groups);
         },

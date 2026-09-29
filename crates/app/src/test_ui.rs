@@ -138,6 +138,8 @@ pub struct Node {
     pub clickable: bool,
     /// Carries an open/closed state — a section header.
     pub expandable: bool,
+    /// That state: `Some(false)` is a closed section.
+    pub expanded: Option<bool>,
 }
 
 /// Every node one frame of `body` produces, on [`screen`].
@@ -174,6 +176,7 @@ pub fn nodes_on(
             description: node.description().map(str::to_owned),
             clickable: node.supports_action(egui::accesskit::Action::Click),
             expandable: node.is_expanded().is_some(),
+            expanded: node.is_expanded(),
         })
         .collect()
 }

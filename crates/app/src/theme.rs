@@ -972,13 +972,17 @@ mod tests {
             B,
             D,
         }
-        let items = [(C::A, "Hue"), (C::B, "Saturation"), (C::D, "Luminance")];
+        let items = [
+            (C::A, "Hue", ""),
+            (C::B, "Saturation", ""),
+            (C::D, "Luminance", ""),
+        ];
         let ctx = crate::test_ui::ctx();
         let mut cur = C::A;
         let found = crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             segmented(ui, &mut cur, &items);
         });
-        for (_, l) in items {
+        for (_, l, _) in items {
             assert!(
                 found.iter().any(|(f, _)| f == l),
                 "{l} not reachable: {found:?}"
@@ -1175,10 +1179,173 @@ mod tests {
         }
     }
 
+    /// Which characters of `b` are code — not inside a string, a char literal or a comment.
+    fn code_mask(b: &[char]) -> Vec<bool> {
+        let mut mask = vec![true; b.len()];
+        let mut i = 0;
+        let ident = |c: char| c.is_alphanumeric() || c == '_';
+        while i < b.len() {
+            let c = b[i];
+            let next = b.get(i + 1).copied();
+            let start = i;
+            if c == '/' && next == Some('/') {
+                while i < b.len() && b[i] != '\n' {
+                    i += 1;
+                }
+            } else if c == '/' && next == Some('*') {
+                let mut depth = 0;
+                while i < b.len() {
+                    if b[i] == '/' && b.get(i + 1) == Some(&'*') {
+                        depth += 1;
+                        i += 2;
+                    } else if b[i] == '*' && b.get(i + 1) == Some(&'/') {
+                        depth -= 1;
+                        i += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            } else if c == 'r'
+                && (next == Some('"') || next == Some('#'))
+                && (i == 0 || !ident(b[i - 1]))
+            {
+                // A raw string: r"…" or r#"…"#.
+                let mut j = i + 1;
+                let mut hashes = 0;
+                while b.get(j) == Some(&'#') {
+                    hashes += 1;
+                    j += 1;
+                }
+                if b.get(j) != Some(&'"') {
+                    i += 1;
+                    continue;
+                }
+                j += 1;
+                'raw: while j < b.len() {
+                    if b[j] == '"' && (0..hashes).all(|k| b.get(j + 1 + k) == Some(&'#')) {
+                        j += 1 + hashes;
+                        break 'raw;
+                    }
+                    j += 1;
+                }
+                i = j;
+            } else if c == '"' {
+                i += 1;
+                while i < b.len() && b[i] != '"' {
+                    i += if b[i] == '\\' { 2 } else { 1 };
+                }
+                i += 1;
+            } else if c == '\'' && (next == Some('\\') || b.get(i + 2) == Some(&'\'')) {
+                // A char literal — '{', '\'' — and not a lifetime, which has no closing quote.
+                i += 1;
+                while i < b.len() && b[i] != '\'' {
+                    i += if b[i] == '\\' { 2 } else { 1 };
+                }
+                i += 1;
+            } else {
+                i += 1;
+                continue;
+            }
+            for m in mask.iter_mut().take(i.min(b.len())).skip(start) {
+                *m = false;
+            }
+        }
+        mask
+    }
+
+    /// `src` with every `#[cfg(test)]` item blanked — its characters spaces, its newlines kept, so
+    /// line numbers still match — and nothing else.
+    ///
+    /// ⚠⚠ **Not "up to the first `#[cfg(test)]`"**, which is what three sweeps here did until M10.6b:
+    /// a test-only item placed mid-file — `retouch.rs` has one at line 81 — hid every production line
+    /// after it, and three `on_hover_text` calls there slipped past both the hover sweep and its
+    /// guard. The coverage walk is what noticed.
+    pub(crate) fn production_code(src: &str) -> String {
+        let b: Vec<char> = src.chars().collect();
+        let mask = code_mask(&b);
+        let marker: Vec<char> = "#[cfg(test)]".chars().collect();
+        let mut out = b.clone();
+        let mut i = 0;
+        while i + marker.len() <= b.len() {
+            if !(mask[i] && b[i..i + marker.len()] == marker[..]) {
+                i += 1;
+                continue;
+            }
+            // The item ends at its body's closing brace, or at a `;` or `,` outside any bracket.
+            let mut j = i + marker.len();
+            let (mut paren, mut end) = (0i32, None);
+            while j < b.len() {
+                if mask[j] {
+                    match b[j] {
+                        '(' | '[' => paren += 1,
+                        ')' | ']' => paren -= 1,
+                        ';' | ',' if paren == 0 => {
+                            end = Some(j);
+                            break;
+                        }
+                        '{' if paren == 0 => {
+                            let mut depth = 0;
+                            while j < b.len() {
+                                if mask[j] {
+                                    if b[j] == '{' {
+                                        depth += 1;
+                                    } else if b[j] == '}' {
+                                        depth -= 1;
+                                        if depth == 0 {
+                                            break;
+                                        }
+                                    }
+                                }
+                                j += 1;
+                            }
+                            end = Some(j);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                j += 1;
+            }
+            let end = end.unwrap_or(b.len() - 1).min(b.len() - 1);
+            for c in out.iter_mut().take(end + 1).skip(i) {
+                if *c != '\n' {
+                    *c = ' ';
+                }
+            }
+            i = end + 1;
+        }
+        out.into_iter().collect()
+    }
+
+    #[test]
+    fn production_code_keeps_what_follows_a_test_item_and_blanks_only_the_item() {
+        let src = "fn a() {}\n#[cfg(test)]\nfn helper() { let s = \"}\"; }\nfn b() { x.on_hover_text(\"hi\"); }\n#[cfg(test)]\nmod tests {\n    fn t() { let c = '}'; let s = \"#[cfg(test)]\"; }\n}\nstruct S {\n    #[cfg(test)]\n    pub(crate) n: usize,\n    kept: u8,\n}\n";
+        let out = production_code(src);
+        assert_eq!(
+            out.lines().count(),
+            src.lines().count(),
+            "line numbers must survive"
+        );
+        // ⚠ The positive control: production code after a test item is still there.
+        assert!(out.contains("fn b() { x.on_hover_text"), "{out}");
+        assert!(
+            out.contains("fn a() {}") && out.contains("kept: u8"),
+            "{out}"
+        );
+        // …and every test item is gone, braces inside its strings and chars notwithstanding.
+        for gone in ["helper", "mod tests", "fn t()", "pub(crate) n"] {
+            assert!(!out.contains(gone), "{gone} survived:\n{out}");
+        }
+    }
+
     /// The literal font sizes in `source`, up to its test module: `FontId::proportional(<digit>`,
     /// `FontId::new(<digit>`, `FontId::monospace(<digit>` and `.size(<digit>`.
     fn literal_sizes(source: &str) -> Vec<String> {
-        let code = source.split("#[cfg(test)]").next().unwrap_or("");
+        let code = production_code(source);
+        let code = code.as_str();
         let mut found = Vec::new();
         for (n, line) in code.lines().enumerate() {
             for pat in [
@@ -1289,7 +1456,8 @@ mod tests {
                     continue;
                 }
                 let src = std::fs::read_to_string(&p).unwrap();
-                let code = src.split("#[cfg(test)]").next().unwrap_or("");
+                let code = production_code(&src);
+                let code = code.as_str();
                 let rel = p.strip_prefix(&root).unwrap().display().to_string();
                 // ⚠ The named hover constants too — the retouch modes, the profile note, the DNG note —
                 // which read exactly like call-site hovers once drawn.
@@ -1361,7 +1529,8 @@ mod tests {
                     continue;
                 }
                 let src = std::fs::read_to_string(&p).unwrap();
-                let code = src.split("#[cfg(test)]").next().unwrap_or("");
+                let code = production_code(&src);
+                let code = code.as_str();
                 let n = code.matches(".on_hover_text(").count();
                 let rel = p.strip_prefix(&root).unwrap().display().to_string();
                 if rel == "theme.rs" {

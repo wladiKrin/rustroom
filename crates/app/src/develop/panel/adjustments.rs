@@ -5,10 +5,10 @@ use crate::develop::panel::hsl_bands;
 use crate::develop::panel::tone_curve;
 use crate::develop::panel::Edited;
 use crate::theme;
+use crate::theme::Hover as _;
 use edit_model::HslBand;
 use eframe::egui;
 use rustroom_app::wb_tool::{self, WbPreset};
-use crate::theme::Hover as _;
 
 /// Which of an [`HslBand`]'s three values the HSL selector is showing.
 ///
@@ -30,6 +30,15 @@ impl HslChannel {
             Self::Hue => "Hue",
             Self::Saturation => "Saturation",
             Self::Luminance => "Luminance",
+        }
+    }
+
+    /// The selector's hover sentence (M10.6b), beside the label so the two cannot part.
+    pub fn hover(self) -> &'static str {
+        match self {
+            Self::Hue => "Shows the sliders that shift each colour's hue",
+            Self::Saturation => "Shows the sliders that change each colour's saturation",
+            Self::Luminance => "Shows the sliders that brighten or darken each colour",
         }
     }
 
@@ -235,9 +244,7 @@ pub(crate) fn white_balance(
             // saying so.
             if ui
                 .selectable_label(*picking, "Pick a neutral")
-                .hover(
-                    "Sets white balance from a spot you click that should be neutral grey",
-                )
+                .hover("Sets white balance from a spot you click that should be neutral grey")
                 .clicked()
             {
                 *picking = !*picking;
@@ -265,9 +272,7 @@ pub(crate) fn white_balance(
             }
         })
         .response
-        .hover(
-            "Sets the temperature for a common light source such as daylight or tungsten",
-        );
+        .hover("Sets the temperature for a common light source such as daylight or tungsten");
     });
 }
 
@@ -604,7 +609,7 @@ pub fn show(
             theme::segmented(
                 ui,
                 grade_range,
-                &color_wheel::GradeRange::ALL.map(|r| (r, r.label())),
+                &color_wheel::GradeRange::ALL.map(|r| (r, r.label(), r.hover())),
             );
             let diameter = ui.available_width().min(188.0);
             {

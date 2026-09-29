@@ -12,13 +12,13 @@
 //! exactly what is left and truncates into it. Nothing is placed where it merely hopes to fit.
 
 use crate::segmented;
+use crate::theme::Hover as _;
 use crate::theme::{self, tokens};
 use crate::{AppView, LibrarySource, RustroomApp};
 use eframe::egui;
 use rustroom_app::bar_plan::{self, Form, Item};
 use rustroom_app::format_filter;
 use rustroom_app::icons;
-use crate::theme::Hover as _;
 
 /// The row's height.
 pub const HEIGHT: f32 = 32.0;
