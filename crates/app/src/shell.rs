@@ -1094,29 +1094,28 @@ pub(crate) fn centre_info(
     let body = egui::TextStyle::Body.resolve(ui.style());
     let small = egui::FontId::proportional(crate::theme::tokens::CAPTION);
     let editing = app.info_draft.as_ref().is_some_and(|(d, _)| *d == id);
-    let (name_w, meta_w) = ui.fonts_mut(|f| {
+    let name_w = ui.fonts_mut(|f| {
         let shown = rustroom_app::entries::caption(&file_name, copy);
-        (
-            f.layout_no_wrap(shown, body.clone(), egui::Color32::WHITE)
-                .size()
-                .x,
-            f.layout_no_wrap(meta.clone(), small.clone(), egui::Color32::WHITE)
-                .size()
-                .x,
-        )
+        f.layout_no_wrap(shown, body.clone(), egui::Color32::WHITE)
+            .size()
+            .x
     });
-    // The field wants the whole gap; the caption wants its own width.
-    let want = if editing {
-        avail
-    } else if meta.is_empty() {
-        name_w + 2.0
+    // ⚠⚠ **The NAME is centred, never the name-and-facts block** (2026-09-29, seen in use): the
+    // facts differ between the views — the Library knows no pixel size until the photo has been
+    // decoded — so a centred block put the name 27 pt further left in the Library than in
+    // Develop. The name is clamped by its own width into the shared gap and the facts take what
+    // is left to its right, truncating if they must; `the_name_does_not_move_with_its_facts`.
+    // The rename field still wants the whole gap.
+    let (x, w) = if editing {
+        let x = (row.center().x - avail / 2.0).max(gap.min + PAD);
+        (x, avail)
     } else {
-        name_w + BETWEEN + meta_w + 2.0
+        let name_box = name_w + 2.0;
+        let x = (row.center().x - name_box / 2.0)
+            .max(gap.min + PAD)
+            .min(gap.max - PAD - name_box);
+        (x, (gap.max - PAD - x).max(name_box))
     };
-    let w = want.min(avail);
-    let x = (row.center().x - w / 2.0)
-        .max(gap.min + PAD)
-        .min(gap.max - PAD - w);
     let rect = egui::Rect::from_min_size(egui::pos2(x, row.top()), egui::vec2(w, row.height()));
     let mut child = ui.new_child(
         egui::UiBuilder::new()
@@ -1251,6 +1250,54 @@ mod tests {
         assert!(
             (lib_first - dev).abs() < 1.0 && (lib_again - dev).abs() < 1.0,
             "the name moved: Library first {lib_first}, Develop {dev}, Library again {lib_again}"
+        );
+    }
+
+    /// ⚠⚠ Seen in use 2026-09-29: the name sat 27 pt further left in the Library than in Develop,
+    /// because the Library's facts lacked the pixel size and the whole block was centred. Same view,
+    /// same gaps, facts of two lengths: the name's centre must not move. ⚠ The sample proves the
+    /// facts really differed, or equal positions would say nothing.
+    #[test]
+    fn the_name_does_not_move_with_its_facts() {
+        let (ctx, mut app) = app_with_photo();
+        crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+        let name = app.library.as_ref().unwrap().entries[1].caption();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 200.0));
+        let draw = |app: &mut RustroomApp, view: AppView| {
+            app.view = view;
+            crate::test_ui::labelled_centres_on(&ctx, screen, Vec::new(), |ui| {
+                let ctx = ui.ctx().clone();
+                let _ = app.top_bar(ui, &ctx);
+            })
+        };
+        // Develop once, so both views' edges are recorded and the gap is the same below.
+        let _ = draw(&mut app, AppView::Develop);
+        let with = draw(&mut app, AppView::Library);
+        app.session = None;
+        let without = draw(&mut app, AppView::Library);
+        let at = |found: &[(String, egui::Pos2)]| {
+            found
+                .iter()
+                .find(|(l, _)| *l == name)
+                .map(|(_, p)| p.x)
+                .unwrap_or_else(|| panic!("the name is missing: {found:?}"))
+        };
+        let facts = |found: &[(String, egui::Pos2)]| {
+            found
+                .iter()
+                .find(|(l, _)| l.contains(" · ") || l.contains("Camera"))
+                .map(|(l, _)| l.clone())
+        };
+        assert_ne!(
+            facts(&with),
+            facts(&without),
+            "sample: the facts did not differ"
+        );
+        assert!(
+            (at(&with) - at(&without)).abs() < 0.5,
+            "the name moved with its facts: {} vs {}",
+            at(&with),
+            at(&without)
         );
     }
 
