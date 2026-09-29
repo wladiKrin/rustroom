@@ -8,10 +8,39 @@ a **design** reason and one deferred for **effort** are different things, and mi
 a hard question gets picked up as though it were a small job.
 
 Milestone-level work lives in the roadmap
-(`~/Documents/obsidian/private/opensource_lightroom/03-plan-of-action.md`); implementation detail
+(`~/Documents/obsidian/private/rustroom/03-plan-of-action.md`); implementation detail
 lives in `CLAUDE.md`. This file is for things consciously left undone.
 
 ---
+
+---
+
+## ⚠⚠ 2026-09-29 — everything still open is now PHASE 10, and this file maps to it
+
+A sweep checked every entry here against the code on 2026-09-29 (`grep -n 'The re-plan' docs/JOURNAL.md`).
+**Every open entry is now a Phase 10 milestone** in `03-plan-of-action.md` — the author kept them all
+and added back the ones earlier decisions had put out of scope. Release engineering is **Phase 11**
+(M11.1–M11.5, the former M10.1–M10.5), last. An entry below still carries its *reasoning*; its
+**status and order** live in the plan. ⚠ Entries the sweep found already shipped are struck with a ✅
+and a pointer, not deleted.
+
+| Milestone | Entries in this file |
+| --- | --- |
+| **M10.6** your to-dos + design leftovers | (from the vault's `to dos.md` and `DESIGN.md`) |
+| **M10.7** code health | *Exports are not bit-reproducible* (a); plus `CLAUDE.md`'s rename, temp-dir, file-size and `PrefixCache` items |
+| **M10.8** Library & workflow | P-26's batch rename (d); *Library: … vertical filmstrip* (b) |
+| **M10.9** presets & shortcuts | *Presets: no import/export…* (a); *No user-defined keyboard shortcuts* (b) |
+| **M10.10** export | P-26's image watermark (a) and export sizing (b) |
+| **M10.11** Develop additions | *Film negative inversion* (a); P-26's Grain (b) |
+| **M10.12** the mask model | *Composites are one level deep* (a); masks' scene sliders as offsets (b, `CLAUDE.md`); *Anchor strokes and spots in sensor space* + *Brush strokes shift…* (c, ⏸) |
+| **M10.13** colour & camera profiles | *C2/C3 have no independent oracle* (a); *`CameraCalibration`…* + `ProfileLookTable` (b); *Per-photo camera profile* (c); P-22 (d) |
+| **M10.14** performance & verification | *What is left in `HslStage`* (a); P-21 (e); *incremental splatting*, *Two Oklab round trips* (f, ⏸); *the u8 wire*, `MAX_TILE_DABS` (g, ⏸) |
+| **M10.15** Immich | the keychain, cached-original eviction, Immich's rating (a–c); *Two-way sync* (d, re-opened) |
+| **M10.16** AI tools | depth masks (a); P-23 (b); P-26's content-aware remove (c) |
+| **M10.17** merge | P-24 |
+| **M10.18** new modules | P-25 (brought in by the author) |
+| **M11.2** Windows & Linux | *The in-window menu bar has never been run*; *Multi-monitor on Linux and Windows*; P-28 |
+| **M11.3** / **M11.5** | *Contributor-facing documentation* / *A plugin system* |
 
 ---
 
@@ -33,23 +62,23 @@ still carries the reasoning that matters — read the entry, then build it under
 | A better interpolator for the geometric stages | ✅ **M7.3a, 2026-09-01** — a `Settings` choice defaulting to Catmull-Rom, both samplers |
 | Fuse perspective into `GeometryStage` | ✅ **M7.3b, 2026-09-25** — one gather; acutance 0.00700 → 0.00823; prefix reordered (journal) |
 | Automatic vertical detection (Hough) | ✅ **M7.4, 2026-09-04** — reshaped into `Auto` / `Refine guides` |
-| Auto-mask brush · ~~dehaze bright subjects~~ · ~~negative Texture~~ · ~~Clarity halos~~ · ~~grading in masks~~ | **M7.6** — grading in masks ✅ 2026-09-05; negative Texture and Clarity halos ✅ 2026-09-02 (W3, struck late); dehaze bright subjects ✅ 2026-09-08; auto-mask ⬜ |
-| ~~Lens correction row batching~~ · sequential export · incremental splatting | **M8.1** — row batching ✅ 2026-09-01 (1178 → 309 ms); the other two ⬜ |
+| ~~Auto-mask brush~~ · ~~dehaze bright subjects~~ · ~~negative Texture~~ · ~~Clarity halos~~ · ~~grading in masks~~ | **M7.6** — grading in masks ✅ 2026-09-05; negative Texture and Clarity halos ✅ 2026-09-02 (W3, struck late); dehaze bright subjects ✅ 2026-09-08; auto-mask ✅ 2026-09-09 (struck 2026-09-29) |
+| ~~Lens correction row batching~~ · ~~sequential export~~ · incremental splatting | **M8.1** — row batching ✅ 2026-09-01 (1178 → 309 ms); parallel export ✅ **M8.10**, 2026-09-15; incremental splatting ⏸ **M10.14f** (parked until a need shows) |
 | The `wgpu` seam | ✅ **M8.3a, 2026-09-10** — one stage across the seam, an equivalence harness, and the cost measured: **3.1–4.7× slower**, bit-exact. Nothing in the app uses it. ⚠ M8.3b's first task is **not** porting a stage: hunt a zero-copy upload (the transfer is the floor at ~6 ms against 0.04 ms of compute) and measure transcendental divergence. `specs/2026-09-10-gpu-seam-design.md` |
 | GPU: a resident chain and HSL | ✅ **M8.3b, 2026-09-10** — N stages share one round trip, and global HSL runs on the GPU at **~2×** (CPU ~21 ms against ~10) behind a Settings toggle, diverging by 0.00034 of an 8-bit level. ⚠ **Masked HSL is NOT accelerated** — it lives inside `MaskStage`, and it is the case reported in use as slow. `specs/2026-09-10-resident-gpu-tail-design.md` |
 | GPU: spatial stages and run-merging | ✅ **M8.3c, 2026-09-11** — sharpening as compute shaders on shared scratch planes, consecutive GPU stages merged into **one** round trip, `gpu_hsl` → `gpu_tail`. **1.52×** on hsl + sharpening; ⚠⚠ the merge itself is worth **10.17 ms** (merged 21.84 ms against split 32.01), so without it a second stage was worth 1.18× — run-merging is what makes it pay at all. ⚠ **An active colour grade splits the run and takes the win to 1.04×.** `specs/2026-09-10-spatial-gpu-design.md` ✅ **confirmed by use** — and the report adds what no measurement here did: **`DragQuality::Full` is usable while dragging** with the toggle on, i.e. the interactive rung's deliberate off-switch earning its place. |
-| GPU: local contrast | ⬜ Deliberately out of M8.3c's scope — it needs **three** blur kinds (`box_blur`, `wide_blur`, the guided filter) where sharpening needed one. ⚠ It is also **adjacent to nothing accelerated**: `local_contrast` runs before saturation and hsl, so porting it alone buys a third round trip rather than joining a run. |
+| GPU: local contrast | ✅ **M8.3n, 2026-09-13** (struck 2026-09-29). ~~Deliberately out of M8.3c's scope — it needs three blur kinds.~~ |
 | GPU: colour grading | ✅ **M8.3d, 2026-09-11** — the acceptance row went **1.04× → 2.05×**, the best ratio in the bench, and `hsl + grade + sharpening` is now **one chain of three**. ⚠⚠ The GPU column barely moved (25.75 → 25.12 ms) while the CPU column climbed 12 ms: a stage joining a run that already pays the transfer is close to free. `specs/2026-09-11-gpu-grading-design.md` |
-| GPU: shader and pipeline caching | ⬜ The shader module, bind-group layout and compute pipelines are rebuilt on **every encode**. The bench's round-0 column shows the cost (~150 ms first render, and a visible outlier thereafter). Contained, and nothing depends on it. |
-| GPU: the mask loop · the prefix | ⬜ **M8.3e–f** (renumbered when grading took the M8.3d slot) — ⚠ M8.3d is a **different mechanism**, not another table entry: a mask's stages live inside `MaskStage`, which the tail sees as one opaque stage, so `accelerate` cannot reach them by name. M8.3e is where the 156.6 ms native prefix one-off is. |
+| GPU: shader and pipeline caching | ✅ **M8.3f, 2026-09-11** — the module, layout, pipelines and a staging-buffer pool survive a render (struck 2026-09-29) |
+| GPU: the mask loop · the prefix | ✅ **M8.3e–q, M8.5–M8.14** — Phase 8 closed 2026-09-18 (struck 2026-09-29) |
 | On-disk thumbnail cache | ✅ **M8.2, 2026-09-10** — a folder opened before fills in at **1.26 ms per entry against 190.41 ms**, 151×, for ~60 KB per photo. Caches the extracted **preview**, not the finished thumbnail. ⚠ Nothing for the *first* open, which stays ~26 s per 830 entries. `specs/2026-09-10-thumbnail-cache-design.md` |
 | Decode a full-size JPEG at 1/8 scale for thumbnails | ⛔ **MEASURED AND REJECTED, 2026-09-10 — and this entry's own earlier claim was wrong.** It said DCT-scaled decode was "the only lever that moves the cold folder open", implying a large win. Measured: **1.6×** (222.3 → 143.2 ms), not the ~8× the framing suggested. Three reasons, each checked rather than argued. **(1) Entropy decoding is irreducible** — Huffman work is proportional to the compressed data, not the output size, so DCT scaling skips only the IDCT, upsampling and colour convert. Of a 26 Mpx camera JPEG's 226.9 ms, decode is **178.1 ms (78%)** and the resize only 43.8 ms. **(2) `image` 0.25 cannot do it at all** — its backend is `zune-jpeg`, whose 1×1/4×4 IDCT paths are a sparse-coefficient optimisation producing full-size blocks, not an output-scale knob. The only Rust crate that offers `scale()` is `jpeg-decoder`, which is a **slower decoder than the one already in the tree**, eating much of the gain. **(3) The embedded EXIF thumbnail is 160×120** — far too small for a 512 px cell, so the trick that makes RAW cheap does not transfer. ⚠⚠ **And M8.2 removed most of the motive**: the cold open now happens **once per folder, ever**, so this would spend a second JPEG decoder in the tree to turn a one-off ~26 s into ~19 s. Reopen only if a faster scaled decoder appears in `image` itself. |
 | Replace libraw's demosaic | ✅ **M8.4, 2026-09-10 — decided OUT of scope**, and the default tier moved `Fast` → `Better` instead. `Better` sits within 0.22–0.30 of an 8-bit level of `Best` on foliage and is indistinguishable from it at 4×, so a Markesteijn/AMaZE-class reimplementation buys nothing measurable. ⚠ Costs ~2.9 s → ~7.5 s per photo opened. `specs/2026-09-10-demosaic-decision.md` |
 | `main.rs` is too large | ✅ **W0, 2026-09-01** — 4,375 → 681 (917 as of 2026-09-08); `canvas.rs` 1,890 → 7 modules |
-| The in-window menu bar has never been run | **M9.2** |
+| The in-window menu bar has never been run | **M11.2** (was M9.2, then M10.2) |
 | Immich integration | **M9.1** |
-| Contributor-facing documentation | **M9.3** |
-| A plugin system | **M9.5** |
+| Contributor-facing documentation | **M11.3** (was M9.3, then M10.3) |
+| A plugin system | **M11.5** (was M9.5, then M10.5) |
 
 ⚠⚠ **One entry changed shape rather than being scheduled: EXIF/IPTC editing.** It was blocked on
 "modify the original" versus "a second XMP sidecar". **Writing metadata only into the *exported*
@@ -57,10 +86,12 @@ file is neither** — the original is untouched, no new sidecar exists, and it i
 needs anyway. Metadata is edited in the catalog and embedded at export; XMP sidecars become M6.3's
 problem, where they belong. **The design question that blocked this is answered; do not re-open it.**
 
-Not scheduled, and deliberately: the two C2/C3 colour-management oracle notes, per-photo camera
-profile, `CameraCalibration`, brush-strokes-shift-under-lens-correction, presets import/export,
-user-defined shortcuts, the accent colour reaching hand-painted widgets, subfolders, vertical
-filmstrip, and the nicer decode placeholder. These stay here as recorded reasoning.
+~~Not scheduled, and deliberately:~~ **All scheduled 2026-09-29 in Phase 10, by the author's call:** the
+C2/C3 oracle (M10.13a), per-photo camera profile (M10.13c), `CameraCalibration` (M10.13b),
+brush-strokes-shift-under-lens-correction (M10.12c, ⏸ blocked), presets import/export (M10.9a),
+user-defined shortcuts (M10.9b), vertical filmstrip (M10.8b). Three were already settled: the accent
+colour (✅ `DESIGN.md` §4.2), subfolders (✅ M9.9) and the nicer decode placeholder (superseded by M9.14,
+and against the author's rule that no low-resolution stand-in is ever painted).
 
 ---
 
@@ -79,24 +110,26 @@ reviews measured so the deletion loses nothing. Ids are the professional review'
   cost by building 1:1 previews in the background at import. The review's ask: a background
   full-size preview build after import or folder open, bounded by a disk budget like the thumbnail
   cache (`ThumbStore`, 5 GB default), with the grid and Compare able to zoom into it.
-- **P-21 · Catalog scale is unproven at archive size.** Documented testing reached ~830 files a folder
+- **P-21 · Catalog scale is unproven at archive size.** → **M10.14e**. Documented testing reached ~830 files a folder
   and ~1,700 rows; the author's catalog holds 6,235 and opened a 398-photo folder without trouble. A
   working archive is 100k–1M. Ask: a synthetic 100k-row benchmark for All Photos, search, smart
   collections and the folder tree, with the numbers written down.
-- **P-22 · No camera-matching colour out of the box.** No camera profiles ship; without a user `.dcp`
+- **P-22 · No camera-matching colour out of the box.** → **M10.13d**. No camera profiles ship; without a user `.dcp`
   a camera gets the matrix rendering, a Fuji shooter gets no film simulations, no LUTs ship. Ask: a
   legal route to profiles (community DCP/ICC sets, a ColorChecker workflow) — the *starter looks*
   half of this shipped in the fix pass (nine built-in presets).
-- **P-23 · No AI denoise.** The guided-filter NR is pre-AI; `ai-mask` already brings `tract` and a
+- **P-23 · No AI denoise.** → **M10.16b**. The guided-filter NR is pre-AI; `ai-mask` already brings `tract` and a
   model registry, so a denoise model is the natural next tenant.
-- **P-24 · No HDR merge, no panorama merge.** Unplanned rather than unbuilt — neither appears anywhere
+- **P-24 · No HDR merge, no panorama merge.** → **M10.17a/b**. Unplanned rather than unbuilt — neither appears anywhere
   else in this file or the journal.
-- **P-25 · Scope: tethering, GPS/map, people tagging, publish services, print** — out of scope by
+- **P-25 · Scope: tethering, GPS/map, people tagging, publish services, print** → **M10.18a–e**, brought
+  into scope by the author 2026-09-29. Originally: out of scope by
   declaration (tethering is on the target list, untouched). Recorded so the scope statement is explicit.
-- **P-26 · Small professional gaps:** text-only watermark; rename one photo at a time (the import
+- **P-26 · Small professional gaps:** → batch rename **M10.8d**, image watermark **M10.10a**, export
+  sizing **M10.10b**, Grain **M10.11b**, content-aware remove **M10.16c**. text-only watermark; rename one photo at a time (the import
   template exists); export resizes by pixel long edge only (no cm/in, PPI or file-size target); no
   content-aware remove; no Grain slider.
-- **P-28 · Cross-platform is a promise so far** — the GUI has only run on this Mac; already M10.2.
+- **P-28 · Cross-platform is a promise so far** — the GUI has only run on this Mac; **M11.2** (was M10.2).
 - **P-29 / P-30 · Decisions, recorded not disputed:** the tool panel is exclusive (Masks hides the
   global sliders; tried the other way and reversed 2026-08-24), and the panel groups follow the edit
   groups rather than Lightroom's Basic panel (consistent with Sync and Paste, the stated reason).
@@ -199,11 +232,11 @@ validates on. The machinery is shared: a LookTable is the same 3-D HSV table as 
 Seeded from the recorded follow-ups formerly in `CLAUDE.md`; **the sections are now in
 `docs/JOURNAL.md`** (split out 2026-09-16) — `grep -n '^### ' docs/JOURNAL.md` for the index.
 
-- **C2/C3 have no independent oracle.** `rawtherapee-cli` is installed but crashes on this machine
+- **C2/C3 have no independent oracle.** → **M10.13a**. `rawtherapee-cli` is installed but crashes on this machine
   (exit 133, SIGTRAP, no output). The dual-illuminant interpolation is therefore **bounded but not
   independently verified** — it is judged by construction and against libraw, not diffed against a
   reference DCP implementation. This is why `camera_profile` stays opt-in.
-- **Per-photo camera profile.** C4 is per *camera*, keyed by `Session::make_model`. Per-photo is
+- **Per-photo camera profile.** → **M10.13c**. C4 is per *camera*, keyed by `Session::make_model`. Per-photo is
   what Lightroom does in its Calibration panel and becomes wanted the moment someone holds both
   "Camera Velvia" and "Adobe Standard" for one body. ⚠ It puts a *decode* parameter into `Edits`,
   which must then travel through the sidecar, presets, copy/paste, sync **and the buffer-cache
@@ -213,9 +246,9 @@ Seeded from the recorded follow-ups formerly in `CLAUDE.md`; **the sections are 
   this easier: tag the layer P3 and render P3.
 - ~~**Gamut mapping / rendering intents at export.**~~ ✅ **M6.4c, 2026-09-26.** The per-channel clip
   stays the default by the author's choice; perceptual and relative colorimetric are offered beside it.
-- **`CameraCalibration` is neither parsed nor applied.** A profile carrying one renders as though it
+- **`CameraCalibration` is neither parsed nor applied.** → **M10.13b**, with `ProfileLookTable`. A profile carrying one renders as though it
   were the identity. Recorded rather than silently mis-rendered.
-- **Multi-monitor on Linux and Windows.** macOS hands the preview to Core Animation, which handles
+- **Multi-monitor on Linux and Windows.** → **M11.2**. macOS hands the preview to Core Animation, which handles
   a display change for free. Elsewhere `display_space` is one global setting and nothing reacts to
   moving the window between monitors. Wayland's colour-management protocol is the eventual answer.
 
@@ -324,7 +357,7 @@ correction, perspective, spot removal and geometry (all upstream of where a mask
 defined), the vignette and the creative look (frame-wide by nature), and the output transform. A
 mask carries every *adjustment*; it does not carry the geometry or the delivery.
 
-### ⚠⚠ Anchor strokes and spots in sensor space (recorded 2026-09-03 — blocked on a MISSING MAP)
+### ⚠⚠ Anchor strokes and spots in sensor space (recorded 2026-09-03 — blocked on a MISSING MAP) → M10.12c ⏸
 
 **Not "extend `FrameMap`", and the name matters.** `FrameMap` is not wrong: it models
 orientation → straighten → crop faithfully, which is its entire domain. The bug is that the space
@@ -367,7 +400,7 @@ above. Only *anchoring* wants the forward map.
   whether a reorder is one undo step. ⚠ Cheap, and **not** blocked on a design question, which is
   what distinguishes it from most of this file.
 
-- **Composites are one level deep.** A refinement is a *shape*, never another composite, so
+- **Composites are one level deep.** → **M10.12a**, re-opened by the author 2026-09-29. A refinement is a *shape*, never another composite, so
   `radial ∩ (brush ∪ gradient)` is not expressible. Deliberate — it is the nesting the rejected
   recursive `Mask::Combine` variant would have bought, at the cost of a tree in the panel and a
   path rather than an integer for every hit-test, drag and coverage-cache index. Revisit only with
@@ -389,7 +422,7 @@ above. Only *anchoring* wants the forward map.
   suppressor is a contained follow-up.~~ ✅ **2026-09-02, W3 track D** (`halo_suppression`,
   `169984b`). Same lapse as the bullet above.
 - ~~**No output/print sharpening** for resized exports.~~ ✅ **M6.1d, 2026-09-01** — in the file's display space, deliberately.
-- **Brush strokes shift when lens corrections are toggled.** Strokes are anchored in
+- **Brush strokes shift when lens corrections are toggled.** → **M10.12c** ⏸ (the entry above). Strokes are anchored in
   "pre-geometry" coordinates, which means *the input to `GeometryStage`* — and lens correction now
   runs ahead of it, so enabling or disabling it redefines that basis. The shift is up to ~3.5% at
   the corners and ~0 at the centre. ⚠ The principled fix is to include distortion in `FrameMap` so
@@ -647,6 +680,9 @@ exists — all 40 sidecars in `~/Pictures/fuji` now hold ONE `Luminance` mask be
 
 
 ### A GPU-side mask coverage cache — worth re-measuring once M8.11 is in use (recorded 2026-09-15, at M8.11 — user's call)
+
+> **2026-09-29:** the serial u8→u32 repack below is ✅ **fixed** (`0064ff2`, 2026-09-17 — a chunked scan);
+> the download half is the **u8 coverage wire**, ⏸ **M10.14g**. The cache itself stays declined.
 
 > **✅ MEASURED DIRECTLY 2026-09-16 (`crates/gpu-pipeline/examples/coverage_transfer_probe.rs`).
 > THE ~2 ms CEILING BELOW DID NOT HOLD FOR EITHER TRANSFER** — upload **7.9–15.8 ms** (4–8×),
@@ -1240,7 +1276,7 @@ render-during-interaction pattern the app already applies elsewhere. **Do not sc
 `MaskStage` work**: at 1600 the whole masked delta is 2.8 ms, and no amount of optimising it moves
 a 53 ms frame meaningfully.
 
-### ⚠ What is left in `HslStage` after the hue LUT (recorded 2026-09-05)
+### ⚠ What is left in `HslStage` after the hue LUT (recorded 2026-09-05) → M10.14a
 
 The LUT took the stage from ~29–34 ms to ~20 ms above a harness floor (1.47–1.66×). **What remains
 is two things and neither is a tweak.** Decomposed shares of the *original* cost:
@@ -1261,7 +1297,7 @@ is two things and neither is a tweak.** Decomposed shares of the *original* cost
 three times running; `cargo run --release -p app --example bench_hsl <raw>` decomposes the stage and
 is the only thing to trust here.
 
-- **Brush: incremental splatting.** Region-scoped coverage brought a paint frame to ~16.6 ms, of
+- **Brush: incremental splatting.** → **M10.14f** ⏸ (parked until a need shows). Region-scoped coverage brought a paint frame to ~16.6 ms, of
   which ~9 ms is rasterization. ⚠ The remaining cost is **dab area, not frame area** — at 1:1 a dab
   is 125 px across — so incremental splatting is the lever if this ever needs to be faster.
 - ✅ **FIXED 2026-09-01** — one lensfun call per row and rayon over output rows; the 3200 rung's prefix 1178 → 309 ms. ⚠ The resampler is now ~2/3 of what is left. The entry as recorded: **`LensCorrectionStage` calls the lensfun API one pixel at a time, and it is measured at 7.7×
@@ -1272,14 +1308,14 @@ is the only thing to trust here.
   and the stage calls each with a 1×1 grid per pixel. Batching per row is the fix and should
   recover most of it; parallelising over rows with rayon is a further win, though note the existing
   `rotate_bilinear` is sequential too, so the stage is at least *consistent* with what is there.
-- **Two Oklab round trips** when HSL and colour grading are both active. Fusing them would break the
+- **Two Oklab round trips** → **M10.14f** ⏸ — when HSL and colour grading are both active. Fusing them would break the
   `PipelineStage` seam that exists for the GPU port.
-- **Export is sequential**, deliberately: pipeline stages are already rayon-parallel internally, so
+- ~~**Export is sequential**~~ ✅ **parallel since M8.10 (2026-09-15)**, struck 2026-09-29. As recorded: sequential, deliberately: pipeline stages are already rayon-parallel internally, so
   parallel export would contend for the same cores while multiplying peak memory.
 - **Demosaic is ~93% of a full-resolution decode**, and the Phase 8 (formerly 5) `wgpu` port would **not** fix it
   — that time is inside libraw's `dcraw_process`, entirely upstream of the stages wgpu would touch.
 
-- **⚠ Exports are not bit-reproducible across runs** (found 2026-09-01 while validating M7.3).
+- **⚠ Exports are not bit-reproducible across runs** → **M10.7a** (found 2026-09-01 while validating M7.3).
   lcms2 stamps a **creation date** into every ICC profile it builds, so two renders of the same
   photo with the same settings differ by **one byte** in the profile header — offset 74 in a JPEG.
   Harmless in itself, and worth recording because of what it costs: **"did this change move any
@@ -1293,17 +1329,20 @@ is the only thing to trust here.
 ## App and UI
 
 - ✅ **`main.rs` — split by W0 on 2026-09-01**, 4,375 → 681, 917 as of 2026-09-08. ⚠ The files now over the ~600 marker are `settings.rs`, `edit-model/src/lib.rs`, `catalog/src/db.rs`, `batch_export.rs`, `panel/geometry.rs` and `library.rs`; `CLAUDE.md` names each when touched.
-- **The in-window menu bar has never been run**, only unit-tested — there is no Linux machine here
+- **The in-window menu bar has never been run** → **M11.2** — only unit-tested — there is no Linux machine here
   and macOS never shows it. Flip the `!cfg!(target_os = "macos")` guard in `shell.rs` to look at it.
   Relatedly, **`native_menu.rs` can rot silently**, since CI never compiles it.
-- **No user-defined keyboard shortcuts.**
-- **The accent colour reaches only egui's own widgets.** The crop overlay, histogram and thumbnail
+- **No user-defined keyboard shortcuts.** → **M10.9b**.
+- ~~**The accent colour reaches only egui's own widgets.**~~ ✅ **Settled by the design language** (`DESIGN.md`
+  §4.2, 2026-09-29): the accent marks selection and set state only, and the hand-painted colours that stay
+  outside it are listed there on purpose. Struck 2026-09-29. As recorded: The crop overlay, histogram and thumbnail
   selection border are painted by hand with hardcoded colours — most visible in **light** mode,
   which has barely been looked at.
 - ~~**Export has no filename templating**~~ ✅ **M6.1a, 2026-09-01.**
-- **Presets: no import/export, no folders, no rename.**
-- **Library:** no on-disk thumbnail cache, no subfolders, no vertical filmstrip.
-- **A nicer decode placeholder** — run the pipeline over the thumbnail for an instant low-res
+- **Presets: no import/export, no folders, no rename.** → **M10.9a**.
+- **Library:** ~~no on-disk thumbnail cache~~ ✅ M8.2, ~~no subfolders~~ ✅ M9.9, no vertical filmstrip → **M10.8b**.
+- ~~**A nicer decode placeholder**~~ ⛔ **superseded by M9.14** and against the author's rule that no
+  low-resolution stand-in is ever painted (struck 2026-09-29). As recorded: run the pipeline over the thumbnail for an instant low-res
   preview, instead of showing the camera JPEG.
 
 ---
@@ -1351,11 +1390,12 @@ its stack table; **neither has ever been added**, and that table now records so.
 
 **Status:** ✅ **slices 1, 2, 3 and 4 are built, merged and confirmed by use.**
 ⛔ **Two-way sync is DECLINED — 2026-09-24, the user's call, and it is not a deferral.** Its successor is
-**uploading edited photos** (⬜, next), which is a different operation and a safer one. See *Two-way sync —
-declined* below before re-proposing anything that writes to the server. Three smaller gaps stay out of
-scope by decision: the OS keychain (the API key is **plaintext** in `settings.json`), **automatic**
-eviction of cached originals (slice 4 built the *manual* half), and reading Immich's own
-`rating`/`isFavorite`.
+**uploading edited photos** (✅ built 2026-09-24), which is a different operation and a safer one. See
+*Two-way sync — declined* below before re-proposing anything that writes to the server. ⚠ **2026-09-29:
+the author re-opened two-way sync as M10.15d**, and brought the three smaller gaps into scope — the OS
+keychain (the API keys are **plaintext** in `settings.json`) **M10.15a**, **automatic** eviction of cached
+originals (slice 4 built the *manual* half) **M10.15b**, and reading Immich's own `rating`/`isFavorite`
+**M10.15c**.
 
 The user self-hosts an **Immich** server holding all their photos, and wants to open them in
 Rustroom by giving a URL and credentials.
@@ -1413,7 +1453,10 @@ from the OpenAPI schema, and both were found by a real reply. **Before the next 
 a real response for every endpoint it touches** — see the fixture lesson in `CLAUDE.md`'s standing
 lessons.
 
-### ⛔ Two-way sync — DECLINED 2026-09-24 (the user's call, with reasons — not a deferral)
+### ⛔ Two-way sync — DECLINED 2026-09-24 (the user's call, with reasons) → re-opened 2026-09-29 as M10.15d
+
+> **2026-09-29:** the author put this back on the list as **M10.15d**. The reasons below stand as the
+> brainstorm's starting point — the decision to revisit is the author's, and it answers the warning below.
 
 ⚠⚠ **Do not re-propose this from a list of "unbuilt Immich slices". It was considered and refused on
 its merits, and the thing that replaces it is *not* a smaller version of it.** The user's words:
@@ -1556,7 +1599,7 @@ has no stacking awareness *and does not report `stack`*, so **Rustroom's grid st
 every stacked pair** while Immich's timeline collapses them. Any "stack pairs" feature in the app owes a
 grid that honours stacks — fed from a `GET /stacks` enumeration, not from the listing.
 
-### ✅ Local stacking BUILT (2026-09-25) — ⬜ honouring Immich's stacks still open
+### ✅ Local stacking BUILT (2026-09-25) — ✅ Immich's own stacks honoured too (below)
 
 ✅ **Same-stem files group into one grid cell**, independent of Immich: `Pictures/fuji` was **830 cells
 for 415 photographs**, and both camera folders are **100% RAW+JPEG pairs**. A **view grouping only**;
@@ -1582,7 +1625,7 @@ primary, so untouched pairs show the RAW where Immich's UI shows the JPEG.
 `stack.delete` are grants the browse key does not have), reconciling the primary with Immich's, and
 two-way sync.
 
-**Status:** ⬜ wanted, unblocked, not specced. Raised the moment the server-side migration landed:
+**Status:** ✅ built 2026-09-25 (the heading's). As first recorded — ⬜ wanted, unblocked, not specced. Raised the moment the server-side migration landed:
 Immich's timeline now collapses **2,378** RAW+JPEG pairs, and **Rustroom's grid still shows both halves**,
 so the two views of the same library disagree.
 
@@ -1613,10 +1656,10 @@ vanish. The downloaded folder **stays visible**, renamed *"Downloaded photos"*, 
 replaced too** — the path itself says "immich" and names the server. ⚠ That withholds where the files
 are, accepted because the requirement was explicit. `grep -n 'completely optional' docs/JOURNAL.md`.
 
-⬜ **Still open, deliberately:** deleting or evicting caches on disable (nothing is deleted today), and
-the OS keychain.
+⬜ **Still open:** deleting or evicting caches on disable (nothing is deleted today) → **M10.15b**, and the
+OS keychain → **M10.15a**.
 
-**Status:** ⬜ wanted, unblocked, not specced. The user's words: *"the whole immich integration should in
+**Status:** ✅ built 2026-09-24 (the heading's). As first recorded — ⬜ wanted, unblocked, not specced. The user's words: *"the whole immich integration should in
 the end be completely optional … a toggle in the immich header in settings with which one can completely
 disable the immich support, i.e. in that case there should be **no mention of immich at all**."*
 
@@ -1692,18 +1735,20 @@ the most time in this integration were both invisible in the OpenAPI schema.
 
 ### ⚠ Three honest costs
 
-- **Credentials are a new kind of surface for this project.** Rustroom has never stored a secret.
+- **Credentials are a new kind of surface for this project.** → **M10.15a**. Rustroom has never stored a secret.
   An API key in `settings.json` in plaintext is the easy path and probably not the right one; the
   OS keychain is right and is platform-specific work.
-- **Duplicated storage.** A cached RAW is a second copy — fine for a working set, needs an eviction
+- **Duplicated storage.** → **M10.15b**. A cached RAW is a second copy — fine for a working set, needs an eviction
   policy if it becomes a library. `BufferCache`'s LRU is the precedent.
 - **It expands what Rustroom is.** Every planning note says "local files, originals never modified,
   Linux first". A network dependency is a genuine change of character — not wrong, but worth
   deciding deliberately rather than sliding into.
 
-## Film negative inversion (recorded 2026-08-26 — a FEATURE, not a plugin)
+## Film negative inversion (recorded 2026-08-26 — a FEATURE, not a plugin) → M10.11a
 
-**Status:** 🟡 wanted, not blocked. A `PipelineStage` like any other.
+**Status:** ⬜ **M10.11a** (scheduled 2026-09-29). Wanted, not blocked. A `PipelineStage` like any other.
+⚠ **2026-09-29:** the eyedropper this entry calls the one new piece of machinery **exists now** — white
+balance (`wb_tool`) and defringe both sample the canvas.
 
 The user wants Lightroom's negative-inversion capability (the Negative Lab Pro workflow) for
 scanned analogue film. ⚠⚠ **It arrived as a request for a plugin *system*, and it is not one.**
@@ -1726,7 +1771,7 @@ already lists as missing — so build it once, for both.
 
 ## A plugin system (recorded 2026-08-26 — DELIBERATELY not now)
 
-**Status:** ⛔ deferred on judgement, revisit **after Phase 5**.
+**Status:** ⛔ deferred on judgement → **M11.5**, the last milestone.
 
 Wanted to encourage outside contributions once the project is public. Three reasons not yet:
 
@@ -1759,7 +1804,7 @@ deliberately *before* publishing any API.
 well-shaped contribution with a golden-image test to prove it. That is what to point contributors
 at meanwhile.
 
-## Contributor-facing documentation (recorded 2026-08-26 — the cheap half of "open source")
+## Contributor-facing documentation (recorded 2026-08-26 — the cheap half of "open source") → M11.3
 
 **Status:** 🟡 wanted, small — and **deliberately scheduled LAST, at the final alpha** (user's call,
 2026-08-27). ⚠ The reason is not priority: it describes a shape that is still moving weekly, so
@@ -1820,7 +1865,11 @@ want none pass `ProfileRendering::default()` explicitly. ⚠ That is four builde
 in the workspace, which is why it was not folded into the fix that found it — the same attribution
 argument M8.9 used. **Do it as its own change, and expect the diff to be wide and shallow.**
 
-## The camera rendering does not reach an export
+## ✅ ~~The camera rendering does not reach an export~~ — FIXED 2026-09-18, struck 2026-09-29
+
+> `batch_export/render.rs` builds the export tail with the photo's own rendering since 2026-09-18 (its
+> comment at the call: *"This was `ProfileRendering::default()` until 2026-09-18, and that was the bug"*).
+> The entry below is the record.
 
 `batch_export::export_one` builds its tail with `pipeline::ProfileRendering::default()`, so the
 camera profile's **tone curve** and **baseline exposure** are absent from every exported file while

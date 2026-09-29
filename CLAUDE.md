@@ -2,7 +2,7 @@
 
 Project-specific guidance for Claude Code working in this repository.
 
-**Rustroom** — an open-source alternative to Adobe Lightroom. (Binary: `rustroom`. Repo folder: `~/Projects/rustroom`. Note: the Obsidian planning-notes folder is still named `opensource_lightroom`.)
+**Rustroom** — an open-source alternative to Adobe Lightroom. (Binary: `rustroom`. Repo folder: `~/Projects/rustroom`. The Obsidian planning notes live in the vault folder `rustroom` — renamed from `opensource_lightroom` on 2026-09-29.)
 
 > **⚠️ Maintain this file — and keep it SMALL.** Update architecture, crate layout, stack, conventions
 > and status here when they meaningfully change; **the history goes in `docs/JOURNAL.md`, not here.**
@@ -24,7 +24,7 @@ Project-specific guidance for Claude Code working in this repository.
 ## Planning docs (read these for full context)
 
 The detailed spec lives in the user's Obsidian vault at
-`~/Documents/obsidian/private/opensource_lightroom/`.
+`~/Documents/obsidian/private/rustroom/`.
 
 ⚠ **Reaching it needs TWO permissions, and they are separate — 2026-08-26.**
 1. **The harness's directory scoping** — `mcp__ccd_directory__request_directory` with the vault path grants it; the user approves in-session.
@@ -36,9 +36,9 @@ The detailed spec lives in the user's Obsidian vault at
 ```
 `Operation not permitted` means TCC; a harness refusal names the path instead. ⚠ Do not conclude from a successful folder grant that the file is readable — the grant reports success while TCC still denies it, which cost a wrong diagnosis here.
 
-- `01-lightroom-capabilities.md` — target feature set + prioritized P0–P4 scope table. **Annotated 2026-08-26** with ✅/🟡/⬜/⛔ per capability, plus a **"deliberate divergences from Lightroom"** section (copy numbering from 0, radial mask affects the inside, no Smart Previews, post-crop vignette by stage order, panel grouped by edit group).
+- `01-lightroom-capabilities.md` — target feature set + prioritized P0–P4 scope table. **Annotated 2026-08-26, re-swept 2026-09-29** with ✅/🟡/⬜/⛔ per capability — every ⬜ names its Phase 10 milestone — plus a **"deliberate divergences from Lightroom"** section (copy numbering from 0, radial mask affects the inside, no Smart Previews, post-crop vignette by stage order, panel grouped by edit group).
 - `02-architecture-and-tech.md` — stack rationale, pipeline design, crate layout, best practices. **Corrected 2026-08-26** — ⚠ four things it got wrong are struck through in place: the **pipeline order** (geometry runs *first*), the **working space** (linear ProPhoto), the **stage trait** (consuming, params baked in at construction), and the **crate layout** (12, not 8). Its §8 lists what the note did not anticipate at all.
-- `03-plan-of-action.md` — phased, step-by-step build order with "Done when" criteria.
+- `03-plan-of-action.md` — phased, step-by-step build order with "Done when" criteria. **The canonical list of open work:** Phase 10 (every open item, M10.6–M10.18) and Phase 11 (release, M11.1–M11.5).
 
 ## Stack
 
@@ -88,7 +88,7 @@ Sharpening is last because it must not amplify anything a later stage would then
 ## Planned crate layout (Cargo workspace)
 
 ```
-opensource_lightroom/
+rustroom/
 ├── Cargo.toml                # [workspace]
 ├── CLAUDE.md                 # this file
 ├── crates/
@@ -171,7 +171,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 94 dated sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-09-28)
+### State (2026-09-29)
 
 **3266 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
@@ -213,32 +213,42 @@ that had grown to ~170 lines by appending.)
   views but never an absent local one; `asset.upload` is a grant separate from `asset.update` (upload
   rides `immich_upload_key`); never delete a staged file on an upload *attempt*; no mtime fallback for
   the upload date; `Settings.immich_enabled` is read only through `immich_source::connection`.
-  ⛔ Two-way sync is DECLINED — the user's call. ⚠ The server is a **Tailscale Funnel**: a stopped
+  ⛔ Two-way sync was DECLINED 2026-09-24 with reasons; the author re-opened it as **M10.15d** on
+  2026-09-29 — start from `docs/BACKLOG.md`'s reasons table. ⚠ The server is a **Tailscale Funnel**: a stopped
   Tailscale on the Mac is never the cause of an Immich error.
 
-### ▶ Next action
+### ▶ Next action — Phase 10, top down
 
-✅ **The first-use review fixes are merged and confirmed by use** (2026-09-28; `grep -n 'First-use
-review fixes' docs/JOURNAL.md`). The reviews themselves were transient and are deleted; their
-milestone-sized findings sit in `docs/BACKLOG.md` under "First-session reviews". ✅ **M9.14
-Previews** (P-20) merged 2026-09-29, confirmed by use — in the table above.
-✅ **The design language** (`docs/DESIGN.md`, direction B) — merged 2026-09-29, confirmed by use:
-tokens, four text sizes, section cards, the status row, one scoped hover sentence per control, seven
-accents, and four rounds of the author's fixes. `grep -n 'design language' docs/JOURNAL.md`.
-✅ **Phase 9 is complete** (M9.13 merged 2026-09-28).
-⚠⚠ **THE AGREED ORDER (the author, 2026-09-29): every other open item first, CHRONOLOGICALLY by when
-it was recorded — Phase 10 LAST.** Do not propose Phase 10 before the queue is empty.
-1. ✅ **Reordering masks and a mask's components** — merged 2026-09-29, confirmed by use
-   (`grep -n 'Reordering masks' docs/JOURNAL.md`).
-2. ⬜ **Next: sweep the open items into one dated queue** and let the author prune it — `docs/BACKLOG.md`
-   has stale entries (it still lists an on-disk thumbnail cache and subfolders as missing; M8.2 and
-   M9.9 built them) and "deliberately not scheduled" ones whose status is the author's call. The oldest open
-   non-Phase-10 item is **film negative inversion (recorded 2026-08-26)**.
+✅ Phase 9 (M9.13 merged 2026-09-28, M9.14 2026-09-29); ✅ the design language (2026-09-29); ✅ reordering
+masks and components (2026-09-29, `grep -n 'Reordering masks' docs/JOURNAL.md`).
 
-Phase 10 when the queue is done: M10.2 Windows + the Linux GUI (never run), M10.3 contributor docs,
-M10.4 `v0.1`, M10.5 plugins. ⛔ **M10.1 was WITHDRAWN — it was never real** (the licence has been
-committed since `e71330d`); do not re-open it.
-⚠ M5.1c and M6.4c keep their own ids; Phase 9's new items start at M9.6 because M9.1–M9.5 are retired.
+⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
+release engineering, LAST.** The canonical list — every sub-item with its date, size and reasoning — is
+the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of its entries to an id.
+`grep -n 'The re-plan' docs/JOURNAL.md` for how the list was built. Within a milestone, oldest first;
+⏸ = parked or blocked.
+
+| Milestone | Sub-items |
+|---|---|
+| **M10.6** your to-dos + design leftovers | a Immich Timeline at the top · b welcome screen (needs the author's description) · c the empty Library text is two sentences (§7.14) · d a table for the non-slider hovers |
+| **M10.7** code health | a pin lcms2's ICC creation date (reproducible exports) · b `ProfileRendering` → `TailRendering` (~270 mentions) · c temp-dir test isolation, 7 + 2 sites · d split the large files · e `PrefixCache`'s tests into `prefix_cache.rs` |
+| **M10.8** Library & workflow | a keyword suggestions · b vertical filmstrip · c stack by hand, group by capture time · d batch rename |
+| **M10.9** presets & shortcuts | a presets import/export, folders, rename · b user-defined shortcuts |
+| **M10.10** export | a image watermark · b sizing in cm/in with PPI, a file-size target |
+| **M10.11** Develop additions | a film negative inversion · b Grain |
+| **M10.12** the mask model | a nested composites · b scene sliders as offsets (Lightroom's model) · c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
+| **M10.13** colour & camera profiles | a an independent C2/C3 reference · b `CameraCalibration` + `ProfileLookTable` · c per-photo profile · d camera-matching colour out of the box (P-22) |
+| **M10.14** performance & verification | a HSL `cbrt`/`atan2` · b the prefix-cache eviction fix's picture half · c Clarity's coalescing · d the ~10–12 ms drag gap · e a 100k-photo catalog benchmark · f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) |
+| **M10.15** Immich | a API keys in the keychain · b evict cached originals · c read Immich's rating · d two-way sync (re-opened) |
+| **M10.16** AI tools | a depth masks · b AI denoise · c content-aware remove |
+| **M10.17** merge | a HDR · b panorama |
+| **M10.18** new modules | a tethering · b GPS and a map · c people tagging · d publish services · e print |
+
+**Phase 11, last:** M11.2 Windows + the Linux GUI (never run; the in-window menu bar never seen;
+multi-monitor), M11.3 contributor docs, M11.4 `v0.1`, M11.5 plugins. ⛔ **M11.1 (was M10.1) is
+WITHDRAWN — it was never real** (the licence has been committed since `e71330d`); do not re-open it.
+⚠ **Retired ids:** M9.1–M9.5 and M10.1–M10.5 moved with their work (M9.2 → M10.2 → M11.2), so Phase 10
+starts at **M10.6**; M5.1c and M6.4c kept their own ids.
 
 **How the author works** (and has every milestone this session): brainstorm → spec → plan → execute
 inline with no check-ins after the design is approved; a branch per feature; he tries it in the GUI
@@ -246,20 +256,10 @@ and says "works, merge it and delete the branch" — then merge `--no-ff`, delet
 journal/CLAUDE.md/Obsidian ✅. He reports what he sees precisely; take it literally. He asks for plain
 explanations of domain terms (DNG, fringe, rendering intent) before choosing — give them.
 
-**Proposed, not scheduled (the author's call):** masks' *scene* sliders (WB, exposure, contrast, tone
-regions) run after the global tone curve, where Lightroom applies them as offsets; raised in M7.3b's
-brainstorm. ⚠ The remaining app-vs-probe drag gap (~10–12 ms) is GPU submit+wait, cause unidentified;
-the shared-device idea is ⛔ declined on a measurement (`docs/BACKLOG.md`). ⚠ Defringe has no GPU twin;
-with it on, a straighten drag pays ~62 ms — build one if use asks.
-
-⚠⚠ **The GPU port is finished** — done, declined with numbers, or blocked on a considered trade.
-
-**The small leftovers:** (1) the u8 coverage wire — ⚠⚠ blocked on a shader restructure (packing four
-samples in a `u32` would race); (2) rename `ProfileRendering` → `TailRendering` (~120 sites, its own
-change); (3) file sizes — in *Open items* only; (4) move `PrefixCache`'s tests into `prefix_cache.rs`.
+⚠⚠ **The GPU port is finished** — done, declined with numbers, or parked/blocked (M10.14f/g).
 ⛔ Declined with numbers in `docs/BACKLOG.md` — do not re-propose from a list: the prefix seams'
-download half in general, spot removal on the GPU, `MIN_GPU_BOX_PX`, the GPU-side coverage cache.
-⚠ `MAX_TILE_DABS`: the cliff is at 2560; blocked on a portability question.
+download half in general, spot removal on the GPU, `MIN_GPU_BOX_PX`, the GPU-side coverage cache, one
+GPU device for the window and the pipeline.
 
 ### The GPU port — closed (reopened once, for geometry, 2026-09-26)
 
@@ -273,36 +273,17 @@ the declines with their numbers in `docs/BACKLOG.md`. ⚠ Count by `impl Pipelin
 `impl (crate::)?GpuStage for` — exposure writes the `crate::` form, and a grep without it undercounts
 by one (it did, 2026-09-26).
 
-### Open items
+### Warnings that outlive their milestone
 
-⚠⚠ **Live items only.** A finished item is deleted from here, not struck through — its record is in
-`docs/JOURNAL.md` and its numbers in `docs/BACKLOG.md`. Four ✅ entries had stacked up here by
-2026-09-18, which is the 1.2 MB failure starting again.
+⚠⚠ **All open work is Phase 10 above.** A finished item is deleted from there, not struck through — its
+record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes belongs here.
 
-- **A GPU-side mask coverage cache** — ✅ measured 2026-09-16; the ceiling missed 4–8×. ⚠⚠ The cost
-  is **not transfer**: a serial u8→u32 repack and a 4×-inflated download wire. **Fix those two
-  first** — mechanical, no design question. Re-price after.
-- ⚠ **The u8 coverage wire**, the **`ProfileRendering` → `TailRendering`** rename, **`MAX_TILE_DABS`** and
-  `PrefixCache`'s test move sit under **▶ Next action** above with their numbers and blockers; the Immich
-  leftovers sit in **State**. Nothing is repeated here — a list in two places is how this file hit 1.2 MB.
-- The prefix-cache eviction fix's **picture** half.
-- Clarity's **coalescing** on the horizontal running-sum pass; **M8.1**'s leftovers.
-- ⚠⚠ **MEASURE A FILE BY ITS CODE, NOT ITS TOTAL** — this list was wrong in *both* directions until
-  2026-09-24, because every figure was a total and this repo's files carry enormous test tails. Measure
-  with `awk '/#\[cfg\(test\)\]/{exit} {n++}'` (code **plus** doc comments, which are heavy here).
-  **The genuinely large ones:** `edit-model/src/lib.rs` **1,883**, `pipeline/src/lib.rs` **1,810**,
-  `catalog/src/db.rs` **1,730**, `app/src/settings.rs` **1,046**. ⚠ `adjustments.rs` is **610**, barely
-  over. ⚠⚠ **Re-measure, never requote** — this entry's own precedent figures went stale within a day,
-  so a measurement written down decays exactly like the totals it was created to correct.
-- The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.** ⚠ `immich_source`
-  adds **two more** that key only on the process id, with no counter; `immich_list_cache`'s and
-  `thumb_store`'s use a counter as well and are the pattern to copy.
-
-### The open question M8.11 did not settle
-
-M8.3j/k/l's inner-chain machinery is reachable **only on the decline path** (a gating brush, cold cache).
-Kept and pinned; whether it still earns its keep is worth asking when something touches it.
-`grep -n 'accelerate_inner' docs/JOURNAL.md`.
+- ⚠⚠ **Never run two gates concurrently** — the temp-dir test-isolation sites (M10.7c) collide.
+  `immich_list_cache`'s and `thumb_store`'s counter-based temp dirs are the pattern to copy.
+- ⚠⚠ **MEASURE A FILE BY ITS CODE, NOT ITS TOTAL** — this repo's files carry enormous test tails. Use
+  `awk '/#\[cfg\(test\)\]/{exit} {n++}'` (code **plus** doc comments). The large ones on 2026-09-24:
+  `edit-model/src/lib.rs` 1,883, `pipeline/src/lib.rs` 1,810, `catalog/src/db.rs` 1,730,
+  `app/src/settings.rs` 1,046. ⚠⚠ **Re-measure, never requote** — a figure written down decays.
 
 ### Standing lessons (the expensive ones — full stories in `docs/JOURNAL.md`)
 
@@ -316,7 +297,7 @@ Kept and pinned; whether it still earns its keep is worth asking when something 
   four tests passed against a catalog that could never find its own rows. **(b)** A query that finds
   **nothing** passes silently, so assert the sample first — `labels.len() > 12` caught three separate ways
   the Color guard opened nothing, and a substring filter matching no tests exits 0. ⚠⚠ **It applies to shell
-  checks, and it cost an invented milestone (M10.1) on 2026-09-25:** `ls | grep -i license` returned
+  checks, and it cost an invented milestone (M10.1, now M11.1) on 2026-09-25:** `ls | grep -i license` returned
   nothing, so I reported no `LICENSE` — it had been committed since `e71330d`. **`ls` here is aliased to
   `eza --long`, which prints NOTHING to a pipe unless given a path argument**, exiting 0 with empty
   stderr. Use `/bin/ls` or `git ls-files` for anything you will act on, and **prove a negative with a
