@@ -159,6 +159,42 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-29 — The design language: three directions, B chosen (branch `design-language`, docs only)
+
+**Input:** the author asked for one cohesive, minimal design language with mockups to choose from,
+naming two irritants — inconsistent font sizes (some tiny with lots of text, hard to read on the 5K;
+others too big) and the Library top row overlapping on the 13-inch MacBook Pro.
+
+**Measured.** *Type:* ten sizes in use — 9, 11, 12, 12.5, 13, 13.5, 14, 15, 17, 18 — plus 26 for
+the rail glyphs; `tune` never set `text_styles`, so egui's defaults (Small 9, Body 13, Heading 18)
+were joined by 24 literal `FontId::proportional` / `.size()` sites across the bin modules. The 9-pt
+sites are exactly the "too small" ones: `hint`, thumbnail badges and captions, the curve hint.
+*Overlap:* reproduced at a 1400×859 window from a scratch profile — the centred status label is
+painted regardless of room, the search field has a fixed width and the bar carries Stack / Expand /
+Reindex / format chips; at Interface size 125 % the whole bar overprints. *Consistency:* four ways of
+showing "selected", three segmented-control looks, buttons that look like labels.
+
+**Three directions on a canvas** (<https://claude.ai/artifact/JK6A3tSpaXPo427cHZTZ7h>), each with
+Library, Develop, Settings and a component kit, sharing the same foundations: A · Studio (the
+current direction disciplined), B · Layered (elevation, rounded, sentence case, roomier), C ·
+Editorial (hairlines, text buttons). **The author chose B**, and added: a **status row** at the
+bottom of the content column carrying the count, format chips, sort, size and ⋯ so the top row only
+navigates and narrows; **no persistent hints** — every control gets one hover sentence; steel blue
+stays the default accent with **Orange, Sage and Rose** added (seven pairs, each checked ≥ 3:1
+against its base and ≥ 4.5:1 for text on it; dark text on the dark-theme accent, where the current
+`primary_button` paints white at 2.4:1). ⚠ Orange was excluded on 2026-08-13 for sitting on the
+colour-temperature axis; offered now at the author's request, with the caveat kept in the rulebook.
+
+**Output:** `docs/DESIGN.md` — the rulebook (type, colour, spacing, the shell and its two rows,
+sixteen components, the hints rule, where every token lives in code, a checklist, a decisions log)
+— and a bullet in `CLAUDE.md`. No code changed. The implementation pass is planned next.
+
+⚠ *Process notes, in memory too:* three Rustroom instances were up at once (the author's, another
+session's, mine) and the drive tool picked the largest window of any of them — it now honours
+`DRIVE_PID`. Synthetic key events reach egui (Escape closes dialogs, Return opens the grid's
+selection); the 2026-09-28 failure was the native open panel only. `File → Open recent` from a seeded
+`settings.json` avoids that panel entirely. AX resize returned success and did nothing to the eframe
+window.
 ### 2026-09-29 — M9.14 Previews: instant 1:1 in Develop, Compare and Survey (branch `m9.14-previews`, merged 2026-09-29)
 
 **The ask** (P-20, the professional review's first blocker): a focus check across a shoot is a wall

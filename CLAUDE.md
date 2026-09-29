@@ -143,6 +143,11 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
   saying it is 15–30 minutes predates 2026-09-23 and is wrong; so is the 2026-09-19 journal note
   calling the stall "not fixable from here".
 - **Color correctness is first-class** — validate against references early.
+- **⚠⚠ ANYTHING THE USER CAN SEE FOLLOWS `docs/DESIGN.md`** — the design language chosen on 2026-09-29
+  (direction *B · Layered*): four text sizes and nothing below 11 pt, one accent for selection and set
+  state, one form per control, a top row plus a status row each with a priority plan, hover text
+  instead of on-screen hints. Its §12 is the checklist for a new element; a literal font size or
+  `Color32` outside `theme.rs` is a defect. Mockups: <https://claude.ai/artifact/JK6A3tSpaXPo427cHZTZ7h>.
 - **Design the GPU seam now, build it later.** Don't leak CPU-specific types into the pipeline interface.
 - Avoid platform-specific assumptions (paths, file dialogs, GPU backend) so Win/macOS stay cheap.
 
