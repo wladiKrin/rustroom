@@ -64,9 +64,11 @@ pub fn move_component(
     let mut comps: Vec<Option<(Option<MaskOp>, Mask)>> = std::iter::once(Some((None, base)))
         .chain(refine.into_iter().map(|r| Some((Some(r.op), r.mask))))
         .collect();
-    let mut taken = order
-        .iter()
-        .map(|&k| comps[k].take().expect("a permutation names each component once"));
+    let mut taken = order.iter().map(|&k| {
+        comps[k]
+            .take()
+            .expect("a permutation names each component once")
+    });
     // ⚠ Its op is `None` (the old base) or `Add` — `component_drop_allowed` said so above.
     let (_, top) = taken.next().expect("a mask has at least its base");
     m.mask = top;
@@ -181,7 +183,10 @@ mod tests {
         let before = a_minus_b_plus_c();
         let mut after = before.clone();
         let mut sel = 0;
-        assert!(move_component(&mut after, &mut sel, 2, 1), "the move was refused");
+        assert!(
+            move_component(&mut after, &mut sel, 2, 1),
+            "the move was refused"
+        );
         assert_eq!(after.refine[0].op, MaskOp::Add, "fixture: C now before B");
         let d = max_difference(&before, &after);
         assert!(d > 0.9, "(A − B) ∪ C and (A ∪ C) − B must differ, got {d}");
@@ -242,11 +247,7 @@ mod tests {
             for to in 0..=n {
                 let top = moved(&ops, from, to)[0];
                 let want = matches!(top, None | Some(MaskOp::Add));
-                assert_eq!(
-                    component_drop_allowed(&m, from, to),
-                    want,
-                    "{from} → {to}"
-                );
+                assert_eq!(component_drop_allowed(&m, from, to), want, "{from} → {to}");
                 let mut got = m.clone();
                 let mut sel = 0;
                 let changed = move_component(&mut got, &mut sel, from, to);
@@ -257,7 +258,11 @@ mod tests {
                     continue;
                 }
                 offered += 1;
-                assert_eq!(got.refine.len(), m.refine.len(), "{from} → {to} lost a shape");
+                assert_eq!(
+                    got.refine.len(),
+                    m.refine.len(),
+                    "{from} → {to} lost a shape"
+                );
                 assert_eq!(
                     op_by_shape(&got),
                     op_by_shape(&m),
@@ -267,7 +272,10 @@ mod tests {
         }
         // ⚠ Assert the sample (standing lesson (b)): a rule that refused everything, or nothing,
         // would pass the loop above.
-        assert!(offered > 10 && refused > 5, "offered {offered}, refused {refused}");
+        assert!(
+            offered > 10 && refused > 5,
+            "offered {offered}, refused {refused}"
+        );
     }
 
     #[test]
@@ -277,7 +285,10 @@ mod tests {
         for (from, to) in [(1, 0), (3, 0), (0, 2)] {
             // (0, 2) moves the base below −B, which would put −B on top.
             let mut got = m.clone();
-            assert!(!move_component(&mut got, &mut sel, from, to), "{from} → {to}");
+            assert!(
+                !move_component(&mut got, &mut sel, from, to),
+                "{from} → {to}"
+            );
             assert_eq!(got, m);
         }
     }

@@ -1032,7 +1032,10 @@ mod tests {
         p.add(MaskKind::Gradient);
         p.refine(edit_model::MaskOp::Subtract, MaskKind::Radial);
         p.refine(edit_model::MaskOp::Add, MaskKind::Radial);
-        assert_eq!(p.s.selected_component, 2, "fixture: +Radial is being edited");
+        assert_eq!(
+            p.s.selected_component, 2,
+            "fixture: +Radial is being edited"
+        );
         p
     }
 
@@ -1043,7 +1046,10 @@ mod tests {
         let m = &p.s.edits.masks[0];
         assert_eq!(m.refine[0].op, edit_model::MaskOp::Add, "+Radial moved up");
         assert_eq!(m.refine[1].op, edit_model::MaskOp::Subtract);
-        assert_eq!(p.s.selected_component, 1, "the edited shape followed its row");
+        assert_eq!(
+            p.s.selected_component, 1,
+            "the edited shape followed its row"
+        );
         assert!(ed.changed && ed.settled, "one drop, one history entry");
     }
 
