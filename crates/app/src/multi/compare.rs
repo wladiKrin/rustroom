@@ -93,6 +93,9 @@ struct Plan {
     candidate: Option<usize>,
     /// The photos to build panes for, with the edits to render each through.
     want: Vec<(PhotoId, edit_model::Edits)>,
+    /// The candidates either side, whose previews are fetched ahead so a step is instant
+    /// rather than a dark pane for the fraction of a second a preview takes (2026-09-29).
+    neighbours: Vec<(PhotoId, edit_model::Edits)>,
 }
 
 /// The two photos Compare is about to show, with the edits to render them through.
@@ -122,24 +125,31 @@ fn plan(app: &RustroomApp, stored: &Option<PhotoId>) -> Option<Plan> {
         .and_then(|id| lib.entries.iter().position(|e| &e.id == id));
     let candidate = compare_pair::candidate(&pool, reference, stored_row);
     let live = app.live_edits();
+    let with_edits = |row: usize| {
+        let e = lib.entries.get(row)?;
+        // ⚠ The **open** photo renders through its live edits, not the row's: the sidecar is
+        // stale exactly while you are editing, and you arrive here straight from Develop.
+        let edits = match &live {
+            Some((p, c, ed)) if *p == e.id.path && *c == e.id.copy => ed.clone(),
+            _ => e.edits.clone(),
+        };
+        Some((e.id.clone(), edits))
+    };
     let want = [Some(reference), candidate]
         .into_iter()
         .flatten()
-        .filter_map(|row| {
-            let e = lib.entries.get(row)?;
-            // ⚠ The **open** photo renders through its live edits, not the row's: the sidecar is
-            // stale exactly while you are editing, and you arrive here straight from Develop.
-            let edits = match &live {
-                Some((p, c, ed)) if *p == e.id.path && *c == e.id.copy => ed.clone(),
-                _ => e.edits.clone(),
-            };
-            Some((e.id.clone(), edits))
-        })
+        .filter_map(with_edits)
+        .collect();
+    let neighbours = [true, false]
+        .into_iter()
+        .filter_map(|forward| compare_pair::step(&pool, reference, candidate, forward))
+        .filter_map(with_edits)
         .collect();
     Some(Plan {
         reference,
         candidate,
         want,
+        neighbours,
     })
 }
 
@@ -156,11 +166,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let plan = plan(app, &stored);
     // M9.14: the panes draw previews, not decodes — one request per pane, the reference first,
     // in `plan.want`'s order (`the_two_shown_photos_are_the_two_panes_asked_for`).
+    // ⚠ The panes first, then the neighbours: the loader works the list in order, and the
+    // pictures on screen must never wait behind a prefetch.
     let reqs: Vec<PreviewRequest> = plan
         .as_ref()
         .map(|p| {
             p.want
                 .iter()
+                .chain(p.neighbours.iter())
                 .map(|(id, e)| app.preview_request(id.clone(), e.clone()))
                 .collect()
         })
@@ -573,12 +586,16 @@ mod tests {
             "no pane for the reference"
         );
         assert!(app.cache.is_empty(), "Compare decoded something");
-        assert_eq!(
-            app.preview_want.len(),
-            2,
-            "Compare asked the preview loader for its two photos"
+        assert!(
+            app.preview_want.len() >= 2,
+            "Compare asked the preview loader for its two photos (and the neighbours after)"
         );
         assert_eq!(app.preview_want[0].id, id, "the reference comes first");
+        assert_eq!(
+            app.preview_want[1].id,
+            app.library.as_ref().unwrap().entries[1].id,
+            "the candidate second, ahead of any prefetch"
+        );
         app.library_mode = LibraryMode::Grid;
         app.release_compare_panes();
         assert!(

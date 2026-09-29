@@ -112,9 +112,9 @@ const MAX_CONCURRENT_DECODES: usize = 2;
 const MAX_CONCURRENT_FULL_DECODES: usize = 1;
 /// Recently viewed photos kept decoded in memory (~85 MB each).
 const BUFFER_CACHE_CAP: usize = 3;
-/// GPU memory for preview textures (M9.14): three 26-Mpx RGBA pictures, the most the on-screen
-/// window (Compare's two panes plus a neighbour) ever pins.
-const PREVIEW_TEXTURE_BUDGET: usize = 192 * 1024 * 1024;
+/// GPU memory for preview textures (M9.14): six 26-Mpx RGBA pictures — the on-screen window
+/// plus the neighbours fetched ahead (Develop's filmstrip pair, Compare's two candidates).
+const PREVIEW_TEXTURE_BUDGET: usize = 6 * 52 * 1024 * 1024;
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {

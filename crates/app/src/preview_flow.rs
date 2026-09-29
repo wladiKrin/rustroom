@@ -66,7 +66,9 @@ impl RustroomApp {
                 continue;
             }
             let bytes = t.rgba.len();
-            let img = egui::ColorImage::from_rgba_unmultiplied([t.width, t.height], &t.rgba);
+            // ⚠ `premultiplied`: every alpha is 255, so the two are the same bytes, and this one
+            // is a copy rather than a multiply over 13 M pixels on the UI thread.
+            let img = egui::ColorImage::from_rgba_premultiplied([t.width, t.height], &t.rgba);
             let tex = ctx.load_texture(
                 format!(
                     "preview:{}#{}:{}",
@@ -101,14 +103,44 @@ impl RustroomApp {
             .as_ref()
             .zip(self.pending.as_ref())
             .is_some_and(|(s, p)| s.path == p.id.path && s.copy == p.id.copy);
-        let window: Vec<PreviewRequest> = match (&self.pending, &self.session) {
+        let mut window: Vec<PreviewRequest> = match (&self.pending, &self.session) {
             (Some(p), _) if !session_covers => vec![p.preview_request.clone()],
             (_, Some(s)) if !s.buffer_is_full_res => {
                 vec![self.preview_request(PhotoId::new(s.path.clone(), s.copy), s.edits.clone())]
             }
             _ => Vec::new(),
         };
+        // ⚠ The neighbours in the filmstrip, fetched ahead so an arrow step finds its preview
+        // already there (2026-09-29: "I'd like it to feel more instant"). After the open
+        // photo's own request, never before it.
+        window.extend(self.filmstrip_neighbours());
         self.sync_preview_window(&window);
+    }
+
+    /// The photos either side of the open one in the filmstrip's order, with their edits.
+    fn filmstrip_neighbours(&self) -> Vec<PreviewRequest> {
+        let (Some(lib), Some(open)) = (
+            &self.library,
+            self.pending.as_ref().map(|p| p.id.clone()).or_else(|| {
+                self.session
+                    .as_ref()
+                    .map(|s| PhotoId::new(s.path.clone(), s.copy))
+            }),
+        ) else {
+            return Vec::new();
+        };
+        let Some(row) = lib.entries.iter().position(|e| e.id == open) else {
+            return Vec::new();
+        };
+        let Some(at) = lib.visible.iter().position(|&r| r == row) else {
+            return Vec::new();
+        };
+        [at + 1, at.wrapping_sub(1)]
+            .into_iter()
+            .filter_map(|i| lib.visible.get(i))
+            .filter_map(|&r| lib.entries.get(r))
+            .map(|e| self.preview_request(e.id.clone(), e.edits.clone()))
+            .collect()
     }
 
     /// Leaving an edited photo: queue its preview unless the store already has it.
@@ -262,6 +294,33 @@ mod tests {
         edited.exposure = 0.5;
         app.queue_leave_build(id, edited);
         assert_eq!(app.leave_queue.len(), 1);
+    }
+
+    /// 2026-09-29: the filmstrip neighbours are fetched ahead, after the open photo's own
+    /// request, so an arrow step finds its preview already there.
+    #[test]
+    fn develop_prefetches_the_filmstrip_neighbours_after_the_open_photo() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 8, 4);
+        app.session.as_mut().unwrap().buffer_is_full_res = false;
+        let open = app
+            .session
+            .as_ref()
+            .map(|s| PhotoId::new(s.path.clone(), s.copy))
+            .unwrap();
+        let mut lib = crate::test_app::library_of(5);
+        lib.entries[2].id = open.clone();
+        lib.visible = (0..5).collect();
+        let (prev, next) = (lib.entries[1].id.clone(), lib.entries[3].id.clone());
+        app.library = Some(lib);
+        app.sync_develop_previews();
+        let ids: Vec<PhotoId> = app.preview_want.iter().map(|r| r.id.clone()).collect();
+        assert_eq!(
+            ids,
+            vec![open, next, prev],
+            "the open photo first, then next, then previous"
+        );
     }
 
     #[test]

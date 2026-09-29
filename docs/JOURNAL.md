@@ -274,6 +274,18 @@ then does a view fall back to the thumbnail. Develop shows the previous photo di
 rendered preview gets its ghost render after the loader's instant miss.
 `a_ghost_waits_for_its_preview_and_shows_its_own_render_only_after_a_miss` pins it.
 
+**The author's fifth look (03:15):** "a short flash of a black image every time I move around
+in Develop or Compare — I thought the embedded JPEG takes only 0.2 s; I'd like it to feel
+instant." The wait had become visible: Develop dimmed the previous frame to near-black and a
+Compare pane stayed dark until the loader answered, and a preview is never instant on its own —
+reading and decoding a 13-Mpx JPEG plus the texture upload is 0.15–0.25 s. So the neighbours
+are **fetched ahead**: Develop asks for the filmstrip's next and previous after the open photo
+(`preview_flow::filmstrip_neighbours`), Compare for the candidates either side (`Plan::neighbours`),
+the loader works the list in that order, and the texture budget holds six previews. The dim on
+the previous frame is light (48, was 140) so a click on a far photo reads as a crossfade; the
+upload copies instead of premultiplying 13 M opaque pixels. Pinned by
+`develop_prefetches_the_filmstrip_neighbours_after_the_open_photo`.
+
 **Not verified in use, and why:** the driven look was attempted at 01:35 and the screen was at
 the login window — nothing could be captured. The author's look: an untouched RAF at 1:1 in
 Develop shows "Camera preview" within a fraction of a second and hands over to the live render
