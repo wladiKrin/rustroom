@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M10.6a: the Immich Timeline at the top (2026-09-29)](#2026-09-29--m106a-the-immich-timeline-at-the-top-branch-m106a-immich-timeline)
+- [M10.6a: the Immich Timeline at the top (2026-09-29)](#2026-09-29--m106a-the-immich-timeline-at-the-top-branch-m106a-immich-timeline-merged-2026-09-29)
 - [The re-plan: every open item becomes Phase 10, release becomes Phase 11 (2026-09-29)](#2026-09-29--the-re-plan-every-open-item-becomes-phase-10-release-becomes-phase-11-branch-replan)
 - [Reordering masks and a mask's components (2026-09-29)](#2026-09-29--reordering-masks-and-a-masks-components-branch-mask-reorder-merged-2026-09-29)
 - [The design language: three directions, B chosen, and built (2026-09-29)](#2026-09-29--the-design-language-three-directions-b-chosen-and-built-branch-design-language-merged-2026-09-29)
@@ -163,7 +163,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-09-29 — M10.6a: the Immich Timeline at the top (branch `m10.6a-immich-timeline`)
+### 2026-09-29 — M10.6a: the Immich Timeline at the top (branch `m10.6a-immich-timeline`, merged 2026-09-29)
 
 **Input:** the author's to-do, *"For immich folder, move timeline to the top."* Spec
 `2026-09-29-m10.6a-immich-timeline-design.md`, plan `2026-09-29-m10.6a-immich-timeline.md`.
@@ -204,7 +204,8 @@ the first-use review's "a × on every folder row read as a standing threat" — 
 `hover`, so it would have been invisible — `raised` shows in both themes. 4 tests, sabotage-checked
 (always drawn, the pop, the width, the face). ⚠ **Then "even fainter"**: at rest `text3` at **55 %**
 (`tokens::ACTION_REST`) — ≈2:1 dark, ≈1.8:1 light, below §10's floor by the author's choice and logged
-there as its one exception; a disabled glyph at 60 % of that, so it stays apart.
+there as its one exception; a disabled glyph at 60 % of that, so it stays apart. ✅ **Confirmed by use and
+merged 2026-09-29.**
 
 ### 2026-09-29 — The re-plan: every open item becomes Phase 10, release becomes Phase 11 (branch `replan`)
 
