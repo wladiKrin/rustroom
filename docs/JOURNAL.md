@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M9.14 Previews: instant 1:1 in Develop, Compare and Survey (2026-09-29)](#2026-09-29--m914-previews-instant-11-in-develop-compare-and-survey-branch-m914-previews-awaiting-use)
+- [M9.14 Previews: instant 1:1 in Develop, Compare and Survey (2026-09-29)](#2026-09-29--m914-previews-instant-11-in-develop-compare-and-survey-branch-m914-previews-merged-2026-09-29)
 - [The resident final checkpoint: the tail's input stays on the GPU (2026-09-26)](#2026-09-26--the-resident-final-checkpoint-the-tails-input-stays-on-the-gpu-branch-resident-final)
 - [Per-pixel fusion: a run of per-pixel stages as one pass (2026-09-26)](#2026-09-26--per-pixel-fusion-a-run-of-per-pixel-stages-as-one-pass-branch-per-pixel-fusion)
 - [GPU timestamps: per-pass GPU time in the running app (2026-09-26)](#2026-09-26--gpu-timestamps-per-pass-gpu-time-in-the-running-app-branch-gpu-timestamps)
@@ -159,7 +159,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-09-29 — M9.14 Previews: instant 1:1 in Develop, Compare and Survey (branch `m9.14-previews`, awaiting use)
+### 2026-09-29 — M9.14 Previews: instant 1:1 in Develop, Compare and Survey (branch `m9.14-previews`, merged 2026-09-29)
 
 **The ask** (P-20, the professional review's first blocker): a focus check across a shoot is a wall
 of seconds per frame, because true 1:1 waits for the full decode. **Spec**
@@ -286,12 +286,11 @@ the previous frame is light (48, was 140) so a click on a far photo reads as a c
 upload copies instead of premultiplying 13 M opaque pixels. Pinned by
 `develop_prefetches_the_filmstrip_neighbours_after_the_open_photo`.
 
-**Not verified in use, and why:** the driven look was attempted at 01:35 and the screen was at
-the login window — nothing could be captured. The author's look: an untouched RAF at 1:1 in
-Develop shows "Camera preview" within a fraction of a second and hands over to the live render
-when the full decode lands; Compare's panes are sharp at zoom without a decode; a Survey of two
-shows previews; leaving an edited photo builds its preview (one at a time, silently); Photo →
-Build previews reports "Building previews n of m…" with Cancel; Settings → Display has the two rows.
+**Confirmed by use and merged, 2026-09-29 ("works, merge it and delete the branch")** after five
+looks in one night — see the paragraphs above for each. The driven look at 01:35 found the screen
+at the login window; every defect after that was the author's, taken literally, and the five
+rounds are the record of what "instant" turned out to mean: a session at the click, no
+low-resolution picture ever, and the neighbours fetched ahead. **3,211 tests**, `--no-ff`.
 
 ### 2026-09-28 — First-use review fixes (branch `first-use-fixes`, merged 2026-09-28)
 
