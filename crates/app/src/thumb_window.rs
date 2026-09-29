@@ -53,9 +53,41 @@ pub fn centre_offset(index: usize, step: f32, extent: f32, content: f32) -> f32 
     (centre - extent * 0.5).clamp(0.0, max)
 }
 
+/// Whether a strip's geometry changed since it was last drawn — a resize changes the `step`, a
+/// narrower window the `extent` — so its active item must be centred again.
+///
+/// ⚠⚠ **Reported in use 2026-09-29:** the filmstrip centred the active photo only when the active
+/// photo CHANGED, so a resize kept the old offset in points while every cell grew or shrank under
+/// it, and the photos slid sideways. `None` — never drawn — counts as a change. The tolerance is a
+/// quarter point, far below a resize step and far above float noise.
+pub fn layout_changed(before: Option<(f32, f32)>, now: (f32, f32)) -> bool {
+    before.is_none_or(|(step, extent)| (step - now.0).abs() > 0.25 || (extent - now.1).abs() > 0.25)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_resize_or_a_first_draw_is_a_layout_change_and_a_steady_frame_is_not() {
+        assert!(layout_changed(None, (150.0, 900.0)), "never drawn");
+        assert!(
+            layout_changed(Some((150.0, 900.0)), (180.0, 900.0)),
+            "taller strip"
+        );
+        assert!(
+            layout_changed(Some((150.0, 900.0)), (150.0, 700.0)),
+            "narrower strip"
+        );
+        assert!(
+            !layout_changed(Some((150.0, 900.0)), (150.0, 900.0)),
+            "a steady frame"
+        );
+        assert!(
+            !layout_changed(Some((150.0, 900.0)), (150.1, 900.0)),
+            "float noise"
+        );
+    }
 
     // Items are 40 long; the viewport shows 100 of them.
     const STEP: f32 = 40.0;

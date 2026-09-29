@@ -57,8 +57,20 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             // correct fix for the M2.2 drift bug — egui computes a `scroll_to_me` target once and
             // never recomputes it, so the centred photo slid left as thumbnails ahead of it
             // loaded and reflowed the content.
+            //
+            // ⚠⚠ **And again whenever the strip's geometry changes** (reported in use 2026-09-29:
+            // "when I resize the film strip the images move around"). The offset is in points, so a
+            // resize that grows every cell slid the photos sideways under a fixed offset; the
+            // active one is re-centred on every frame the step or the width differs, so it stays
+            // put and only grows or shrinks. `thumb_window::layout_changed`.
+            let layout_id = egui::Id::new("filmstrip_layout");
+            let before: Option<(f32, f32)> = ui.ctx().data(|d| d.get_temp(layout_id));
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(layout_id, (step, extent)));
+            let recentre =
+                want_scroll || rustroom_app::thumb_window::layout_changed(before, (step, extent));
             let mut area = egui::ScrollArea::horizontal();
-            if want_scroll {
+            if recentre {
                 if let Some(pos) = active.and_then(|a| visible.iter().position(|&i| i == a)) {
                     area = area.horizontal_scroll_offset(
                         rustroom_app::thumb_window::centre_offset(pos, step, extent, content),
@@ -88,6 +100,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             // context menu needs the selection *and* the entries), so a live
                             // borrow of `lib.entries` in the argument would conflict with it.
                             let cell_id = lib.entries[i].id.clone();
+                            // ⚠ `caption()`, never `file_name` — the one rule the Library
+                            // caption, the rename field and the default export name share.
+                            let caption = lib.entries[i].caption();
                             ui.push_id(&cell_id, |ui| {
                                 // The filmstrip's cell *is* its click target, so it opts in here.
                                 let resp = thumb::cell(
@@ -105,10 +120,19 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                         .unwrap_or_default(),
                                 )
                                 .interact(egui::Sense::click())
-                                // ⚠ `label()`, never `file_name` — the one rule the Library
-                                // caption, the rename field and the default export name share.
                                 // The grid needs no hover: it draws the caption already.
-                                .on_hover_text(lib.entries[i].caption());
+                                .on_hover_text(&caption);
+                                // The caption as the cell's accessible name too — a screen reader
+                                // and a test find the photo by it.
+                                let active_here = lib.selection.active() == Some(i);
+                                resp.widget_info(|| {
+                                    egui::WidgetInfo::selected(
+                                        egui::WidgetType::SelectableLabel,
+                                        true,
+                                        active_here,
+                                        &caption,
+                                    )
+                                });
                                 thumb::selection_border(
                                     ui,
                                     resp.rect,
@@ -167,5 +191,72 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     }
     if let Some(i) = open_index {
         app.open_entry(ctx, i);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::RustroomApp;
+    use eframe::egui;
+
+    /// ⚠⚠ **Reported in use 2026-09-29:** "when I resize the film strip, the images move around,
+    /// but it should always be centered around the image that's currently selected, so it doesn't
+    /// move, just gets resized." The strip is resized by storing the panel's size, as a drag of its
+    /// top edge does. ⚠ Sample first: the two heights must really give two cell sizes, or two equal
+    /// positions would prove nothing.
+    #[test]
+    fn resizing_the_strip_keeps_the_selected_photo_where_it_was() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        let mut lib = crate::test_app::library_of(40);
+        lib.selection.click(20);
+        let name = lib.entries[20].caption();
+        app.library = Some(lib);
+        let (w, h) = (1200.0, 800.0);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h));
+        let at = |app: &mut RustroomApp, height: f32| -> egui::Rect {
+            ctx.data_mut(|d| {
+                d.insert_persisted(
+                    egui::Id::new("filmstrip"),
+                    egui::containers::panel::PanelState {
+                        outer_rect: egui::Rect::from_min_max(
+                            egui::pos2(0.0, h - height),
+                            egui::pos2(w, h),
+                        ),
+                    },
+                )
+            });
+            let mut found = Vec::new();
+            // Two frames: a scroll offset set on one is laid out on the next.
+            for _ in 0..2 {
+                found = crate::test_ui::labelled_rects_on(&ctx, screen, |ui| {
+                    let c = ui.ctx().clone();
+                    super::show(app, ui, &c);
+                });
+            }
+            found
+                .into_iter()
+                .find(|(l, _)| *l == name)
+                .map(|(_, r)| r)
+                .unwrap_or_else(|| panic!("the selected photo was not drawn at {height}"))
+        };
+        let small = at(&mut app, 96.0);
+        let large = at(&mut app, 200.0);
+        assert!(
+            large.width() > small.width() * 1.5,
+            "sample: the cells did not grow: {small:?} then {large:?}"
+        );
+        assert!(
+            (large.center().x - small.center().x).abs() < 1.0,
+            "the selected photo moved when the strip was resized: {} then {}",
+            small.center().x,
+            large.center().x
+        );
+        let back = at(&mut app, 120.0);
+        assert!(
+            (back.center().x - small.center().x).abs() < 1.0,
+            "and when it shrank again: {}",
+            back.center().x
+        );
     }
 }
