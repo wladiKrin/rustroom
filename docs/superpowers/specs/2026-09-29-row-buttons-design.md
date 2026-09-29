@@ -21,7 +21,8 @@ author's decision (2026-09-29).**
 - **Always drawn**, on every row, whatever the pointer does.
 - **Three states, existing tokens only** (`theme::tokens`):
   - at rest: **`text3`** — the counts' grey; 3.6:1 on the dark panel, 3.1:1 on the light one, above
-    `DESIGN.md` §10's 3:1 non-text floor;
+    `DESIGN.md` §10's 3:1 non-text floor; ⚠ **then made fainter the same day** at the author's request —
+    `text3` at 55 % (`tokens::ACTION_REST`), below the floor by choice;
   - the pointer anywhere on the row: **`text`**, the name's colour — the pop;
   - the pointer on one cell: that cell also gets the **`raised`** fill (radius `tokens::RADIUS`) — a
     button's face — so the one a click will hit is plain (§9: hover changes fill only). ⚠ Not `hover`,

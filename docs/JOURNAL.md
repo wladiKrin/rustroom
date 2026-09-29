@@ -202,7 +202,9 @@ pointed cell; cells **20 pt** wide (`tokens::ROW_ACTION`, was the row's 30). ⚠
 the first-use review's "a × on every folder row read as a standing threat" — the author's call.
 ⚠ The spec first said a `hover` fill under the pointed cell; the row under the pointer **already** wears
 `hover`, so it would have been invisible — `raised` shows in both themes. 4 tests, sabotage-checked
-(always drawn, the pop, the width, the face).
+(always drawn, the pop, the width, the face). ⚠ **Then "even fainter"**: at rest `text3` at **55 %**
+(`tokens::ACTION_REST`) — ≈2:1 dark, ≈1.8:1 light, below §10's floor by the author's choice and logged
+there as its one exception; a disabled glyph at 60 % of that, so it stays apart.
 
 ### 2026-09-29 — The re-plan: every open item becomes Phase 10, release becomes Phase 11 (branch `replan`)
 

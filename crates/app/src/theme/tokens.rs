@@ -87,6 +87,12 @@ pub fn of(ui: &egui::Ui) -> &'static Tokens {
 /// How much of the accent an open row or the active tool carries over its surface.
 pub const TINT: f32 = 0.18;
 
+/// How much of `text3` a list row's action glyph carries **at rest** — faint on purpose (the author,
+/// 2026-09-29: "even fainter"). ⚠ Below `DESIGN.md` §10's 3:1 non-text floor (≈2:1 dark, ≈1.8:1 light)
+/// by that choice: at rest the glyph only says a button is there; the pointer on the row brings it to
+/// full `text`.
+pub const ACTION_REST: f32 = 0.55;
+
 /// Text on an accent fill: dark on the dark theme's light accents, white on the light theme's
 /// dark ones. ⚠ White on the dark-theme steel blue measured **2.4:1** — the reason this exists.
 pub fn on_accent(dark: bool) -> Color32 {

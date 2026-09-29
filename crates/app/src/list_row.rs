@@ -244,11 +244,13 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
         }
         // ⚠ A disabled action neither pops nor takes the face: it is not the one a click hits.
         colours.push(if !on {
-            tk.text3.gamma_multiply(0.45)
+            // ⚠ Kept below the resting enabled glyph, so the two stay apart at rest too.
+            tk.text3
+                .gamma_multiply(crate::theme::tokens::ACTION_REST * 0.6)
         } else if pointer_here {
             tk.text
         } else {
-            tk.text3
+            tk.text3.gamma_multiply(crate::theme::tokens::ACTION_REST)
         });
         // ⚠ Advance, or the next cell lands on this one's hit area and wins the tie.
         right = cell.left();
@@ -445,7 +447,8 @@ mod tests {
     fn the_buttons_are_drawn_with_no_pointer_on_the_row() {
         let (glyphs, tk) = painted_glyphs(&test_ui::ctx(), None);
         assert_eq!(glyphs.len(), 2, "both glyphs, at rest: {glyphs:?}");
-        assert!(glyphs.iter().all(|(_, c)| *c == tk.text3), "{glyphs:?}");
+        let rest = tk.text3.gamma_multiply(crate::theme::tokens::ACTION_REST);
+        assert!(glyphs.iter().all(|(_, c)| *c == rest), "{glyphs:?}");
     }
 
     /// The pop: `text3` at rest, `text` with the pointer anywhere on the row.
@@ -454,7 +457,8 @@ mod tests {
         let ctx = test_ui::ctx();
         let (rest, tk) = painted_glyphs(&ctx, None);
         // ⚠ Proven different before anything is asserted about which is which (lesson (c)).
-        assert_ne!(tk.text3, tk.text, "the two states must be told apart");
+        let faint = tk.text3.gamma_multiply(crate::theme::tokens::ACTION_REST);
+        assert_ne!(faint, tk.text, "the two states must be told apart");
         let name = test_ui::labelled_centres(&ctx, Vec::new(), |ui| draw(ui, &mut (false, None)))
             .into_iter()
             .find(|(l, _)| l == "Portraits")
@@ -462,7 +466,7 @@ mod tests {
             .expect("the row is named");
         // The row's own centre is on its name, well left of the cells at the right edge.
         let (hot, _) = painted_glyphs(&ctx, Some(name));
-        assert!(rest.iter().all(|(_, c)| *c == tk.text3), "rest: {rest:?}");
+        assert!(rest.iter().all(|(_, c)| *c == faint), "rest: {rest:?}");
         assert_eq!(hot.len(), 2, "{hot:?}");
         assert!(hot.iter().all(|(_, c)| *c == tk.text), "hovered: {hot:?}");
     }
