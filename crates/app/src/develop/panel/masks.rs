@@ -16,7 +16,7 @@ use crate::develop::panel::{mask_components, section, Edited};
 use crate::Session;
 use eframe::egui;
 use rustroom_app::mask_kind::MaskKind;
-use rustroom_app::mask_tool;
+use rustroom_app::{mask_order, mask_tool};
 
 /// Brush tool settings, which live on the app rather than on the mask.
 ///
@@ -269,6 +269,9 @@ fn show_all_row(ui: &mut egui::Ui, s: &mut Session) {
 fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
     let mut remove: Option<usize> = None;
     let mut pick: Option<usize> = None;
+    let mut rects = Vec::with_capacity(s.edits.masks.len());
+    // The mask row being dragged, and whether it was released this frame.
+    let mut drag: Option<(usize, bool)> = None;
     for i in 0..s.edits.masks.len() {
         let (kind, name) = {
             let m = &s.edits.masks[i];
@@ -297,8 +300,13 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
                     "Switches the mask off: its adjustments are not applied — in the view, \
                      the export, anywhere — until it is switched back on. Undo brings it back.",
                 )),
+                reorder: Some(mask_components::MASK_ROW_HOVER),
             },
         );
+        rects.push(out.rect);
+        if out.dragging || out.released {
+            drag = Some((i, out.released));
+        }
         if out.delete {
             remove = Some(i);
         } else if out.eye {
@@ -338,6 +346,24 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
             ui.add_enabled_ui(waiting.is_none(), |ui| {
                 mask_components::rows(ui, s, i, ed);
             });
+        }
+    }
+    if let (Some((from, released)), None, None) = (drag, pick, remove) {
+        if let Some((to, line)) = mask_components::drop_slot(ui, &rects) {
+            if released {
+                if mask_order::move_mask(
+                    &mut s.edits.masks,
+                    &mut s.mask_shown,
+                    &mut s.selected_mask,
+                    from,
+                    to,
+                ) {
+                    s.active_mask_handle = None;
+                    ed.discrete();
+                }
+            } else {
+                mask_components::paint_drop_line(ui, ui.max_rect().x_range(), line);
+            }
         }
     }
     if let Some(i) = pick {
@@ -622,15 +648,34 @@ mod tests {
 
         /// Drag the slider labelled `label` 120 pt to the right.
         fn drag(&mut self, label: &str) -> Edited {
+            let from = self.centre(label);
+            self.pointer_path(from, from + egui::vec2(120.0, 0.0))
+        }
+
+        /// Press on the row labelled `from` and release on the upper (`after == false`) or lower
+        /// half of the row labelled `to` — "before it" and "after it".
+        fn drag_row(&mut self, from: &str, to: &str, after: bool) -> Edited {
+            let start = self.centre(from);
+            let quarter = mask_components::ROW_HEIGHT / 4.0;
+            let end = self.centre(to) + egui::vec2(0.0, if after { quarter } else { -quarter });
+            self.pointer_path(start, end)
+        }
+
+        /// The centre of the widget labelled `label`.
+        fn centre(&mut self, label: &str) -> egui::Pos2 {
             let ctx = self.ctx.clone();
-            let from = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            let all = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
                 self.body(ui, &mut Edited::default())
-            })
-            .into_iter()
-            .find(|(l, _)| l == label)
-            .map(|(_, p)| p)
-            .unwrap_or_else(|| panic!("no widget labelled {label:?} was drawn"));
-            let to = from + egui::vec2(120.0, 0.0);
+            });
+            all.iter()
+                .find(|(l, _)| l == label)
+                .map(|(_, p)| *p)
+                .unwrap_or_else(|| panic!("no widget labelled {label:?} was drawn: {all:?}"))
+        }
+
+        /// Press at `from`, move to `to`, release there: five frames, `ed` folded over them.
+        fn pointer_path(&mut self, from: egui::Pos2, to: egui::Pos2) -> Edited {
+            let ctx = self.ctx.clone();
             let press = |pos, pressed| egui::Event::PointerButton {
                 pos,
                 button: egui::PointerButton::Primary,
@@ -979,5 +1024,90 @@ mod tests {
         p.click(&name);
         assert_eq!(p.s.selected_mask, None);
         assert_eq!(p.s.edits.masks.len(), 1, "deselecting must not delete it");
+    }
+
+    /// Gradient, then −Radial, then +Radial — the last selected.
+    fn composite_panel() -> Panel {
+        let mut p = Panel::new();
+        p.add(MaskKind::Gradient);
+        p.refine(edit_model::MaskOp::Subtract, MaskKind::Radial);
+        p.refine(edit_model::MaskOp::Add, MaskKind::Radial);
+        assert_eq!(p.s.selected_component, 2, "fixture: +Radial is being edited");
+        p
+    }
+
+    #[test]
+    fn dragging_a_component_reorders_the_composite_as_one_edit() {
+        let mut p = composite_panel();
+        let ed = p.drag_row("Add Radial", "Subtract Radial", false);
+        let m = &p.s.edits.masks[0];
+        assert_eq!(m.refine[0].op, edit_model::MaskOp::Add, "+Radial moved up");
+        assert_eq!(m.refine[1].op, edit_model::MaskOp::Subtract);
+        assert_eq!(p.s.selected_component, 1, "the edited shape followed its row");
+        assert!(ed.changed && ed.settled, "one drop, one history entry");
+    }
+
+    /// ⚠ Slot 0 is reached through the MASK row's lower half: "Gradient" names both the base
+    /// component row and the kind button, so the harness cannot aim at it by name.
+    ///
+    /// ⚠ A "nothing changed" test also passes when the drag went nowhere — so its twin,
+    /// `an_add_dropped_on_top_becomes_the_base`, aims at the same point and must change the mask.
+    #[test]
+    fn a_subtract_is_never_dropped_on_top() {
+        let mut p = composite_panel();
+        let before = p.s.edits.masks.clone();
+        let ed = p.drag_row("Subtract Radial", "Gradient 1", true);
+        assert_eq!(p.s.edits.masks, before, "a Subtract reached the top");
+        assert!(!ed.settled, "a refused drop is no history entry");
+    }
+
+    #[test]
+    fn an_add_dropped_on_top_becomes_the_base() {
+        let mut p = composite_panel();
+        let ed = p.drag_row("Add Radial", "Gradient 1", true);
+        let m = &p.s.edits.masks[0];
+        assert!(
+            matches!(m.mask, edit_model::Mask::Radial(_)),
+            "the Add is the base"
+        );
+        assert!(matches!(m.refine[0].mask, edit_model::Mask::Linear(_)));
+        assert_eq!(m.refine[0].op, edit_model::MaskOp::Add, "the old base adds");
+        assert_eq!(m.refine[1].op, edit_model::MaskOp::Subtract);
+        assert_eq!(p.s.selected_component, 0);
+        assert!(ed.settled);
+    }
+
+    #[test]
+    fn dragging_a_mask_reorders_the_masks_and_their_eyes() {
+        let mut p = Panel::new();
+        p.add(MaskKind::Gradient);
+        p.add(MaskKind::Radial);
+        p.s.mask_shown = vec![true, false];
+        assert_eq!(p.s.selected_mask, Some(1), "fixture: Radial 2 selected");
+        let ed = p.drag_row("Radial 2", "Gradient 1", false);
+        assert!(matches!(
+            p.s.edits.masks[0].mask,
+            edit_model::Mask::Radial(_)
+        ));
+        assert!(matches!(
+            p.s.edits.masks[1].mask,
+            edit_model::Mask::Linear(_)
+        ));
+        assert_eq!(p.s.mask_shown, [false, true], "the eyes stayed behind");
+        assert_eq!(p.s.selected_mask, Some(0), "the selection stayed behind");
+        assert!(ed.changed && ed.settled);
+        let labels = p.labels();
+        assert!(labels.iter().any(|l| l == "Radial 1"), "{labels:?}");
+    }
+
+    #[test]
+    fn a_mask_dropped_where_it_started_is_no_edit() {
+        let mut p = Panel::new();
+        p.add(MaskKind::Gradient);
+        p.add(MaskKind::Radial);
+        let before = p.s.edits.masks.clone();
+        let ed = p.drag_row("Gradient 1", "Radial 2", false);
+        assert_eq!(p.s.edits.masks, before);
+        assert!(!ed.settled);
     }
 }

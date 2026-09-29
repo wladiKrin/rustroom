@@ -132,6 +132,7 @@ pub(super) fn list(ui: &mut egui::Ui, s: &mut Session, eyes: &mut EyeTool, ed: &
                     indent: 0.0,
                     eye: None,
                     hold: None,
+                    reorder: None,
                 },
             );
             if row.delete {
