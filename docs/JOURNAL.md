@@ -175,7 +175,8 @@ and the author's new `to dos.md`. Each item was checked against the **code**, no
 (the lesson the vault's M7.1c marker taught). Dates are when an item was first recorded, from
 `git blame` on the backlog and `CLAUDE.md`. **41 open items**, plus **10 added back** by the author
 (P-25's five modules, three Immich leftovers, two-way sync, nested composites) — **51**, grouped into
-**M10.6–M10.18** with sub-items by letter.
+**M10.6–M10.18** with sub-items by letter. The author then moved two to **M11.4** — the welcome screen and
+the empty Library's text — leaving **49** in Phase 10.
 
 **What the sweep found already shipped, and struck:**
 - *"The camera rendering does not reach an export"* — fixed 2026-09-18 (`batch_export/render.rs`).
@@ -242,7 +243,7 @@ drop on release — one `Edited::discrete`, none for a drop where the row starte
   the plan's full-stop sabotage on `MASK_ROW_HOVER` **stayed green**. Fixed by dropping the space (the
   reader already skips whitespace before the quote); the widened sweep then flagged one constant,
   `EMPTY_LIBRARY_HINT` — empty-state prose (§7.14), not a hover — so both empty-state texts became
-  `*_TEXT`. ⚠ That text is **two sentences** where §7.14 says one; left for the author.
+  `*_TEXT`. ⚠ That text is **two sentences** where §7.14 says one; left for the author (now **M11.4**).
 - ⚠ A "nothing changed" panel test also passes when the drag went nowhere, so each has a twin aimed at
   the same point that must change something (`a_subtract_is_never_dropped_on_top` ↔
   `an_add_dropped_on_top_becomes_the_base`). The harness reaches component slot 0 through the **mask**

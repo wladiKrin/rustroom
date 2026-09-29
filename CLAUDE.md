@@ -230,7 +230,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 
 | Milestone | Sub-items |
 |---|---|
-| **M10.6** your to-dos + design leftovers | a Immich Timeline at the top · b welcome screen (needs the author's description) · c the empty Library text is two sentences (§7.14) · d a table for the non-slider hovers |
+| **M10.6** your to-do + a design leftover | a Immich Timeline at the top · b a table for the non-slider hovers |
 | **M10.7** code health | a pin lcms2's ICC creation date (reproducible exports) · b `ProfileRendering` → `TailRendering` (~270 mentions) · c temp-dir test isolation, 7 + 2 sites · d split the large files · e `PrefixCache`'s tests into `prefix_cache.rs` |
 | **M10.8** Library & workflow | a keyword suggestions · b vertical filmstrip · c stack by hand, group by capture time · d batch rename |
 | **M10.9** presets & shortcuts | a presets import/export, folders, rename · b user-defined shortcuts |
@@ -245,7 +245,8 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | **M10.18** new modules | a tethering · b GPS and a map · c people tagging · d publish services · e print |
 
 **Phase 11, last:** M11.2 Windows + the Linux GUI (never run; the in-window menu bar never seen;
-multi-monitor), M11.3 contributor docs, M11.4 `v0.1`, M11.5 plugins. ⛔ **M11.1 (was M10.1) is
+multi-monitor), M11.3 contributor docs, M11.4 `v0.1` (with the welcome screen and the empty Library's
+text, moved there from M10.6 by the author), M11.5 plugins. ⛔ **M11.1 (was M10.1) is
 WITHDRAWN — it was never real** (the licence has been committed since `e71330d`); do not re-open it.
 ⚠ **Retired ids:** M9.1–M9.5 and M10.1–M10.5 moved with their work (M9.2 → M10.2 → M11.2), so Phase 10
 starts at **M10.6**; M5.1c and M6.4c kept their own ids.
