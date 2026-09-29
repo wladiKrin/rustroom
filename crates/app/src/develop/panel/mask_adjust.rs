@@ -87,7 +87,7 @@ pub fn show(
                 ed.slider(ui, &mut a.saturation, -100.0..=100.0, "Saturation", 0.0);
                 ui.add_space(4.0);
                 hsl_bands::show(ui, &mut a.hsl, channel, ed);
-                theme::sub_label(ui, "Color Grading");
+                theme::sub_label(ui, "Color grading");
                 theme::segmented(
                     ui,
                     grade,
@@ -114,7 +114,7 @@ pub fn show(
                 ed.slider(ui, &mut cg.balance, -100.0..=100.0, "Balance", 0.0);
             }
             LocalGroup::Detail => {
-                theme::sub_label(ui, "Noise Reduction");
+                theme::sub_label(ui, "Noise reduction");
                 ed.slider(
                     ui,
                     &mut a.noise_reduction.luminance,

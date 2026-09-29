@@ -33,12 +33,31 @@ const CARD_GAP: f32 = 10.0;
 /// The text a header paints for `name`: the Library rail's group names in capitals, so the rail
 /// reads as a table of contents; every other header as written, in sentence case —
 /// `docs/DESIGN.md` §7.5. Pure, so the rule is testable without a window.
+///
+/// ⚠ Sentence case is applied here rather than by renaming: the names are also the AccessKit
+/// labels the harness clicks by ("White Balance", "Color") and the Sync dialog's rows, so the
+/// painted text changes and the name does not. A later word written in capitals ("HSL") stays.
 pub fn header_text(name: &str, rail: bool) -> String {
     if rail {
-        name.to_uppercase()
-    } else {
-        name.to_owned()
+        return name.to_uppercase();
     }
+    let mut out = String::with_capacity(name.len());
+    for (i, word) in name.split(' ').enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        let acronym = word.len() > 1 && word.chars().all(|c| !c.is_lowercase());
+        if i == 0 || acronym {
+            out.push_str(word);
+        } else {
+            let mut cs = word.chars();
+            if let Some(first) = cs.next() {
+                out.extend(first.to_lowercase());
+                out.push_str(cs.as_str());
+            }
+        }
+    }
+    out
 }
 
 /// What a header row carries besides its name.
@@ -110,7 +129,8 @@ pub struct HeaderOut {
 struct CardShapes {
     background: egui::layers::ShapeIdx,
     rule: egui::layers::ShapeIdx,
-    top: f32,
+    /// The header row, which the card grows from to take in the body.
+    row: egui::Rect,
 }
 
 impl HeaderOut {
@@ -127,12 +147,18 @@ impl HeaderOut {
         ui: &mut egui::Ui,
         add: impl FnOnce(&mut egui::Ui) -> R,
     ) -> Option<R> {
-        let inner = self.state.show_body_unindented(ui, add).map(|r| r.inner);
-        let bottom = ui.cursor().top() - ui.spacing().item_spacing.y;
+        // ⚠⚠ Vertically the card is the header row **united with the body's own rect**, never
+        // "from the header down to the cursor": the snapshot strip lays out bottom-up, and reading
+        // the cursor there stretched its card to the bottom of the window (seen 2026-09-29).
+        let (inner, body) = match self.state.show_body_unindented(ui, add) {
+            Some(r) => (Some(r.inner), Some(r.response.rect)),
+            None => (None, None),
+        };
+        let span = body.map_or(self.card.row, |b| self.card.row.union(b));
         let full = ui.max_rect();
         let rect = egui::Rect::from_min_max(
-            egui::pos2(full.left() - CARD_PAD_X, self.card.top - CARD_PAD_TOP),
-            egui::pos2(full.right() + CARD_PAD_X, bottom + CARD_PAD_BOTTOM),
+            egui::pos2(full.left() - CARD_PAD_X, span.top() - CARD_PAD_TOP),
+            egui::pos2(full.right() + CARD_PAD_X, span.bottom() + CARD_PAD_BOTTOM),
         );
         let t = tokens::of(ui);
         ui.painter().set(
@@ -283,7 +309,7 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
         card: CardShapes {
             background,
             rule,
-            top: rect.top(),
+            row: rect,
         },
     }
 }
@@ -351,7 +377,11 @@ mod tests {
         // `docs/DESIGN.md` §7.5: the rail reads as a table of contents, the panel and the dialogs
         // as sentence case. Both halves, or a function that always (or never) uppercased passes.
         assert_eq!(header_text("Smart collections", true), "SMART COLLECTIONS");
-        assert_eq!(header_text("White balance", false), "White balance");
+        assert_eq!(header_text("White Balance", false), "White balance");
+        assert_eq!(header_text("Noise Reduction", false), "Noise reduction");
+        // A later word in capitals is an acronym and keeps them; a one-word name is untouched.
+        assert_eq!(header_text("Adjust HSL", false), "Adjust HSL");
+        assert_eq!(header_text("Tone", false), "Tone");
     }
 
     #[test]

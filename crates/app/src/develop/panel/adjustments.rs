@@ -589,7 +589,7 @@ pub fn show(
         // ⚠ Noise Reduction above Sharpening: you must denoise before you can judge
         // sharpening, and it is the pipeline's own order. A deliberate divergence from
         // Lightroom, which puts Sharpening first.
-        theme::sub_label(ui, "Noise Reduction");
+        theme::sub_label(ui, "Noise reduction");
         let nr = &mut edits.noise_reduction;
         ed.slider(ui, &mut nr.luminance, 0.0..=100.0, "Luminance", 0.0);
         ed.slider(

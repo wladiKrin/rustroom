@@ -38,7 +38,7 @@ pub fn show(
     channel: &mut CurveChannel,
     binding: ParametricDrag,
 ) -> egui::Rect {
-    theme::sub_label_with(ui, "Tone Curve", |ui| {
+    theme::sub_label_with(ui, "Tone curve", |ui| {
         let r = ui
             .add_enabled(
                 *param != edit_model::ParametricCurve::default(),

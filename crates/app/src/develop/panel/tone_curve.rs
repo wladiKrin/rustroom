@@ -123,7 +123,7 @@ pub fn show(
 ) -> egui::Rect {
     // ⚠ Through `sub_label_with`, never a hand-rolled `horizontal` around a sub-label: that
     // nesting is what widened the panel every frame on 2026-09-19 — see `theme::sub_label_with`.
-    theme::sub_label_with(ui, "Tone Curve", |ui| {
+    theme::sub_label_with(ui, "Tone curve", |ui| {
         // ⚠ Disabled rather than hidden on a neutral curve: a control that appears and
         // disappears is harder to learn than one that greys out.
         let r = ui
