@@ -50,6 +50,45 @@ fn section<R>(
     out.response
 }
 
+/// A name field with a "+" at its right edge — the rail's way to add a collection, a smart
+/// collection or a keyword. Returns the field's response and whether "+" was clicked.
+///
+/// ⚠⚠ **Laid out at exactly the width it is given, the "+" first from the right and the field in
+/// what is left.** The three rows used to size the field as "available width − 30" beside the
+/// button — and when the design language widened button padding, the "+" outgrew those 30 points,
+/// the row asked for more than the panel had, and egui widened the panel by the overflow **every
+/// frame**: "the left sidecar keeps expanding indefinitely" (2026-09-29), the 2026-09-19 growth bug
+/// again. A row that derives its parts from its own allocation cannot ask for more than it got.
+///
+/// ⚠ `extra` gates the "+" beyond a name being typed (Save this view needs an open source); the
+/// caller still decides the commit, after the field has taken this frame's typing.
+fn new_item_row(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    hint: &str,
+    extra: bool,
+    plus_hover: &str,
+) -> (egui::Response, bool) {
+    let named = !text.trim().is_empty();
+    let size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(
+        size,
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            let plus = ui
+                .add_enabled(named && extra, egui::Button::new("+"))
+                .on_hover_text(plus_hover)
+                .clicked();
+            let field = ui.add_sized(
+                egui::vec2(ui.available_width(), size.y),
+                egui::TextEdit::singleline(text).hint_text(hint),
+            );
+            (field, plus)
+        },
+    )
+    .inner
+}
+
 /// Draw the collections panel. Every action is applied here.
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ Collected and applied after the list closes, the shape every panel in this app uses:
@@ -196,22 +235,20 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     "Collections",
                                     &n,
                                     |ui| {
-                                        ui.horizontal(|ui| {
-                                            let field = ui.add(
-                                                egui::TextEdit::singleline(&mut app.new_collection)
-                                                    .hint_text("New collection")
-                                                    .desired_width(ui.available_width() - 30.0),
-                                            );
-                                            let named = !app.new_collection.trim().is_empty();
-                                            let plus =
-                                                ui.add_enabled(named, egui::Button::new("+")).clicked();
-                                            if named && (plus || theme::committed(ui, &field)) {
-                                                if let Some(cat) = &app.catalog {
-                                                    let _ = cat.create_collection(app.new_collection.trim());
-                                                }
-                                                app.new_collection.clear();
+                                        let (field, plus) = new_item_row(
+                                            ui,
+                                            &mut app.new_collection,
+                                            "New collection",
+                                            true,
+                                            "Create a collection with this name",
+                                        );
+                                        let named = !app.new_collection.trim().is_empty();
+                                        if named && (plus || theme::committed(ui, &field)) {
+                                            if let Some(cat) = &app.catalog {
+                                                let _ = cat.create_collection(app.new_collection.trim());
                                             }
-                                        });
+                                            app.new_collection.clear();
+                                        }
                                         if rows.is_empty() {
                                             crate::theme::hint(ui, "No collections yet.");
                                         }
@@ -270,22 +307,18 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     "Smart collections",
                                     &n,
                                     |ui| {
-                                        ui.horizontal(|ui| {
-                                            let field = ui.add(
-                                                egui::TextEdit::singleline(&mut app.new_smart)
-                                                    .hint_text("Save this view")
-                                                    .desired_width(ui.available_width() - 30.0),
-                                            );
-                                            let ready =
-                                                !app.new_smart.trim().is_empty() && app.library.is_some();
-                                            let plus = ui
-                                                .add_enabled(ready, egui::Button::new("+"))
-                                                .on_hover_text("Save the current source and filter as a rule")
-                                                .clicked();
-                                            if ready && (plus || theme::committed(ui, &field)) {
-                                                action = Action::SaveSmart;
-                                            }
-                                        });
+                                        let has_library = app.library.is_some();
+                                        let (field, plus) = new_item_row(
+                                            ui,
+                                            &mut app.new_smart,
+                                            "Save this view",
+                                            has_library,
+                                            "Save the current source and filter as a smart collection",
+                                        );
+                                        let ready = !app.new_smart.trim().is_empty() && has_library;
+                                        if ready && (plus || theme::committed(ui, &field)) {
+                                            action = Action::SaveSmart;
+                                        }
                                         if smarts.is_empty() {
                                             crate::theme::hint(ui, "No smart collections yet.");
                                         }
@@ -367,19 +400,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             .and_then(|id| kws.iter().find(|k| k.id == id))
                                             .map(|k| format!("New keyword under {}", k.name))
                                             .unwrap_or_else(|| "New keyword".to_string());
-                                        ui.horizontal(|ui| {
-                                            let field = ui.add(
-                                                egui::TextEdit::singleline(&mut app.new_keyword)
-                                                    .hint_text(hint)
-                                                    .desired_width(ui.available_width() - 30.0),
-                                            );
-                                            let named = !app.new_keyword.trim().is_empty();
-                                            let plus =
-                                                ui.add_enabled(named, egui::Button::new("+")).clicked();
-                                            if named && (plus || theme::committed(ui, &field)) {
-                                                action = Action::CreateKeyword;
-                                            }
-                                        });
+                                        let (field, plus) = new_item_row(
+                                            ui,
+                                            &mut app.new_keyword,
+                                            &hint,
+                                            true,
+                                            "Create a keyword with this name",
+                                        );
+                                        let named = !app.new_keyword.trim().is_empty();
+                                        if named && (plus || theme::committed(ui, &field)) {
+                                            action = Action::CreateKeyword;
+                                        }
                                         if kws.is_empty() {
                                             crate::theme::hint(ui, "No keywords yet.");
                                         }
@@ -940,6 +971,65 @@ mod tests {
     /// The new keyword's parent is the keyword last clicked, and a click anywhere else clears it —
     /// the author's replacement for the parent dropdown. ⚠ Both halves, and the clear is asserted
     /// from a click OUTSIDE the panel's list, which is the case the rule is about.
+    /// ⚠⚠ **Reported in use 2026-09-29: "when moving the mouse in the Library the left sidecar keeps
+    /// expanding indefinitely."** Every frame the pointer moves is a frame drawn, and a row that asks
+    /// for more than the panel's width makes egui widen the panel by the overflow — then the row asks
+    /// for that much more. Drawn with the **real theme** (the bare harness has egui's narrower button
+    /// padding, under which the rows fitted), every section open, the pointer moving; the width must
+    /// settle. ⚠ Sample first: the panel must actually have been drawn and measured.
+    #[test]
+    fn the_rail_keeps_its_width_while_the_pointer_moves() {
+        let ctx = crate::test_ui::ctx();
+        crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+        let mut app = crate::test_app::for_test();
+        let s = &mut app.settings.panel_sections;
+        s.folders = true;
+        s.collections = true;
+        s.smart = true;
+        s.keywords = true;
+        s.dates = true;
+        s.immich = true;
+        // The Immich section too, with the integration on — it draws rows and actions of its own.
+        app.settings.immich_enabled = true;
+        app.settings.immich_url = "https://immich.example".to_string();
+        app.settings.immich_key = "a-key".to_string();
+        app.catalog
+            .as_ref()
+            .unwrap()
+            .create_keyword("Europe", None)
+            .unwrap();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 875.0));
+        let mut widths = Vec::new();
+        for frame in 0..30 {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events: vec![egui::Event::PointerMoved(egui::pos2(
+                        120.0 + frame as f32,
+                        300.0,
+                    ))],
+                    ..Default::default()
+                },
+                |ui| super::show(&mut app, ui, &ctx),
+            );
+            if let Some(st) =
+                egui::containers::panel::PanelState::load(&ctx, egui::Id::new("collections"))
+            {
+                widths.push(st.size().x);
+            }
+        }
+        assert!(
+            widths.len() > 20,
+            "the panel was never measured: {widths:?}"
+        );
+        let settled = widths[5];
+        assert!(settled > 100.0, "sample: {settled}");
+        assert!(
+            widths.iter().skip(5).all(|w| (w - settled).abs() < 0.5),
+            "the rail grew while the pointer moved: {widths:?}"
+        );
+    }
+
     #[test]
     fn clicking_a_keyword_makes_it_the_parent_and_clicking_elsewhere_clears_it() {
         let ctx = crate::test_ui::ctx();
