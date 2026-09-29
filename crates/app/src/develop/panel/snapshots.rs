@@ -149,7 +149,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) -> bo
                 true,
                 Header::new("Snapshots").trailing(&count),
             );
-            out.state.show_body_unindented(ui, |ui| {
+            out.show_body(ui, |ui| {
                 // Fill the panel's height so egui stores the panel size, not the smaller content
                 // size — otherwise a resizable panel shrinks back each frame.
                 ui.set_min_height(ui.available_height());
@@ -246,7 +246,7 @@ fn now_row(ui: &mut egui::Ui, drift: &str, action: &mut Action) {
     let room = (button.rect.left() - 8.0 - (name.right() + 8.0)).max(0.0);
     let mut job = egui::text::LayoutJob::simple_singleline(
         drift.to_string(),
-        egui::FontId::proportional(11.0),
+        egui::FontId::proportional(crate::theme::tokens::CAPTION),
         v.weak_text_color(),
     );
     job.wrap = egui::text::TextWrapping::truncate_at_width(room);

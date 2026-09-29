@@ -145,7 +145,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
         //
         // ⚠⚠ egui's panel state is **not persisted** here, so this default is the width every launch
         // actually gets — not merely a first-run hint.
-        .default_size(320.0)
+        .default_size(316.0)
         // ⚠ `default_size` is a *wrapping* width under egui 0.35: on a fresh profile the panel came
         // up at ~214 pt, which left every slider rail 60 pt long — a 40-pt drag took Exposure
         // from 0 to +5 (both first-use reviews). The floor is what keeps the rails usable.
@@ -273,7 +273,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                         true,
                         section::Header::new("Profile"),
                     );
-                    out.state.show_body_unindented(ui, |ui| {
+                    out.show_body(ui, |ui| {
                         camera_profile_row(app, ui);
                         if let Some(s) = &mut app.session {
                             profile::rendering(ui, &mut s.edits, &app.looks, &mut ed);

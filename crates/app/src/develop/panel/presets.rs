@@ -47,7 +47,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         true,
         section::Header::new("Presets").trailing(&count),
     );
-    out.state.show_body_unindented(ui, |ui| {
+    out.show_body(ui, |ui| {
         // ⚠ Pinned to its width, never a bare `with_layout(right_to_left)` — the 2026-09-19
         // growth bug.
         ui.allocate_ui_with_layout(

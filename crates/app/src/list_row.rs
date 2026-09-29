@@ -9,10 +9,10 @@
 
 use eframe::egui;
 
-/// Row height in points — the Masks list's.
-pub const ROW_HEIGHT: f32 = 26.0;
+/// Row height in points — the Masks list's, `docs/DESIGN.md` §5.
+pub const ROW_HEIGHT: f32 = crate::theme::tokens::LIST_ROW;
 /// How much of the accent the open row's tint carries — the rail's value.
-const TINT: f32 = 0.18;
+const TINT: f32 = crate::theme::tokens::TINT;
 
 /// One action cell at the right edge of a row.
 pub struct RowAction<'a> {
@@ -154,7 +154,7 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
             egui::Color32::TRANSPARENT
         };
         if fill != egui::Color32::TRANSPARENT {
-            painter.rect_filled(rect, 4.0, fill);
+            painter.rect_filled(rect, crate::theme::tokens::RADIUS, fill);
         }
         let text = if spec.selected {
             v.strong_text_color()
@@ -162,6 +162,9 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
             v.widgets.inactive.fg_stroke.color
         };
         let font = egui::TextStyle::Body.resolve(ui.style());
+        // ⚠ The count is decoration on a closed row and information on the open one — §7.6.
+        let tk = crate::theme::tokens::of(ui);
+        let count_colour = if spec.selected { tk.text2 } else { tk.text3 };
         // The name is clipped before the count and the actions, never over them.
         let name_right = right - 6.0;
         let right_text = spec
@@ -169,7 +172,11 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
             .map(|n| n.to_string())
             .or_else(|| (!spec.meta.is_empty()).then(|| spec.meta.to_string()));
         let count_galley = right_text.map(|s| {
-            painter.layout_no_wrap(s, egui::FontId::proportional(11.0), v.weak_text_color())
+            painter.layout_no_wrap(
+                s,
+                egui::FontId::proportional(crate::theme::tokens::CAPTION),
+                count_colour,
+            )
         });
         let count_w = count_galley
             .as_ref()
@@ -193,7 +200,7 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
             painter.galley(
                 egui::pos2(name_right - g.size().x, rect.center().y - g.size().y / 2.0),
                 g,
-                v.weak_text_color(),
+                count_colour,
             );
         }
         let mut cell_x = rect.right() - ROW_HEIGHT / 2.0;
@@ -205,7 +212,7 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
                 egui::pos2(cell_x, rect.center().y),
                 egui::Align2::CENTER_CENTER,
                 a.glyph,
-                egui::FontId::proportional(if a.glyph == '×' { 17.0 } else { 15.0 }),
+                egui::FontId::proportional(crate::theme::tokens::ICON),
                 colour,
             );
             cell_x -= ROW_HEIGHT;

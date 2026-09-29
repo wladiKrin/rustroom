@@ -83,7 +83,7 @@ the surface named; **text must be ≥ 4.5:1, non-text UI ≥ 3:1**, checked by t
 | `line` | `#2b2b30` | `#d9d9de` | hairlines: bar edges, dialog head/foot, row separators |
 | `text` | `#e6e6e8` (13.8:1) | `#1d1d1f` | body, titles, values |
 | `text2` | `#a3a3a8` (6.8:1) | `#5f5f66` | captions, counts, secondary labels, quiet buttons at rest |
-| `text3` | `#727278` (3.6:1) | `#9a9aa0` | decoration only: disabled, chevrons, thumbnail captions — never text that must be read |
+| `text3` | `#727278` (3.6:1) | `#8a8a90` (3.1:1) | decoration only: disabled, chevrons, thumbnail captions — never text that must be read |
 | `tooltip` | `#0f0f11` | `#2a2a2e` | tooltip fill; text is `text` of the *dark* theme in both |
 
 Elevation is the only depth: canvas < panel < card < raised < hover. No borders on controls

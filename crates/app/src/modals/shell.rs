@@ -17,12 +17,12 @@ use eframe::egui;
 use rustroom_app::settings::Settings;
 
 /// The title bar's height.
-const TITLE_BAR: f32 = 36.0;
+const TITLE_BAR: f32 = 44.0;
 /// The footer's height.
-const FOOTER: f32 = 38.0;
+const FOOTER: f32 = 52.0;
 /// The tab control's height — a step taller than the panels' compact selectors: it is the
 /// dialog's primary navigation.
-const TABS: f32 = 24.0;
+const TABS: f32 = crate::theme::tokens::CONTROL_ROW;
 
 /// What the footer offers.
 pub struct Footer<'a> {
@@ -161,14 +161,14 @@ fn title_bar(ui: &mut egui::Ui, id: egui::Id, title: &str) -> bool {
         egui::pos2(rect.left(), rect.center().y - 3.0),
         egui::Align2::LEFT_CENTER,
         title,
-        egui::TextStyle::Body.resolve(ui.style()),
+        crate::theme::title_font(ui.style()),
         v.strong_text_color(),
     );
     painter.text(
         egui::pos2(cell.center().x, rect.center().y - 3.0),
         egui::Align2::CENTER_CENTER,
         "×",
-        egui::FontId::proportional(17.0),
+        egui::FontId::proportional(crate::theme::tokens::ICON),
         if close.hovered() {
             v.strong_text_color()
         } else {
@@ -237,7 +237,7 @@ fn footer_row(ui: &mut egui::Ui, id: egui::Id, footer: &Footer<'_>, out: &mut Di
         if width > 20.0 {
             let mut job = egui::text::LayoutJob::simple_singleline(
                 footer.note.to_string(),
-                egui::FontId::proportional(11.0),
+                egui::FontId::proportional(crate::theme::tokens::CAPTION),
                 v.weak_text_color(),
             );
             job.wrap = egui::text::TextWrapping::truncate_at_width(width);

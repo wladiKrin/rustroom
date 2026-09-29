@@ -386,7 +386,7 @@ fn tile_buttons(
                 at.center(),
                 egui::Align2::CENTER_CENTER,
                 glyph,
-                egui::FontId::proportional(15.0),
+                egui::FontId::proportional(crate::theme::tokens::ICON),
                 colour,
             );
         }

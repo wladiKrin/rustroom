@@ -40,7 +40,7 @@ fn section<R>(
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::Response {
     let state_id = ui.make_persistent_id(id);
-    let mut h = Header::new(title).draggable(true);
+    let mut h = Header::new(title).draggable(true).rail(true);
     if !trailing.is_empty() {
         h = h.trailing(trailing);
     }
@@ -96,7 +96,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let mut drop_to: Option<usize> = None;
 
     egui::Panel::left("collections")
-        .default_size(210.0)
+        .default_size(240.0)
+        .min_size(200.0)
         .show(ui, |ui| {
             // ⚠⚠ **One scroll area for the whole panel, and the three inner ones were REMOVED
             // to get it.** Nested vertical scroll areas fight over the wheel — the inner one

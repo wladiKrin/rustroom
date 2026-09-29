@@ -32,7 +32,7 @@ pub fn selection_border(ui: &egui::Ui, rect: egui::Rect, active: bool, selected:
     };
     ui.painter().rect_stroke(
         rect,
-        egui::CornerRadius::same(5),
+        egui::CornerRadius::same(crate::theme::tokens::RADIUS_THUMB),
         egui::Stroke::new(2.0, color),
         egui::StrokeKind::Inside,
     );
@@ -109,7 +109,7 @@ pub struct CellStyle {
 }
 
 /// The thumbnail's corner radius in points.
-const CORNER: u8 = 4;
+const CORNER: u8 = crate::theme::tokens::RADIUS_THUMB;
 
 /// [`cell`] with a say over the marks: `overlay_marks` paints them over the picture's bottom
 /// edge (the filmstrip, which has no room under it); `false` leaves them to the caller, who
@@ -152,7 +152,7 @@ pub fn cell_with(
             ui.painter().rect_filled(
                 rect,
                 egui::CornerRadius::same(CORNER),
-                egui::Color32::from_gray(60),
+                crate::theme::tokens::of(ui).raised,
             );
         }
     }
@@ -162,30 +162,32 @@ pub fn cell_with(
         // like "Client crop" would have overflowed a 17 pt box. Capped at half the cell so a long
         // label cannot cover the photograph, and elided rather than clipped so the truncation is
         // visible as truncation.
-        let font = egui::FontId::proportional(9.0);
-        let max_w = (box_size.x * 0.5).max(17.0);
+        let font = egui::FontId::proportional(crate::theme::tokens::CAPTION);
+        let max_w = (box_size.x * 0.5).max(18.0);
         let galley = ui.painter().layout(
             text.to_string(),
             font.clone(),
-            ui.visuals().extreme_bg_color,
+            egui::Color32::WHITE,
             max_w - 6.0,
         );
-        let size = egui::vec2((galley.size().x + 6.0).max(17.0), 13.0);
+        let size = egui::vec2((galley.size().x + 10.0).max(18.0), 16.0);
         let badge_rect = egui::Rect::from_min_size(rect.min + egui::vec2(3.0, 3.0), size);
         // ⚠ Published through egui's memory rather than the return type: `cell` already returns
         // the cell's own `Response`, and the two call sites want the badge only to open a label
         // draft. Threading a second rect through both would churn every caller for one use.
         ui.ctx()
             .memory_mut(|m| m.data.insert_temp(badge_id(ui), badge_rect));
+        // ⚠ White on 55 % black, `docs/DESIGN.md` §7.10: readable over any photograph, and not
+        // the accent — the accent means *selected*, and a badge on every stack said so falsely.
         ui.painter().rect_filled(
             badge_rect,
-            egui::CornerRadius::same(2),
-            ui.visuals().selection.bg_fill,
+            egui::CornerRadius::same(4),
+            egui::Color32::from_black_alpha(140),
         );
         ui.painter().galley(
             badge_rect.center() - galley.size() / 2.0,
             galley,
-            ui.visuals().extreme_bg_color,
+            egui::Color32::WHITE,
         );
         badge_end = Some(badge_rect.right());
     }

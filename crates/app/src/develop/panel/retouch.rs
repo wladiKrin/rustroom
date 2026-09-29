@@ -56,7 +56,7 @@ pub(crate) fn show_with(
         ed.discrete();
     }
     let picked_before = s.selected_spot;
-    out.state.show_body_unindented(ui, |ui| {
+    out.show_body(ui, |ui| {
         list(ui, s, tool, ed);
         show_all_row(ui, s);
     });

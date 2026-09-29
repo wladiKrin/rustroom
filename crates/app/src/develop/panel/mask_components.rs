@@ -34,12 +34,12 @@ pub fn component_mut(
 }
 
 /// Row height in points.
-pub const ROW_HEIGHT: f32 = 26.0;
+pub const ROW_HEIGHT: f32 = crate::theme::tokens::LIST_ROW;
 /// How far a component row sits in from its mask.
 pub const INDENT: f32 = 18.0;
-const GLYPH: f32 = 14.0;
+const GLYPH: f32 = crate::theme::tokens::ICON_INLINE;
 /// How much of the accent the selected mask's tint carries — the rail's value.
-const TINT: f32 = 0.18;
+const TINT: f32 = crate::theme::tokens::TINT;
 
 /// The glyph a refinement's op shows in the row's first column.
 pub fn op_glyph(op: edit_model::MaskOp) -> &'static str {
@@ -242,7 +242,7 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
                 egui::pos2(name_rect.right() + 8.0, rect.center().y),
                 egui::Align2::LEFT_CENTER,
                 spec.meta,
-                egui::FontId::proportional(11.0),
+                egui::FontId::proportional(crate::theme::tokens::CAPTION),
                 v.weak_text_color(),
             );
         }
@@ -253,7 +253,7 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
                 egui::pos2(cell_x, rect.center().y),
                 egui::Align2::CENTER_CENTER,
                 "×",
-                egui::FontId::proportional(17.0),
+                egui::FontId::proportional(crate::theme::tokens::ICON),
                 x_colour,
             );
             cell_x -= ROW_HEIGHT;

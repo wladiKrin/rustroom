@@ -169,7 +169,7 @@ pub(crate) fn tile(
             egui::pos2(rect.center().x, rect.max.y - CAPTION_H * 0.5),
             egui::Align2::CENTER_CENTER,
             caption,
-            egui::FontId::proportional(11.0),
+            egui::FontId::proportional(crate::theme::tokens::CAPTION),
             ui.visuals().weak_text_color(),
         );
     }

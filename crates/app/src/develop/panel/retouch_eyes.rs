@@ -109,7 +109,7 @@ pub(super) fn list(ui: &mut egui::Ui, s: &mut Session, eyes: &mut EyeTool, ed: &
         s.suppressed_eye = None;
         ed.discrete();
     }
-    out.state.show_body_unindented(ui, |ui| {
+    out.show_body(ui, |ui| {
         let long = s.full_long;
         let selected = s.selected_eye.filter(|&i| i < s.edits.eyes.len());
         let (mut pick, mut remove) = (None, None);

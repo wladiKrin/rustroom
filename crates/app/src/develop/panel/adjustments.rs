@@ -506,7 +506,7 @@ pub fn show(
             false,
             super::section::Header::new("Advanced color"),
         );
-        adv.state.show_body_unindented(ui, |ui| {
+        adv.show_body(ui, |ui| {
             theme::sub_label_hover(
                 ui,
                 "Adjust individual colors",
@@ -730,7 +730,7 @@ fn section(
             .modified(modified)
             .resettable(true),
     );
-    out.state.show_body_unindented(ui, |ui| body(ui, edits, ed));
+    out.show_body(ui, |ui| body(ui, edits, ed));
     if out.reset {
         edits.merge_from(
             &edit_model::Edits::default(),

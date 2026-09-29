@@ -17,11 +17,29 @@
 //! colorimetric render, see `edit_model::RENDERING_GROUP`), and the Masks panel's MASKS, SHAPE
 //! (trailing = the shape's kind) and adjustment sections.
 
-use crate::theme;
+use crate::theme::{self, tokens};
 use eframe::egui;
 
-const HEIGHT: f32 = 22.0;
+const HEIGHT: f32 = tokens::HEADER_ROW;
 const CHEVRON_W: f32 = 14.0;
+/// How far a card reaches past the content it holds, left and right.
+const CARD_PAD_X: f32 = 8.0;
+/// How far a card reaches above its header and below its last row.
+const CARD_PAD_TOP: f32 = 4.0;
+const CARD_PAD_BOTTOM: f32 = 6.0;
+/// The space a card leaves under itself before the next header's own air.
+const CARD_GAP: f32 = 10.0;
+
+/// The text a header paints for `name`: the Library rail's group names in capitals, so the rail
+/// reads as a table of contents; every other header as written, in sentence case —
+/// `docs/DESIGN.md` §7.5. Pure, so the rule is testable without a window.
+pub fn header_text(name: &str, rail: bool) -> String {
+    if rail {
+        name.to_uppercase()
+    } else {
+        name.to_owned()
+    }
+}
 
 /// What a header row carries besides its name.
 pub struct Header<'a> {
@@ -40,6 +58,8 @@ pub struct Header<'a> {
     /// dragging their headers. ⚠ egui reports `clicked()` only for a press-release that did not
     /// become a drag, so the two gestures exclude each other by construction.
     pub draggable: bool,
+    /// The Library rail's form: the name in capitals, in the caption face and the secondary grey.
+    pub rail: bool,
 }
 
 impl<'a> Header<'a> {
@@ -50,7 +70,12 @@ impl<'a> Header<'a> {
             resettable: false,
             trailing: None,
             draggable: false,
+            rail: false,
         }
+    }
+    pub fn rail(mut self, on: bool) -> Self {
+        self.rail = on;
+        self
     }
     pub fn modified(mut self, on: bool) -> Self {
         self.modified = on;
@@ -78,6 +103,46 @@ pub struct HeaderOut {
     pub reset: bool,
     /// The row's own response — a draggable header's drag is read from it.
     pub response: egui::Response,
+    /// The shapes reserved behind and under the row: the card background and the hairline.
+    card: CardShapes,
+}
+
+struct CardShapes {
+    background: egui::layers::ShapeIdx,
+    rule: egui::layers::ShapeIdx,
+    top: f32,
+}
+
+impl HeaderOut {
+    /// Draw the section's body, then turn the section into a **card** — `docs/DESIGN.md` §7.5:
+    /// the `card` surface behind the header and the body, radius 10, and no hairline.
+    ///
+    /// ⚠⚠ **Painted behind, never wrapped.** The background was reserved as an empty shape before
+    /// the header painted, and is filled in here once the body's height is known — so a card
+    /// costs a caller one word (`show_body` for `state.show_body_unindented`) and changes no
+    /// layout. A header whose body is shown the old way (the dialogs, the rail) keeps its
+    /// hairline and gets no card.
+    pub fn show_body<R>(
+        &mut self,
+        ui: &mut egui::Ui,
+        add: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> Option<R> {
+        let inner = self.state.show_body_unindented(ui, add).map(|r| r.inner);
+        let bottom = ui.cursor().top() - ui.spacing().item_spacing.y;
+        let full = ui.max_rect();
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(full.left() - CARD_PAD_X, self.card.top - CARD_PAD_TOP),
+            egui::pos2(full.right() + CARD_PAD_X, bottom + CARD_PAD_BOTTOM),
+        );
+        let t = tokens::of(ui);
+        ui.painter().set(
+            self.card.background,
+            egui::Shape::rect_filled(rect, tokens::RADIUS_CARD, t.card),
+        );
+        ui.painter().set(self.card.rule, egui::Shape::Noop);
+        ui.add_space(CARD_GAP);
+        inner
+    }
 }
 
 /// Draw the header row.
@@ -93,6 +158,8 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
     );
 
     ui.add_space(6.0);
+    // ⚠ Reserved before anything paints, so a card filled in by `show_body` sits behind the row.
+    let background = ui.painter().add(egui::Shape::Noop);
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), HEIGHT),
         if h.draggable {
@@ -111,7 +178,12 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
         egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, enabled, h.name)
     });
 
-    let font = theme::section_font(ui.style());
+    let caption = theme::section_font(ui.style());
+    let font = if h.rail {
+        caption.clone()
+    } else {
+        egui::TextStyle::Body.resolve(ui.style())
+    };
     let weak = ui.visuals().weak_text_color();
     // The actions fill in from the right edge; `right` is where the next one ends.
     let mut right = rect.right();
@@ -119,7 +191,7 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
     if h.modified && h.resettable {
         let galley = ui
             .painter()
-            .layout_no_wrap("reset".to_owned(), font.clone(), weak);
+            .layout_no_wrap("reset".to_owned(), caption.clone(), weak);
         let cell = egui::Rect::from_min_max(
             egui::pos2(right - galley.size().x - 8.0, rect.top()),
             egui::pos2(right, rect.bottom()),
@@ -149,7 +221,7 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
         let v = ui.visuals().clone();
         let painter = ui.painter_at(rect);
         if let Some(text) = h.trailing {
-            let galley = painter.layout_no_wrap(text.to_owned(), font.clone(), weak);
+            let galley = painter.layout_no_wrap(text.to_owned(), caption.clone(), weak);
             painter.galley(
                 egui::pos2(
                     right - galley.size().x - 4.0,
@@ -177,9 +249,13 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
         let text_rect = painter.text(
             egui::pos2(rect.left() + CHEVRON_W + 2.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            h.name.to_uppercase(),
+            header_text(h.name, h.rail),
             font,
-            v.strong_text_color(),
+            if h.rail {
+                v.weak_text_color()
+            } else {
+                v.strong_text_color()
+            },
         );
         if h.modified {
             painter.circle_filled(
@@ -188,16 +264,27 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
                 v.selection.bg_fill,
             );
         }
-        painter.line_segment(
-            [rect.left_bottom(), rect.right_bottom()],
-            egui::Stroke::new(1.0, v.widgets.noninteractive.bg_stroke.color),
-        );
     }
+    // ⚠ The hairline is its own shape so `show_body` can take it away: a card needs no rule, a
+    // dialog's plain header keeps one, and the rail's capitals carry the structure alone.
+    let rule = if h.rail {
+        ui.painter().add(egui::Shape::Noop)
+    } else {
+        ui.painter().add(egui::Shape::line_segment(
+            [rect.left_bottom(), rect.right_bottom()],
+            egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+        ))
+    };
 
     HeaderOut {
         state,
         reset,
         response: resp,
+        card: CardShapes {
+            background,
+            rule,
+            top: rect.top(),
+        },
     }
 }
 
@@ -213,6 +300,7 @@ mod tests {
             resettable,
             trailing,
             draggable,
+            rail,
         } = h;
         crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             let _ = header(
@@ -225,6 +313,7 @@ mod tests {
                     resettable,
                     trailing,
                     draggable,
+                    rail,
                 },
             );
         })
@@ -255,6 +344,31 @@ mod tests {
     fn a_neutral_header_offers_no_reset() {
         let l = labels(Header::new("Profile").resettable(true));
         assert!(!l.iter().any(|l| l == "reset"));
+    }
+
+    #[test]
+    fn a_rail_header_is_in_capitals_and_every_other_header_is_as_written() {
+        // `docs/DESIGN.md` §7.5: the rail reads as a table of contents, the panel and the dialogs
+        // as sentence case. Both halves, or a function that always (or never) uppercased passes.
+        assert_eq!(header_text("Smart collections", true), "SMART COLLECTIONS");
+        assert_eq!(header_text("White balance", false), "White balance");
+    }
+
+    #[test]
+    fn a_card_body_is_drawn_and_its_value_returned() {
+        // `show_body` replaces `state.show_body_unindented` at every card site; it must still run
+        // the body when open and hand back what the body returned.
+        let ctx = crate::test_ui::ctx();
+        let mut got = None;
+        let found = crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            let mut out = header(ui, egui::Id::new("c"), true, Header::new("Tone"));
+            got = out.show_body(ui, |ui| {
+                let _ = ui.button("Auto");
+                7
+            });
+        });
+        assert_eq!(got, Some(7));
+        assert!(found.iter().any(|(l, _)| l == "Auto"), "{found:?}");
     }
 
     #[test]

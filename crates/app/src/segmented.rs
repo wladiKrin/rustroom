@@ -41,8 +41,11 @@ pub fn segmented_with_hover<T: PartialEq + Copy>(
     segmented_sized(ui, current, items, SEGMENTED_HEIGHT, font)
 }
 
-/// The compact segmented control's height: the HSL and grading selectors.
-pub const SEGMENTED_HEIGHT: f32 = 18.0;
+/// The compact segmented control's height: the HSL and grading selectors, the curve channels.
+///
+/// ⚠ 24 with caption labels, where a primary switch (the mask mode, the app switch) is the
+/// control row's 28 with body labels — `docs/DESIGN.md` §7.2. One shape at two sizes.
+pub const SEGMENTED_HEIGHT: f32 = 24.0;
 
 /// A segmented control at a given height and font. The Masks panel's mode control is drawn
 /// taller and in the body face (user's call, 2026-09-19: the compact one read too small for
@@ -134,12 +137,15 @@ pub fn segmented_sized<T: PartialEq + Copy>(
     let rows = n.div_ceil(cols);
     let total = rows as f32 * height + (rows as f32 - 1.0) * GAP;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, total), egui::Sense::hover());
-    let v = ui.visuals().clone();
+    let t = theme::tokens::of(ui);
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 4.0, v.extreme_bg_color);
+    // ⚠ A pill well on the canvas colour, the lit cell raised out of it — `docs/DESIGN.md` §7.2.
+    // Wrapped rows keep the radius of one row, so a 2 × 2 block reads as the same control.
+    painter.rect_filled(rect, height / 2.0, t.canvas);
     let inner = rect.shrink(2.0);
     let w = inner.width() / cols as f32;
     let row_h = (inner.height() - (rows as f32 - 1.0) * GAP) / rows as f32;
+    let cell_radius = row_h / 2.0;
     let mut all = resp.clone();
     for (i, (item, label, hover)) in items.iter().enumerate() {
         let (col, row) = (i % cols, i / cols);
@@ -166,24 +172,31 @@ pub fn segmented_sized<T: PartialEq + Copy>(
         }
         let lit = *current == *item;
         if lit {
-            painter.rect_filled(cell, 3.0, v.widgets.inactive.bg_fill);
+            lit_cell(&painter, cell, cell_radius, t.raised);
         } else if r.hovered() {
-            painter.rect_filled(cell, 3.0, v.widgets.hovered.weak_bg_fill);
+            painter.rect_filled(cell, cell_radius, t.hover);
         }
         painter.text(
             cell.center(),
             egui::Align2::CENTER_CENTER,
             *label,
             font.clone(),
-            if lit {
-                v.strong_text_color()
-            } else {
-                v.text_color()
-            },
+            if lit { t.text } else { t.text2 },
         );
         all = all.union(r);
     }
     all
+}
+
+/// The lit segment: the fill and a one-point shadow under it, so it reads as raised out of the
+/// well rather than painted on it.
+fn lit_cell(painter: &egui::Painter, cell: egui::Rect, radius: f32, fill: egui::Color32) {
+    painter.rect_filled(
+        cell.translate(egui::vec2(0.0, 1.0)),
+        radius,
+        egui::Color32::from_black_alpha(70),
+    );
+    painter.rect_filled(cell, radius, fill);
 }
 
 /// One item of a [`pill`]: its value, its glyph, its label and its hover text.
@@ -218,9 +231,9 @@ pub fn pill<T: PartialEq + Copy>(
     items: &[PillItem<'_, T>],
     style: PillStyle,
 ) -> egui::Response {
-    const PAD: f32 = 12.0;
+    const PAD: f32 = 10.0;
     const GAP: f32 = 6.0;
-    let icon_font = egui::FontId::proportional(style.font.size + 3.0);
+    let icon_font = egui::FontId::proportional(crate::theme::tokens::ICON);
     let (label_w, icon_w) = ui.fonts_mut(|f| {
         let lw = items
             .iter()
@@ -251,9 +264,11 @@ pub fn pill<T: PartialEq + Copy>(
         egui::Sense::hover(),
     );
     let v = ui.visuals().clone();
+    let t = theme::tokens::of(ui);
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 5.0, v.extreme_bg_color);
+    painter.rect_filled(rect, style.height / 2.0, t.canvas);
     let inner = rect.shrink(2.0);
+    let radius = inner.height() / 2.0;
     let mut all = resp.clone();
     for (i, it) in items.iter().enumerate() {
         let cell = egui::Rect::from_min_size(
@@ -281,19 +296,17 @@ pub fn pill<T: PartialEq + Copy>(
         }
         let lit = *current == it.value;
         let colour = if lit && style.accent {
-            painter.rect_filled(cell, 4.0, v.selection.bg_fill);
-            // ⚠ White on the accent in both themes: every accent pair was contrast-checked
-            // against white text (`every_accent_has_usable_contrast`), not against the
-            // theme's strong text, which is near-black on light.
-            egui::Color32::WHITE
+            painter.rect_filled(cell, radius, v.selection.bg_fill);
+            // ⚠ `on_accent`, never white: white on the dark theme's steel blue is 2.4:1.
+            theme::on_accent(v.dark_mode)
         } else if lit {
-            painter.rect_filled(cell, 4.0, v.widgets.inactive.bg_fill);
-            v.strong_text_color()
+            lit_cell(&painter, cell, radius, t.raised);
+            t.text
         } else if r.hovered() {
-            painter.rect_filled(cell, 4.0, v.widgets.hovered.weak_bg_fill);
-            v.strong_text_color()
+            painter.rect_filled(cell, radius, t.hover);
+            t.text
         } else {
-            v.text_color()
+            t.text2
         };
         let x = cell.left() + PAD;
         let icon_rect = painter.text(
@@ -323,7 +336,7 @@ pub fn pill<T: PartialEq + Copy>(
 pub fn chip(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
     const H: f32 = 20.0;
     const DOT: f32 = 3.5;
-    let font = egui::FontId::proportional(11.0);
+    let font = egui::FontId::proportional(crate::theme::tokens::CAPTION);
     let w = ui.fonts_mut(|f| {
         f.layout_no_wrap(label.to_owned(), font.clone(), egui::Color32::WHITE)
             .size()
@@ -398,7 +411,7 @@ pub fn switch(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
     /// consequential decision, and a label at the same size as every section header read as one more
     /// small control. An explicit size rather than a resolved `TextStyle`, so there is no style to
     /// miss in a bare harness `Context` — the panic `section_font`'s own doc warns about.
-    const LABEL_PT: f32 = 14.0;
+    const LABEL_PT: f32 = crate::theme::tokens::TITLE;
     let gap = ui.spacing().item_spacing.x;
     let font = egui::FontId::proportional(LABEL_PT);
     let text_w = ui.fonts_mut(|f| {

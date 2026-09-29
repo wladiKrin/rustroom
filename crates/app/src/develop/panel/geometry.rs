@@ -100,8 +100,7 @@ pub fn show(
 
     // ── CROP ──
     let mut out = geo_header(ui, s, GeoGroup::Crop);
-    out.state
-        .show_body_unindented(ui, |ui| crop(ui, s, &mut aspect, composition_guide, ed));
+    out.show_body(ui, |ui| crop(ui, s, &mut aspect, composition_guide, ed));
     if out.reset {
         s.edits.reset_geo_group(GeoGroup::Crop);
         // ⚠ The lock is view state on the app, and a full-frame crop under a lock would snap
@@ -112,8 +111,7 @@ pub fn show(
 
     // ── STRAIGHTEN ──
     let mut out = geo_header(ui, s, GeoGroup::Straighten);
-    out.state
-        .show_body_unindented(ui, |ui| straighten(ui, s, ed));
+    out.show_body(ui, |ui| straighten(ui, s, ed));
     if out.reset {
         s.edits.reset_geo_group(GeoGroup::Straighten);
         clear_guides(s);
@@ -122,8 +120,7 @@ pub fn show(
 
     // ── PERSPECTIVE ──
     let mut out = geo_header(ui, s, GeoGroup::Perspective);
-    out.state
-        .show_body_unindented(ui, |ui| perspective(ui, s, ed, auto));
+    out.show_body(ui, |ui| perspective(ui, s, ed, auto));
     if out.reset {
         s.edits.reset_geo_group(GeoGroup::Perspective);
         // ⚠ As editing the sliders by hand does: guides that solved to a correction that is
@@ -145,8 +142,7 @@ pub fn show(
         true,
         section::Header::new("Lens").trailing(&lens_label),
     );
-    out.state
-        .show_body_unindented(ui, |ui| lens(ui, s, lens_profile_found, ed));
+    out.show_body(ui, |ui| lens(ui, s, lens_profile_found, ed));
 }
 
 /// One of the three resettable headers, its dot from `GeoGroup`.
@@ -191,7 +187,7 @@ fn crop(
     // glyph too, which the tests click by.
     let glyph_button = |ui: &mut egui::Ui, glyph: &str, hover: &str| -> bool {
         ui.add(
-            egui::Button::new(egui::RichText::new(glyph).size(18.0))
+            egui::Button::new(egui::RichText::new(glyph).size(crate::theme::tokens::ICON))
                 .min_size(egui::vec2(CROP_ROW, CROP_ROW)),
         )
         .on_hover_text(hover)

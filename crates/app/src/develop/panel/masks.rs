@@ -93,7 +93,7 @@ pub fn show(
         s.mask_shown.clear();
         ed.discrete();
     }
-    out.state.show_body_unindented(ui, |ui| {
+    out.show_body(ui, |ui| {
         add_controls(ui, s, add_mode, ed);
         list(ui, s, ed);
         show_all_row(ui, s);
@@ -119,8 +119,7 @@ pub fn show(
             true,
             section::Header::new("Shape").trailing(kind),
         );
-        out.state
-            .show_body_unindented(ui, |ui| shape_block(ui, shape, &mut brush, ed));
+        out.show_body(ui, |ui| shape_block(ui, shape, &mut brush, ed));
     }
 
     super::mask_adjust::show(ui, &mut m.adjustments, baseline, mask_hsl, mask_grade, ed);

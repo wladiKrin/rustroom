@@ -1,6 +1,7 @@
 //! The one place Rustroom's look is defined.
 //!
-//! Dark by default with a switchable accent, light available as a setting, compact controls.
+//! Dark by default with a switchable accent, light available as a setting. The rulebook is
+//! `docs/DESIGN.md` (direction B, chosen 2026-09-29); its values live in [`tokens`].
 //!
 //! The split that makes colour cheap to revisit: anything expressible in
 //! `egui::Style`/`Visuals` is a central change applied retroactively everywhere. What is
@@ -8,12 +9,15 @@
 //! headers, how a control row is composed — which is why this module also holds helpers that
 //! encode conventions ([`hint`], [`caption`], [`button_row`]), not just colours.
 //!
-//! ⚠ **The accent does not reach everything.** It sets egui's own widget colours; anything
-//! Rustroom paints by hand — the crop overlay, the histogram, the thumbnail selection border —
-//! keeps its own hardcoded colours until someone routes them through here too.
+//! ⚠ **Hand-painted colour reads the tokens** (`tokens::of(ui)`), never a literal grey. The
+//! exceptions — the histogram's channels, the crop frame, the mask and clipping overlays, the
+//! red-eye circle — are listed in `docs/DESIGN.md` §4.2.
 
 use eframe::egui;
 use rustroom_app::settings::{Accent, Settings, ThemeChoice};
+
+pub mod tokens;
+pub use tokens::on_accent;
 
 /// The accent colours, one pair per variant.
 ///
@@ -27,7 +31,7 @@ use rustroom_app::settings::{Accent, Settings, ThemeChoice};
 /// orphan rule allows inherent impls only in the crate that defines the type — so this could
 /// only be an extension trait or a free function, and a trait carrying one method used in one
 /// file is machinery for its own sake.
-fn accent_color(accent: Accent, dark: bool) -> egui::Color32 {
+pub fn accent_color(accent: Accent, dark: bool) -> egui::Color32 {
     let (r, g, b) = match (accent, dark) {
         (Accent::Neutral, true) => (0x9a, 0x9a, 0x9a),
         (Accent::Neutral, false) => (0x5a, 0x5a, 0x5a),
@@ -37,6 +41,12 @@ fn accent_color(accent: Accent, dark: bool) -> egui::Color32 {
         (Accent::Teal, false) => (0x2c, 0x6d, 0x68),
         (Accent::Violet, true) => (0x9a, 0x8f, 0xd0),
         (Accent::Violet, false) => (0x54, 0x4a, 0x8c),
+        (Accent::Orange, true) => (0xe3, 0x9a, 0x5c),
+        (Accent::Orange, false) => (0xb0, 0x52, 0x1a),
+        (Accent::Sage, true) => (0x9c, 0xc4, 0x8a),
+        (Accent::Sage, false) => (0x3e, 0x7a, 0x37),
+        (Accent::Rose, true) => (0xdd, 0x8f, 0xa6),
+        (Accent::Rose, false) => (0xa6, 0x3d, 0x5f),
     };
     egui::Color32::from_rgb(r, g, b)
 }
@@ -154,29 +164,40 @@ pub fn apply(ctx: &egui::Context, settings: &Settings) {
     }
 }
 
-/// The theme's surfaces: the panel, the popups, body text and hairlines.
+/// The theme's surfaces, text greys and hairlines, from [`tokens`] — `docs/DESIGN.md` §4.1.
 ///
-/// ⚠ **Per theme, never in [`tune`]** — every value here is a pair, the visual identity
-/// spec's rule. Dark mode is the one that moves: egui's `gray(140)` body text on `gray(27)`
-/// is 4.6:1, readable but dim beside the `gray(180)` button text next to it, and every surface
-/// was the same `gray(27)` so nothing read as a panel. Light mode's `gray(80)` on `gray(248)`
-/// is already 7.5:1 and keeps its text; only its hairlines soften.
+/// ⚠ **Per theme, never in [`tune`]** — every value is a pair.
 ///
-/// ⚠ Separators get *weaker*, not stronger: section headers carry the structure now, so the
-/// hairlines become guides rather than walls.
+/// ⚠ How the tokens land in egui's slots: fields (`TextEdit`) paint `extreme_bg_color`, so that
+/// is the **card**; buttons and combos paint `inactive.weak_bg_fill`, the **raised** step; their
+/// hover `hovered.weak_bg_fill`, the **hover** step; labels `noninteractive.fg_stroke`, the body
+/// **text**; `weak_text_color` is **text2**, which is readable — egui's default derives it by
+/// alpha, which fell below 4.5:1 on the card.
 fn surfaces(style: &mut egui::Style, dark: bool) {
+    let t = tokens::tokens(dark);
     let v = &mut style.visuals;
-    if dark {
-        let panel = egui::Color32::from_gray(32);
-        v.panel_fill = panel;
-        v.window_fill = panel;
-        v.widgets.noninteractive.bg_fill = panel;
-        v.widgets.noninteractive.weak_bg_fill = panel;
-        v.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(166);
-        v.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(46);
-    } else {
-        v.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(205);
-    }
+    v.panel_fill = t.panel;
+    v.window_fill = t.panel;
+    v.window_stroke = egui::Stroke::new(1.0, t.line);
+    v.extreme_bg_color = t.card;
+    v.faint_bg_color = t.card;
+    v.weak_text_color = Some(t.text2);
+    let w = &mut v.widgets;
+    w.noninteractive.bg_fill = t.panel;
+    w.noninteractive.weak_bg_fill = t.panel;
+    w.noninteractive.fg_stroke.color = t.text;
+    w.noninteractive.bg_stroke.color = t.line;
+    w.inactive.bg_fill = t.raised;
+    w.inactive.weak_bg_fill = t.raised;
+    w.inactive.fg_stroke.color = t.text;
+    w.inactive.bg_stroke = egui::Stroke::NONE;
+    w.hovered.weak_bg_fill = t.hover;
+    w.hovered.bg_stroke = egui::Stroke::NONE;
+    w.hovered.fg_stroke.color = t.text;
+    w.active.weak_bg_fill = t.hover;
+    w.active.bg_stroke = egui::Stroke::NONE;
+    w.open.weak_bg_fill = t.raised;
+    w.open.bg_stroke = egui::Stroke::NONE;
 }
 
 /// The Develop canvas surround: darker than the panel in both themes.
@@ -186,11 +207,7 @@ fn surfaces(style: &mut egui::Style, dark: bool) {
 /// is what this serves. ⚠ Only the Develop canvas takes it; the Library grid is a browsing
 /// surface and keeps `panel_fill`.
 pub fn canvas_fill(dark: bool) -> egui::Color32 {
-    if dark {
-        egui::Color32::from_gray(22)
-    } else {
-        egui::Color32::from_gray(222)
-    }
+    tokens::tokens(dark).canvas
 }
 
 /// The frame the Develop canvas is drawn in.
@@ -204,8 +221,8 @@ pub fn canvas_frame(style: &egui::Style) -> egui::Frame {
 /// against the panel edge. Deliberately not applied through `tune`'s spacing, which every
 /// menu and popup shares.
 pub const PANEL_MARGIN: egui::Margin = egui::Margin {
-    left: 10,
-    right: 10,
+    left: 14,
+    right: 14,
     top: 6,
     bottom: 6,
 };
@@ -215,24 +232,43 @@ pub fn panel_frame(style: &egui::Style) -> egui::Frame {
     egui::Frame::side_top_panel(style).inner_margin(PANEL_MARGIN)
 }
 
-/// The theme-independent tweaks: the compact density.
+/// The theme-independent tweaks: the type scale, the metrics and the shape — `docs/DESIGN.md`
+/// §3 and §5.
 ///
 /// ⚠ **Only theme-independent things belong here.** Anything colour-related goes in that
 /// theme's own `visuals` — see [`apply`] — or light mode inherits dark colours.
 ///
-/// Compact because the Develop panel stacks 20+ sliders across six collapsible sections, and
-/// every Phase 3 tool makes that worse. It costs some trackpad precision on fine drags, which
-/// is the trade taken knowingly.
+/// ⚠⚠ **Four text sizes, set here and nowhere else.** Before 2026-09-29 `tune` never touched
+/// `text_styles`, so egui's defaults (Small **9**, Body 13, Heading 18) sat beside 24 literal
+/// sizes in the bin modules — ten sizes in all, the 9-pt hints the ones the author could not
+/// read on a 5K display. `no_literal_font_size_outside_theme` keeps the literals out.
 ///
-/// ⚠ **egui's defaults are already fairly tight** — `item_spacing.y` 3.0 and `interact_size.y`
-/// 18.0 — which the first draft of these values got wrong by assuming they were roomier, and
-/// `the_compact_metrics_are_tighter_than_the_defaults` caught. So the headroom is smaller than
-/// it looks: the visible gain here comes mostly from **halving the slider rail**, which is
-/// where the vertical space in a panel of sliders actually goes.
+/// ⚠ Direction B is **roomier than the old compact density on purpose** (the author's choice from
+/// three): a 28-pt control row where there was 16. The Develop panel scrolls; that is the trade.
 fn tune(style: &mut egui::Style) {
-    style.spacing.item_spacing.y = 2.0;
-    style.spacing.interact_size.y = 16.0;
-    style.spacing.slider_rail_height = 4.0;
+    use egui::{FontFamily, FontId, TextStyle};
+    style.text_styles = [
+        (TextStyle::Small, FontId::proportional(tokens::CAPTION)),
+        (TextStyle::Body, FontId::proportional(tokens::BODY)),
+        (TextStyle::Button, FontId::proportional(tokens::BODY)),
+        (
+            TextStyle::Monospace,
+            FontId::new(tokens::BODY, FontFamily::Monospace),
+        ),
+        (TextStyle::Heading, FontId::proportional(tokens::DISPLAY)),
+        (section_style(), FontId::proportional(tokens::CAPTION)),
+        (title_style(), FontId::proportional(tokens::TITLE)),
+    ]
+    .into();
+
+    let sp = &mut style.spacing;
+    sp.interact_size.y = tokens::CONTROL_ROW;
+    sp.item_spacing = egui::vec2(8.0, 2.0);
+    sp.button_padding = egui::vec2(10.0, 4.0);
+    sp.slider_rail_height = 4.0;
+    sp.tooltip_width = 280.0;
+    sp.menu_margin = egui::Margin::same(8);
+    style.interaction.tooltip_delay = 0.4;
 
     // One radius for every widget state. egui ships 2/2/3/2/2 — hovered widgets change shape
     // as well as colour, which reads as a flicker on a row of chips.
@@ -244,13 +280,10 @@ fn tune(style: &mut egui::Style) {
         &mut w.active,
         &mut w.open,
     ] {
-        ws.corner_radius = egui::CornerRadius::same(4);
+        ws.corner_radius = egui::CornerRadius::same(tokens::RADIUS);
     }
-
-    // The section header and sub-label face: smaller than body, uppercased by its callers.
-    style
-        .text_styles
-        .insert(section_style(), egui::FontId::proportional(SECTION_PT));
+    style.visuals.window_corner_radius = egui::CornerRadius::same(tokens::RADIUS_DIALOG);
+    style.visuals.menu_corner_radius = egui::CornerRadius::same(tokens::RADIUS_DIALOG);
 
     // ⚠ Both of these are **off by default in egui**, and their absence is why the shipped
     // sliders looked nothing like the mockups they were chosen from — a grey rectangle on a
@@ -268,7 +301,11 @@ fn tune(style: &mut egui::Style) {
     // fill already carries the signal.
 }
 
-/// The small explanatory line under a control.
+/// A line of secondary text under a control: a value, a state, an empty list's note.
+///
+/// ⚠⚠ **Not an explanation.** Since 2026-09-29 explanations live on hover (`docs/DESIGN.md` §8);
+/// what stays on screen is what changes — a readout, a chosen path, "No keywords yet." It draws
+/// at the caption size (11 pt), never below; the 9-pt hints were what the author could not read.
 ///
 /// ⚠ Distinct from a *caption* — a filename under a thumbnail, a camera model beside a title —
 /// which renders identically today but means something different. Those live in the Library
@@ -323,8 +360,20 @@ pub fn section_style() -> egui::TextStyle {
     egui::TextStyle::Name("section".into())
 }
 
-/// The section face's size in points.
-const SECTION_PT: f32 = 11.0;
+/// The named text style for titles: dialog titles, the open photo's name, empty-state buttons.
+pub fn title_style() -> egui::TextStyle {
+    egui::TextStyle::Name("title".into())
+}
+
+/// The title face, resolved against `style` — the same fallback [`section_font`] carries, for
+/// the same reason: a bare harness `Context` never runs [`apply`].
+pub fn title_font(style: &egui::Style) -> egui::FontId {
+    style
+        .text_styles
+        .get(&title_style())
+        .cloned()
+        .unwrap_or_else(|| egui::FontId::proportional(tokens::TITLE))
+}
 
 /// The section face, resolved against `style` — or the same face by value when the style
 /// was never tuned.
@@ -339,12 +388,13 @@ pub fn section_font(style: &egui::Style) -> egui::FontId {
         .text_styles
         .get(&section_style())
         .cloned()
-        .unwrap_or_else(|| egui::FontId::proportional(SECTION_PT))
+        .unwrap_or_else(|| egui::FontId::proportional(tokens::CAPTION))
 }
 
-/// A sub-label: the name of a block of controls inside a section — Presence, Noise Reduction,
-/// Color Grading. Uppercased, in the section face, in the weak text colour, with a little air
-/// above and no hairline: the hairline was the old idiom and the name replaces it.
+/// A sub-label: the name of a block of controls inside a section — Presence, Noise reduction,
+/// Color grading. In the caption face and the secondary grey, **as written** (sentence case,
+/// `docs/DESIGN.md` §7.5 — the capitals belong to the Library rail alone), with air above and no
+/// hairline.
 ///
 /// ⚠ Not for a value ("No presets yet.") and not for a control's own text; those stay
 /// `label`s. Plain labels produce no AccessKit node, so nothing in the tests reaches these.
@@ -363,17 +413,10 @@ pub fn sub_label_hover(ui: &mut egui::Ui, text: &str, hover: &str) {
 
 /// The one body both go through, so the two cannot drift apart in spacing, case or colour.
 fn sub_label_response(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add_space(4.0);
+    ui.add_space(8.0);
     let colour = ui.visuals().weak_text_color();
     let font = section_font(ui.style());
-    ui.add(
-        egui::Label::new(
-            egui::RichText::new(text.to_uppercase())
-                .font(font)
-                .color(colour),
-        )
-        .selectable(false),
-    )
+    ui.add(egui::Label::new(egui::RichText::new(text).font(font).color(colour)).selectable(false))
 }
 
 /// A sub-label with `trailing` content right-aligned on the same row — a view toggle or a
@@ -392,12 +435,10 @@ fn sub_label_response(ui: &mut egui::Ui, text: &str) -> egui::Response {
 /// ⚠ The trailing closure runs in a right-to-left layout, so its first widget lands at the
 /// right edge.
 pub fn sub_label_with(ui: &mut egui::Ui, text: &str, trailing: impl FnOnce(&mut egui::Ui)) {
-    ui.add_space(4.0);
+    ui.add_space(8.0);
     let colour = ui.visuals().weak_text_color();
     let font = section_font(ui.style());
-    let galley = ui
-        .painter()
-        .layout_no_wrap(text.to_uppercase(), font, colour);
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, colour);
     let height = galley.size().y.max(ui.spacing().interact_size.y);
     let row = egui::Rect::from_min_size(
         ui.next_widget_position(),
@@ -465,8 +506,8 @@ impl DialogSize {
     pub fn default_size(self) -> (f32, f32) {
         match self {
             Self::Compact => (340.0, 140.0),
-            Self::Standard => (480.0, 320.0),
-            Self::Wide => (640.0, 480.0),
+            Self::Standard => (520.0, 320.0),
+            Self::Wide => (680.0, 480.0),
         }
     }
 }
@@ -492,16 +533,16 @@ pub fn dialog_frame(ctx: &egui::Context) -> egui::Frame {
     egui::Frame::popup(&ctx.style_of(ctx.theme())).inner_margin(DIALOG_MARGIN)
 }
 
-/// The accent-filled button with white text: a dialog footer's primary verb, the bar's Export.
+/// The accent-filled button: a dialog footer's primary verb, the bar's Export.
 ///
-/// ⚠ One painter for both, so the bar and the dialogs cannot drift apart. ⚠ White on the
-/// accent in both themes: every accent pair was contrast-checked against white text
-/// (`every_accent_has_usable_contrast`). A disabled one is drawn greyed, never hidden — the
-/// Save button with an empty name must still be seen.
+/// ⚠ One painter for both, so the bar and the dialogs cannot drift apart. ⚠ The text is
+/// [`on_accent`] — dark on the dark theme's light accents, white on the light theme's dark ones
+/// (`text_on_every_accent_is_readable`); white on the dark steel blue was 2.4:1. A disabled one
+/// is drawn greyed, never hidden — the Save button with an empty name must still be seen.
 pub fn primary_button(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
     let accent = ui.visuals().selection.bg_fill;
     let (fill, colour) = if enabled {
-        (accent, egui::Color32::WHITE)
+        (accent, on_accent(ui.visuals().dark_mode))
     } else {
         (accent.gamma_multiply(0.35), ui.visuals().weak_text_color())
     };
@@ -663,14 +704,20 @@ mod tests {
     }
 
     #[test]
-    fn hint_text_is_smaller_than_body_text() {
-        // ⚠ Today this passes on egui's defaults, so it is a **tripwire, not a discovery**:
-        // it starts earning its keep the moment `tune` begins setting `text_styles` itself,
-        // at which point a hint that reads at body size is no longer a hint.
+    fn the_type_scale_is_four_sizes() {
+        // ⚠⚠ `docs/DESIGN.md` §3: caption 11, body 13, title 15, display 20, and nothing below
+        // 11. Asserted over **every** installed style, so a fifth size added to `tune` fails
+        // here rather than drifting in. egui's own default Small was 9 — the unreadable hints.
         let s = tuned();
+        assert!(s.text_styles.len() >= 7, "sample: {}", s.text_styles.len());
+        let mut sizes: Vec<u32> = s.text_styles.values().map(|f| f.size as u32).collect();
+        sizes.sort_unstable();
+        sizes.dedup();
+        assert_eq!(sizes, vec![11, 13, 15, 20], "the installed sizes");
         let body = s.text_styles[&egui::TextStyle::Body].size;
         let small = s.text_styles[&egui::TextStyle::Small].size;
         assert!(small < body, "small {small} should be under body {body}");
+        assert_eq!(title_font(&s).size, tokens::TITLE);
     }
 
     #[test]
@@ -835,7 +882,7 @@ mod tests {
             &w.active,
             &w.open,
         ] {
-            assert_eq!(ws.corner_radius, egui::CornerRadius::same(4));
+            assert_eq!(ws.corner_radius, egui::CornerRadius::same(tokens::RADIUS));
         }
     }
 
@@ -892,14 +939,169 @@ mod tests {
     }
 
     #[test]
-    fn the_compact_metrics_are_tighter_than_the_defaults() {
-        // Pins the direction, not the values: a later tweak may change how much tighter, but
-        // `tune` accidentally becoming a no-op again should fail.
-        let mut s = egui::Style::default();
-        let before = (s.spacing.item_spacing.y, s.spacing.interact_size.y);
-        tune(&mut s);
-        assert!(s.spacing.item_spacing.y < before.0);
-        assert!(s.spacing.interact_size.y < before.1);
+    fn text_on_every_accent_is_readable() {
+        // ⚠⚠ The primary button and the lit app switch paint text on the accent. White on the dark
+        // theme's steel blue measured 2.4:1 — below even the non-text floor — so the text colour is
+        // a pair too (`on_accent`), and this sweeps it over every accent at the text floor.
+        assert!(Accent::ALL.len() >= 7, "sample");
+        for accent in Accent::ALL {
+            for dark in [true, false] {
+                let c = contrast(on_accent(dark), accent_color(accent, dark));
+                assert!(
+                    c >= 4.5,
+                    "text on {accent:?} ({}): {c:.2}:1 is below 4.5:1",
+                    if dark { "dark" } else { "light" }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_text_greys_are_readable_where_they_are_used() {
+        // Body text and the secondary grey sit on the panel, inside cards and on buttons; both must
+        // clear the text floor on all three. The tertiary grey is decoration only (chevrons,
+        // thumbnail captions, placeholders) and sits on the panel and in fields, never on a button,
+        // so it is held to the 3:1 non-text floor there. ⚠ The light theme's first value, #9a9aa0,
+        // measured 2.55:1 on the panel — found by this test, not lowered to pass it.
+        for dark in [true, false] {
+            let t = tokens::tokens(dark);
+            for (name, surface, text3) in [
+                ("panel", t.panel, true),
+                ("card", t.card, true),
+                ("raised", t.raised, false),
+            ] {
+                let mut greys = vec![("text", t.text, 4.5), ("text2", t.text2, 4.5)];
+                if text3 {
+                    greys.push(("text3", t.text3, 3.0));
+                }
+                for (grey, colour, floor) in greys {
+                    let c = contrast(colour, surface);
+                    assert!(
+                        c >= floor,
+                        "{grey} on {name} (dark={dark}): {c:.2}:1 is below {floor}:1"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_dark_surfaces_step_up_in_order() {
+        // Elevation is the only depth in direction B: each step must be lighter than the one under
+        // it, or a card disappears into its panel.
+        let t = tokens::tokens(true);
+        let steps = [t.canvas, t.panel, t.card, t.raised, t.hover];
+        assert!(
+            steps.windows(2).all(|p| luminance(p[0]) < luminance(p[1])),
+            "dark surfaces out of order"
+        );
+        // Light mode: the canvas is the darkest surface and the card the lightest.
+        let l = tokens::tokens(false);
+        for s in [l.panel, l.card, l.raised] {
+            assert!(luminance(l.canvas) < luminance(s));
+            assert!(luminance(s) <= luminance(l.card));
+        }
+    }
+
+    #[test]
+    fn the_theme_paints_the_tokens() {
+        // ⚠ The tokens are only the rulebook if egui's own slots carry them: a field, a button and a
+        // label must come out in the card, raised and text values in both themes.
+        let ctx = egui::Context::default();
+        apply(&ctx, &Settings::default());
+        for (theme, dark) in [(egui::Theme::Dark, true), (egui::Theme::Light, false)] {
+            let v = ctx.style_of(theme).visuals.clone();
+            let t = tokens::tokens(dark);
+            assert_eq!(v.panel_fill, t.panel);
+            assert_eq!(v.text_edit_bg_color(), t.card);
+            assert_eq!(v.widgets.inactive.weak_bg_fill, t.raised);
+            assert_eq!(v.widgets.noninteractive.fg_stroke.color, t.text);
+            assert_eq!(v.weak_text_color(), t.text2);
+        }
+    }
+
+    /// The literal font sizes in `source`, up to its test module: `FontId::proportional(<digit>`,
+    /// `FontId::new(<digit>`, `FontId::monospace(<digit>` and `.size(<digit>`.
+    fn literal_sizes(source: &str) -> Vec<String> {
+        let code = source.split("#[cfg(test)]").next().unwrap_or("");
+        let mut found = Vec::new();
+        for (n, line) in code.lines().enumerate() {
+            for pat in [
+                "FontId::proportional(",
+                "FontId::new(",
+                "FontId::monospace(",
+                ".size(",
+            ] {
+                let mut rest = line;
+                while let Some(i) = rest.find(pat) {
+                    rest = &rest[i + pat.len()..];
+                    if rest.trim_start().starts_with(|c: char| c.is_ascii_digit()) {
+                        found.push(format!("{}: {}", n + 1, line.trim()));
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn no_literal_font_size_outside_theme() {
+        // ⚠⚠ Ten sizes crept in exactly this way — one reasonable-looking `.size(15.0)` at a time.
+        // Sizes come from the text styles or `theme::tokens`; this walks every app source file
+        // outside the theme and fails on a literal. ⚠ The sample and a positive control first, so a
+        // walk that found no files or a matcher that matches nothing cannot pass.
+        assert_eq!(
+            literal_sizes("let f = egui::FontId::proportional(9.0);\nx.size(15.0)").len(),
+            2,
+            "the matcher misses the shape it exists to catch"
+        );
+        assert!(literal_sizes("egui::FontId::proportional(tokens::BODY)").is_empty());
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            for e in std::fs::read_dir(&dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    files.push(p);
+                }
+            }
+        }
+        assert!(files.len() > 100, "sample: {} files", files.len());
+        let mut offenders = Vec::new();
+        for f in &files {
+            let rel = f.strip_prefix(&root).unwrap().to_string_lossy().to_string();
+            if rel == "theme.rs" || rel.starts_with("theme/") {
+                continue;
+            }
+            for hit in literal_sizes(&std::fs::read_to_string(f).unwrap()) {
+                offenders.push(format!("{rel}:{hit}"));
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "literal font sizes outside theme (use a TextStyle or theme::tokens):\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    #[test]
+    fn the_metrics_follow_the_design_language() {
+        // `tune` accidentally becoming a no-op should fail, and so should a control row that is
+        // not the rulebook's 28 — every button, combo and slider row inherits it.
+        let s = tuned();
+        assert_eq!(s.spacing.interact_size.y, tokens::CONTROL_ROW);
+        assert_ne!(
+            s.spacing.interact_size.y,
+            egui::Style::default().spacing.interact_size.y,
+            "tune changed nothing"
+        );
+        assert_eq!(
+            s.visuals.window_corner_radius,
+            egui::CornerRadius::same(tokens::RADIUS_DIALOG)
+        );
     }
 
     #[test]

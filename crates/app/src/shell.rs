@@ -665,13 +665,13 @@ fn egui_key(c: char) -> Option<egui::Key> {
     })
 }
 
-/// The bar's minimum height in points: the app-mode pill and 4 pt of air.
-const BAR_HEIGHT: f32 = 36.0;
+/// The top bar's height, `docs/DESIGN.md` §5.
+const BAR_HEIGHT: f32 = crate::theme::tokens::TOP_BAR;
 
-/// The app-mode pill's height.
-const VIEW_PILL: f32 = 32.0;
-/// The Library layout pill's height — a step smaller than the app mode, which it sits inside.
-const MODE_PILL: f32 = 28.0;
+/// The app-mode pill's height: the control row.
+const VIEW_PILL: f32 = crate::theme::tokens::CONTROL_ROW;
+/// The Library layout pill's height — the same row; the accent, not the size, tells them apart.
+const MODE_PILL: f32 = crate::theme::tokens::CONTROL_ROW;
 
 /// The Library / Develop switch: a 32 pt icon + label pill, its lit half filled with the accent.
 ///
@@ -698,7 +698,7 @@ fn view_switch(ui: &mut egui::Ui, view: &mut AppView) {
         ],
         PillStyle {
             height: VIEW_PILL,
-            font: egui::FontId::proportional(13.5),
+            font: egui::FontId::proportional(crate::theme::tokens::BODY),
             accent: true,
         },
     );
@@ -741,7 +741,7 @@ fn mode_switch(ui: &mut egui::Ui, mode: &mut LibraryMode) {
         ],
         PillStyle {
             height: MODE_PILL,
-            font: egui::FontId::proportional(12.5),
+            font: egui::FontId::proportional(crate::theme::tokens::BODY),
             accent: false,
         },
     );
@@ -1106,7 +1106,7 @@ fn grid_size_slider(app: &mut RustroomApp, ui: &mut egui::Ui) {
         app.cell_zoom_pending = false;
         app.save_settings();
     }
-    ui.label(egui::RichText::new(icons::THUMB_SIZE.to_string()).size(15.0))
+    ui.label(egui::RichText::new(icons::THUMB_SIZE.to_string()).size(crate::theme::tokens::ICON))
         .on_hover_text("Thumbnail size");
 }
 
@@ -1326,7 +1326,7 @@ fn centre_info(
         return None;
     }
     let body = egui::TextStyle::Body.resolve(ui.style());
-    let small = egui::FontId::proportional(11.0);
+    let small = egui::FontId::proportional(crate::theme::tokens::CAPTION);
     let editing = app.info_draft.as_ref().is_some_and(|(d, _)| *d == id);
     let (name_w, meta_w) = ui.fonts_mut(|f| {
         let shown = rustroom_app::entries::caption(&file_name, copy);

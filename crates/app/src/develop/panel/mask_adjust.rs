@@ -49,7 +49,7 @@ pub fn show(
                 .modified(a.group_differs(g))
                 .resettable(true),
         );
-        out.state.show_body_unindented(ui, |ui| match g {
+        out.show_body(ui, |ui| match g {
             LocalGroup::WhiteBalance => {
                 adjustments::white_balance(ui, &mut a.white_balance, baseline, None, ed);
             }
