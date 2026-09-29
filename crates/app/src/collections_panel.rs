@@ -506,8 +506,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     tops.push(top);
                                     continue;
                                 }
-                                let n = crate::immich_panel::header_count(app);
-                                section(ui, &mut sections.immich, "sec_immich", "Immich", &n, |ui| {
+                                // ⚠ No count on the header, as for Dates: the Timeline and Albums
+                                // rows carry their own (M10.6a).
+                                section(ui, &mut sections.immich, "sec_immich", "Immich", "", |ui| {
                                     immich_action = crate::immich_panel::body(app, ui);
                                 })
                             }
