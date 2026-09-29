@@ -72,6 +72,17 @@ fn badge_id(ui: &egui::Ui) -> egui::Id {
     ui.id().with("thumb_badge_rect")
 }
 
+/// Where the last `cell` drew for this `Ui` painted its picture — the placeholder's box when there
+/// is no picture yet. The grid anchors the stack badge to it (`docs/DESIGN.md` §7.10), so a
+/// portrait thumbnail's badge sits on the photograph rather than in the empty corner of its cell.
+pub fn image_rect(ui: &egui::Ui) -> Option<egui::Rect> {
+    ui.ctx().memory(|m| m.data.get_temp(image_id(ui)))
+}
+
+fn image_id(ui: &egui::Ui) -> egui::Id {
+    ui.id().with("thumb_image_rect")
+}
+
 pub fn cell(
     ui: &mut egui::Ui,
     box_size: egui::Vec2,
@@ -147,6 +158,8 @@ pub fn cell_with(
             egui::Image::new(tex)
                 .corner_radius(egui::CornerRadius::same(CORNER))
                 .paint_at(ui, at);
+            ui.ctx()
+                .memory_mut(|m| m.data.insert_temp(image_id(ui), at));
         }
         None => {
             ui.painter().rect_filled(
@@ -154,6 +167,8 @@ pub fn cell_with(
                 egui::CornerRadius::same(CORNER),
                 crate::theme::tokens::of(ui).raised,
             );
+            ui.ctx()
+                .memory_mut(|m| m.data.insert_temp(image_id(ui), rect));
         }
     }
     let mut badge_end: Option<f32> = None;

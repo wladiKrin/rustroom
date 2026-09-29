@@ -349,8 +349,9 @@ mod tests {
         let seen: Vec<Option<[u32; 2]>> = (0..3)
             .map(|_| record_once(&ctx, &mut settings, small))
             .collect();
-        // 80% of 400 is 320, below Compact's 340 default and above its 300 minimum.
-        assert_eq!(seen[0], Some([320, 140]), "clamped to the viewport");
+        // 80% of 400 is 320, below Compact's 340 default and above its 300 minimum. The height
+        // is Compact's default, 160 since direction B's 44-pt head and 52-pt foot (2026-09-29).
+        assert_eq!(seen[0], Some([320, 160]), "clamped to the viewport");
         assert!(
             seen.iter().all(|s| *s == seen[0]),
             "and then stable, got {seen:?}"

@@ -404,7 +404,13 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
 
                             // ⚠ In Appearance because stacking is a **browsing** decision, the same
                             // reasoning that keeps the format filter out of the Develop toolbar.
-                            ui.label("Stacking");
+                            // ⚠ Pinned to the first row's height, so it reads beside the checkbox
+                            // rather than drifting to the foot of its two-row cell.
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(0.0, theme::tokens::CONTROL_ROW),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| ui.label("Stacking"),
+                            );
                             ui.vertical(|ui| {
                                 ui.checkbox(
                                     &mut d.stacking.enabled,

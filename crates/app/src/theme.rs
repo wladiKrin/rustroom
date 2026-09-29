@@ -505,9 +505,11 @@ impl DialogSize {
     /// The size a dialog of this class opens at when it has never been resized.
     pub fn default_size(self) -> (f32, f32) {
         match self {
-            Self::Compact => (340.0, 140.0),
-            Self::Standard => (520.0, 320.0),
-            Self::Wide => (680.0, 480.0),
+            Self::Compact => (340.0, 160.0),
+            // ⚠ Taller with direction B's 28-pt rows: at 320 the Appearance tab needed a
+            // scrollbar for five rows (seen 2026-09-29).
+            Self::Standard => (520.0, 440.0),
+            Self::Wide => (680.0, 560.0),
         }
     }
 }

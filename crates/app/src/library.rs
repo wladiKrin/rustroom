@@ -712,11 +712,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                         // `cell_with` allocates with `Sense::hover()`, and a click
                                         // in this app has to be *collected* and applied after the
                                         // closure releases `lib`. ⚠ Top-right, because the Immich
-                                        // download badge already owns the top-left.
+                                        // download badge already owns the top-left — and the
+                                        // top-right **of the picture**, not of the cell, or a
+                                        // portrait's badge floated in the empty corner beside it.
                                         if let Some(st) = e.stack {
                                             if let Some(k) = rustroom_app::stack::key_of(&e.id.path)
                                             {
-                                                let full = ui.min_rect();
+                                                let full =
+                                                    thumb::image_rect(ui).unwrap_or(cell_resp.rect);
                                                 let pill = egui::Rect::from_min_size(
                                                     egui::pos2(
                                                         full.right() - STACK_BADGE.x - 4.0,
