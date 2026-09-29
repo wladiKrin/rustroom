@@ -6,6 +6,7 @@ pub mod ai_coverage;
 pub mod ai_space;
 pub mod ai_worker;
 pub mod auto_tone_tool;
+pub mod bar_plan;
 pub mod batch_export;
 pub mod brush_tool;
 pub mod buffer_cache;

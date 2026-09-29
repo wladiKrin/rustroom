@@ -117,10 +117,22 @@ const BUFFER_CACHE_CAP: usize = 3;
 const PREVIEW_TEXTURE_BUDGET: usize = 6 * 52 * 1024 * 1024;
 
 fn main() -> eframe::Result<()> {
-    let native_options = eframe::NativeOptions {
+    let mut native_options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
+    // ⚠ MEASUREMENT SWITCH (2026-09-29): `RUSTROOM_DEBUG_WINDOW=1440x875` opens the window at that
+    // inner size, top left of the main display — how the design language's "nothing overlaps on a
+    // 13-inch MacBook Pro" is checked. The window ignores Accessibility resizes, and macOS
+    // otherwise restores whatever size the last instance closed at.
+    if let Some((w, h)) = std::env::var("RUSTROOM_DEBUG_WINDOW")
+        .ok()
+        .and_then(|v| rustroom_app::bar_plan::parse_size(&v))
+    {
+        native_options.viewport = egui::ViewportBuilder::default()
+            .with_inner_size([w, h])
+            .with_position([0.0, 25.0]);
+    }
     eframe::run_native(
         "Rustroom",
         native_options,
