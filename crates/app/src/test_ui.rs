@@ -140,6 +140,8 @@ pub struct Node {
     pub expandable: bool,
     /// That state: `Some(false)` is a closed section.
     pub expanded: Option<bool>,
+    /// Where it was drawn — nothing when AccessKit reported no bounds.
+    pub rect: egui::Rect,
 }
 
 /// Every node one frame of `body` produces, on [`screen`].
@@ -177,6 +179,12 @@ pub fn nodes_on(
             clickable: node.supports_action(egui::accesskit::Action::Click),
             expandable: node.is_expanded().is_some(),
             expanded: node.is_expanded(),
+            rect: node.bounds().map_or(egui::Rect::NOTHING, |b| {
+                egui::Rect::from_min_max(
+                    egui::pos2(b.x0 as f32, b.y0 as f32),
+                    egui::pos2(b.x1 as f32, b.y1 as f32),
+                )
+            }),
         })
         .collect()
 }

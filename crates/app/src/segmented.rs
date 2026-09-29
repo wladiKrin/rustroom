@@ -449,14 +449,17 @@ pub fn chip_width(ui: &egui::Ui, label: &str, font: &egui::FontId) -> f32 {
 ///
 /// ⚠ Reports as a checkbox: it *is* one, drawn as a chip — the format filter's semantics did
 /// not change with its clothes.
-pub fn chip(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
+///
+/// ⚠ `hover` is required (M10.6b): a chip is a control.
+pub fn chip(ui: &mut egui::Ui, on: &mut bool, label: &str, hover: &str) -> egui::Response {
     const H: f32 = 20.0;
     let font = egui::FontId::proportional(crate::theme::tokens::CAPTION);
     let width = chip_width(ui, label, &font);
-    let (rect, mut r) = ui.allocate_exact_size(egui::vec2(width, H), egui::Sense::click());
+    let (rect, r) = ui.allocate_exact_size(egui::vec2(width, H), egui::Sense::click());
     let enabled = ui.is_enabled();
     let was = *on;
     r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, was, label));
+    let mut r = r.hover(hover);
     // ⚠ `mark_changed`, or a caller reading `changed()` — as the format filter does, exactly
     // as it read the checkbox it replaced — sees nothing and the chips are "not clickable"
     // (seen in use 2026-09-20). A hand-drawn widget has to say so itself.
@@ -837,7 +840,7 @@ mod tests {
         let mut on = true;
         let mut changed = false;
         test_ui::click(&ctx, "RAF 12", |ui| {
-            changed |= chip(ui, &mut on, "RAF 12").changed();
+            changed |= chip(ui, &mut on, "RAF 12", "Shows or hides the RAF files").changed();
         });
         assert!(!on, "a click did not toggle the chip");
         // ⚠ The format filter reads `changed()`, not the flag — a chip that flips the flag

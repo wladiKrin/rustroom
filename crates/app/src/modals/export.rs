@@ -110,7 +110,11 @@ fn watermark_body(ui: &mut egui::Ui, opts: &mut ExportOptions) {
 /// the Immich ticks are present.
 fn folder_row(ui: &mut egui::Ui, opts: &ExportOptions, pick_dir: &mut bool) {
     ui.horizontal(|ui| {
-        if ui.button("Choose…").clicked() {
+        if ui
+            .button("Choose…")
+            .hover("Chooses the folder the exports are written to")
+            .clicked()
+        {
             *pick_dir = true;
         }
         let shown = if opts.dest_dir.as_os_str().is_empty() {
@@ -433,7 +437,8 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                         if opts.format.is_lossy() {
                             ui.add(
                                 egui::Slider::new(&mut opts.quality, 1..=100).text("JPEG quality"),
-                            );
+                            )
+                            .hover("Trades file size for detail, higher keeping more");
                         }
                     });
                     // ⚠ Its own collapsed section: colour space and rendering intent are the two
@@ -454,7 +459,9 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                         for s in color::OutputSpace::ALL {
                                             ui.selectable_value(&mut opts.space, s, s.label());
                                         }
-                                    }));
+                                    })
+                                    .response
+                                    .hover("Sets the colour space the files are written in"));
                                 ui.end_row();
                                 ui.label("Rendering intent");
                                 // ⚠ Disabled, not hidden, for ProPhoto: the working space maps
@@ -481,10 +488,12 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                     });
                     section(ui, "Size", &export_summary::size(&opts), false, |ui| {
                         let mut resize = opts.max_edge.is_some();
-                        ui.checkbox(&mut resize, "Fit within a long edge");
+                        ui.checkbox(&mut resize, "Fit within a long edge")
+                            .hover("Scales each photo down so its long edge fits the size below");
                         if resize {
                             let mut edge = opts.max_edge.unwrap_or(2048);
-                            ui.add(egui::Slider::new(&mut edge, 256..=8192).text("Long edge (px)"));
+                            ui.add(egui::Slider::new(&mut edge, 256..=8192).text("Long edge (px)"))
+                                .hover("Sets the longest side of each exported photo, in pixels");
                             opts.max_edge = Some(edge);
                         } else {
                             opts.max_edge = None;

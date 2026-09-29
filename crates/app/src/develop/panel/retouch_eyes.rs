@@ -133,7 +133,8 @@ pub(super) fn list(ui: &mut egui::Ui, s: &mut Session, eyes: &mut EyeTool, ed: &
                     indent: 0.0,
                     eye: None,
                     hold: None,
-                    reorder: None,
+                    hover: "Selects this correction, so its sliders edit it",
+                    draggable: false,
                 },
             );
             if row.delete {

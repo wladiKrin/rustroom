@@ -87,6 +87,16 @@ impl CurveChannel {
         }
     }
 
+    /// The selector's hover sentence (M10.6b), beside the label so the two cannot part.
+    pub fn hover(self) -> &'static str {
+        match self {
+            Self::Rgb => "Shows the curve that shapes all three colours together",
+            Self::Red => "Shows the red channel's own curve",
+            Self::Green => "Shows the green channel's own curve",
+            Self::Blue => "Shows the blue channel's own curve",
+        }
+    }
+
     /// The channel's index into a per-channel histogram, or `None` for the composite.
     fn index(self) -> Option<usize> {
         match self {
@@ -174,7 +184,7 @@ pub fn selectors(ui: &mut egui::Ui, mode: &mut CurveMode, channel: &mut CurveCha
     let channels = CurveChannel::ALL.map(|c| Segment {
         value: c,
         label: c.label(),
-        hover: "",
+        hover: c.hover(),
         mark: c.mark(&v),
     });
     ui.add_enabled_ui(*mode == CurveMode::Point, |ui| {

@@ -89,9 +89,10 @@ pub struct RowSpec<'a> {
     /// The second toggle, left of the eye: `Some((on, verb, hover))`. A mask's is "Disable"
     /// (an edit: off in the export too); a patch's is "Hold out" (view only).
     pub hold: Option<(bool, &'a str, &'a str)>,
-    /// `Some(hover)` makes the row draggable to reorder and says so on hover; `None` keeps it
-    /// click-only (patches, eyes, presets).
-    pub reorder: Option<&'a str>,
+    /// What a click on the row does, in one sentence (M10.6b) — required, a row is a control.
+    pub hover: &'a str,
+    /// Draggable to reorder (masks and their components); patches, eyes and presets are not.
+    pub draggable: bool,
 }
 
 pub struct RowOut {
@@ -116,7 +117,7 @@ pub struct RowOut {
 pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
     // ⚠ Drag is sensed only where a reorder exists: egui separates a click from a drag by its
     // threshold, so a reorderable row still selects on a click.
-    let sense = if spec.reorder.is_some() {
+    let sense = if spec.draggable {
         egui::Sense::click_and_drag()
     } else {
         egui::Sense::click()
@@ -132,10 +133,7 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
             spec.accessible,
         )
     });
-    let resp = match spec.reorder {
-        Some(hover) => resp.hover(hover),
-        None => resp,
-    };
+    let resp = resp.hover(spec.hover);
     let v = ui.visuals().clone();
     let mut delete = false;
     let mut right = rect.right();
@@ -374,7 +372,8 @@ pub fn rows(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
                 indent: INDENT,
                 eye: None,
                 hold: None,
-                reorder: Some(COMPONENT_ROW_HOVER),
+                hover: COMPONENT_ROW_HOVER,
+                draggable: true,
             },
         );
         rects.push(out.rect);

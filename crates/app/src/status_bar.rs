@@ -463,7 +463,14 @@ fn sort_combo(app: &mut RustroomApp, ui: &mut egui::Ui, compact: bool) {
             for o in catalog::SortOrder::ALL {
                 ui.selectable_value(&mut order, o, o.label());
             }
-        });
+        })
+        .response
+        // ⚠ The compact form is the glyph alone, and the promise above that it names its order on
+        // hover had no hover behind it until M10.6b's walk found the combo mute.
+        .hover(format!(
+            "Sorts the photos by {}",
+            order.label().to_lowercase()
+        ));
     // ⚠ `apply_sort` guards on an actual change itself, since this body runs every frame and
     // re-sorting a folder of hundreds per frame is not free.
     app.apply_sort(order);
@@ -614,12 +621,15 @@ fn format_chips(app: &mut RustroomApp, ui: &mut egui::Ui, rtl: bool) {
         let label = format!("{} {count}", ext.to_uppercase());
         // ⚠ A chip with a dot rather than a checkbox: the dot carries the state in colour, the
         // semantics are the checkbox's exactly (`segmented::chip` reports as one).
+        let says = if single {
+            "The only format in this folder".to_string()
+        } else {
+            format!("Shows or hides the {} files", ext.to_uppercase())
+        };
         let r = ui
-            .add_enabled_ui(!single, |ui| segmented::chip(ui, &mut shown, &label))
+            .add_enabled_ui(!single, |ui| segmented::chip(ui, &mut shown, &label, &says))
             .inner;
-        if single {
-            r.hover("The only format in this folder");
-        } else if r.changed() {
+        if !single && r.changed() {
             toggled = Some(ext.clone());
         }
     }

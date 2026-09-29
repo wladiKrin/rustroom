@@ -253,9 +253,18 @@ fn crop(
     // ⚠ One segmented control, never a row of chips: seven chips clipped at the panel's width.
     // The lit segment is *derived* from the lock each frame, as the chips were; a lock that
     // matches nothing lights nothing.
-    let mut items: Vec<(Option<Chip>, &str, &str)> = vec![(Some(Chip::Free), "Free", "")];
-    for (label, ratio) in PRESETS {
-        items.push((Some(Chip::Preset(ratio)), label, ""));
+    // The sentences first, so the items can borrow them.
+    let says: Vec<String> = PRESETS
+        .iter()
+        .map(|(label, _)| format!("Keeps the crop at {label}"))
+        .collect();
+    let mut items: Vec<(Option<Chip>, &str, &str)> = vec![(
+        Some(Chip::Free),
+        "Free",
+        "Lets the crop take any proportion",
+    )];
+    for ((label, ratio), s) in PRESETS.iter().zip(&says) {
+        items.push((Some(Chip::Preset(*ratio)), label, s.as_str()));
     }
     items.push((
         Some(Chip::Custom),
@@ -453,11 +462,9 @@ fn perspective(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited, auto: &mut b
         let refining = !s.guides.is_empty();
         let label = if refining { "Refine guides" } else { "Auto" };
         let hint = if refining {
-            "Move each guide you drew onto the nearest strong edge. A guide with no edge near it \
-             is left exactly where you put it."
+            "Moves each guide you drew onto the nearest strong edge, leaving one with none near it"
         } else {
-            "Find two vertical edges in the photograph and solve the tilt from them. The guides \
-             it infers are left on screen so you can nudge, refine or delete them."
+            "Finds two vertical edges and straightens the tilt from them, leaving its guides to adjust"
         };
         if ui.button(label).hover(hint).clicked() {
             *auto = true;

@@ -146,7 +146,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     indent: 0.0,
                     eye: None,
                     hold: None,
-                    reorder: None,
+                    hover: "Applies this preset to the photo",
+                    draggable: false,
                 },
             );
             if out.delete {
@@ -212,6 +213,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     }
 }
 
+/// What a starter's preview and name do on a click — the same, so one sentence (M10.6b).
+const STARTER_HOVER: &str = "Applies this look to the photo";
+
 /// One starter: a small preview of the open photo through it, then its name. The whole row
 /// is the button. Without a preview yet, a quiet box of the same size holds the place.
 fn starter_row(
@@ -224,6 +228,7 @@ fn starter_row(
     let mut clicked = false;
     ui.horizontal(|ui| {
         let (rect, r) = ui.allocate_exact_size(BOX, egui::Sense::click());
+        let r = r.hover(STARTER_HOVER);
         clicked |= r.clicked();
         match tex {
             Some(t) => {
@@ -237,7 +242,7 @@ fn starter_row(
                     .rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
             }
         }
-        let label = ui.selectable_label(has, name);
+        let label = ui.selectable_label(has, name).hover(STARTER_HOVER);
         clicked |= label.clicked();
     });
     clicked

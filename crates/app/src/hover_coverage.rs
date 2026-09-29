@@ -41,10 +41,31 @@ struct Walk {
     seen: usize,
 }
 
+/// A control — it takes a click, or it is a slider, which egui's own slider does not report as
+/// clickable (it only drags) and which the author's scope names.
+fn is_control(n: &Node) -> bool {
+    (n.clickable || n.role == Role::Slider) && !n.expandable && !EXEMPT.contains(&n.role)
+}
+
+/// ⚠ egui's **built-in** slider draws its number as a separate `DragValue` with an automatic id, so
+/// no caller can give that number a description. It is covered by the described slider it belongs to
+/// — one directly left of it on the same row, which is exactly how egui lays the two out. The app's
+/// own slider describes its number itself (`develop/panel/slider.rs`).
+fn number_of_a_described_slider(n: &Node, nodes: &[Node]) -> bool {
+    n.role == Role::SpinButton
+        && nodes.iter().any(|s| {
+            s.role == Role::Slider
+                && s.description.as_deref().is_some_and(|d| !d.is_empty())
+                && s.rect.y_range().intersects(n.rect.y_range())
+                && s.rect.right() <= n.rect.left() + 1.0
+                && n.rect.left() - s.rect.right() < 40.0
+        })
+}
+
 impl Walk {
     fn check(&mut self, surface: &str, nodes: &[Node]) {
         for n in nodes {
-            if !n.clickable || n.expandable || EXEMPT.contains(&n.role) {
+            if !is_control(n) || number_of_a_described_slider(n, nodes) {
                 continue;
             }
             self.seen += 1;
@@ -280,7 +301,9 @@ fn every_clickable_control_says_what_it_does() {
     export(&mut w);
     info(&mut w);
     // ⚠ The sample first (standing lesson (b)): a walk that reached nothing would pass below.
-    assert!(w.seen > 150, "sample: only {} controls checked", w.seen);
+    // ⚠ 537 on 2026-09-30; the floor sits below it so a surface that stops drawing fails here
+    // rather than quietly shrinking the walk.
+    assert!(w.seen > 400, "sample: only {} controls checked", w.seen);
     assert!(
         w.faults.is_empty(),
         "{} controls without one short sentence:\n{}",

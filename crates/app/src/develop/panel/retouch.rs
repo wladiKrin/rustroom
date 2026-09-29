@@ -104,7 +104,8 @@ fn list(ui: &mut egui::Ui, s: &mut Session, tool: &SpotTool, ed: &mut Edited) {
             indent: 0.0,
             eye: None,
             hold: None,
-            reorder: None,
+            hover: "Edits the settings the next patch you place will use",
+            draggable: false,
         },
     );
     if out.clicked {
@@ -132,10 +133,10 @@ fn list(ui: &mut egui::Ui, s: &mut Session, tool: &SpotTool, ed: &mut Edited) {
                 hold: Some((
                     s.spot_held.get(i).copied().unwrap_or(false),
                     "Hold out",
-                    "Holds this patch out of the view so you can see what it covers. Its \
-                     outline stays. Affects only what you see — never the render or the export.",
+                    "Hides this patch in the view only, so you can see what it covers",
                 )),
-                reorder: None,
+                hover: "Selects this patch, so the sliders edit it",
+                draggable: false,
             },
         );
         if out.delete {

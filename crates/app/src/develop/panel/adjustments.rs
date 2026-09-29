@@ -728,11 +728,20 @@ pub fn show(
             // first, which would turn merely *looking* at the panel into a decision.
             let mut l = edits.applied_lens_correction();
             let mut touched = false;
-            touched |= ui.checkbox(&mut l.distortion, "Distortion").changed();
-            touched |= ui.checkbox(&mut l.tca, "Chromatic aberration").changed();
+            touched |= ui
+                .checkbox(&mut l.distortion, "Distortion")
+                .hover("Straightens the lens's barrel or pincushion bending")
+                .changed();
+            touched |= ui
+                .checkbox(&mut l.tca, "Chromatic aberration")
+                .hover("Removes the colour fringes the lens adds toward the edges")
+                .changed();
             // ⚠ Not the creative Vignette, which stays in Effects. This one is corrective and
             // pre-crop; that one is creative and post-crop. The section heading keeps them apart.
-            touched |= ui.checkbox(&mut l.vignetting, "Vignetting").changed();
+            touched |= ui
+                .checkbox(&mut l.vignetting, "Vignetting")
+                .hover("Brightens the corners the lens darkens")
+                .changed();
             // ⚠ Also surfaced in the **Crop** tool, and that is not duplication for its own sake:
             // Scale is only *judgeable* against the uncropped frame, which is what crop mode
             // shows. Here it is often invisible — if you have cropped at all, the empty corners

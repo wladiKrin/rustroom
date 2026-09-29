@@ -79,7 +79,11 @@ fn stack_format_chips(ui: &mut egui::Ui, s: &mut rustroom_app::stack::Stacking) 
     ui.horizontal_wrapped(|ui| {
         for ext in seen {
             let mut on = !s.formats.is_hidden(ext);
-            if crate::segmented::chip(ui, &mut on, &ext.to_uppercase()).changed() {
+            let says = format!(
+                "Includes {} files when grouping photos that share a name",
+                ext.to_uppercase()
+            );
+            if crate::segmented::chip(ui, &mut on, &ext.to_uppercase(), &says).changed() {
                 s.formats.toggle(ext);
             }
         }
@@ -354,10 +358,9 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             // ⚠ Swatches, not a list of names: the choice is a colour, so it is
                             // made by looking. Shown in the theme's own half of each pair.
                             let dark = ui.visuals().dark_mode;
-                            let orange_hover = "Orange — ⚠ a warm accent sits on the colour \
-                                                temperature axis, so it can colour how you judge \
-                                                white balance. Steel blue is the default for that \
-                                                reason.";
+                            let orange_hover =
+                                "Uses orange, which sits on the white-balance axis and can colour \
+                                 that judgement";
                             let items: Vec<crate::segmented::Swatch<'_, Accent>> = Accent::ALL
                                 .iter()
                                 .map(|&a| crate::segmented::Swatch {

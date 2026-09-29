@@ -298,10 +298,11 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
                 hold: Some((
                     s.edits.masks[i].disabled,
                     "Disable",
-                    "Switches the mask off: its adjustments are not applied — in the view, \
-                     the export, anywhere — until it is switched back on. Undo brings it back.",
+                    "Switches this mask off everywhere, the export included, until you switch it \
+                     back on",
                 )),
-                reorder: Some(mask_components::MASK_ROW_HOVER),
+                hover: mask_components::MASK_ROW_HOVER,
+                draggable: true,
             },
         );
         rects.push(out.rect);

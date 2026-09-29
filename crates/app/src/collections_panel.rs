@@ -265,7 +265,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                     meta: "",
                                                     selected: selected == Some(c.id),
                                                     indent: 0.0,
-                                                    hover: "",
+                                                    hover: "Shows the photos in this collection",
                                                     actions: &[
                                                         RowAction {
                                                             glyph: '×',
@@ -343,7 +343,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                     meta: "",
                                                     selected,
                                                     indent: 0.0,
-                                                    hover: "",
+                                                    hover: "Shows the photos these rules find",
                                                     actions: &[
                                                         RowAction {
                                                             glyph: '×',
