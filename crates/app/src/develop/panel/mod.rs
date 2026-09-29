@@ -21,7 +21,6 @@ pub mod snapshots;
 pub mod tone_curve;
 
 use crate::{theme, RustroomApp};
-use edit_model::Edits;
 use eframe::egui;
 use rustroom_app::tool::Tool;
 
@@ -191,6 +190,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     return;
                 }
                 let tool = app.tool;
+                // What this photo would open as untouched — the adjustments' neutral and the
+                // target of both resets (`adjustments::SourceInfo::fresh`).
+                let fresh = app.settings.initial_edits(None);
                 // ⚠ A *shared* borrow that ends on this line, so `presets::show` below can take
                 // `&mut app`. The histogram only reads.
                 if let Some(s) = &app.session {
@@ -237,7 +239,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 if ui
                                     .small_button("Reset adjustments")
                                     .on_hover_text(format!(
-                                        "Resets {} to neutral, keeping the crop and masks",
+                                        "Resets {} to how a new photo opens, keeping the crop and masks",
                                         adjustments::SECTIONS
                                             .iter()
                                             .map(|s| s.name())
@@ -246,8 +248,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                     ))
                                     .clicked()
                                 {
-                                    s.edits
-                                        .merge_from(&Edits::default(), adjustments::edit_groups());
+                                    // ⚠ To how a new photo opens, never all-off: a ticked "Apply
+                                    // lens correction to new photos" is the default, not an edit.
+                                    s.edits.merge_from(&fresh, adjustments::edit_groups());
                                     ed.discrete();
                                 }
                             },
@@ -318,6 +321,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                     // where a closure capturing `s` twice would be `E0499`.
                                     buffer: &s.buffer,
                                     hist: Some(&s.hist),
+                                    fresh: &fresh,
                                 },
                                 adjustments::Pickers {
                                     wb: Some(&mut s.picking_wb),
@@ -612,6 +616,57 @@ mod tests {
         assert_eq!(s.edits.exposure, 0.0, "the sliders were not reset");
         assert_eq!(s.edits.geometry.crop.left, 0.25, "the crop must survive");
         assert!(s.history.can_undo(), "one click, one history entry");
+    }
+
+    /// ⚠⚠ **Reported in use 2026-09-29:** with "Apply lens correction to new photos" ticked, an
+    /// untouched photo's Lens section showed a reset as though it had been edited, and both "Reset
+    /// adjustments" paths turned the default correction off. The preference is the photo's starting
+    /// point, not an edit. ⚠ Both halves: turning the correction off must still read as an edit
+    /// (the harness can see a reset at all), and the button and the menu command both restore it.
+    #[test]
+    fn a_default_lens_correction_is_not_an_edit() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 200, 100);
+        app.settings.auto_lens_correction = true;
+        let fresh = app.settings.initial_edits(None);
+        assert!(
+            fresh.lens_correction.is_some_and(|l| l.is_active()),
+            "sample: the preference must seed a correction"
+        );
+        app.session.as_mut().unwrap().edits = fresh.clone();
+        let resets = |app: &mut RustroomApp| {
+            crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+                show(app, ui);
+            })
+            .into_iter()
+            .filter(|(l, _)| l == "reset")
+            .count()
+        };
+        assert_eq!(resets(&mut app), 0, "an untouched photo offered a reset");
+
+        app.session.as_mut().unwrap().edits.lens_correction = None;
+        assert_eq!(
+            resets(&mut app),
+            1,
+            "turning the default correction off must read as an edit"
+        );
+        crate::test_ui::click(&ctx, "Reset adjustments", |ui| {
+            show(&mut app, ui);
+        });
+        assert_eq!(
+            app.session.as_ref().unwrap().edits.lens_correction,
+            fresh.lens_correction,
+            "the panel's Reset adjustments must restore the default correction"
+        );
+
+        app.session.as_mut().unwrap().edits.lens_correction = None;
+        app.reset_adjustments();
+        assert_eq!(
+            app.session.as_ref().unwrap().edits.lens_correction,
+            fresh.lens_correction,
+            "the menu's Reset adjustments must restore it too"
+        );
     }
 
     /// ⚠⚠ **The panel must not widen frame over frame.** A row whose content is wider than the

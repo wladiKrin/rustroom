@@ -150,6 +150,15 @@ pub struct SourceInfo<'a> {
     /// The rendered frame's histogram, for the ghost behind the tone curve. `None` in a
     /// harness that has no render.
     pub hist: Option<&'a [[u32; 256]; 3]>,
+    /// What this photo would open as if it had never been edited — `Settings::initial_edits(None)`.
+    /// **The sections' neutral**: a section is modified when it differs from this, and its reset
+    /// returns to it.
+    ///
+    /// ⚠⚠ **Never `Edits::default()`** (reported in use 2026-09-29): with "Apply lens correction to
+    /// new photos" ticked every fresh photo opens with the corrections on, and measured against
+    /// all-off the Lens section showed its dot and a reset on a photo nobody had touched — and
+    /// the reset, like "Reset adjustments", turned the default correction off.
+    pub fresh: &'a edit_model::Edits,
 }
 
 /// The white-balance controls: a temperature, a tint, and the named illuminants.
@@ -471,14 +480,15 @@ pub fn show(
         baseline_ev,
         buffer,
         hist,
+        fresh,
     } = source;
     // White Balance and Tone open by default; the rest start collapsed, because a panel
     // that opens with 30 sliders showing is the problem this section structure removes.
-    section(ui, SECTIONS[0], true, edits, ed, |ui, edits, ed| {
+    section(ui, SECTIONS[0], true, fresh, edits, ed, |ui, edits, ed| {
         white_balance(ui, &mut edits.white_balance, baseline, picking, ed);
     });
 
-    section(ui, SECTIONS[1], true, edits, ed, |ui, edits, ed| {
+    section(ui, SECTIONS[1], true, fresh, edits, ed, |ui, edits, ed| {
         tone(
             ui,
             edits,
@@ -493,7 +503,7 @@ pub fn show(
         );
     });
 
-    section(ui, SECTIONS[2], false, edits, ed, |ui, edits, ed| {
+    section(ui, SECTIONS[2], false, fresh, edits, ed, |ui, edits, ed| {
         // ⚠ Vibrance first: Adobe's order, and the gentler control. Saturation clips
         // already-saturated colour far more readily, so it is the one offered second.
         ed.slider(ui, &mut edits.vibrance, -100.0..=100.0, "Vibrance", 0.0);
@@ -598,7 +608,7 @@ pub fn show(
         });
     });
 
-    section(ui, SECTIONS[3], false, edits, ed, |ui, edits, ed| {
+    section(ui, SECTIONS[3], false, fresh, edits, ed, |ui, edits, ed| {
         // ⚠ Noise Reduction above Sharpening: you must denoise before you can judge
         // sharpening, and it is the pipeline's own order. A deliberate divergence from
         // Lightroom, which puts Sharpening first.
@@ -653,7 +663,7 @@ pub fn show(
     // ⚠ Placed after Detail, not first, despite running first in the pipeline: it is on by
     // default and visited only to turn something *off*, so depth costs nothing. Panel follows
     // workflow, pipeline follows maths — the rule `SECTIONS`' own doc comment states.
-    section(ui, SECTIONS[4], false, edits, ed, |ui, edits, ed| {
+    section(ui, SECTIONS[4], false, fresh, edits, ed, |ui, edits, ed| {
         ui.label(
             egui::RichText::new(lens_status(lens, lens_profile_found))
                 .small()
@@ -704,7 +714,7 @@ pub fn show(
         super::defringe::show(ui, &mut edits.defringe, picking_fringe, ed);
     });
 
-    section(ui, SECTIONS[5], false, edits, ed, |ui, edits, ed| {
+    section(ui, SECTIONS[5], false, fresh, edits, ed, |ui, edits, ed| {
         let v = &mut edits.vignette;
         ed.help_scope = rustroom_app::slider_help::Scope::Vignette;
         ed.slider(ui, &mut v.amount, -100.0..=100.0, "Amount", 0.0);
@@ -737,11 +747,13 @@ fn section(
     ui: &mut egui::Ui,
     s: Section,
     open_by_default: bool,
+    fresh: &edit_model::Edits,
     edits: &mut edit_model::Edits,
     ed: &mut Edited,
     body: impl FnOnce(&mut egui::Ui, &mut edit_model::Edits, &mut Edited),
 ) {
-    let modified = edits.group_differs(&edit_model::Edits::default(), s.index());
+    // ⚠ Against the photo's own starting point, never all-off — `SourceInfo::fresh`.
+    let modified = edits.group_differs(fresh, s.index());
     let mut out = super::section::header(
         ui,
         ui.make_persistent_id(s.name()),
@@ -752,10 +764,7 @@ fn section(
     );
     out.show_body(ui, |ui| body(ui, edits, ed));
     if out.reset {
-        edits.merge_from(
-            &edit_model::Edits::default(),
-            edit_model::EditGroups::only(s.index()),
-        );
+        edits.merge_from(fresh, edit_model::EditGroups::only(s.index()));
         ed.discrete();
     }
 }
@@ -1027,6 +1036,7 @@ mod tests {
                     baseline_ev: None,
                     buffer: &buf,
                     hist: None,
+                    fresh: &edit_model::Edits::default(),
                 },
                 Pickers::default(),
                 &mut ed,
@@ -1080,6 +1090,7 @@ mod tests {
                     baseline_ev: None,
                     buffer: &buf,
                     hist: None,
+                    fresh: &edit_model::Edits::default(),
                 },
                 Pickers {
                     wb: None,
@@ -1143,6 +1154,7 @@ mod tests {
                         baseline_ev: None,
                         buffer: &buf,
                         hist: None,
+                        fresh: &edit_model::Edits::default(),
                     },
                     Pickers::default(),
                     &mut ed,
@@ -1225,6 +1237,7 @@ mod tests {
                         baseline_ev: None,
                         buffer: &buf,
                         hist: None,
+                        fresh: &edit_model::Edits::default(),
                     },
                     Pickers::default(),
                     &mut ed,
@@ -1307,6 +1320,7 @@ mod tests {
                         baseline_ev: None,
                         buffer: buf,
                         hist: None,
+                        fresh: &edit_model::Edits::default(),
                     },
                     Pickers::default(),
                     ed,
@@ -1347,6 +1361,7 @@ mod tests {
                         baseline_ev: None,
                         buffer: buf,
                         hist: None,
+                        fresh: &edit_model::Edits::default(),
                     },
                     Pickers::default(),
                     ed,
@@ -1387,6 +1402,7 @@ mod tests {
                         baseline_ev: None,
                         buffer: buf,
                         hist: None,
+                        fresh: &edit_model::Edits::default(),
                     },
                     Pickers::default(),
                     ed,

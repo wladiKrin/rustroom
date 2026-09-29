@@ -290,13 +290,16 @@ impl RustroomApp {
     ///
     /// ⚠ Scoped, for the reason the button's own comment gives: under an exclusive panel each
     /// tool resets its own domain and must not discard a crop or a mask the user cannot see.
+    ///
+    /// ⚠⚠ To how a new photo opens (`Settings::initial_edits(None)`), never all-off: with "Apply
+    /// lens correction to new photos" ticked the corrections are the default, not an edit, and a
+    /// reset that turned them off undid a preference (reported in use 2026-09-29).
     pub(crate) fn reset_adjustments(&mut self) {
         let tool = self.tool;
+        let fresh = self.settings.initial_edits(None);
         let Some(s) = &mut self.session else { return };
-        s.edits.merge_from(
-            &Edits::default(),
-            develop::panel::adjustments::edit_groups(),
-        );
+        s.edits
+            .merge_from(&fresh, develop::panel::adjustments::edit_groups());
         s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
         if s.history.push(s.edits.clone()) {
             if let Some(path) = self.open_photo() {
