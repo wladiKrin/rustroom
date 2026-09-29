@@ -17,13 +17,25 @@ use rustroom_app::view_region;
 /// 0.2x and imperceptible at 8x.
 const ZOOM_STEP: f32 = 1.25;
 
+/// Whether the zoom keys act on the **pending** view: a photo still decoding with no session of
+/// its own. ⚠⚠ A ghost session (`ghost.rs`) is the pending photo's own and is what the canvas
+/// draws, so the keys must reach it — the first version checked `pending` first and ⌘1 moved a
+/// view nobody could see (reported 2026-09-29).
+fn pending_is_the_view(app: &RustroomApp) -> bool {
+    match (&app.pending, &app.session) {
+        (Some(p), Some(s)) => !(s.path == p.id.path && s.copy == p.id.copy),
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
 fn zoom_by(app: &mut RustroomApp, factor: f32) {
-    // ⚠ The pending preview first (M9.14, 2026-09-29): while a photo decodes, the zoom keys act
-    // on the picture that is on screen, not on the previous session behind it.
-    if let Some(p) = &mut app.pending {
-        p.zoom = view_region::zoom_step(p.zoom, factor);
-        if p.zoom <= view_region::MIN_ZOOM {
-            p.pan = egui::Vec2::ZERO;
+    if pending_is_the_view(app) {
+        if let Some(p) = &mut app.pending {
+            p.zoom = view_region::zoom_step(p.zoom, factor);
+            if p.zoom <= view_region::MIN_ZOOM {
+                p.pan = egui::Vec2::ZERO;
+            }
         }
     } else if let Some(s) = &mut app.session {
         s.zoom = view_region::zoom_step(s.zoom, factor);
@@ -93,16 +105,19 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
         Command::ZoomIn => zoom_by(app, ZOOM_STEP),
         Command::ZoomOut => zoom_by(app, 1.0 / ZOOM_STEP),
         Command::FitView => {
-            if let Some(p) = &mut app.pending {
-                p.zoom = 1.0;
-                p.pan = egui::Vec2::ZERO;
+            if pending_is_the_view(app) {
+                if let Some(p) = &mut app.pending {
+                    p.zoom = 1.0;
+                    p.pan = egui::Vec2::ZERO;
+                }
             } else if let Some(s) = &mut app.session {
                 s.zoom = 1.0;
                 s.pan = egui::Vec2::ZERO;
             }
         }
         Command::ZoomActual => {
-            if let Some(p) = &mut app.pending {
+            let pending_view = pending_is_the_view(app);
+            if let Some(p) = app.pending.as_mut().filter(|_| pending_view) {
                 // ⚠ 1:1 against the **preview** while the photo decodes: one preview pixel per
                 // point. On an X-T4 the camera JPEG is 71% of the RAW, so this sits between the
                 // half-size buffer's 1:1 and the true one; the session inherits the zoom, and
@@ -267,6 +282,55 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
 mod tests {
     use super::*;
     use rustroom_app::composition_guides::CompositionGuide;
+
+    /// ⌘1 with a **ghost session** for the pending photo zooms the session — the view on
+    /// screen — to the preview's 1:1, and leaves the pending view alone.
+    #[test]
+    fn the_zoom_keys_reach_a_ghost_session_not_the_pending_view_behind_it() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 8, 4);
+        let id = {
+            let s = app.session.as_mut().unwrap();
+            s.buffer_is_ghost = true;
+            s.buffer_is_full_res = false;
+            rustroom_app::photo_id::PhotoId::new(s.path.clone(), s.copy)
+        };
+        let req = app.preview_request(id.clone(), app.session.as_ref().unwrap().edits.clone());
+        app.preview_textures.insert(
+            req.key(),
+            (
+                crate::test_app::texture(&ctx, "ghost-preview", 64, 32),
+                rustroom_app::preview_loader::PreviewSource::Camera,
+            ),
+            64 * 32 * 4,
+        );
+        app.pending = Some(crate::PendingOpen {
+            id,
+            placeholder: None,
+            start_at: std::time::Instant::now() + std::time::Duration::from_secs(3600),
+            seq: None,
+            preview_request: req,
+            zoom: 1.0,
+            pan: egui::Vec2::ZERO,
+            fit_long: 0.0,
+        });
+        execute(&mut app, &ctx, Command::ZoomActual);
+        let s = app.session.as_ref().unwrap();
+        // fit_cap of an 8-px buffer is 8, fit_scale 1: 64 px of preview at 1:1 is 8× fit.
+        assert!(
+            (s.zoom - 8.0).abs() < 1e-3,
+            "the session did not zoom to the preview's 1:1: {}",
+            s.zoom
+        );
+        assert_eq!(
+            app.pending.as_ref().unwrap().zoom,
+            1.0,
+            "the pending view was touched"
+        );
+        execute(&mut app, &ctx, Command::FitView);
+        assert_eq!(app.session.as_ref().unwrap().zoom, 1.0);
+    }
 
     /// 2026-09-29: ⌘1 while a photo decodes zooms the pending preview to its own 1:1; ⌘0 and
     /// ⌘− act on it too. Before, the keys reached only the previous session behind it.

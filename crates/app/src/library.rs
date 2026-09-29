@@ -589,13 +589,26 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // cannot both happen from one gesture.
         bg_clicked = bg.clicked();
 
-        // The cell's geometry: a square picture box and a height that is exactly the box, the
-        // caption and the marks row — `cell_layout::grid_cell`'s rule.
+        // The cell's geometry: a picture box in the aspect of the majority orientation on
+        // screen, and a height that is exactly the box, the caption and the marks row —
+        // `cell_layout::grid_cell`'s rule. ⚠ The sample is the first 200 visible thumbnails
+        // already loaded, not a stat per frame over thousands.
         let layout = {
             let spacing_y = ui.spacing().item_spacing.y;
             let caption_h = ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(name_size)));
+            let aspect = rustroom_app::cell_layout::majority_aspect(
+                visible
+                    .iter()
+                    .take(200)
+                    .filter_map(|&i| lib.cache.get_stale(&lib.entries[i].id))
+                    .map(|t| {
+                        let v = t.size_vec2();
+                        (v.x, v.y)
+                    }),
+            );
             rustroom_app::cell_layout::grid_cell(
                 cell,
+                aspect,
                 caption_h,
                 thumb::marks_row_height(name_size * MARK_SCALE),
                 spacing_y,
@@ -664,7 +677,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         ui.push_id(&cell_id, |ui| {
                             // The picture gets the cell's height minus the caption and the
                             // marks row — `cell_layout::thumb_box`'s rule.
-                            let box_size = egui::vec2(layout.box_side, layout.box_side);
+                            let box_size = egui::vec2(layout.box_w, layout.box_h);
                             let cell_size = egui::vec2(cell, layout.height);
                             let resp = ui
                                 .allocate_ui(cell_size, |ui| {

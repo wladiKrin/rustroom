@@ -250,6 +250,17 @@ square — a **square picture box** with the picture sitting on its bottom edge,
 exactly the box, the caption and the marks row (`cell_layout::grid_cell`). *(5)* Survey's pinch
 ceiling 900 → 2400 pt. ⚠ The Survey rebuild of the first look stays reverted.
 
+**The author's third look (02:45):** *(1)* ⌘1 dead again — the zoom commands checked
+`pending` first, and with a ghost session the pending entry still exists for the decode, so ⌘1
+moved a pending view the canvas never draws. `commands::pending_is_the_view` now says which of
+the two is on screen; pinned by `the_zoom_keys_reach_a_ghost_session_not_the_pending_view_behind_it`.
+*(2)* The grid "became worse: elongated, even larger gaps" — the square box stretched every
+landscape cell. The box now takes the **aspect of the majority orientation on screen**
+(`cell_layout::majority_aspect` over the loaded thumbnails: 3:2 for a landscape folder, 2:3 for
+a portrait one), the cell is exactly the box, the caption and the marks row, and the picture
+sits on the box's bottom edge. The minority orientation is smaller inside that box; no uniform
+box avoids that, and the majority is what the eye scans.
+
 **Not verified in use, and why:** the driven look was attempted at 01:35 and the screen was at
 the login window — nothing could be captured. The author's look: an untouched RAF at 1:1 in
 Develop shows "Camera preview" within a fraction of a second and hands over to the live render
