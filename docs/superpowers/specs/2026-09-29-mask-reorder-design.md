@@ -33,8 +33,10 @@ Both lists are **append-only, delete-any** today.
   under the selected mask) drag to change the order its shapes combine in. A click still selects; a
   drag past egui's threshold moves.
 - **While dragging:** a 2-pt accent line (`selection.bg_fill`) at the insertion slot, as in the
-  Library rail. For components, a slot the top-row rule forbids draws **no line**, and releasing
-  there does nothing.
+  Library rail. The slot is decided by the rows' **midpoints** — the upper half of a row is
+  "before it", the lower half "after it" (the plan's refinement: the Library's past-the-top rule
+  makes a drop on the row above a no-op at 30 pt). For components, a slot the top-row rule forbids
+  draws **no line**, and releasing there does nothing.
 - **The base is an Add onto nothing**, which is what makes base moves exact: when a refinement
   becomes the top row its `Add` is dropped (the op column goes blank), and the old base becomes an
   `Add` refinement in its new place (the op column shows `+`). Coverage is unchanged by that
@@ -66,21 +68,23 @@ Both lists are **append-only, delete-any** today.
     `moved(_, from, to)`. Used for both `selected_mask` and `selected_component`.
   - `component_drop_allowed(m: &MaskedAdjustment, from, to) -> bool` — true when the row that
     would end on top is the base or an `Add` refinement, and the move is in range.
-  - `move_component(m: &MaskedAdjustment, from, to) -> Option<MaskedAdjustment>` — `None` when the
-    drop is not allowed or changes nothing; otherwise the composite rebuilt from the new order: the
-    top row's shape is `mask`, every other row a `Refinement` keeping its op, the old base as `Add`.
-    `adjustments` and `disabled` are untouched.
+  - `move_component(m: &mut MaskedAdjustment, selected: &mut usize, from, to) -> bool` — false
+    when the drop is not allowed or changes nothing; otherwise the composite rebuilt in place from
+    the new order (the top row's shape is `mask`, every other row a `Refinement` keeping its op, the
+    old base as `Add`; `adjustments` and `disabled` untouched) and `selected` moved with its shape.
+  - `move_mask(masks, shown, selected: &mut Option<usize>, from, to) -> bool` — the masks and the
+    eye flags by one permutation, the selection with its mask (the plan's refinement: both moves
+    update their selection themselves, so the bin cannot apply one and forget the other).
 
 **Bin:**
 
 - `mask_components::row` senses `click_and_drag` and reports `drag_started`, `dragging` and
   `released` in `RowOut`, plus the row's top edge; the hover sentence is a new `RowSpec` field
   (patch and preset rows that share `row` pass none and keep click-only sensing).
-- `masks::list` collects each mask row's top, paints the line from `panel_order::drop_index`, and on
-  release applies `moved` to `edits.masks` **and** `mask_shown`, then `index_after_move` to
-  `selected_mask`.
+- `masks::list` collects each mask row's rect, paints the line from `panel_order::drop_index` over
+  the rows' midpoints, and on release calls `mask_order::move_mask`.
 - `mask_components::rows` does the same for components through `component_drop_allowed` /
-  `move_component`, then `index_after_move` to `selected_component`.
+  `move_component`.
 - Drag state across frames is egui's own (`dragged()` on a stable row id), so no new `Session`
   field. ⚠ If a row's id turns out unstable across the drag, give the row an explicit id rather
   than adding a session field.
