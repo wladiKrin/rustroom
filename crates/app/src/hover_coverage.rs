@@ -75,7 +75,7 @@ impl Walk {
                     n.label, n.role
                 )),
                 Some(d) => {
-                    if let Some(f) = crate::theme::sentence_fault(d) {
+                    if let Some(f) = rustroom_app::slider_help::sentence_fault(d) {
                         self.faults
                             .push(format!("{surface}: {:?}: {f}: {d:?}", n.label));
                     }

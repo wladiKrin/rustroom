@@ -396,24 +396,6 @@ pub fn describe(r: &egui::Response, sentence: &str) {
         .accesskit_node_builder(r.id, |n| n.set_description(sentence.to_owned()));
 }
 
-/// Why `t` is not one short sentence, or `None` — the rule `every_hover_is_one_short_sentence` sweeps
-/// the sources with and `hover_coverage` checks every drawn description against (`DESIGN.md` §8).
-#[cfg(test)]
-pub(crate) fn sentence_fault(t: &str) -> Option<&'static str> {
-    let t = t.trim();
-    if t.chars().count() > 110 {
-        Some("over 110 characters")
-    } else if t.contains(". ") || t.contains('\n') || t.contains("; ") {
-        Some("more than one sentence")
-    } else if t.ends_with('.') && !t.ends_with('…') {
-        Some("a trailing full stop")
-    } else if t.contains('⚠') || t.to_lowercase().contains("double-click to reset") {
-        Some("a warning or the reset phrase")
-    } else {
-        None
-    }
-}
-
 /// A line of secondary text under a control: a value, a state, an empty list's note.
 ///
 /// ⚠⚠ **Not an explanation.** Since 2026-09-29 explanations live on hover (`docs/DESIGN.md` §8);
@@ -1559,7 +1541,7 @@ mod tests {
             if t.is_empty() {
                 continue;
             }
-            if let Some(fault) = super::sentence_fault(t) {
+            if let Some(fault) = rustroom_app::slider_help::sentence_fault(t) {
                 bad.push(format!("{at}: {fault}: {t:?}"));
             }
         }

@@ -376,7 +376,17 @@ export, preview builds and Immich downloads (existing rule).
   (`every_edit_slider_has_hover_help`, `every_geometry_slider_has_hover_help`) require to be
   empty. `a_shared_label_says_what_it_does_where_it_is` and `an_ambiguous_label_needs_its_scope`
   pin the rule. **This is the shape to copy** for any other control that wants a table. Every
-  other control still carries its sentence at the call site (`.on_hover_text`), under the sweep.
+  other control carries its sentence at the call site.
+- **Every clickable control has its sentence, and it is checked on the drawn app (M10.6b).** A
+  sentence goes through `theme::Hover` — `.hover(sentence)` — which shows it and makes it the
+  control's **AccessKit description**; `on_hover_text` is called nowhere else
+  (`no_bare_on_hover_text_outside_theme`). The shared widgets take the sentence as a **required**
+  argument — a dialog footer's primary (`Footer::confirm`), dialog tabs, segmented controls, chips,
+  the mask/patch/preset row — so a new one cannot ship mute. `hover_coverage` draws every surface a
+  harness reaches and fails on a clickable control (sliders included) with no description, or one that
+  `slider_help::sentence_fault` rejects. **Exempt:** section headers (they carry an *expanded* state),
+  menu items, text fields, and labels (selectable text, not controls). **Not reached, and said so:**
+  Compare, Survey, the canvas overlays, the Import dialog.
 - **What moved on 2026-09-29:** the camera-profile note (the combo), the curve's gestures (the
   curve; a value still shows while a point is in play), the parametric and defringe instructions,
   the Settings tier / resampler / Immich paragraphs (their controls, the chosen option's line
@@ -406,7 +416,8 @@ export, preview builds and Immich downloads (existing rule).
 
 Text ≥ 4.5:1 including Caption; non-text ≥ 3:1 (one deliberate exception: a list row's action glyph
 *at rest*, §7.6, which the pointer on the row brings to full contrast); targets ≥ 28 pt tall; every icon-only control
-has an accessibility label (`widget_info`) *and* a tooltip; Escape / Return work in every
+has an accessibility label (`widget_info`) *and* a tooltip — and every control's hover sentence is
+also its AccessKit description, which a screen reader reads (§8); Escape / Return work in every
 dialog; nothing conveyed by colour alone (the modified dot sits beside a name; a selected
 segment is also lighter).
 
@@ -415,7 +426,7 @@ segment is also lighter).
 | Rule | Code |
 |---|---|
 | Text styles (§3) | `theme::tune`: `Small` 11, `Body`/`Button`/`Monospace` 13, `Heading` 20, named `"section"` 11 and `"title"` 15; `theme::title_font`, `theme::medium_font`; `no_literal_font_size_outside_theme` sweeps the sources |
-| Hover sentences (§8) | `slider_help.rs` (lib: `Scope`, `HslTab`, `text`); `Edited::help_scope` / `missing_help`; `theme::every_hover_is_one_short_sentence` sweeps the rest |
+| Hover sentences (§8) | `slider_help.rs` (lib: `Scope`, `HslTab`, `text`, **`sentence_fault`** — the one rule); `Edited::help_scope` / `missing_help`; **`theme::Hover`** (`.hover`, `.hover_titled`, `describe`); `hover_coverage.rs` walks the drawn app; `theme::every_hover_is_one_short_sentence` sweeps the sources |
 | Surfaces, text greys, sizes, radii (§4.1, §5) | `theme::tokens` (`tokens::of(ui)` for a painter); `theme::surfaces` maps them onto egui's slots, per theme |
 | Accent pairs, text on the accent (§4.2) | `settings::Accent` + `theme::accent_color`; `theme::on_accent`; `text_on_every_accent_is_readable` |
 | Metrics (§5) | `theme::tune`: `interact_size.y` 28, `item_spacing` 8 × 2, `button_padding` 10 × 4, radius 6, dialogs and menus 12, `tooltip_delay` 0.4, `tooltip_width` 280 |
@@ -459,3 +470,4 @@ data in the lib crate and testable headless; only the drawing lives in the bin m
 | 2026-09-29 | **Built.** Reindex moved back behind ⋯ with Expand all / Stack all — the 2026-09-23 call took it out of a one-item menu and set the condition "if a second Library action ever wants this corner, reconsider the menu then"; that happened | Reindex as a bar button |
 | 2026-09-29 | A list row's actions **always drawn**, `text3` at rest and `text` under the pointer on the row, a `raised` face under the pointed one; action cells **20** wide (`tokens::ROW_ACTION`) — the author, after trying M10.6a | actions drawn only under the pointer (P-13); 30-wide cells |
 | 2026-09-29 | The list-row action glyph at rest **fainter**: `text3` at 55 % (`tokens::ACTION_REST`), below the 3:1 floor by choice | `text3` at rest |
+| 2026-09-30 | **Every clickable control carries one hover sentence, as its AccessKit description too** — one helper, required sentences on the shared widgets, and a walk over the drawn app (537 controls) | sentences at call sites under a source sweep only |

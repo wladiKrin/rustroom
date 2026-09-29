@@ -245,6 +245,26 @@ const BANDS: [&str; 8] = [
     "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta",
 ];
 
+/// Why `t` is not one short sentence, or `None` — the house rule for **every** hover in the app
+/// (`DESIGN.md` §8): at most 110 characters, one sentence, no full stop, no warning, no reset phrase.
+/// The source sweep (`theme::every_hover_is_one_short_sentence`) and the drawn-app walk
+/// (`hover_coverage`) both read it, so the two cannot drift; this table's own test adds stricter
+/// limits for the sliders on top.
+pub fn sentence_fault(t: &str) -> Option<&'static str> {
+    let t = t.trim();
+    if t.chars().count() > 110 {
+        Some("over 110 characters")
+    } else if t.contains(". ") || t.contains('\n') || t.contains("; ") {
+        Some("more than one sentence")
+    } else if t.ends_with('.') && !t.ends_with('…') {
+        Some("a trailing full stop")
+    } else if t.contains('⚠') || t.to_lowercase().contains("double-click to reset") {
+        Some("a warning or the reset phrase")
+    } else {
+        None
+    }
+}
+
 /// The help sentence for a slider, if it has one: the scope's own table first, then [`GLOBAL`].
 pub fn text(scope: Scope, label: &str) -> Option<String> {
     if let Scope::Hsl(tab) = scope {
@@ -308,11 +328,23 @@ mod tests {
     /// ⚠⚠ The author's rule (2026-09-29): "it should simply state what it does exactly in one,
     /// clear sentence", and no "Double-click to reset" on each. Checked over every sentence the
     /// table can produce, so a new entry cannot drift back into paragraphs.
+    /// The shared rule, both halves: each fault is named, and a good sentence has none.
+    #[test]
+    fn sentence_fault_names_each_way_a_hover_goes_wrong() {
+        assert_eq!(sentence_fault("Shows the photos in this collection"), None);
+        assert!(sentence_fault("Two sentences. Here").is_some());
+        assert!(sentence_fault("Ends with a stop.").is_some());
+        assert!(sentence_fault("⚠ A warning").is_some());
+        assert!(sentence_fault(&"x".repeat(111)).is_some());
+        assert!(sentence_fault("Line one\nline two").is_some());
+    }
+
     #[test]
     fn every_sentence_is_one_short_sentence() {
         let all = all();
         assert!(all.len() > 60, "sample: {}", all.len());
         for (at, t) in &all {
+            assert_eq!(sentence_fault(t), None, "{at}: {t:?}");
             assert!(!t.ends_with('.'), "{at}: no full stop — {t:?}");
             assert!(
                 !t.contains(". ") && !t.contains("; "),
