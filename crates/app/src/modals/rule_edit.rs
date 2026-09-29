@@ -13,6 +13,7 @@ use crate::RustroomApp;
 use eframe::egui;
 use rustroom_app::rule::{Cmp, Criterion};
 use rustroom_app::rule_form::{Match, Row};
+use crate::theme::Hover as _;
 
 /// Every kind a new row can be, in the order the dropdown offers them.
 ///
@@ -345,7 +346,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     if ui
                         .button("×")
-                        .on_hover_text("Removes this condition")
+                        .hover("Removes this condition")
                         .clicked()
                     {
                         drop_row = Some(ri);

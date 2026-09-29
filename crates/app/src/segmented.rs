@@ -15,6 +15,7 @@
 
 use crate::theme;
 use eframe::egui;
+use crate::theme::Hover as _;
 
 /// A segmented control: one full-width well, `items.len()` equal columns, exactly one lit.
 ///
@@ -227,7 +228,7 @@ pub fn segmented_marked<T: PartialEq + Copy>(
         let r = if hover.is_empty() {
             r
         } else {
-            r.on_hover_text(*hover)
+            r.hover(*hover)
         };
         let enabled = ui.is_enabled();
         let selected = *current == *item;
@@ -382,7 +383,7 @@ pub fn pill<T: PartialEq + Copy>(
         let r = if it.hover.is_empty() {
             r
         } else {
-            r.on_hover_text(it.hover)
+            r.hover(it.hover)
         };
         let enabled = ui.is_enabled();
         let selected = *current == it.value;
@@ -552,9 +553,9 @@ pub fn swatches<T: PartialEq + Copy>(
             r.mark_changed();
         }
         let r = if it.hover.is_empty() {
-            r.on_hover_text(it.label)
+            r.hover(it.label)
         } else {
-            r.on_hover_text(it.hover)
+            r.hover(it.hover)
         };
         let p = ui.painter();
         if *current == it.value {

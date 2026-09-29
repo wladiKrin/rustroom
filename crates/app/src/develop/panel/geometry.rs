@@ -16,6 +16,7 @@ use crate::Session;
 use eframe::egui;
 use rustroom_app::composition_guides::CompositionGuide;
 use rustroom_app::crop_tool;
+use crate::theme::Hover as _;
 
 /// One entry of the aspect row.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -190,7 +191,7 @@ fn crop(
             egui::Button::new(egui::RichText::new(glyph).size(crate::theme::tokens::ICON))
                 .min_size(egui::vec2(CROP_ROW, CROP_ROW)),
         )
-        .on_hover_text(hover)
+        .hover(hover)
         .clicked()
     };
     let mut swap = false;
@@ -233,7 +234,7 @@ fn crop(
             |ui| {
                 swap = ui
                     .add(egui::Button::new("Swap").min_size(egui::vec2(0.0, CROP_ROW)))
-                    .on_hover_text("Switches the crop between landscape and portrait")
+                    .hover("Switches the crop between landscape and portrait")
                     .clicked();
             },
         );
@@ -328,7 +329,7 @@ fn crop(
                         }
                     })
                     .response
-                    .on_hover_text(
+                    .hover(
                         "Chooses the guide drawn inside the crop (O cycles through them)",
                     );
             },
@@ -369,7 +370,7 @@ fn level_button(ui: &mut egui::Ui, armed: bool) -> egui::Response {
             "Straighten by drawing a line",
         )
     });
-    let resp = resp.on_hover_text(
+    let resp = resp.hover(
         "Straightens the photo along a line you drag over something that should be level",
     );
     if ui.is_rect_visible(rect) {
@@ -445,7 +446,7 @@ fn perspective(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited, auto: &mut b
     ui.horizontal(|ui| {
         if ui
             .toggle_value(&mut s.show_guides, "Guide mode")
-            .on_hover_text(
+            .hover(
                 "Corrects perspective from lines you draw along edges that should be vertical or horizontal",
             )
             .changed()
@@ -461,12 +462,12 @@ fn perspective(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited, auto: &mut b
             "Find two vertical edges in the photograph and solve the tilt from them. The guides \
              it infers are left on screen so you can nudge, refine or delete them."
         };
-        if ui.button(label).on_hover_text(hint).clicked() {
+        if ui.button(label).hover(hint).clicked() {
             *auto = true;
         }
         if ui
             .add_enabled(refining, egui::Button::new("Clear"))
-            .on_hover_text("Removes the guide lines, keeping the corrections they made")
+            .hover("Removes the guide lines, keeping the corrections they made")
             .clicked()
         {
             clear_guides(s);

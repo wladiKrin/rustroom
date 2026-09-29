@@ -14,6 +14,7 @@
 use crate::develop::panel::Edited;
 use eframe::egui;
 use rustroom_app::looks::LooksState;
+use crate::theme::Hover as _;
 
 /// The camera-rendering checkbox and, directly under it, the look controls.
 pub fn rendering(
@@ -25,7 +26,7 @@ pub fn rendering(
     let mut rendered = edits.applied_rendering() == edit_model::Rendering::Camera;
     if ui
         .checkbox(&mut rendered, "Camera rendering")
-        .on_hover_text(
+        .hover(
             "Renders the photo with the camera's own tone and colour, instead of a flat colorimetric look",
         )
         .changed()

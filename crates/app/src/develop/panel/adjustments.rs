@@ -8,6 +8,7 @@ use crate::theme;
 use edit_model::HslBand;
 use eframe::egui;
 use rustroom_app::wb_tool::{self, WbPreset};
+use crate::theme::Hover as _;
 
 /// Which of an [`HslBand`]'s three values the HSL selector is showing.
 ///
@@ -234,7 +235,7 @@ pub(crate) fn white_balance(
             // saying so.
             if ui
                 .selectable_label(*picking, "Pick a neutral")
-                .on_hover_text(
+                .hover(
                     "Sets white balance from a spot you click that should be neutral grey",
                 )
                 .clicked()
@@ -264,7 +265,7 @@ pub(crate) fn white_balance(
             }
         })
         .response
-        .on_hover_text(
+        .hover(
             "Sets the temperature for a common light source such as daylight or tungsten",
         );
     });
@@ -339,7 +340,7 @@ pub(crate) fn tone(
     // its Auto on its own row in the Tone panel for the same reason.
     if ui
         .button("Auto")
-        .on_hover_text("Sets Exposure, Whites and Blacks automatically from the histogram")
+        .hover("Sets Exposure, Whites and Blacks automatically from the histogram")
         .clicked()
     {
         rustroom_app::auto_tone_tool::apply(edits, buffer, baseline_ev);
@@ -596,7 +597,7 @@ pub fn show(
             // has no hover parameter and the trailing closure owns the right of the row, so "color
             // grading" is carried by the checkbox's hover rather than half-added here.
             theme::sub_label_with(ui, "Tint by tone", |ui| {
-                ui.checkbox(show_grade_range, "Show range").on_hover_text(
+                ui.checkbox(show_grade_range, "Show range").hover(
                     "Tints the preview where the selected range applies, without changing the photo",
                 );
             });

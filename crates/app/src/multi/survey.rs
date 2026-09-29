@@ -22,6 +22,7 @@ use rustroom_app::preview_loader::PreviewRequest;
 use rustroom_app::selection::Selection;
 use rustroom_app::thumb_loader::ThumbRequest;
 use rustroom_app::tile_layout;
+use crate::theme::Hover as _;
 
 /// A cell whose image area exceeds this on either side draws the preview rather than the
 /// 512-px thumbnail (M9.14).
@@ -374,7 +375,7 @@ fn tile_buttons(
         }
         let r = ui
             .interact(at, base.with(("tilebtn", i)), egui::Sense::click())
-            .on_hover_text(hint);
+            .hover(hint);
         if r.hovered() || focused {
             ui.painter().text(
                 at.center(),

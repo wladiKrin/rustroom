@@ -23,6 +23,7 @@ pub mod tone_curve;
 use crate::{theme, RustroomApp};
 use eframe::egui;
 use rustroom_app::tool::Tool;
+use crate::theme::Hover as _;
 
 /// Accumulates, over one frame of the panel, whether the photo changed and whether a drag
 /// settled into a history entry.
@@ -241,7 +242,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                             |ui| {
                                 if ui
                                     .small_button("Reset adjustments")
-                                    .on_hover_text(format!(
+                                    .hover(format!(
                                         "Resets {} to how a new photo opens, keeping the crop and masks",
                                         adjustments::SECTIONS
                                             .iter()
@@ -530,7 +531,7 @@ fn camera_profile_row(app: &mut RustroomApp, ui: &mut egui::Ui) {
     const PROFILE_HELP: &str =
         "Chooses this camera's colour profile, including any .dcp file you put in the profiles folder";
     ui.horizontal(|ui| {
-        ui.label("Camera profile").on_hover_text(PROFILE_HELP);
+        ui.label("Camera profile").hover(PROFILE_HELP);
         egui::ComboBox::from_id_salt("camera_profile_pick")
             .selected_text(label)
             .show_ui(ui, |ui| {
@@ -543,7 +544,7 @@ fn camera_profile_row(app: &mut RustroomApp, ui: &mut egui::Ui) {
                 }
             })
             .response
-            .on_hover_text(PROFILE_HELP);
+            .hover(PROFILE_HELP);
     });
     // ⚠ A change guard like its neighbours: this body runs every frame, and `apply_camera_profile`
     // rebuilds two decode workers and re-decodes the open photo.

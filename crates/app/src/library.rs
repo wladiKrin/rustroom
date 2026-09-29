@@ -6,6 +6,7 @@ use eframe::egui;
 use rustroom_app::photo_id::PhotoId;
 use rustroom_app::thumb_loader::ThumbRequest;
 use std::path::PathBuf;
+use crate::theme::Hover as _;
 
 /// The Library grid: thumbnails, selection, double-click / Enter to open in Develop.
 /// The entry indices whose cells the rubber band touches.
@@ -135,7 +136,7 @@ fn empty_library(ui: &mut egui::Ui) -> Option<rustroom_app::menu::Command> {
         };
         if ui
             .add(big("Open a folder…"))
-            .on_hover_text("Opens a folder of photos (⇧⌘O)")
+            .hover("Opens a folder of photos (⇧⌘O)")
             .clicked()
         {
             picked = Some(rustroom_app::menu::Command::OpenFolder);
@@ -143,7 +144,7 @@ fn empty_library(ui: &mut egui::Ui) -> Option<rustroom_app::menu::Command> {
         ui.add_space(6.0);
         if ui
             .add(big("Import from a card…"))
-            .on_hover_text("Copies new photos from a memory card into dated folders (⇧⌘I)")
+            .hover("Copies new photos from a memory card into dated folders (⇧⌘I)")
             .clicked()
         {
             picked = Some(rustroom_app::menu::Command::Import);
@@ -768,7 +769,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                     },
                                                 );
                                                 let clicked = r.clicked();
-                                                let _ = r.on_hover_text(if st.expanded {
+                                                let _ = r.hover(if st.expanded {
                                                     "Collapses this stack to one photo"
                                                 } else {
                                                     "Shows every file in this stack"

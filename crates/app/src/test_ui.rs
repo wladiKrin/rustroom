@@ -126,6 +126,58 @@ pub fn labelled_rects_on(
         .collect()
 }
 
+/// One AccessKit node, as the hover-coverage walk reads it (M10.6b).
+#[derive(Debug, Clone)]
+pub struct Node {
+    /// The label, or the value for a node without one (a combo box).
+    pub label: String,
+    pub role: egui::accesskit::Role,
+    /// What `theme::Hover` recorded — the control's hover sentence.
+    pub description: Option<String>,
+    /// Offers a click: a control, not a label.
+    pub clickable: bool,
+    /// Carries an open/closed state — a section header.
+    pub expandable: bool,
+}
+
+/// Every node one frame of `body` produces, on [`screen`].
+pub fn nodes(ctx: &egui::Context, body: impl FnMut(&mut egui::Ui)) -> Vec<Node> {
+    nodes_on(ctx, screen(), body)
+}
+
+/// [`nodes`] on a screen of the caller's size — the top bar wants a wide one.
+pub fn nodes_on(
+    ctx: &egui::Context,
+    screen_rect: egui::Rect,
+    body: impl FnMut(&mut egui::Ui),
+) -> Vec<Node> {
+    let out = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(screen_rect),
+            ..Default::default()
+        },
+        body,
+    );
+    let Some(update) = out.platform_output.accesskit_update else {
+        return Vec::new();
+    };
+    update
+        .nodes
+        .iter()
+        .map(|(_, node)| Node {
+            label: node
+                .label()
+                .or_else(|| node.value())
+                .unwrap_or_default()
+                .to_owned(),
+            role: node.role(),
+            description: node.description().map(str::to_owned),
+            clickable: node.supports_action(egui::accesskit::Action::Click),
+            expandable: node.is_expanded().is_some(),
+        })
+        .collect()
+}
+
 /// The numeric value of every widget that reports one — a `Slider` or a `DragValue` — after
 /// laying `body` out once.
 ///

@@ -6,6 +6,7 @@
 
 use eframe::egui;
 use rustroom_app::tool::Tool;
+use crate::theme::Hover as _;
 
 /// Rail width in points.
 ///
@@ -62,7 +63,7 @@ fn entry(ui: &mut egui::Ui, t: Tool, picked: bool) -> egui::Response {
         egui::vec2(ui.available_width(), height),
         egui::Sense::click(),
     );
-    let resp = resp.on_hover_text(t.label());
+    let resp = resp.hover(t.label());
     let enabled = ui.is_enabled();
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, t.label()));
 

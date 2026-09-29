@@ -15,6 +15,7 @@ use rustroom_app::export_presets::ExportPreset;
 use rustroom_app::export_summary;
 use rustroom_app::filename_template::{NameFacts, Template};
 use rustroom_app::settings::ConfirmOutcome;
+use crate::theme::Hover as _;
 
 /// What a DNG is — the Format combo's hover. ⚠ It was a paragraph under the Colour section,
 /// shown whenever DNG was chosen (`docs/DESIGN.md` §8).
@@ -71,7 +72,7 @@ fn metadata_body(ui: &mut egui::Ui, opts: &mut ExportOptions) {
                     export::MetadataScope::CopyrightOnly,
                 ] {
                     ui.selectable_value(&mut opts.metadata.scope, s, s.label())
-                        .on_hover_text(HOVER);
+                        .hover(HOVER);
                 }
             });
             ui.end_row();
@@ -86,7 +87,7 @@ fn watermark_body(ui: &mut egui::Ui, opts: &mut ExportOptions) {
         .show(ui, |ui| {
             ui.label("Text");
             ui.text_edit_singleline(&mut opts.watermark.text)
-                .on_hover_text("Sets the watermark text, which scales with the exported image");
+                .hover("Sets the watermark text, which scales with the exported image");
             ui.end_row();
             ui.label("Corner");
             egui::ComboBox::from_id_salt("watermark_corner")
@@ -281,7 +282,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                         ui.add_space(6.0);
                         let save = ui
                             .button("+ Save current…")
-                            .on_hover_text("Saves these export settings as a preset");
+                            .hover("Saves these export settings as a preset");
                         // ⚠ The accessible name is the sentence, as the Presets panel's.
                         save.widget_info(|| {
                             egui::WidgetInfo::labeled(
@@ -358,7 +359,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                                 ui.label(
                                                     egui::RichText::new(format!("→ {when}")).weak(),
                                                 )
-                                                .on_hover_text(
+                                                .hover(
                                                     "Sets the date the photo carries in Immich",
                                                 );
                                             }
@@ -368,7 +369,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                             // IS a new picture, and replacing the old asset would
                                             // mean deleting one.
                                             ui.label(egui::RichText::new(note).weak())
-                                                .on_hover_text(
+                                                .hover(
                                                     "Exporting again uploads a second photo unless the file is byte-identical",
                                                 );
                                         }
@@ -404,7 +405,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                             egui::TextEdit::singleline(&mut opts.filename_template)
                                 .desired_width(f32::INFINITY),
                         )
-                        .on_hover_text(rustroom_app::filename_template::token_hover());
+                        .hover(rustroom_app::filename_template::token_hover());
                         if let Err(e) = Template::parse(&opts.filename_template) {
                             theme::error_hint(ui, &e.to_string());
                         }
@@ -423,7 +424,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                         }
                                     })
                                     .response
-                                    .on_hover_text(DNG_NOTE);
+                                    .hover(DNG_NOTE);
                                 ui.end_row();
                             });
                         // ⚠ Hidden, not disabled, for a lossless format: at this size a disabled
@@ -466,7 +467,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                             }
                                         })
                                         .response
-                                        .on_hover_text(
+                                        .hover(
                                             "Chooses how colours outside the output's range are brought inside it",
                                         );
                                 });
@@ -498,7 +499,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                 egui::Slider::new(&mut opts.output_sharpening.amount, 0..=100)
                                     .text("Amount"),
                             )
-                            .on_hover_text(
+                            .hover(
                                 "Sharpens the finished file to restore the edges lost in resizing",
                             );
                         },
@@ -517,7 +518,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                 }
                             })
                             .response
-                            .on_hover_text(
+                            .hover(
                                 "Sets the RAW demosaic quality for this export, where higher is slower",
                             );
                         },

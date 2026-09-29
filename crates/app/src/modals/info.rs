@@ -7,6 +7,7 @@ use crate::modals::{dialog, Footer, Modal};
 use crate::theme;
 use crate::RustroomApp;
 use eframe::egui;
+use crate::theme::Hover as _;
 
 /// The description fields' hover. ⚠ It was a paragraph under them (`docs/DESIGN.md` §8).
 const SHARED_NOTE: &str =
@@ -218,11 +219,11 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                 3 => {
                     grid(ui, "info_description", |ui| {
                         ui.label(egui::RichText::new("Title").weak())
-                            .on_hover_text(SHARED_NOTE);
+                            .hover(SHARED_NOTE);
                         ui.text_edit_singleline(&mut draft.edited.title);
                         ui.end_row();
                         ui.label(egui::RichText::new("Caption").weak())
-                            .on_hover_text(SHARED_NOTE);
+                            .hover(SHARED_NOTE);
                         ui.add(
                             egui::TextEdit::multiline(&mut draft.edited.caption)
                                 .desired_rows(2)
@@ -230,11 +231,11 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         );
                         ui.end_row();
                         ui.label(egui::RichText::new("Copyright").weak())
-                            .on_hover_text(SHARED_NOTE);
+                            .hover(SHARED_NOTE);
                         ui.text_edit_singleline(&mut draft.edited.copyright);
                         ui.end_row();
                         ui.label(egui::RichText::new("Creator").weak())
-                            .on_hover_text(SHARED_NOTE);
+                            .hover(SHARED_NOTE);
                         ui.text_edit_singleline(&mut draft.edited.creator);
                         ui.end_row();
                     });

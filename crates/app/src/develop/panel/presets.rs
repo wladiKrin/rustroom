@@ -17,6 +17,7 @@ use edit_model::EditGroups;
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
 use rustroom_app::thumb_loader::ThumbRequest;
+use crate::theme::Hover as _;
 
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     enum Action {
@@ -56,7 +57,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             |ui| {
                 let r = ui
                     .button("+ Save current…")
-                    .on_hover_text("Saves this photo's settings as a new preset");
+                    .hover("Saves this photo's settings as a new preset");
                 // ⚠ The accessible name is the old sentence: the harness and a screen reader
                 // get what the button does, not its short form.
                 let enabled = ui.is_enabled();

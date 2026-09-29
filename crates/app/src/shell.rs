@@ -14,6 +14,7 @@ use rustroom_app::icons;
 use rustroom_app::menu::{self, Command};
 use rustroom_app::photo_id::PhotoId;
 use rustroom_app::render_engine::RegionRect;
+use crate::theme::Hover as _;
 
 impl eframe::App for RustroomApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -711,7 +712,7 @@ fn export_button(ui: &mut egui::Ui) -> egui::Response {
         theme::primary_button(ui, &format!("{} Export…", icons::EXPORT), true)
     })
     .inner
-    .on_hover_text("Exports the selected photos (⌘E)")
+    .hover("Exports the selected photos (⌘E)")
 }
 
 /// Rating, flag and colour-label filtering, in one popup.
@@ -826,7 +827,7 @@ fn mark_filter(app: &mut RustroomApp, ui: &mut egui::Ui, compact: bool) {
                     }
                 });
         });
-    button.on_hover_text(if compact {
+    button.hover(if compact {
         label.as_str()
     } else {
         "Shows only the photos with the ratings, flags, labels, cameras or lenses you choose"

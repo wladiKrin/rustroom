@@ -13,6 +13,7 @@ use crate::{theme, RustroomApp};
 use eframe::egui;
 use rustroom_app::icons;
 use rustroom_app::settings::PanelSection;
+use crate::theme::Hover as _;
 
 /// One collapsible section of the panel: the Develop panel's header, draggable.
 ///
@@ -77,7 +78,7 @@ fn new_item_row(
         |ui| {
             let plus = ui
                 .add_enabled(named && extra, egui::Button::new("+"))
-                .on_hover_text(plus_hover)
+                .hover(plus_hover)
                 .clicked();
             let field = ui.add_sized(
                 egui::vec2(ui.available_width(), size.y),

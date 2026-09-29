@@ -10,6 +10,7 @@ use edit_model::{EyeKind, SpotMode};
 use eframe::egui;
 use rustroom_app::eye_tool::{EyeTool, FALLBACK_CATCHLIGHT};
 use rustroom_app::{mask_tool, spot_tool};
+use crate::theme::Hover as _;
 
 /// The Retouch tool's four modes. Derived, never stored: `SpotTool::mode` and `EyeTool::active`
 /// are the two facts, and this is their product.
@@ -191,7 +192,7 @@ pub(super) fn settings(ui: &mut egui::Ui, s: &mut Session, tool: &mut EyeTool, e
         let mut on = sel.map_or(tool.catchlight, |i| s.edits.eyes[i].catchlight.is_some());
         if ui
             .checkbox(&mut on, "Catchlight")
-            .on_hover_text("Adds a small highlight to the pupil so it looks alive")
+            .hover("Adds a small highlight to the pupil so it looks alive")
             .changed()
         {
             tool.catchlight = on;

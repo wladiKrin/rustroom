@@ -25,6 +25,7 @@
 use eframe::egui;
 use rustroom_app::slider_map;
 use std::ops::RangeInclusive;
+use crate::theme::Hover as _;
 
 /// The label column. The widest labels today ("Radius (px)", "Smoothness") fit; a wider one
 /// truncates and shows in full on hover.
@@ -171,9 +172,9 @@ impl egui::Widget for Slider<'_> {
             // ⚠ The help sits on the **name**, where a reader looks for it; an elided name shows
             // itself in full first.
             let label_resp = match (&help, elided) {
-                (Some(h), true) => label_resp.on_hover_text(format!("{label}\n{h}")),
-                (Some(h), false) => label_resp.on_hover_text(h.as_str()),
-                (None, true) => label_resp.on_hover_text(label),
+                (Some(h), true) => label_resp.hover_titled(label, h),
+                (Some(h), false) => label_resp.hover(h.as_str()),
+                (None, true) => label_resp.hover(label),
                 (None, false) => label_resp,
             };
 
@@ -237,6 +238,12 @@ impl egui::Widget for Slider<'_> {
             let now = *value as f64;
             let enabled = ui.is_enabled();
             resp.widget_info(|| egui::WidgetInfo::slider(enabled, now, label));
+            // ⚠ The rail is what AccessKit calls the slider, and its sentence sits on the name above;
+            // the rail carries it as its description too, so a screen reader and `hover_coverage`
+            // find it on the control itself (M10.6b).
+            if let Some(h) = &help {
+                crate::theme::describe(&resp, h);
+            }
 
             if ui.is_rect_visible(rect) {
                 let v = ui.visuals().clone();

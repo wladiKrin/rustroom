@@ -13,6 +13,7 @@ use crate::theme;
 use edit_model::ToneCurve;
 use eframe::egui;
 use rustroom_app::tone_curve_tool as tool;
+use crate::theme::Hover as _;
 
 /// Widest the editor is drawn, and it stays **fixed** while the panel grows. The widget is square —
 /// a tone curve read against a non-square box misleads about its slope.
@@ -135,7 +136,7 @@ pub fn reset_button(ui: &mut egui::Ui, curve: &mut ToneCurve, ed: &mut Edited) {
     // disappears is harder to learn than one that greys out.
     let r = ui
         .add_enabled(!curve.points.is_empty(), egui::Button::new("Reset"))
-        .on_hover_text("Resets the curve to a straight line");
+        .hover("Resets the curve to a straight line");
     if r.clicked() {
         // ⚠ Cleared to *empty*, not to the two identity endpoints: empty is what keeps
         // `ToneCurveStage` out of the pipeline entirely.
@@ -226,7 +227,7 @@ pub fn show(
         allocated.expect("the horizontal closure always runs")
     };
     // ⚠ How to work it is the hover, never a standing line (`docs/DESIGN.md` §8).
-    let resp = resp.on_hover_text(GESTURE_HELP);
+    let resp = resp.hover(GESTURE_HELP);
 
     // ⚠ Which point a drag grabbed has to survive between frames, or re-hit-testing each frame
     // would let a fast drag jump to whichever point the pointer happened to pass over. egui's

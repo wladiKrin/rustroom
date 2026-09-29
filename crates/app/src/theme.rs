@@ -362,6 +362,58 @@ fn tune(style: &mut egui::Style) {
     // fill already carries the signal.
 }
 
+/// Every hover sentence goes through here (M10.6b): it is shown as the tooltip **and** becomes the
+/// control's AccessKit description — which a screen reader reads, and which `hover_coverage` checks on
+/// every clickable control the harnesses can draw. ⚠ `on_hover_text` itself is called nowhere else;
+/// `no_bare_on_hover_text_outside_theme` holds that.
+pub trait Hover {
+    /// Show `sentence` on hover and record it as this control's description.
+    fn hover(self, sentence: impl AsRef<str>) -> Self;
+    /// `title` on its own line above `sentence` in the tooltip — an elided name shown in full — with
+    /// `sentence` alone as the description.
+    fn hover_titled(self, title: &str, sentence: &str) -> Self;
+}
+
+impl Hover for egui::Response {
+    fn hover(self, sentence: impl AsRef<str>) -> Self {
+        let s = sentence.as_ref();
+        describe(&self, s);
+        self.on_hover_text(s)
+    }
+
+    fn hover_titled(self, title: &str, sentence: &str) -> Self {
+        describe(&self, sentence);
+        self.on_hover_text(format!("{title}\n{sentence}"))
+    }
+}
+
+/// Record `sentence` as a control's description without a tooltip of its own — for a node whose
+/// sentence is shown by its neighbour: a slider's rail, whose sentence sits on its name.
+///
+/// ⚠ A no-op while AccessKit is off, which is every frame without a screen reader or a test.
+pub fn describe(r: &egui::Response, sentence: &str) {
+    r.ctx
+        .accesskit_node_builder(r.id, |n| n.set_description(sentence.to_owned()));
+}
+
+/// Why `t` is not one short sentence, or `None` — the rule `every_hover_is_one_short_sentence` sweeps
+/// the sources with and `hover_coverage` checks every drawn description against (`DESIGN.md` §8).
+#[cfg(test)]
+pub(crate) fn sentence_fault(t: &str) -> Option<&'static str> {
+    let t = t.trim();
+    if t.chars().count() > 110 {
+        Some("over 110 characters")
+    } else if t.contains(". ") || t.contains('\n') || t.contains("; ") {
+        Some("more than one sentence")
+    } else if t.ends_with('.') && !t.ends_with('…') {
+        Some("a trailing full stop")
+    } else if t.contains('⚠') || t.to_lowercase().contains("double-click to reset") {
+        Some("a warning or the reset phrase")
+    } else {
+        None
+    }
+}
+
 /// A line of secondary text under a control: a value, a state, an empty list's note.
 ///
 /// ⚠⚠ **Not an explanation.** Since 2026-09-29 explanations live on hover (`docs/DESIGN.md` §8);
@@ -1247,6 +1299,7 @@ mod tests {
                 // An empty state's prose is `*_TEXT`, not a hover (DESIGN.md §7.14).
                 for pat in [
                     "on_hover_text(",
+                    ".hover(",
                     "hover: ",
                     "HINT: &str =",
                     "HELP: &str =",
@@ -1277,6 +1330,51 @@ mod tests {
     /// the sources so a paragraph cannot creep back in one reasonable-looking call at a time — the
     /// way the 177 of them had become essays, warnings and measurements. `slider_help` checks its
     /// own table the same way. ⚠ Sample and a positive control first.
+    /// ⚠ The helper's whole point: the sentence becomes the control's description.
+    #[test]
+    fn a_hover_is_the_controls_description() {
+        let ctx = crate::test_ui::ctx();
+        let nodes = crate::test_ui::nodes(&ctx, |ui| {
+            let _ = ui.button("Go").hover("Goes somewhere");
+        });
+        let go = nodes.iter().find(|n| n.label == "Go").expect("drawn");
+        assert!(go.clickable, "a button offers a click");
+        assert_eq!(go.description.as_deref(), Some("Goes somewhere"));
+    }
+
+    /// ⚠⚠ Every hover goes through `Hover`, or the description — and the coverage walk — is
+    /// bypassed. Swept over the non-test code of every source; a positive control first: this file's
+    /// own call must be found, or the sweep is reading nothing.
+    #[test]
+    fn no_bare_on_hover_text_outside_theme() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![root.clone()];
+        let (mut own, mut bare) = (0, Vec::new());
+        while let Some(dir) = stack.pop() {
+            for e in std::fs::read_dir(&dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                if p.extension().is_none_or(|x| x != "rs") {
+                    continue;
+                }
+                let src = std::fs::read_to_string(&p).unwrap();
+                let code = src.split("#[cfg(test)]").next().unwrap_or("");
+                let n = code.matches(".on_hover_text(").count();
+                let rel = p.strip_prefix(&root).unwrap().display().to_string();
+                if rel == "theme.rs" {
+                    own += n;
+                } else if n > 0 {
+                    bare.push(format!("{rel}: {n}"));
+                }
+            }
+        }
+        assert!(own > 0, "the sweep did not find theme.rs's own call");
+        assert!(bare.is_empty(), "on_hover_text outside theme.rs: {bare:?}");
+    }
+
     #[test]
     fn every_hover_is_one_short_sentence() {
         assert_eq!(
@@ -1292,12 +1390,8 @@ mod tests {
             if t.is_empty() {
                 continue;
             }
-            let long = t.chars().count() > 110;
-            let sentences = t.contains(". ") || t.contains('\n') || t.contains("; ");
-            let stop = t.ends_with('.') && !t.ends_with("…");
-            let noise = t.contains('⚠') || t.to_lowercase().contains("double-click to reset");
-            if long || sentences || stop || noise {
-                bad.push(format!("{at}: {t:?}"));
+            if let Some(fault) = super::sentence_fault(t) {
+                bad.push(format!("{at}: {fault}: {t:?}"));
             }
         }
         assert!(

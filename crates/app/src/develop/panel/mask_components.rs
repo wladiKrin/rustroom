@@ -8,6 +8,7 @@ use crate::Session;
 use eframe::egui;
 use rustroom_app::mask_kind::MaskKind;
 use rustroom_app::{mask_order, mask_tool};
+use crate::theme::Hover as _;
 
 /// The mask at component `j` — `0` is the base, `j > 0` the `j-1`th refinement.
 ///
@@ -132,7 +133,7 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         )
     });
     let resp = match spec.reorder {
-        Some(hover) => resp.on_hover_text(hover),
+        Some(hover) => resp.hover(hover),
         None => resp,
     };
     let v = ui.visuals().clone();
@@ -147,7 +148,7 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         let name = format!("Delete {}", spec.accessible);
         let r = ui
             .interact(cell, resp.id.with("delete"), egui::Sense::click())
-            .on_hover_text("Deletes this mask");
+            .hover("Deletes this mask");
         r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
         delete = r.clicked();
         if r.hovered() {
@@ -165,7 +166,7 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         let name = format!("Show {}", spec.accessible);
         let r = ui
             .interact(cell, resp.id.with("eye"), egui::Sense::click())
-            .on_hover_text("Shows this mask's overlay on the photo");
+            .hover("Shows this mask's overlay on the photo");
         r.widget_info(|| {
             egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, &name)
         });
@@ -191,7 +192,7 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         let name = format!("{verb} {}", spec.accessible);
         let r = ui
             .interact(cell, resp.id.with("hold"), egui::Sense::click())
-            .on_hover_text(hover);
+            .hover(hover);
         r.widget_info(|| {
             egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, &name)
         });
@@ -441,7 +442,7 @@ pub fn kind_button(ui: &mut egui::Ui, kind: MaskKind, width: f32) -> egui::Respo
     resp.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, kind.menu_label())
     });
-    let resp = resp.on_hover_text(kind.hover());
+    let resp = resp.hover(kind.hover());
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
         let wv = if resp.hovered() {

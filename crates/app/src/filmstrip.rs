@@ -9,6 +9,7 @@ use crate::interaction::apply_click;
 use crate::{thumb, RustroomApp};
 use eframe::egui;
 use rustroom_app::thumb_loader::ThumbRequest;
+use crate::theme::Hover as _;
 
 /// Bottom strip of the loaded folder's thumbnails; click a cell to open that photo.
 /// The panel is resizable (drag its top border); thumbnails scale with its height.
@@ -121,7 +122,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 )
                                 .interact(egui::Sense::click())
                                 // The grid needs no hover: it draws the caption already.
-                                .on_hover_text(&caption);
+                                .hover(&caption);
                                 // The caption as the cell's accessible name too — a screen reader
                                 // and a test find the photo by it.
                                 let active_here = lib.selection.active() == Some(i);
