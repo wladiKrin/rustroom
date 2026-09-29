@@ -175,7 +175,8 @@ of albums, blank until each list is in hand. The section header's count went (as
 never had one). Albums opens by default, so the albums sit where they were, one row lower; the month
 list is now fetched with the section, not when the Timeline is opened, so the closed row shows its
 count. Each row reads its own fetch flag (`ImmichWorker::is_listing_{albums,buckets}`), and a click in
-the same frame always wins over a background request. **3266 → 3273 tests**, goldens unmoved.
+the same frame always wins over a background request. **3266 → 3273 tests**, goldens unmoved. ✅ **Confirmed
+by use 2026-09-29** (*"works"*), with a round on the row buttons requested in the same breath.
 
 **Worth keeping:**
 

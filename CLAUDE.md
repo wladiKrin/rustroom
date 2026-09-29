@@ -230,7 +230,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 
 | Milestone | Sub-items |
 |---|---|
-| **M10.6** your to-do + a design leftover | a Immich Timeline at the top — 🟡 built on `m10.6a-immich-timeline`, waiting for the author's try (`grep -n 'M10.6a' docs/JOURNAL.md`) · b a table for the non-slider hovers |
+| **M10.6** your to-do + a design leftover | a Immich Timeline at the top — ✅ confirmed by use; on `m10.6a-immich-timeline` with a row-buttons round, not yet merged (`grep -n 'M10.6a' docs/JOURNAL.md`) · b a table for the non-slider hovers |
 | **M10.7** code health | a pin lcms2's ICC creation date (reproducible exports) · b `ProfileRendering` → `TailRendering` (~270 mentions) · c temp-dir test isolation, 7 + 2 sites · d split the large files · e `PrefixCache`'s tests into `prefix_cache.rs` |
 | **M10.8** Library & workflow | a keyword suggestions · b vertical filmstrip · c stack by hand, group by capture time · d batch rename |
 | **M10.9** presets & shortcuts | a presets import/export, folders, rename · b user-defined shortcuts |
