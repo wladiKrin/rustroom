@@ -1,5 +1,11 @@
-//! The Library panel's row: a name, a count, the accent tint on the open one, and its actions
-//! as glyph cells at the right edge.
+//! The Library panel's row: a name, a count at the right edge, the accent tint on the open one,
+//! and its actions as glyph cells left of the count.
+//!
+//! ⚠⚠ **The count ends at the same x on every row, and a header's count ends there too**
+//! (`tokens::TRAILING_INSET`). The actions used to sit at the edge with the count left of them,
+//! so a folder's count (one action) and an Immich album's (two) and a section header's (none)
+//! each stood in a different column — "all the numbers should be to the most right, with the
+//! buttons to the left of them" (the author, 2026-09-29). `every_count_in_the_rail_ends_at_one_x`.
 //!
 //! The Masks list's shape (`mask_components::row`) for the Library's lists — collections,
 //! keywords, folders, smart collections — without the mask-specific glyph column, and with
@@ -9,10 +15,13 @@
 
 use eframe::egui;
 
-/// Row height in points — the Masks list's.
-pub const ROW_HEIGHT: f32 = 26.0;
+/// Row height in points — the Masks list's, `docs/DESIGN.md` §5.
+pub const ROW_HEIGHT: f32 = crate::theme::tokens::LIST_ROW;
 /// How much of the accent the open row's tint carries — the rail's value.
-const TINT: f32 = 0.18;
+const TINT: f32 = crate::theme::tokens::TINT;
+/// The room between the leftmost-reaching count and the action cell beside it. The cells carry
+/// their own padding around the glyph, so this only keeps a wide count off a cell's hit area.
+const COUNT_GAP: f32 = 2.0;
 
 /// One action cell at the right edge of a row.
 pub struct RowAction<'a> {
@@ -65,6 +74,59 @@ pub struct RowOut {
     pub response: egui::Response,
 }
 
+/// A tree row's disclosure gutter, left of its name: the triangle's width.
+pub const DISCLOSURE: f32 = 12.0;
+/// How far one tree level indents — folders, dates, the Immich timeline.
+pub const INDENT: f32 = 12.0;
+
+/// The indent a tree row at `depth` passes as [`RowSpec::indent`], leaving the gutter for its
+/// [`disclosure`] triangle.
+pub fn tree_indent(depth: usize) -> f32 {
+    depth as f32 * INDENT + DISCLOSURE
+}
+
+/// A disclosure triangle in `row`'s gutter, just left of a name drawn at `indent`; returns
+/// whether it was clicked. Call it **after** the row, so it wins the click there — the row's own
+/// actions work the same way.
+///
+/// ⚠⚠ **PAINTED, not a glyph.** The icon font is Phosphor with a version-3 `post` table — no
+/// glyph names — so a caret codepoint could only be taken from its stylesheet on trust, and this
+/// project has shipped glyphs that rendered as empty boxes (`icons.rs` records it). A painted
+/// triangle cannot be missing from a font. Moved here from `folder_rows` when the Dates and Immich
+/// timeline trees became list rows (2026-09-29).
+pub fn disclosure(
+    ui: &mut egui::Ui,
+    row: egui::Rect,
+    indent: f32,
+    open: bool,
+    id: egui::Id,
+) -> bool {
+    let centre = egui::pos2(row.left() + indent - DISCLOSURE / 2.0, row.center().y);
+    let hit = ui.interact(
+        egui::Rect::from_center_size(centre, egui::vec2(DISCLOSURE, row.height())),
+        id,
+        egui::Sense::click(),
+    );
+    let colour = ui.visuals().text_color();
+    let s = 3.5;
+    let pts = if open {
+        vec![
+            centre + egui::vec2(-s, -s * 0.6),
+            centre + egui::vec2(s, -s * 0.6),
+            centre + egui::vec2(0.0, s * 0.8),
+        ]
+    } else {
+        vec![
+            centre + egui::vec2(-s * 0.6, -s),
+            centre + egui::vec2(s * 0.8, 0.0),
+            centre + egui::vec2(-s * 0.6, s),
+        ]
+    };
+    ui.painter()
+        .add(egui::Shape::convex_polygon(pts, colour, egui::Stroke::NONE));
+    hit.clicked()
+}
+
 /// Draw one row.
 ///
 /// ⚠ The actions are registered **after** the row so they win the hit-test tie — egui takes the
@@ -101,8 +163,40 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
         )
     });
     let v = ui.visuals().clone();
+    // ⚠ The count is decoration on a closed row and information on the open one — §7.6.
+    let tk = crate::theme::tokens::of(ui);
+    let count_colour = if spec.selected { tk.text2 } else { tk.text3 };
+    let caption = egui::FontId::proportional(crate::theme::tokens::CAPTION);
+    let right_text = spec
+        .count
+        .map(|n| n.to_string())
+        .or_else(|| (!spec.meta.is_empty()).then(|| spec.meta.to_string()));
+    let count_galley = right_text.map(|s| {
+        ui.painter()
+            .layout_no_wrap(s, caption.clone(), count_colour)
+    });
+    // The count column: right-aligned at the inset, at least four digits wide so the action cells
+    // left of it stand at one x on every row below 10,000. A meta text (a snapshot's time) takes
+    // its own width.
+    let column = count_galley.as_ref().map(|g| {
+        if spec.count.is_some() {
+            let four = ui
+                .painter()
+                .layout_no_wrap("0000".to_owned(), caption.clone(), count_colour)
+                .size()
+                .x;
+            g.size().x.max(four)
+        } else {
+            g.size().x
+        }
+    });
     let mut action = None;
-    let mut right = rect.right();
+    // The actions fill in leftwards from the count column, or from the edge on a row without one.
+    let mut right = match column {
+        Some(w) => rect.right() - crate::theme::tokens::TRAILING_INSET - w - COUNT_GAP,
+        None => rect.right(),
+    };
+    let mut cells: Vec<egui::Rect> = Vec::with_capacity(spec.actions.len());
     let mut colours: Vec<egui::Color32> = Vec::with_capacity(spec.actions.len());
     // ⚠ The actions exist on every row — a screen reader or a test finds them by name — but
     // they are **drawn only under the pointer**: a "×" on every folder row at all times read as
@@ -120,8 +214,17 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
         // cursor after, so every row after the first landed on top of it ("the boxes and
         // names on the left are overlapping", seen in use 2026-09-20). The enabled flag goes
         // straight into the widget info instead.
-        let r = ui.interact(cell, resp.id.with(i), egui::Sense::click());
         let on = enabled && a.enabled;
+        // ⚠ A disabled action senses the pointer but never a click, so a click on it reaches the
+        // row. The keyword row's Tag and Untag are disabled until photos are picked, and once the
+        // count moved to the edge (2026-09-29) they stood under the middle of a short row, where a
+        // click meant to open the keyword was silently eaten.
+        let sense = if on {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        };
+        let r = ui.interact(cell, resp.id.with(i), sense);
         r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, &name));
         let r = if a.hover.is_empty() {
             r
@@ -140,6 +243,7 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
         });
         // ⚠ Advance, or the next cell lands on this one's hit area and wins the tie.
         right = cell.left();
+        cells.push(cell);
     }
     let clicked = resp.clicked() && action.is_none();
     let double_clicked = resp.double_clicked() && action.is_none();
@@ -154,7 +258,7 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
             egui::Color32::TRANSPARENT
         };
         if fill != egui::Color32::TRANSPARENT {
-            painter.rect_filled(rect, 4.0, fill);
+            painter.rect_filled(rect, crate::theme::tokens::RADIUS, fill);
         }
         let text = if spec.selected {
             v.strong_text_color()
@@ -162,24 +266,14 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
             v.widgets.inactive.fg_stroke.color
         };
         let font = egui::TextStyle::Body.resolve(ui.style());
-        // The name is clipped before the count and the actions, never over them.
+        // The name is clipped before the actions and the count, never over them — the actions'
+        // room is kept even while they are hidden, so a name does not shorten under the pointer.
         let name_right = right - 6.0;
-        let right_text = spec
-            .count
-            .map(|n| n.to_string())
-            .or_else(|| (!spec.meta.is_empty()).then(|| spec.meta.to_string()));
-        let count_galley = right_text.map(|s| {
-            painter.layout_no_wrap(s, egui::FontId::proportional(11.0), v.weak_text_color())
-        });
-        let count_w = count_galley
-            .as_ref()
-            .map(|g| g.size().x + 8.0)
-            .unwrap_or(0.0);
         // ⚠ Elided with "…", not clipped mid-glyph: "immich (downloaded" and "concert/Krinitsi"
         // were what a clip left of two folder names (P-13). The full name is the row's hover.
         let name_left = rect.left() + spec.indent + 8.0;
         let mut job = egui::text::LayoutJob::simple_singleline(spec.name.to_owned(), font, text);
-        job.wrap.max_width = (name_right - count_w - name_left).max(0.0);
+        job.wrap.max_width = (name_right - name_left).max(0.0);
         job.wrap.max_rows = 1;
         job.wrap.break_anywhere = true;
         job.wrap.overflow_character = Some('…');
@@ -191,24 +285,24 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
         );
         if let Some(g) = count_galley {
             painter.galley(
-                egui::pos2(name_right - g.size().x, rect.center().y - g.size().y / 2.0),
+                egui::pos2(
+                    rect.right() - crate::theme::tokens::TRAILING_INSET - g.size().x,
+                    rect.center().y - g.size().y / 2.0,
+                ),
                 g,
-                v.weak_text_color(),
+                count_colour,
             );
         }
-        let mut cell_x = rect.right() - ROW_HEIGHT / 2.0;
-        for (a, colour) in spec.actions.iter().zip(colours) {
-            if !pointer_here {
-                break;
+        if pointer_here {
+            for ((a, colour), cell) in spec.actions.iter().zip(colours).zip(&cells) {
+                painter.text(
+                    cell.center(),
+                    egui::Align2::CENTER_CENTER,
+                    a.glyph,
+                    egui::FontId::proportional(crate::theme::tokens::ICON),
+                    colour,
+                );
             }
-            painter.text(
-                egui::pos2(cell_x, rect.center().y),
-                egui::Align2::CENTER_CENTER,
-                a.glyph,
-                egui::FontId::proportional(if a.glyph == '×' { 17.0 } else { 15.0 }),
-                colour,
-            );
-            cell_x -= ROW_HEIGHT;
         }
     }
     RowOut {
@@ -289,6 +383,44 @@ mod tests {
         let mut out = (false, None);
         test_ui::click(&ctx, "Add to Portraits", |ui| draw(ui, &mut out));
         assert_eq!(out.1, Some(1), "the second cell was not reached");
+    }
+
+    /// ⚠ A disabled action must not eat a click meant for its row — the keyword row's Tag and Untag
+    /// are disabled until photos are picked, and stood under the middle of a short row once the
+    /// count moved to the edge (2026-09-29). ⚠ Both halves: the same cell enabled is still reached.
+    #[test]
+    fn a_click_on_a_disabled_action_reaches_the_row() {
+        let draw = |ui: &mut egui::Ui, enabled: bool, out: &mut (bool, Option<usize>)| {
+            let acts = [RowAction {
+                glyph: '+',
+                verb: "Tag",
+                hover: "",
+                enabled,
+            }];
+            let o = row(
+                ui,
+                RowSpec {
+                    name: "Europe",
+                    count: Some(3),
+                    meta: "",
+                    selected: false,
+                    indent: 0.0,
+                    hover: "",
+                    actions: &acts,
+                },
+            );
+            out.0 |= o.clicked;
+            if o.action.is_some() {
+                out.1 = o.action;
+            }
+        };
+        for (enabled, row_opens, action) in [(false, true, None), (true, false, Some(0))] {
+            let ctx = test_ui::ctx();
+            let mut out = (false, None);
+            test_ui::click(&ctx, "Tag Europe", |ui| draw(ui, enabled, &mut out));
+            assert_eq!(out.0, row_opens, "enabled: {enabled} — did the row open");
+            assert_eq!(out.1, action, "enabled: {enabled} — which action fired");
+        }
     }
 
     #[test]

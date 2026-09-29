@@ -47,16 +47,16 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         true,
         section::Header::new("Presets").trailing(&count),
     );
-    out.state.show_body_unindented(ui, |ui| {
+    out.show_body(ui, |ui| {
         // ⚠ Pinned to its width, never a bare `with_layout(right_to_left)` — the 2026-09-19
         // growth bug.
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), ui.spacing().interact_size.y + 4.0),
             egui::Layout::right_to_left(egui::Align::Center),
             |ui| {
-                let r = ui.button("+ Save current…").on_hover_text(
-                    "Keeps this photo's settings as a preset, under a name you give it",
-                );
+                let r = ui
+                    .button("+ Save current…")
+                    .on_hover_text("Saves this photo's settings as a new preset");
                 // ⚠ The accessible name is the old sentence: the harness and a screen reader
                 // get what the button does, not its short form.
                 let enabled = ui.is_enabled();

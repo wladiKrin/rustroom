@@ -143,6 +143,11 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
   saying it is 15–30 minutes predates 2026-09-23 and is wrong; so is the 2026-09-19 journal note
   calling the stall "not fixable from here".
 - **Color correctness is first-class** — validate against references early.
+- **⚠⚠ ANYTHING THE USER CAN SEE FOLLOWS `docs/DESIGN.md`** — the design language chosen on 2026-09-29
+  (direction *B · Layered*): four text sizes and nothing below 11 pt, one accent for selection and set
+  state, one form per control, a top row plus a status row each with a priority plan, hover text
+  instead of on-screen hints — one sentence, no full stop, swept by `every_hover_is_one_short_sentence`. Its §12 is the checklist for a new element; a literal font size or
+  `Color32` outside `theme.rs` is a defect. Mockups: <https://claude.ai/artifact/JK6A3tSpaXPo427cHZTZ7h>.
 - **Design the GPU seam now, build it later.** Don't leak CPU-specific types into the pipeline interface.
 - Avoid platform-specific assumptions (paths, file dialogs, GPU backend) so Win/macOS stay cheap.
 
@@ -168,7 +173,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-28)
 
-**3211 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
+**3250 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -217,6 +222,9 @@ that had grown to ~170 lines by appending.)
 review fixes' docs/JOURNAL.md`). The reviews themselves were transient and are deleted; their
 milestone-sized findings sit in `docs/BACKLOG.md` under "First-session reviews". ✅ **M9.14
 Previews** (P-20) merged 2026-09-29, confirmed by use — in the table above.
+✅ **The design language** (`docs/DESIGN.md`, direction B) — merged 2026-09-29, confirmed by use:
+tokens, four text sizes, section cards, the status row, one scoped hover sentence per control, seven
+accents, and four rounds of the author's fixes. `grep -n 'design language' docs/JOURNAL.md`.
 ✅ **Phase 9 is complete** (M9.13 merged 2026-09-28). Next is **Phase 10** (was 9), integration and
 release: M10.2
 Windows + the Linux GUI (never run), M10.3 contributor docs, M10.4 `v0.1`, M10.5 plugins. ⛔ **M10.1 was

@@ -21,7 +21,6 @@ pub mod snapshots;
 pub mod tone_curve;
 
 use crate::{theme, RustroomApp};
-use edit_model::Edits;
 use eframe::egui;
 use rustroom_app::tool::Tool;
 
@@ -43,6 +42,12 @@ pub struct Edited {
     /// One line for the status bar about what a button just did — Auto says which sliders it
     /// set and by how much, so two sliders pinned at +100 read as a result, not a fault (A-17).
     pub note: Option<String>,
+    /// Which block the next sliders belong to, for their hover sentence — set before a block,
+    /// reset after (`slider_help::Scope`).
+    pub help_scope: rustroom_app::slider_help::Scope,
+    /// Every slider drawn this frame whose scope and label found no sentence, as `Scope/label`.
+    /// ⚠ The panel tests assert it stays empty — the pairs actually drawn, not a list of labels.
+    pub missing_help: Vec<String>,
 }
 
 /// Whether `r`'s gesture is over, so its change is one undo step.
@@ -75,10 +80,13 @@ impl Edited {
         // compile error; getting it wrong fails `every_slider_resets_to_its_fields_default`.
         default: f32,
     ) -> egui::Response {
-        // ⚠ Every slider explains itself on hover, from one table, with the reset hint appended
-        // once here. A label the table does not know draws no help; the panel tests fail on it.
-        let help =
-            rustroom_app::slider_help::text(label).map(|h| format!("{h} Double-click resets it."));
+        // ⚠ Every slider explains itself on hover, from one table, in its block's scope. A pair the
+        // table does not know draws no help and is recorded; the panel tests fail on it.
+        let help = rustroom_app::slider_help::text(self.help_scope, label);
+        if help.is_none() {
+            self.missing_help
+                .push(format!("{:?}/{label}", self.help_scope));
+        }
         let r = ui.add(
             slider::Slider::new(value, range)
                 .text(label)
@@ -128,6 +136,9 @@ impl Edited {
 ///
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     let mut photo_edited = false;
+    // The tone curve's open state is a setting, toggled deep inside the session borrow below;
+    // saved once out here when it changed — `collections_panel`'s `panel_sections` shape.
+    let curve_was_open = app.settings.tone_curve_open;
     // ⚠ The Geometry panel's Auto button, applied after the panel closes: `auto_guides` needs
     // `&mut RustroomApp` while the closure below still holds `&mut app.session`, which is the
     // same reason `rename` is applied out here rather than at its call site.
@@ -145,7 +156,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
         //
         // ⚠⚠ egui's panel state is **not persisted** here, so this default is the width every launch
         // actually gets — not merely a first-run hint.
-        .default_size(320.0)
+        .default_size(316.0)
         // ⚠ `default_size` is a *wrapping* width under egui 0.35: on a fresh profile the panel came
         // up at ~214 pt, which left every slider rail 60 pt long — a 40-pt drag took Exposure
         // from 0 to +5 (both first-use reviews). The floor is what keeps the rails usable.
@@ -182,6 +193,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     return;
                 }
                 let tool = app.tool;
+                // What this photo would open as untouched — the adjustments' neutral and the
+                // target of both resets (`adjustments::SourceInfo::fresh`).
+                let fresh = app.settings.initial_edits(None);
                 // ⚠ A *shared* borrow that ends on this line, so `presets::show` below can take
                 // `&mut app`. The histogram only reads.
                 if let Some(s) = &app.session {
@@ -228,7 +242,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 if ui
                                     .small_button("Reset adjustments")
                                     .on_hover_text(format!(
-                                        "Resets {}. Leaves the crop and any masks alone.",
+                                        "Resets {} to how a new photo opens, keeping the crop and masks",
                                         adjustments::SECTIONS
                                             .iter()
                                             .map(|s| s.name())
@@ -237,8 +251,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                     ))
                                     .clicked()
                                 {
-                                    s.edits
-                                        .merge_from(&Edits::default(), adjustments::edit_groups());
+                                    // ⚠ To how a new photo opens, never all-off: a ticked "Apply
+                                    // lens correction to new photos" is the default, not an edit.
+                                    s.edits.merge_from(&fresh, adjustments::edit_groups());
                                     ed.discrete();
                                 }
                             },
@@ -273,7 +288,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                         true,
                         section::Header::new("Profile"),
                     );
-                    out.state.show_body_unindented(ui, |ui| {
+                    out.show_body(ui, |ui| {
                         camera_profile_row(app, ui);
                         if let Some(s) = &mut app.session {
                             profile::rendering(ui, &mut s.edits, &app.looks, &mut ed);
@@ -291,7 +306,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 &mut s.edits,
                                 adjustments::Channels {
                                     hsl: &mut app.hsl_channel,
+                                    curve_mode: &mut app.curve_mode,
                                     curve: &mut app.curve_channel,
+                                    curve_open: &mut app.settings.tone_curve_open,
                                     parametric_drag: app.settings.parametric_drag,
                                 },
                                 adjustments::GradeUi {
@@ -309,6 +326,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                     // where a closure capturing `s` twice would be `E0499`.
                                     buffer: &s.buffer,
                                     hist: Some(&s.hist),
+                                    fresh: &fresh,
                                 },
                                 adjustments::Pickers {
                                     wb: Some(&mut s.picking_wb),
@@ -339,6 +357,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 hsl: &mut app.mask_hsl_channel,
                                 grade: &mut app.mask_grade_range,
                                 add_mode: &mut app.mask_add_mode,
+                                curve_open: &mut app.settings.tone_curve_open,
                             },
                             masks::BrushTool {
                                 size: &mut app.brush_size,
@@ -389,6 +408,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     // `&mut app.session` rules out — the same reason `presets::show` is drawn outside it.
     if auto {
         photo_edited |= app.auto_guides();
+    }
+
+    if app.settings.tone_curve_open != curve_was_open {
+        app.save_settings();
     }
 
     // ⚠ Applied *after* the panel closes, not inside it: the commit writes the sidecar and
@@ -502,8 +525,12 @@ fn camera_profile_row(app: &mut RustroomApp, ui: &mut egui::Ui) {
         })
         .unwrap_or_else(|| "Built-in (libraw)".to_string());
 
+    // ⚠ The explanation is the combo's hover (`docs/DESIGN.md` §8), not three lines of 9-pt text
+    // under it: it said the same thing on every photo, which is what the author could not read.
+    const PROFILE_HELP: &str =
+        "Chooses this camera's colour profile, including any .dcp file you put in the profiles folder";
     ui.horizontal(|ui| {
-        ui.label("Camera profile");
+        ui.label("Camera profile").on_hover_text(PROFILE_HELP);
         egui::ComboBox::from_id_salt("camera_profile_pick")
             .selected_text(label)
             .show_ui(ui, |ui| {
@@ -514,15 +541,10 @@ fn camera_profile_row(app: &mut RustroomApp, ui: &mut egui::Ui) {
                 for e in &app.camera_profiles_cache {
                     ui.selectable_value(&mut chosen, Some(e.path.clone()), &e.name);
                 }
-            });
+            })
+            .response
+            .on_hover_text(PROFILE_HELP);
     });
-    if app.camera_profiles_cache.is_empty() {
-        theme::hint(
-            ui,
-            "Colours come from Rustroom's built-in camera data. To use a profile from your camera \
-             maker instead, put its .dcp file in the profiles folder next to your settings.",
-        );
-    }
     // ⚠ A change guard like its neighbours: this body runs every frame, and `apply_camera_profile`
     // rebuilds two decode workers and re-decodes the open photo.
     if chosen != current {
@@ -604,6 +626,169 @@ mod tests {
         assert_eq!(s.edits.exposure, 0.0, "the sliders were not reset");
         assert_eq!(s.edits.geometry.crop.left, 0.25, "the crop must survive");
         assert!(s.history.can_undo(), "one click, one history entry");
+    }
+
+    /// ⚠⚠ **Reported in use 2026-09-29:** with "Apply lens correction to new photos" ticked, an
+    /// untouched photo's Lens section showed a reset as though it had been edited, and both "Reset
+    /// adjustments" paths turned the default correction off. The preference is the photo's starting
+    /// point, not an edit. ⚠ Both halves: turning the correction off must still read as an edit
+    /// (the harness can see a reset at all), and the button and the menu command both restore it.
+    #[test]
+    fn a_default_lens_correction_is_not_an_edit() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 200, 100);
+        app.settings.auto_lens_correction = true;
+        let fresh = app.settings.initial_edits(None);
+        assert!(
+            fresh.lens_correction.is_some_and(|l| l.is_active()),
+            "sample: the preference must seed a correction"
+        );
+        app.session.as_mut().unwrap().edits = fresh.clone();
+        let resets = |app: &mut RustroomApp| {
+            crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+                show(app, ui);
+            })
+            .into_iter()
+            .filter(|(l, _)| l == "reset")
+            .count()
+        };
+        assert_eq!(resets(&mut app), 0, "an untouched photo offered a reset");
+
+        app.session.as_mut().unwrap().edits.lens_correction = None;
+        assert_eq!(
+            resets(&mut app),
+            1,
+            "turning the default correction off must read as an edit"
+        );
+        crate::test_ui::click(&ctx, "Reset adjustments", |ui| {
+            show(&mut app, ui);
+        });
+        assert_eq!(
+            app.session.as_ref().unwrap().edits.lens_correction,
+            fresh.lens_correction,
+            "the panel's Reset adjustments must restore the default correction"
+        );
+
+        app.session.as_mut().unwrap().edits.lens_correction = None;
+        app.reset_adjustments();
+        assert_eq!(
+            app.session.as_ref().unwrap().edits.lens_correction,
+            fresh.lens_correction,
+            "the menu's Reset adjustments must restore it too"
+        );
+    }
+
+    /// Every labelled rect the whole panel draws for `tool`, at a real window's size, after the
+    /// sections have settled — the panel's own width, not a harness's.
+    fn panel_rects(
+        app: &mut RustroomApp,
+        ctx: &egui::Context,
+        tool: Tool,
+    ) -> Vec<(String, egui::Rect)> {
+        app.tool = tool;
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 3000.0));
+        let mut found = Vec::new();
+        for _ in 0..3 {
+            found = crate::test_ui::labelled_rects_on(ctx, screen, |ui| {
+                show(app, ui);
+            });
+        }
+        found
+    }
+
+    fn rect_of(found: &[(String, egui::Rect)], label: &str) -> egui::Rect {
+        found
+            .iter()
+            .find(|(l, _)| l == label)
+            .map(|(_, r)| *r)
+            .unwrap_or_else(|| panic!("{label} was not drawn"))
+    }
+
+    /// ⚠⚠ The author's pick, 2026-09-29 (option A on the canvas): the curve's two choices on two rows
+    /// at the control row's height — its five labels on one compact row had shrunk to 9.35 pt in
+    /// 20-pt cells. Measured at the panel's real width.
+    #[test]
+    fn the_curve_selectors_are_two_full_height_rows() {
+        let ctx = crate::test_ui::ctx();
+        crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 200, 100);
+        let found = panel_rects(&mut app, &ctx, Tool::Edit);
+        let (point, param) = (
+            rect_of(&found, "Point curve"),
+            rect_of(&found, "Parametric"),
+        );
+        let chans = ["RGB", "Red", "Green", "Blue"].map(|l| rect_of(&found, l));
+        assert!(
+            (point.center().y - param.center().y).abs() < 0.5,
+            "the modes share a row"
+        );
+        assert!(
+            chans
+                .iter()
+                .all(|r| (r.center().y - chans[0].center().y).abs() < 0.5),
+            "the four channels share a row: {chans:?}"
+        );
+        assert!(
+            chans[0].top() > point.bottom(),
+            "the channels sit under the modes"
+        );
+        for r in chans.iter().chain([&point, &param]) {
+            assert!(
+                r.height() >= 24.0,
+                "a segment is shorter than the control row's: {r:?}"
+            );
+        }
+    }
+
+    /// ⚠⚠ The author's pick, 2026-09-29 (option B): the four mask modes as a 2 × 2 block with an
+    /// icon each, never three and one. Measured at the panel's real width.
+    #[test]
+    fn the_mask_modes_are_a_two_by_two_block() {
+        let ctx = crate::test_ui::ctx();
+        crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 200, 100);
+        let found = panel_rects(&mut app, &ctx, Tool::Masks);
+        let cells = ["New mask", "Add", "Subtract", "Intersect"].map(|l| rect_of(&found, l));
+        let mut ys: Vec<i32> = cells.iter().map(|r| r.center().y.round() as i32).collect();
+        let mut xs: Vec<i32> = cells.iter().map(|r| r.center().x.round() as i32).collect();
+        ys.sort_unstable();
+        ys.dedup();
+        xs.sort_unstable();
+        xs.dedup();
+        assert_eq!(
+            (ys.len(), xs.len()),
+            (2, 2),
+            "not two rows of two: {cells:?}"
+        );
+        assert!(
+            cells.iter().all(|r| r.height() >= 30.0),
+            "the cells are not the larger size: {cells:?}"
+        );
+    }
+
+    /// ⚠ The curve's open state is a **setting**, saved when it changes — collapsed to keep it out
+    /// of the way, it must stay collapsed across a restart. The file is read back, not the field.
+    #[test]
+    fn collapsing_the_tone_curve_is_saved() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 200, 100);
+        app.tool = Tool::Edit;
+        assert!(
+            app.settings.tone_curve_open,
+            "sample: the curve starts open"
+        );
+        crate::test_ui::click(&ctx, "Tone curve", |ui| {
+            show(&mut app, ui);
+        });
+        assert!(!app.settings.tone_curve_open, "the click did not close it");
+        assert!(
+            !app.settings_store.load().tone_curve_open,
+            "closed, but not saved — it would reopen on the next launch"
+        );
     }
 
     /// ⚠⚠ **The panel must not widen frame over frame.** A row whose content is wider than the

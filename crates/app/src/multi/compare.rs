@@ -45,20 +45,6 @@ struct Outcome {
     to_grid: bool,
 }
 
-/// The line under the two photos.
-///
-/// ⚠⚠ Named rather than inline **so the glyph probe can reach it**. Its arrows shipped as tofu
-/// boxes because they were chosen without checking — the fifth time this project has done that,
-/// after the rail's four glyphs, the mark badges, the keyword checkmarks and the perspective
-/// arrows. A literal inside a `RichText::new(..)` call cannot be probed by a test.
-///
-/// ⚠ `<-` and `->` as ASCII, not `←`/`→`: neither arrow is in any bundled font.
-/// Also swept by `theme::every_menu_string_is_renderable`.
-pub(crate) const INSTRUCTION: &str =
-    "← → move the bordered photo · Enter or a click moves the border · \
-                           digits, P, X and U rate it · scroll pans and pinch zooms, each pane \
-                           on its own";
-
 /// The photo the reference must step around: the candidate when there is one, else itself.
 ///
 /// ⚠ `step`'s first "held still" argument is *excluded* from the walk, so passing the reference
@@ -309,7 +295,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         });
 
         // ── Draw ─────────────────────────────────────────────────────────────────────────
-        ui.label(egui::RichText::new(INSTRUCTION).weak());
 
         let stage = multi::stage(ui);
         // ⚠ `pair`, never `survey(2, ..)`: Compare is side by side at every window shape,
@@ -932,7 +917,18 @@ mod tests {
         // about egui's defaults rather than the stack production actually uses.
         let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {});
         let id = egui::FontId::proportional(14.0);
-        for c in INSTRUCTION.chars().filter(|c| !c.is_ascii()) {
+        // ⚠ The keys now live in the shortcuts dialog's Compare section; `←` and `→` are still
+        // what gets drawn, so the probe follows them there.
+        let keys: String = crate::modals::EXTRA_KEYS
+            .iter()
+            .filter(|(title, _)| *title == "Compare")
+            .flat_map(|(_, lines)| lines.iter().flat_map(|(a, b)| [*a, *b]))
+            .collect();
+        assert!(
+            keys.contains('←'),
+            "sample: the Compare keys were not found"
+        );
+        for c in keys.chars().filter(|c| !c.is_ascii()) {
             assert!(
                 ctx.fonts_mut(|f| f.has_glyph(&id, c)),
                 "{c:?} (U+{:04X}) is in no bundled font and will draw as a tofu box",

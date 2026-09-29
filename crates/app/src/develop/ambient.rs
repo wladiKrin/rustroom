@@ -27,7 +27,7 @@ pub fn draw(app: &RustroomApp, ctx: &egui::Context) {
     }
     if app.show_info_overlay {
         let lines = info_lines(app, &s.path);
-        let font = egui::FontId::proportional(14.0);
+        let font = egui::FontId::proportional(crate::theme::tokens::BODY);
         let galleys: Vec<_> = lines
             .into_iter()
             .map(|l| painter.layout_no_wrap(l, font.clone(), egui::Color32::WHITE))

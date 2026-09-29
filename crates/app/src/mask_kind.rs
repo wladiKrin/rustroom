@@ -58,29 +58,13 @@ impl MaskKind {
     /// of small print under the controls).
     pub fn hover(self) -> &'static str {
         match self {
-            MaskKind::Gradient => {
-                "Gradient — a straight ramp. Drag its lines on the image: the outer two mark \
-                 where the effect starts and where it reaches full strength."
-            }
-            MaskKind::Radial => {
-                "Radial — an ellipse. Drag it on the image; the outer line marks where the \
-                 effect falls to nothing."
-            }
-            MaskKind::Brush => "Brush — paint the mask on the image with the settings under Shape.",
-            MaskKind::Luminance => {
-                "Luminance range — selects tones by brightness, wherever they are in the frame."
-            }
-            MaskKind::Colour => {
-                "Colour range — selects colours by hue, wherever they are in the frame."
-            }
-            MaskKind::Subject => {
-                "Subject — the main subject, found by a neural network. Computed once per photo \
-                 and cached."
-            }
-            MaskKind::Select => {
-                "Select by click — click the sky, a building, anything: a neural network outlines \
-                 the region under the click. Click again to re-aim."
-            }
+            MaskKind::Gradient => "Adds a mask that fades across a straight line",
+            MaskKind::Radial => "Adds an elliptical mask",
+            MaskKind::Brush => "Adds a mask you paint with a brush",
+            MaskKind::Luminance => "Adds a mask that selects tones by brightness",
+            MaskKind::Colour => "Adds a mask that selects colours by hue",
+            MaskKind::Subject => "Adds a mask of the main subject, found automatically",
+            MaskKind::Select => "Adds a mask of whatever you click, found automatically",
         }
     }
 

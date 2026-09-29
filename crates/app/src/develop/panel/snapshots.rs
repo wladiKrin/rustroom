@@ -149,6 +149,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) -> bo
                 true,
                 Header::new("Snapshots").trailing(&count),
             );
+            // ⚠⚠ **No card here** — `state.show_body_unindented`, not `show_body`. This body fills
+            // its resizable panel on purpose (below), and the gap a card leaves under itself made
+            // the content 10 pt taller than the panel every frame, so the strip grew until it hit
+            // its half-height cap and squeezed the sliders to two sections (seen 2026-09-29). The
+            // strip's own panel frame already sets it apart.
             out.state.show_body_unindented(ui, |ui| {
                 // Fill the panel's height so egui stores the panel size, not the smaller content
                 // size — otherwise a resizable panel shrinks back each frame.
@@ -232,7 +237,7 @@ fn now_row(ui: &mut egui::Ui, drift: &str, action: &mut Action) {
                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
             |ui| {
                 ui.add(egui::Button::new("+ Save").min_size(egui::vec2(0.0, 22.0)))
-                    .on_hover_text("Save the current settings as a snapshot")
+                    .on_hover_text("Saves the current settings as a snapshot")
             },
         )
         .inner;
@@ -246,7 +251,7 @@ fn now_row(ui: &mut egui::Ui, drift: &str, action: &mut Action) {
     let room = (button.rect.left() - 8.0 - (name.right() + 8.0)).max(0.0);
     let mut job = egui::text::LayoutJob::simple_singleline(
         drift.to_string(),
-        egui::FontId::proportional(11.0),
+        egui::FontId::proportional(crate::theme::tokens::CAPTION),
         v.weak_text_color(),
     );
     job.wrap = egui::text::TextWrapping::truncate_at_width(room);
@@ -366,13 +371,13 @@ fn row(
                 RowAction {
                     glyph: '×',
                     verb: "Delete",
-                    hover: "Delete this snapshot",
+                    hover: "Deletes this snapshot",
                     enabled: true,
                 },
                 RowAction {
                     glyph: icons::COPY,
                     verb: "Make a virtual copy from",
-                    hover: "Make a virtual copy with these settings",
+                    hover: "Makes a virtual copy with this snapshot's settings",
                     enabled: true,
                 },
             ],

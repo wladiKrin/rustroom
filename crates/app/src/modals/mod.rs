@@ -383,11 +383,6 @@ fn confirm_merge_keyword(app: &mut RustroomApp, ctx: &egui::Context) {
     }
 }
 
-/// The keyboard reference.
-///
-/// ⚠ **Generated from `menu::model()`, never hand-written.** A shortcuts dialog listing a
-/// chord the app does not have is worse than no dialog at all, and a hand-written one drifts
-/// the first time a shortcut moves.
 /// The keys that are not menu items, for the shortcuts dialog. Also swept by
 /// `theme::every_menu_string_is_renderable`.
 pub(crate) const EXTRA_KEYS: &[(&str, &[(&str, &str)])] = &[
@@ -408,9 +403,34 @@ pub(crate) const EXTRA_KEYS: &[(&str, &[(&str, &str)])] = &[
             ("Nudge a focused one", "← →"),
         ],
     ),
+    // ⚠ Compare's and Survey's keys were a line of 11-pt text across the top of each view until
+    // 2026-09-29; explanations do not stand on screen any more (`docs/DESIGN.md` §8), so they are
+    // listed here with every other key.
+    (
+        "Compare",
+        &[
+            ("Move the bordered photo", "← →"),
+            ("Move the border", "Enter or a click"),
+            ("Pan or zoom one pane", "scroll or pinch"),
+        ],
+    ),
+    (
+        "Survey",
+        &[
+            ("Move", "arrow keys"),
+            ("Pick or reject, and take it off the wall", "P or X"),
+            ("Open in Develop", "Enter"),
+            ("Resize the tiles", "pinch or ⌃ scroll"),
+        ],
+    ),
     ("Also", &[("Compare", "Y")]),
 ];
 
+/// The keyboard reference.
+///
+/// ⚠ **Generated from `menu::model()`, never hand-written.** A shortcuts dialog listing a
+/// chord the app does not have is worse than no dialog at all, and a hand-written one drifts
+/// the first time a shortcut moves.
 fn shortcuts(app: &mut RustroomApp, ctx: &egui::Context) {
     // ⚠ Through the shared funnel like every other dialog. It built its own `egui::Modal` before,
     // which meant it missed the frame padding and the sizing entirely — and it is one of the

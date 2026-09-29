@@ -32,6 +32,16 @@ impl HslChannel {
         }
     }
 
+    /// The tab the band sliders' hover sentences describe.
+    pub fn help_tab(self) -> rustroom_app::slider_help::HslTab {
+        use rustroom_app::slider_help::HslTab;
+        match self {
+            Self::Hue => HslTab::Hue,
+            Self::Saturation => HslTab::Saturation,
+            Self::Luminance => HslTab::Luminance,
+        }
+    }
+
     /// The band field this channel edits.
     pub fn value_mut(self, band: &mut HslBand) -> &mut f32 {
         match self {
@@ -140,6 +150,15 @@ pub struct SourceInfo<'a> {
     /// The rendered frame's histogram, for the ghost behind the tone curve. `None` in a
     /// harness that has no render.
     pub hist: Option<&'a [[u32; 256]; 3]>,
+    /// What this photo would open as if it had never been edited — `Settings::initial_edits(None)`.
+    /// **The sections' neutral**: a section is modified when it differs from this, and its reset
+    /// returns to it.
+    ///
+    /// ⚠⚠ **Never `Edits::default()`** (reported in use 2026-09-29): with "Apply lens correction to
+    /// new photos" ticked every fresh photo opens with the corrections on, and measured against
+    /// all-off the Lens section showed its dot and a reset on a photo nobody had touched — and
+    /// the reset, like "Reset adjustments", turned the default correction off.
+    pub fresh: &'a edit_model::Edits,
 }
 
 /// The white-balance controls: a temperature, a tint, and the named illuminants.
@@ -177,10 +196,10 @@ pub(crate) fn white_balance(
     let r = ui.add(
         super::slider::Slider::new(&mut mired, MIRED_MIN..=MIRED_MAX)
             .text("Temp")
-            .help(
-                rustroom_app::slider_help::text("Temp")
-                    .map(|h| format!("{h} Double-click resets it.")),
-            )
+            .help(rustroom_app::slider_help::text(
+                rustroom_app::slider_help::Scope::Global,
+                "Temp",
+            ))
             .custom_formatter(|m| format!("{:.0} K", 1.0e6 / m))
             .custom_parser(|s| {
                 s.trim()
@@ -215,7 +234,9 @@ pub(crate) fn white_balance(
             // saying so.
             if ui
                 .selectable_label(*picking, "Pick a neutral")
-                .on_hover_text("Click something in the photo that should be grey")
+                .on_hover_text(
+                    "Sets white balance from a spot you click that should be neutral grey",
+                )
                 .clicked()
             {
                 *picking = !*picking;
@@ -243,7 +264,9 @@ pub(crate) fn white_balance(
             }
         })
         .response
-        .on_hover_text("Named illuminants — each one just moves the Temp slider");
+        .on_hover_text(
+            "Sets the temperature for a common light source such as daylight or tungsten",
+        );
     });
 }
 
@@ -268,6 +291,19 @@ const ADVANCED_ID: &str = "color_advanced";
 const MIRED_MIN: f32 = 1.0e6 / 25000.0;
 const MIRED_MAX: f32 = 1.0e6 / 1667.0;
 
+/// The point curve a channel edits.
+fn point_curve(
+    edits: &mut edit_model::Edits,
+    channel: tone_curve::CurveChannel,
+) -> &mut edit_model::ToneCurve {
+    match channel {
+        tone_curve::CurveChannel::Rgb => &mut edits.tone_curve,
+        tone_curve::CurveChannel::Red => &mut edits.tone_curve_red,
+        tone_curve::CurveChannel::Green => &mut edits.tone_curve_green,
+        tone_curve::CurveChannel::Blue => &mut edits.tone_curve_blue,
+    }
+}
+
 /// The Tone section: Auto, the six tonal sliders, the curve, then the Presence block.
 ///
 /// ⚠ The camera rendering and the look sat on top of this section until 2026-09-19; they are
@@ -289,7 +325,9 @@ pub(crate) fn tone(
     ed: &mut Edited,
 ) {
     let CurveUi {
+        mode: curve_mode,
         channel: curve_channel,
+        open: curve_open,
         parametric_drag,
     } = curves;
     // ⚠⚠ **The analysis runs on the click only.** This body runs sixty times a second, and a
@@ -301,7 +339,7 @@ pub(crate) fn tone(
     // its Auto on its own row in the Tone panel for the same reason.
     if ui
         .button("Auto")
-        .on_hover_text("Sets Exposure, Whites and Blacks from the histogram")
+        .on_hover_text("Sets Exposure, Whites and Blacks automatically from the histogram")
         .clicked()
     {
         rustroom_app::auto_tone_tool::apply(edits, buffer, baseline_ev);
@@ -326,33 +364,51 @@ pub(crate) fn tone(
     // sub-label rather than a header, since `tone_curve` belongs to the `Tone` edit group and a
     // header here would put the panel and the Sync dialog out of step. The curve draws its own
     // sub-label row. (It closed the section until 2026-09-19.)
-    // ⚠ Which of the four curves the widget edits is decided here, because `show` takes one curve —
-    // and reading the selection *by value* first is what keeps `edits` and `curve_channel` from being
-    // borrowed at once.
-    let selected = *curve_channel;
-    // ⚠ M5.1c: the Parametric view edits a different field, so it is its own widget. The point views
-    // get the parametric curve read-only, to draw the combined curve.
-    let param = edits.tone_curve_parametric;
-    let curve = match selected {
-        tone_curve::CurveChannel::Parametric => {
-            let _ = super::parametric_curve::show(
-                ui,
-                &mut edits.tone_curve_parametric,
-                &edits.tone_curve.points,
-                ed,
-                hist,
-                curve_channel,
-                parametric_drag,
-            );
-            None
+    //
+    // ⚠⚠ **Collapsible since 2026-09-29** ("it's quite large and may be in the way", the author): the
+    // header stays, with a dot while any of the five curves is not straight, so a closed curve still
+    // says it is doing something.
+    let modified = [
+        &edits.tone_curve,
+        &edits.tone_curve_red,
+        &edits.tone_curve_green,
+        &edits.tone_curve_blue,
+    ]
+    .iter()
+    .any(|c| !c.points.is_empty())
+        || edits.tone_curve_parametric != edit_model::ParametricCurve::default();
+    // ⚠ Read *by value* first, which is what keeps `edits` and the selections from being borrowed at
+    // once below.
+    let (mode, channel) = (*curve_mode, *curve_channel);
+    let open = tone_curve::header(ui, curve_open, modified, |ui| match mode {
+        tone_curve::CurveMode::Parametric => {
+            super::parametric_curve::reset_button(ui, &mut edits.tone_curve_parametric, ed)
         }
-        tone_curve::CurveChannel::Rgb => Some(&mut edits.tone_curve),
-        tone_curve::CurveChannel::Red => Some(&mut edits.tone_curve_red),
-        tone_curve::CurveChannel::Green => Some(&mut edits.tone_curve_green),
-        tone_curve::CurveChannel::Blue => Some(&mut edits.tone_curve_blue),
-    };
-    if let Some(curve) = curve {
-        tone_curve::show(ui, curve, ed, hist, Some(curve_channel), Some(&param));
+        tone_curve::CurveMode::Point => {
+            tone_curve::reset_button(ui, point_curve(edits, channel), ed)
+        }
+    });
+    if open {
+        tone_curve::selectors(ui, curve_mode, curve_channel);
+        // ⚠ M5.1c: the Parametric view edits a different field, so it is its own widget. The point
+        // views get the parametric curve read-only, to draw the combined curve.
+        let param = edits.tone_curve_parametric;
+        match *curve_mode {
+            tone_curve::CurveMode::Parametric => {
+                let _ = super::parametric_curve::show(
+                    ui,
+                    &mut edits.tone_curve_parametric,
+                    &edits.tone_curve.points,
+                    ed,
+                    hist,
+                    parametric_drag,
+                );
+            }
+            tone_curve::CurveMode::Point => {
+                let c = *curve_channel;
+                tone_curve::show(ui, point_curve(edits, c), ed, hist, Some(c), Some(&param));
+            }
+        }
     }
     // ⚠ A sub-label, not a header. These are Lightroom's "Presence" block and they are
     // local-contrast tools rather than tonal ones — a different kind of decision, which is why
@@ -365,8 +421,7 @@ pub(crate) fn tone(
         -100.0..=100.0,
         "Texture",
         0.0,
-    )
-    .on_hover_text("Fine surface detail. Negative smooths texture while keeping edges sharp; positive crisps detail along edges too.");
+    );
     ed.slider(
         ui,
         &mut edits.local_contrast.clarity,
@@ -380,34 +435,41 @@ pub(crate) fn tone(
 /// The colour-grading block's view state: the `Shad │ Mid │ High │ Global` selector and the
 /// grade range view's two session fields.
 ///
-/// ⚠ Grouped because the three travel together and `show` was two arguments past clippy's
-/// limit with them loose — a fair complaint rather than a lint to silence, the reason
-/// `FrameSpec` exists. None of these is an edit: they never reach `Edits` or a sidecar.
-/// Which channel each of the panel's two selectors is showing.
+/// The tone curve's UI inputs: which curve and channel are shown, whether the block is open, and
+/// what a drag does in the Parametric view. Grouped when the drag binding arrived (M5.1c), because
+/// `too_many_arguments` fired at eight.
+pub(crate) struct CurveUi<'a> {
+    pub mode: &'a mut tone_curve::CurveMode,
+    pub channel: &'a mut tone_curve::CurveChannel,
+    /// `Settings::tone_curve_open` — the caller saves it when it changes.
+    pub open: &'a mut bool,
+    pub parametric_drag: rustroom_app::settings::ParametricDrag,
+}
+
+/// Which view each of the panel's selectors is showing, and whether the tone curve is open.
 ///
 /// ⚠ A params struct because clippy counted **eight** arguments on [`show`], and as `SourceInfo`'s own
 /// doc records, *"every time the note was that clippy was right"* — the fifth time this project has
 /// answered `too_many_arguments` this way, after `FrameSpec`, `NameField`, `RenderSpec` and
 /// `SourceInfo`.
 ///
-/// ⚠⚠ Both are **view state**, never `Edits`: switching a selector must not push a history entry or
+/// ⚠⚠ All are **view state**, never `Edits`: switching a selector must not push a history entry or
 /// travel in a preset. That is why they arrive as their own `&mut`s rather than being reached through
 /// the app — the caller holds `&mut app.session` at the same time.
-/// The tone curve's two UI inputs: which view is selected, and what a drag does in the Parametric
-/// view. Grouped when the second arrived (M5.1c), because `too_many_arguments` fired at eight.
-pub(crate) struct CurveUi<'a> {
-    pub channel: &'a mut tone_curve::CurveChannel,
-    pub parametric_drag: rustroom_app::settings::ParametricDrag,
-}
-
 pub struct Channels<'a> {
     pub hsl: &'a mut HslChannel,
+    pub curve_mode: &'a mut tone_curve::CurveMode,
     pub curve: &'a mut tone_curve::CurveChannel,
+    /// Whether the tone curve is expanded — `Settings::tone_curve_open`, saved by the caller.
+    pub curve_open: &'a mut bool,
     /// What a drag does in the curve's Parametric view — a `Settings` binding, carried with the
     /// channel selections because it is read in the same place.
     pub parametric_drag: rustroom_app::settings::ParametricDrag,
 }
 
+/// ⚠ Grouped because the three travel together and `show` was two arguments past clippy's
+/// limit with them loose — a fair complaint rather than a lint to silence, the reason
+/// `FrameSpec` exists. None of these is an edit: they never reach `Edits` or a sidecar.
 pub struct GradeUi<'a> {
     pub range: &'a mut color_wheel::GradeRange,
     /// The "Show range" checkbox.
@@ -443,7 +505,9 @@ pub fn show(
     } = pickers;
     let Channels {
         hsl: hsl_channel,
+        curve_mode,
         curve: curve_channel,
+        curve_open,
         parametric_drag,
     } = channels;
     let GradeUi {
@@ -458,14 +522,15 @@ pub fn show(
         baseline_ev,
         buffer,
         hist,
+        fresh,
     } = source;
     // White Balance and Tone open by default; the rest start collapsed, because a panel
     // that opens with 30 sliders showing is the problem this section structure removes.
-    section(ui, SECTIONS[0], true, edits, ed, |ui, edits, ed| {
+    section(ui, SECTIONS[0], true, fresh, edits, ed, |ui, edits, ed| {
         white_balance(ui, &mut edits.white_balance, baseline, picking, ed);
     });
 
-    section(ui, SECTIONS[1], true, edits, ed, |ui, edits, ed| {
+    section(ui, SECTIONS[1], true, fresh, edits, ed, |ui, edits, ed| {
         tone(
             ui,
             edits,
@@ -473,14 +538,16 @@ pub fn show(
             baseline_ev,
             hist,
             CurveUi {
+                mode: curve_mode,
                 channel: curve_channel,
+                open: curve_open,
                 parametric_drag,
             },
             ed,
         );
     });
 
-    section(ui, SECTIONS[2], false, edits, ed, |ui, edits, ed| {
+    section(ui, SECTIONS[2], false, fresh, edits, ed, |ui, edits, ed| {
         // ⚠ Vibrance first: Adobe's order, and the gentler control. Saturation clips
         // already-saturated colour far more readily, so it is the one offered second.
         ed.slider(ui, &mut edits.vibrance, -100.0..=100.0, "Vibrance", 0.0);
@@ -506,12 +573,11 @@ pub fn show(
             false,
             super::section::Header::new("Advanced color"),
         );
-        adv.state.show_body_unindented(ui, |ui| {
+        adv.show_body(ui, |ui| {
             theme::sub_label_hover(
                 ui,
                 "Adjust individual colors",
-                "HSL — shift the hue, saturation or brightness of one color at a time, leaving the \
-                 others alone.",
+                "Adjusts the hue, saturation and brightness of each colour separately (HSL)",
             );
             // ⚠ Shared with a mask's own HSL block — see `hsl_bands`. One layout learned once.
             hsl_bands::show(ui, &mut edits.hsl, hsl_channel, ed);
@@ -531,8 +597,7 @@ pub fn show(
             // grading" is carried by the checkbox's hover rather than half-added here.
             theme::sub_label_with(ui, "Tint by tone", |ui| {
                 ui.checkbox(show_grade_range, "Show range").on_hover_text(
-                    "Tints the photograph where the selected range reaches. Affects only what you \
-                 see — never the render, the export or the histogram.",
+                    "Tints the preview where the selected range applies, without changing the photo",
                 );
             });
             theme::segmented(
@@ -546,6 +611,7 @@ pub fn show(
                 // which need the struct itself.
                 color_wheel::show(ui, &mut edits.color_grading, *grade_range, diameter, ed);
                 let w = grade_range.wheel_mut(&mut edits.color_grading);
+                ed.help_scope = rustroom_app::slider_help::Scope::TintByTone;
                 ed.slider(ui, &mut w.hue, 0.0..=360.0, "Hue", 0.0);
                 // ⚠⚠ `Strength`, not `Saturation`: the global Saturation slider and HSL's Saturation channel both
                 // mean **the image's chroma**, while this means **how much tint is applied** — the same word
@@ -574,6 +640,7 @@ pub fn show(
                 edit_model::ColorGrading::default().blending,
             );
             ed.slider(ui, &mut g.balance, -100.0..=100.0, "Balance", 0.0);
+            ed.help_scope = rustroom_app::slider_help::Scope::Global;
             // ⚠ Two inputs, one value on the wire, derived here because this is the one place the
             // checkbox and the selector are both in scope. Change-guarded: this body runs every
             // frame, and an unguarded write would request a render sixty times a second.
@@ -585,11 +652,12 @@ pub fn show(
         });
     });
 
-    section(ui, SECTIONS[3], false, edits, ed, |ui, edits, ed| {
+    section(ui, SECTIONS[3], false, fresh, edits, ed, |ui, edits, ed| {
         // ⚠ Noise Reduction above Sharpening: you must denoise before you can judge
         // sharpening, and it is the pipeline's own order. A deliberate divergence from
         // Lightroom, which puts Sharpening first.
-        theme::sub_label(ui, "Noise Reduction");
+        theme::sub_label(ui, "Noise reduction");
+        ed.help_scope = rustroom_app::slider_help::Scope::NoiseReduction;
         let nr = &mut edits.noise_reduction;
         ed.slider(ui, &mut nr.luminance, 0.0..=100.0, "Luminance", 0.0);
         ed.slider(
@@ -608,6 +676,7 @@ pub fn show(
             edit_model::NoiseReduction::default().smoothness,
         );
         theme::sub_label(ui, "Sharpening");
+        ed.help_scope = rustroom_app::slider_help::Scope::Sharpening;
         let sh = &mut edits.sharpening;
         ed.slider(ui, &mut sh.amount, 0.0..=100.0, "Amount", 0.0);
         // The one slider not on a 0..100 scale: a physical quantity in full-resolution
@@ -627,6 +696,7 @@ pub fn show(
             edit_model::Sharpening::default().detail,
         );
         ed.slider(ui, &mut sh.masking, 0.0..=100.0, "Masking", 0.0);
+        ed.help_scope = rustroom_app::slider_help::Scope::Global;
     });
 
     // ⚠ Its own section rather than a block inside Detail, and its own edit group with it. They
@@ -637,7 +707,7 @@ pub fn show(
     // ⚠ Placed after Detail, not first, despite running first in the pipeline: it is on by
     // default and visited only to turn something *off*, so depth costs nothing. Panel follows
     // workflow, pipeline follows maths — the rule `SECTIONS`' own doc comment states.
-    section(ui, SECTIONS[4], false, edits, ed, |ui, edits, ed| {
+    section(ui, SECTIONS[4], false, fresh, edits, ed, |ui, edits, ed| {
         ui.label(
             egui::RichText::new(lens_status(lens, lens_profile_found))
                 .small()
@@ -664,6 +734,7 @@ pub fn show(
             //
             // ⚠ "Scale", not "Crop": only *pincushion* correction empties the frame, and barrel
             // correction's autoscale is exactly 1, so on many photos this does nothing at all.
+            ed.help_scope = rustroom_app::slider_help::Scope::Lens;
             let scaled = ed
                 .slider(
                     ui,
@@ -673,6 +744,7 @@ pub fn show(
                     edit_model::LensCorrection::default().scale,
                 )
                 .changed();
+            ed.help_scope = rustroom_app::slider_help::Scope::Global;
             if touched || scaled {
                 edits.lens_correction = Some(l);
             }
@@ -686,8 +758,9 @@ pub fn show(
         super::defringe::show(ui, &mut edits.defringe, picking_fringe, ed);
     });
 
-    section(ui, SECTIONS[5], false, edits, ed, |ui, edits, ed| {
+    section(ui, SECTIONS[5], false, fresh, edits, ed, |ui, edits, ed| {
         let v = &mut edits.vignette;
+        ed.help_scope = rustroom_app::slider_help::Scope::Vignette;
         ed.slider(ui, &mut v.amount, -100.0..=100.0, "Amount", 0.0);
         ed.slider(
             ui,
@@ -704,6 +777,7 @@ pub fn show(
             "Feather",
             edit_model::Vignette::default().feather,
         );
+        ed.help_scope = rustroom_app::slider_help::Scope::Global;
     });
 }
 
@@ -717,11 +791,13 @@ fn section(
     ui: &mut egui::Ui,
     s: Section,
     open_by_default: bool,
+    fresh: &edit_model::Edits,
     edits: &mut edit_model::Edits,
     ed: &mut Edited,
     body: impl FnOnce(&mut egui::Ui, &mut edit_model::Edits, &mut Edited),
 ) {
-    let modified = edits.group_differs(&edit_model::Edits::default(), s.index());
+    // ⚠ Against the photo's own starting point, never all-off — `SourceInfo::fresh`.
+    let modified = edits.group_differs(fresh, s.index());
     let mut out = super::section::header(
         ui,
         ui.make_persistent_id(s.name()),
@@ -730,12 +806,9 @@ fn section(
             .modified(modified)
             .resettable(true),
     );
-    out.state.show_body_unindented(ui, |ui| body(ui, edits, ed));
+    out.show_body(ui, |ui| body(ui, edits, ed));
     if out.reset {
-        edits.merge_from(
-            &edit_model::Edits::default(),
-            edit_model::EditGroups::only(s.index()),
-        );
+        edits.merge_from(fresh, edit_model::EditGroups::only(s.index()));
         ed.discrete();
     }
 }
@@ -943,7 +1016,9 @@ mod tests {
                 None,
                 None,
                 CurveUi {
+                    mode: &mut tone_curve::CurveMode::default(),
                     channel: &mut tone_curve::CurveChannel::default(),
+                    open: &mut true,
                     parametric_drag: Default::default(),
                 },
                 &mut ed,
@@ -992,7 +1067,9 @@ mod tests {
                 &mut edits,
                 Channels {
                     hsl: &mut channel,
+                    curve_mode: &mut tone_curve::CurveMode::default(),
                     curve: &mut tone_curve::CurveChannel::default(),
+                    curve_open: &mut true,
                     parametric_drag: Default::default(),
                 },
                 GradeUi {
@@ -1007,6 +1084,7 @@ mod tests {
                     baseline_ev: None,
                     buffer: &buf,
                     hist: None,
+                    fresh: &edit_model::Edits::default(),
                 },
                 Pickers::default(),
                 &mut ed,
@@ -1045,7 +1123,9 @@ mod tests {
                 &mut edits,
                 Channels {
                     hsl: &mut channel,
+                    curve_mode: &mut tone_curve::CurveMode::default(),
                     curve: &mut tone_curve::CurveChannel::default(),
+                    curve_open: &mut true,
                     parametric_drag: Default::default(),
                 },
                 GradeUi {
@@ -1060,6 +1140,7 @@ mod tests {
                     baseline_ev: None,
                     buffer: &buf,
                     hist: None,
+                    fresh: &edit_model::Edits::default(),
                 },
                 Pickers {
                     wb: None,
@@ -1094,7 +1175,10 @@ mod tests {
         let buf = tone_fixture();
         let mut edits = edit_model::Edits::default();
         let mut channel = HslChannel::default();
-        let mut curve = tone_curve::CurveChannel::Parametric;
+        let mut curve = tone_curve::CurveChannel::default();
+        // The Parametric view, so its sliders are in the sweep; the curve block open.
+        let mut mode = tone_curve::CurveMode::Parametric;
+        let mut open = true;
         let mut grade = color_wheel::GradeRange::default();
         let (mut show_range, mut view) = (false, None);
         let mut ed = Edited::default();
@@ -1108,7 +1192,9 @@ mod tests {
                     &mut edits,
                     Channels {
                         hsl: &mut channel,
+                        curve_mode: &mut mode,
                         curve: &mut curve,
+                        curve_open: &mut open,
                         parametric_drag: Default::default(),
                     },
                     GradeUi {
@@ -1123,6 +1209,7 @@ mod tests {
                         baseline_ev: None,
                         buffer: &buf,
                         hist: None,
+                        fresh: &edit_model::Edits::default(),
                     },
                     Pickers::default(),
                     &mut ed,
@@ -1178,7 +1265,10 @@ mod tests {
         let buf = tone_fixture();
         let mut edits = edit_model::Edits::default();
         let mut channel = HslChannel::default();
-        let mut curve = tone_curve::CurveChannel::Parametric;
+        let mut curve = tone_curve::CurveChannel::default();
+        // The Parametric view, so its sliders are in the sweep; the curve block open.
+        let mut mode = tone_curve::CurveMode::Parametric;
+        let mut open = true;
         let mut grade = color_wheel::GradeRange::default();
         let (mut show_range, mut view) = (true, None);
         let mut ed = Edited::default();
@@ -1190,7 +1280,9 @@ mod tests {
                     &mut edits,
                     Channels {
                         hsl: &mut channel,
+                        curve_mode: &mut mode,
                         curve: &mut curve,
+                        curve_open: &mut open,
                         parametric_drag: Default::default(),
                     },
                     GradeUi {
@@ -1205,6 +1297,7 @@ mod tests {
                         baseline_ev: None,
                         buffer: &buf,
                         hist: None,
+                        fresh: &edit_model::Edits::default(),
                     },
                     Pickers::default(),
                     &mut ed,
@@ -1217,11 +1310,13 @@ mod tests {
         crate::test_ui::click(&ctx, "Advanced color", &mut body);
         let labels = crate::test_ui::slider_labels(&ctx, &mut body);
         assert!(labels.len() > 30, "only {} sliders found", labels.len());
-        let mute: Vec<&String> = labels
-            .iter()
-            .filter(|l| rustroom_app::slider_help::text(l).is_none())
-            .collect();
-        assert!(mute.is_empty(), "sliders without help: {mute:?}");
+        // ⚠ What the sliders actually looked up — scope and label — not the labels alone: "Detail"
+        // is two different sentences, and only the drawn pair says which one a slider got.
+        assert!(
+            ed.missing_help.is_empty(),
+            "sliders without help: {:?}",
+            ed.missing_help
+        );
     }
 
     struct RangePanel {
@@ -1270,7 +1365,9 @@ mod tests {
                     edits,
                     Channels {
                         hsl: channel,
+                        curve_mode: &mut tone_curve::CurveMode::default(),
                         curve: &mut tone_curve::CurveChannel::default(),
+                        curve_open: &mut true,
                         parametric_drag: Default::default(),
                     },
                     GradeUi {
@@ -1285,6 +1382,7 @@ mod tests {
                         baseline_ev: None,
                         buffer: buf,
                         hist: None,
+                        fresh: &edit_model::Edits::default(),
                     },
                     Pickers::default(),
                     ed,
@@ -1310,7 +1408,9 @@ mod tests {
                     edits,
                     Channels {
                         hsl: channel,
+                        curve_mode: &mut tone_curve::CurveMode::default(),
                         curve: &mut tone_curve::CurveChannel::default(),
+                        curve_open: &mut true,
                         parametric_drag: Default::default(),
                     },
                     GradeUi {
@@ -1325,6 +1425,7 @@ mod tests {
                         baseline_ev: None,
                         buffer: buf,
                         hist: None,
+                        fresh: &edit_model::Edits::default(),
                     },
                     Pickers::default(),
                     ed,
@@ -1350,7 +1451,9 @@ mod tests {
                     edits,
                     Channels {
                         hsl: channel,
+                        curve_mode: &mut tone_curve::CurveMode::default(),
                         curve: &mut tone_curve::CurveChannel::default(),
+                        curve_open: &mut true,
                         parametric_drag: Default::default(),
                     },
                     GradeUi {
@@ -1365,6 +1468,7 @@ mod tests {
                         baseline_ev: None,
                         buffer: buf,
                         hist: None,
+                        fresh: &edit_model::Edits::default(),
                     },
                     Pickers::default(),
                     ed,
@@ -1525,7 +1629,9 @@ mod tests {
                     baseline,
                     None,
                     CurveUi {
+                        mode: &mut tone_curve::CurveMode::default(),
                         channel: &mut tone_curve::CurveChannel::default(),
+                        open: &mut true,
                         parametric_drag: Default::default(),
                     },
                     &mut ed,
@@ -1562,7 +1668,9 @@ mod tests {
                         None,
                         None,
                         CurveUi {
+                            mode: &mut tone_curve::CurveMode::default(),
                             channel: &mut tone_curve::CurveChannel::default(),
+                            open: &mut true,
                             parametric_drag: Default::default(),
                         },
                         &mut ed,

@@ -81,11 +81,10 @@ pub fn section(
         })
         .response
         .on_hover_text(
-            "The colour space the .cube was authored against. A .cube file does not record \
-             this, so it has to be declared. Linear means the LUT is a complete rendering and \
-             replaces the camera's.",
+            "Sets the colour space the .cube file was made for, which the file itself does not record",
         );
 
+    ed.help_scope = rustroom_app::slider_help::Scope::Look;
     ed.slider(
         ui,
         &mut edits.look.strength,
@@ -93,6 +92,7 @@ pub fn section(
         "Strength",
         edit_model::Look::default().strength,
     );
+    ed.help_scope = rustroom_app::slider_help::Scope::Global;
 
     // ⚠ What to say is decided in the lib, where it is a pure function a test can reach; this
     // body only draws it. See `looks::notes`.

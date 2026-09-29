@@ -343,7 +343,11 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             let mut drop_row: Option<usize> = None;
             for (ri, row) in form.rows.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
-                    if ui.button("×").on_hover_text("Remove").clicked() {
+                    if ui
+                        .button("×")
+                        .on_hover_text("Removes this condition")
+                        .clicked()
+                    {
                         drop_row = Some(ri);
                     }
                     // The kind dropdown replaces every value with a prototype of the new kind.

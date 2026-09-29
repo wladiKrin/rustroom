@@ -17,7 +17,7 @@ use rustroom_app::icons;
 /// ⚠ Larger than body text on purpose — see [`icon_text`]. Still smaller than the rail's 22 pt,
 /// because a toolbar icon sits in a row of its own height while a rail entry has a label under
 /// it and a whole 88 pt column to fill.
-const ICON_SIZE: f32 = 17.0;
+const ICON_SIZE: f32 = crate::theme::tokens::ICON;
 use rustroom_app::menu::Command;
 
 /// The Develop editor body: preset panel, adjustments panel, filmstrip, canvas.
@@ -105,6 +105,11 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     if app.show_filmstrip && app.show_panels && app.library.is_some() {
         filmstrip::show(app, ui, ctx);
     }
+    // ⚠ After the filmstrip, so it sits above it: egui stacks bottom panels outward in call
+    // order. It spans the canvas column, the rail and the panel having taken their sides.
+    if app.session.is_some() && app.show_panels {
+        crate::status_bar::develop(app, ui);
+    }
     photo_edited |= canvas::show(app, ui, ctx);
     photo_edited |= delete_selected_retouch(app, ctx);
 
@@ -124,21 +129,19 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 /// high-frequency (undo, zoom, before/after) or a mode switch. Each also appears in a menu, on
 /// purpose: a menu is for reach and discovery, a button is for speed.
 pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
-    // ⚠ Names the *configured* pan binding, never "drag": the left button belongs to the tools
-    // (the author's call, 2026-09-28), so a hint saying "drag" would be wrong for every binding
-    // but Space+left.
-    let zoom_actual_hint = format!(
-        "Zoom to 1:1 — scroll to look around, or {}",
-        app.settings.pan_drag.label()
-    );
+    // ⚠ It named the configured pan binding until 2026-09-29; a hover now says what the control
+    // does in one sentence (`docs/DESIGN.md` §8), and panning is in the shortcuts dialog.
+    let zoom_actual_hint = "Zooms to 100 %, one photo pixel per screen pixel (⌘1)";
     // Undo/Redo drive the unified `ActionLog`, so one control walks back through photo edits
     // and preset deletions in the order they actually happened. ⚠ The *tooltip* says which,
     // so an icon button never silently does the surprising one — that wording used to be the
     // button's label and must not be lost with it.
     let open = app.open_photo();
     let undo_hint = match app.actions.peek_undo(open.as_ref()) {
-        Some(ActionKind::PresetDelete { name }) => format!("Undo delete “{name}”"),
-        _ => "Undo".to_string(),
+        Some(ActionKind::PresetDelete { name }) => {
+            format!("Brings back the deleted preset “{name}” (⌘Z)")
+        }
+        _ => "Undoes the last change (⌘Z)".to_string(),
     };
     let undo_click = icon(
         ui,
@@ -146,7 +149,12 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         &undo_hint,
         app.actions.can_undo(open.as_ref()),
     );
-    let redo_click = icon(ui, icons::REDO, "Redo", app.actions.can_redo(open.as_ref()));
+    let redo_click = icon(
+        ui,
+        icons::REDO,
+        "Redoes the last undone change (⇧⌘Z)",
+        app.actions.can_redo(open.as_ref()),
+    );
     ui.separator();
     if undo_click {
         commands::execute(app, ctx, Command::Undo);
@@ -166,10 +174,15 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // the current state, and "fit" stops being true the moment you scroll.
         let (zoom_out, zoom_fit, zoom_actual, zoom_in) = well(ui, |ui| {
             (
-                icon(ui, icons::ZOOM_OUT, "Zoom out", true),
-                icon(ui, icons::ZOOM_FIT, "Zoom to fit", true),
-                icon(ui, icons::ZOOM_ACTUAL, &zoom_actual_hint, true),
-                icon(ui, icons::ZOOM_IN, "Zoom in", true),
+                icon(ui, icons::ZOOM_OUT, "Zooms out (⌘−)", true),
+                icon(
+                    ui,
+                    icons::ZOOM_FIT,
+                    "Fits the whole photo in the view (⌘0)",
+                    true,
+                ),
+                icon(ui, icons::ZOOM_ACTUAL, zoom_actual_hint, true),
+                icon(ui, icons::ZOOM_IN, "Zooms in (⌘=)", true),
             )
         });
         if zoom_out {
@@ -198,7 +211,7 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 egui::Button::selectable(before_after, label)
                     .min_size(egui::vec2(0.0, TOOL_HEIGHT)),
             )
-            .on_hover_text("Show the photo as it was decoded (\\)")
+            .on_hover_text("Shows the photo without your adjustments (\\)")
             .clicked()
         {
             commands::execute(app, ctx, Command::ToggleBeforeAfter);
@@ -207,6 +220,62 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ The filename is **not** drawn here. `shell` owns the row's right-aligned cluster, so
     // that the status line and the filename cannot fight over the same remaining space — which
     // is exactly what happened when this function right-aligned it itself.
+}
+
+/// How far [`toolbar`] advances the bar's cursor, measured rather than drawn — the seed the top bar
+/// uses to centre the photo's name identically in both views before Develop has been drawn once
+/// (`shell::shared_gap`).
+///
+/// ⚠ Mirrors `toolbar`'s sequence: undo, redo, a separator, the zoom well (spacing 2 inside), a
+/// separator, Before / After. `shell`'s `the_centred_name_sits_at_the_same_x_in_both_views` fails
+/// if this and the drawn toolbar drift apart.
+pub fn toolbar_width(ui: &egui::Ui) -> f32 {
+    let pad = ui.spacing().button_padding.x * 2.0;
+    let gap = ui.spacing().item_spacing.x;
+    let sep = 6.0;
+    let glyph = |c: char| {
+        let w = ui
+            .painter()
+            .layout_no_wrap(
+                c.to_string(),
+                egui::FontId::proportional(ICON_SIZE),
+                egui::Color32::PLACEHOLDER,
+            )
+            .size()
+            .x;
+        (w + pad).max(TOOL_WIDTH)
+    };
+    let body = egui::TextStyle::Button.resolve(ui.style());
+    let before_after = ui
+        .painter()
+        .layout_no_wrap(
+            format!("{} Before / After", icons::BEFORE_AFTER),
+            body,
+            egui::Color32::PLACEHOLDER,
+        )
+        .size()
+        .x
+        + pad;
+    let well: f32 = [
+        icons::ZOOM_OUT,
+        icons::ZOOM_FIT,
+        icons::ZOOM_ACTUAL,
+        icons::ZOOM_IN,
+    ]
+    .iter()
+    .map(|c| glyph(*c) + 2.0)
+    .sum();
+    glyph(icons::UNDO)
+        + gap
+        + glyph(icons::REDO)
+        + gap
+        + sep
+        + gap
+        + well
+        + sep
+        + gap
+        + before_after
+        + gap
 }
 
 /// A toolbar icon button with a tooltip. Returns whether it was clicked.
@@ -244,7 +313,8 @@ const TOOL_HEIGHT: f32 = 28.0;
 /// allocates nothing, so the row stays the buttons' height.
 /// `the_bar_is_the_same_height_in_both_views` measures it.
 fn well<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let fill = ui.visuals().extreme_bg_color;
+    // ⚠ The segmented well's colour and shape (`docs/DESIGN.md` §7.2): the canvas colour, a pill.
+    let fill = crate::theme::tokens::of(ui).canvas;
     let bg = ui.painter().add(egui::Shape::Noop);
     let spacing = ui.spacing().item_spacing.x;
     ui.spacing_mut().item_spacing.x = 2.0;
@@ -258,17 +328,19 @@ fn well<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
         egui::pos2(right, cy + TOOL_HEIGHT / 2.0),
     )
     .expand(2.0);
-    ui.painter()
-        .set(bg, egui::epaint::RectShape::filled(rect, 5.0, fill));
+    ui.painter().set(
+        bg,
+        egui::epaint::RectShape::filled(rect, rect.height() / 2.0, fill),
+    );
     inner
 }
 
 /// One toolbar icon at [`ICON_SIZE`].
 ///
-/// ⚠ Sized explicitly rather than inheriting the body text size. `theme::tune` deliberately
-/// makes body text compact, because the panel stacks twenty-odd sliders — but an icon carries
-/// the *whole* meaning of its button, where a word has letters to be recognised by, so the same
-/// size reads as too small. One helper, so the toolbar cannot end up with two icon sizes.
+/// ⚠ Sized explicitly at the toolbar icon size (`tokens::ICON`, 16) rather than inheriting the
+/// 13-pt body text: an icon carries the *whole* meaning of its button, where a word has letters
+/// to be recognised by, so the body size reads as too small. One helper, so the toolbar cannot
+/// end up with two icon sizes.
 fn icon_text(glyph: char) -> egui::RichText {
     egui::RichText::new(glyph).size(ICON_SIZE)
 }

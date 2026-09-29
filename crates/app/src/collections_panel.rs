@@ -40,7 +40,7 @@ fn section<R>(
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::Response {
     let state_id = ui.make_persistent_id(id);
-    let mut h = Header::new(title).draggable(true);
+    let mut h = Header::new(title).draggable(true).rail(true);
     if !trailing.is_empty() {
         h = h.trailing(trailing);
     }
@@ -48,6 +48,45 @@ fn section<R>(
     out.state.show_body_unindented(ui, body);
     *open = out.state.is_open();
     out.response
+}
+
+/// A name field with a "+" at its right edge — the rail's way to add a collection, a smart
+/// collection or a keyword. Returns the field's response and whether "+" was clicked.
+///
+/// ⚠⚠ **Laid out at exactly the width it is given, the "+" first from the right and the field in
+/// what is left.** The three rows used to size the field as "available width − 30" beside the
+/// button — and when the design language widened button padding, the "+" outgrew those 30 points,
+/// the row asked for more than the panel had, and egui widened the panel by the overflow **every
+/// frame**: "the left sidecar keeps expanding indefinitely" (2026-09-29), the 2026-09-19 growth bug
+/// again. A row that derives its parts from its own allocation cannot ask for more than it got.
+///
+/// ⚠ `extra` gates the "+" beyond a name being typed (Save this view needs an open source); the
+/// caller still decides the commit, after the field has taken this frame's typing.
+fn new_item_row(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    hint: &str,
+    extra: bool,
+    plus_hover: &str,
+) -> (egui::Response, bool) {
+    let named = !text.trim().is_empty();
+    let size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(
+        size,
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            let plus = ui
+                .add_enabled(named && extra, egui::Button::new("+"))
+                .on_hover_text(plus_hover)
+                .clicked();
+            let field = ui.add_sized(
+                egui::vec2(ui.available_width(), size.y),
+                egui::TextEdit::singleline(text).hint_text(hint),
+            );
+            (field, plus)
+        },
+    )
+    .inner
 }
 
 /// Draw the collections panel. Every action is applied here.
@@ -96,7 +135,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let mut drop_to: Option<usize> = None;
 
     egui::Panel::left("collections")
-        .default_size(210.0)
+        .default_size(240.0)
+        .min_size(200.0)
         .show(ui, |ui| {
             // ⚠⚠ **One scroll area for the whole panel, and the three inner ones were REMOVED
             // to get it.** Nested vertical scroll areas fight over the wheel — the inner one
@@ -146,7 +186,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             meta: "",
                                             selected: showing_all,
                                             indent: 0.0,
-                                            hover: "Every photo in the catalog, from every folder ever opened",
+                                            hover: "Shows every photo in the catalog, from every folder you have opened",
                                             actions: &[],
                                         },
                                     );
@@ -195,22 +235,20 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     "Collections",
                                     &n,
                                     |ui| {
-                                        ui.horizontal(|ui| {
-                                            let field = ui.add(
-                                                egui::TextEdit::singleline(&mut app.new_collection)
-                                                    .hint_text("New collection")
-                                                    .desired_width(ui.available_width() - 30.0),
-                                            );
-                                            let named = !app.new_collection.trim().is_empty();
-                                            let plus =
-                                                ui.add_enabled(named, egui::Button::new("+")).clicked();
-                                            if named && (plus || theme::committed(ui, &field)) {
-                                                if let Some(cat) = &app.catalog {
-                                                    let _ = cat.create_collection(app.new_collection.trim());
-                                                }
-                                                app.new_collection.clear();
+                                        let (field, plus) = new_item_row(
+                                            ui,
+                                            &mut app.new_collection,
+                                            "New collection",
+                                            true,
+                                            "Create a collection with this name",
+                                        );
+                                        let named = !app.new_collection.trim().is_empty();
+                                        if named && (plus || theme::committed(ui, &field)) {
+                                            if let Some(cat) = &app.catalog {
+                                                let _ = cat.create_collection(app.new_collection.trim());
                                             }
-                                        });
+                                            app.new_collection.clear();
+                                        }
                                         if rows.is_empty() {
                                             crate::theme::hint(ui, "No collections yet.");
                                         }
@@ -231,7 +269,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                         RowAction {
                                                             glyph: '×',
                                                             verb: "Delete",
-                                                            hover: "Delete",
+                                                            hover: "Deletes this collection",
                                                             enabled: true,
                                                         },
                                                         RowAction {
@@ -269,22 +307,18 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     "Smart collections",
                                     &n,
                                     |ui| {
-                                        ui.horizontal(|ui| {
-                                            let field = ui.add(
-                                                egui::TextEdit::singleline(&mut app.new_smart)
-                                                    .hint_text("Save this view")
-                                                    .desired_width(ui.available_width() - 30.0),
-                                            );
-                                            let ready =
-                                                !app.new_smart.trim().is_empty() && app.library.is_some();
-                                            let plus = ui
-                                                .add_enabled(ready, egui::Button::new("+"))
-                                                .on_hover_text("Save the current source and filter as a rule")
-                                                .clicked();
-                                            if ready && (plus || theme::committed(ui, &field)) {
-                                                action = Action::SaveSmart;
-                                            }
-                                        });
+                                        let has_library = app.library.is_some();
+                                        let (field, plus) = new_item_row(
+                                            ui,
+                                            &mut app.new_smart,
+                                            "Save this view",
+                                            has_library,
+                                            "Save the current source and filter as a smart collection",
+                                        );
+                                        let ready = !app.new_smart.trim().is_empty() && has_library;
+                                        if ready && (plus || theme::committed(ui, &field)) {
+                                            action = Action::SaveSmart;
+                                        }
                                         if smarts.is_empty() {
                                             crate::theme::hint(ui, "No smart collections yet.");
                                         }
@@ -313,13 +347,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                         RowAction {
                                                             glyph: '×',
                                                             verb: "Delete",
-                                                            hover: "Delete",
+                                                            hover: "Deletes this smart collection",
                                                             enabled: true,
                                                         },
                                                         RowAction {
                                                             glyph: icons::GEAR,
                                                             verb: "Edit",
-                                                            hover: "Edit the rule",
+                                                            hover: "Edits this smart collection's rule",
                                                             enabled: true,
                                                         },
                                                     ],
@@ -366,19 +400,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             .and_then(|id| kws.iter().find(|k| k.id == id))
                                             .map(|k| format!("New keyword under {}", k.name))
                                             .unwrap_or_else(|| "New keyword".to_string());
-                                        ui.horizontal(|ui| {
-                                            let field = ui.add(
-                                                egui::TextEdit::singleline(&mut app.new_keyword)
-                                                    .hint_text(hint)
-                                                    .desired_width(ui.available_width() - 30.0),
-                                            );
-                                            let named = !app.new_keyword.trim().is_empty();
-                                            let plus =
-                                                ui.add_enabled(named, egui::Button::new("+")).clicked();
-                                            if named && (plus || theme::committed(ui, &field)) {
-                                                action = Action::CreateKeyword;
-                                            }
-                                        });
+                                        let (field, plus) = new_item_row(
+                                            ui,
+                                            &mut app.new_keyword,
+                                            &hint,
+                                            true,
+                                            "Create a keyword with this name",
+                                        );
+                                        let named = !app.new_keyword.trim().is_empty();
+                                        if named && (plus || theme::committed(ui, &field)) {
+                                            action = Action::CreateKeyword;
+                                        }
                                         if kws.is_empty() {
                                             crate::theme::hint(ui, "No keywords yet.");
                                         }
@@ -451,63 +483,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     }
                                     _ => Vec::new(),
                                 };
-                            for y in rustroom_app::date_tree::group(&days) {
-                                // ⚠ `id_salt` on every header: egui's auto-ids shift with what was drawn
-                                // before them — the hazard the grid's `push_id` fixed — so two years with
-                                // the same month number would otherwise collapse together.
-                                egui::CollapsingHeader::new(format!("{} ({})", y.year, y.count))
-                                    .id_salt(("year", y.year))
-                                    .show(ui, |ui| {
-                                        let sel = open_periods.contains(&(y.year, None, None));
-                                        if ui
-                                            .selectable_label(sel, format!("All of {}", y.year))
-                                            .clicked()
-                                        {
-                                            action = Action::OpenPeriod(
-                                                (y.year, None, None),
-                                                ui.input(|i| i.modifiers),
-                                            );
-                                        }
-                                        for m in &y.months {
-                                            let name = rustroom_app::date_tree::month_name(m.month);
-                                            egui::CollapsingHeader::new(format!(
-                                                "{name} ({})",
-                                                m.count
-                                            ))
-                                            .id_salt(("month", y.year, m.month))
-                                            .show(ui, |ui| {
-                                                let sel = open_periods.contains(&(
-                                                    y.year,
-                                                    Some(m.month),
-                                                    None,
-                                                ));
-                                                if ui
-                                                    .selectable_label(sel, format!("All of {name}"))
-                                                    .clicked()
-                                                {
-                                                    action = Action::OpenPeriod(
-                                                        (y.year, Some(m.month), None),
-                                                        ui.input(|i| i.modifiers),
-                                                    );
-                                                }
-                                                for d in &m.days {
-                                                    let sel = open_periods.contains(&(
-                                                        y.year,
-                                                        Some(m.month),
-                                                        Some(d.day),
-                                                    ));
-                                                    let label =
-                                                        format!("{} {name} ({})", d.day, d.count);
-                                                    if ui.selectable_label(sel, label).clicked() {
-                                                        action = Action::OpenPeriod(
-                                                            (y.year, Some(m.month), Some(d.day)),
-                                                            ui.input(|i| i.modifiers),
-                                                        );
-                                                    }
-                                                }
-                                            });
-                                        }
-                                    });
+                            // ⚠ Rows with their counts in the rail's column, not collapsing headers — `date_rows`.
+                            if let Some((period, mods)) = crate::date_rows::rows(ui, &days, &open_periods) {
+                                action = Action::OpenPeriod(period, mods);
                             }
                         })
                             }
@@ -925,17 +903,65 @@ mod tests {
         );
     }
 
-    /// ⚠⚠ **The requirement as a test rather than a list of places to remember** — with the
-    /// integration off, the panel must not offer the Immich **section**.
-    ///
-    /// ⚠⚠ **One deliberate exception, and it is the user revising their own rule (2026-09-24):** the
-    /// downloaded folder keeps the name **"immich (downloaded)"** whether or not the integration is
-    /// on, because those are their photographs and they know where they came from. So this asserts
-    /// the *section* is gone and that nothing else mentions it — not that the word is absent
-    /// entirely, which would be a claim the design no longer makes.
-    ///
-    /// ⚠ Both halves: present when configured, absent when off. An absence alone would pass against
-    /// a panel that drew nothing.
+    /// ⚠⚠ **Reported in use 2026-09-29: "when moving the mouse in the Library the left sidecar keeps
+    /// expanding indefinitely."** Every frame the pointer moves is a frame drawn, and a row that asks
+    /// for more than the panel's width makes egui widen the panel by the overflow — then the row asks
+    /// for that much more. Drawn with the **real theme** (the bare harness has egui's narrower button
+    /// padding, under which the rows fitted), every section open, the pointer moving; the width must
+    /// settle. ⚠ Sample first: the panel must actually have been drawn and measured.
+    #[test]
+    fn the_rail_keeps_its_width_while_the_pointer_moves() {
+        let ctx = crate::test_ui::ctx();
+        crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+        let mut app = crate::test_app::for_test();
+        let s = &mut app.settings.panel_sections;
+        s.folders = true;
+        s.collections = true;
+        s.smart = true;
+        s.keywords = true;
+        s.dates = true;
+        s.immich = true;
+        // The Immich section too, with the integration on — it draws rows and actions of its own.
+        app.settings.immich_enabled = true;
+        app.settings.immich_url = "https://immich.example".to_string();
+        app.settings.immich_key = "a-key".to_string();
+        app.catalog
+            .as_ref()
+            .unwrap()
+            .create_keyword("Europe", None)
+            .unwrap();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 875.0));
+        let mut widths = Vec::new();
+        for frame in 0..30 {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events: vec![egui::Event::PointerMoved(egui::pos2(
+                        120.0 + frame as f32,
+                        300.0,
+                    ))],
+                    ..Default::default()
+                },
+                |ui| super::show(&mut app, ui, &ctx),
+            );
+            if let Some(st) =
+                egui::containers::panel::PanelState::load(&ctx, egui::Id::new("collections"))
+            {
+                widths.push(st.size().x);
+            }
+        }
+        assert!(
+            widths.len() > 20,
+            "the panel was never measured: {widths:?}"
+        );
+        let settled = widths[5];
+        assert!(settled > 100.0, "sample: {settled}");
+        assert!(
+            widths.iter().skip(5).all(|w| (w - settled).abs() < 0.5),
+            "the rail grew while the pointer moved: {widths:?}"
+        );
+    }
+
     /// The new keyword's parent is the keyword last clicked, and a click anywhere else clears it —
     /// the author's replacement for the parent dropdown. ⚠ Both halves, and the clear is asserted
     /// from a click OUTSIDE the panel's list, which is the case the rule is about.
@@ -964,6 +990,120 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **Reported in use 2026-09-29:** "the numbers indicating the amount of photos are not in
+    /// one column" — a folder's count stood left of its one action, an Immich album's left of its
+    /// two, a header's at the edge, and the Dates' inside their labels. Every count the rail paints
+    /// must end at one x. Found as painted text, which is what the eye sees.
+    ///
+    /// ⚠ The sample: counts from a header, a one-action row, a two-action row, a no-action row and
+    /// a tree row, or "one x" could be the same kind of row five times.
+    #[test]
+    fn every_count_in_the_rail_ends_at_one_x() {
+        let ctx = crate::test_ui::ctx();
+        crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+        let mut app = crate::test_app::for_test();
+        app.library = Some(crate::test_app::library_of(3));
+        crate::test_app::catalog_library(&mut app);
+        {
+            let cat = app.catalog.as_ref().unwrap();
+            let first = app.library.as_ref().unwrap().entries[0].id.path.clone();
+            // 2026-05-17, as days since the epoch — the catalog's own fixture date.
+            cat.set_capture(
+                &first,
+                &core_image::Capture {
+                    taken: Some(20_590 * 86_400),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            cat.create_collection("Trips").unwrap();
+            cat.create_keyword("Europe", None).unwrap();
+        }
+        let s = &mut app.settings.panel_sections;
+        s.folders = true;
+        s.collections = true;
+        s.smart = true;
+        s.keywords = true;
+        s.dates = true;
+        s.immich = true;
+        app.settings.immich_enabled = true;
+        app.settings.immich_url = "https://immich.example".to_string();
+        app.settings.immich_key = "a-key".to_string();
+        app.immich_albums = Some(Ok(vec![immich::AlbumSummary {
+            id: "a1".to_string(),
+            album_name: "Holiday".to_string(),
+            asset_count: 1234,
+            last_modified_asset_timestamp: None,
+        }]));
+        app.immich_buckets = Some(Ok(vec![immich::Bucket {
+            time_bucket: "2025-03-01T00:00:00.000Z".to_string(),
+            count: 57,
+        }]));
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 1600.0));
+        let draw = |app: &mut crate::RustroomApp| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    ..Default::default()
+                },
+                |ui| super::show(app, ui, &ctx),
+            )
+        };
+        // Open the Immich timeline, so its years are drawn too.
+        let _ = draw(&mut app);
+        crate::test_ui::click(&ctx, "Timeline", |ui| super::show(&mut app, ui, &ctx));
+        let _ = draw(&mut app);
+        let out = draw(&mut app);
+
+        fn walk(shape: &egui::Shape, found: &mut Vec<(String, f32)>) {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, found)),
+                egui::Shape::Text(t) => {
+                    let text = t.galley.text();
+                    if !text.is_empty() && text.chars().all(|c| c.is_ascii_digit()) {
+                        found.push((text.to_owned(), t.pos.x + t.galley.size().x));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut counts = Vec::new();
+        for c in &out.shapes {
+            walk(&c.shape, &mut counts);
+        }
+        let texts: Vec<&str> = counts.iter().map(|(t, _)| t.as_str()).collect();
+        // 1234: the album, two actions. 3: the folder, one. 57: the Immich year, a tree row.
+        // 2026 and 2025 are the two years' NAMES, painted at the left, and are left out below —
+        // asserted present first, so the filter is known to remove something real.
+        for want in ["1234", "3", "57", "2026", "2025"] {
+            assert!(
+                texts.contains(&want),
+                "sample: {want} was not painted: {texts:?}"
+            );
+        }
+        let column: Vec<&(String, f32)> = counts
+            .iter()
+            .filter(|(t, _)| t != "2026" && t != "2025")
+            .collect();
+        assert!(column.len() >= 6, "sample: too few counts: {column:?}");
+        let x = column[0].1;
+        assert!(
+            column.iter().all(|(_, r)| (r - x).abs() < 0.5),
+            "the counts do not end at one x: {column:?}"
+        );
+    }
+
+    /// ⚠⚠ **The requirement as a test rather than a list of places to remember** — with the
+    /// integration off, the panel must not offer the Immich **section**.
+    ///
+    /// ⚠⚠ **One deliberate exception, and it is the user revising their own rule (2026-09-24):** the
+    /// downloaded folder keeps the name **"immich (downloaded)"** whether or not the integration is
+    /// on, because those are their photographs and they know where they came from. So this asserts
+    /// the *section* is gone and that nothing else mentions it — not that the word is absent
+    /// entirely, which would be a claim the design no longer makes.
+    ///
+    /// ⚠ Both halves: present when configured, absent when off. An absence alone would pass against
+    /// a panel that drew nothing.
     #[test]
     fn the_immich_section_appears_only_when_the_integration_is_on() {
         let labels = |enabled: bool| -> Vec<String> {

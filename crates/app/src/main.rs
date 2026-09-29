@@ -52,6 +52,7 @@ mod catalog_ops;
 mod collections_panel;
 mod commands;
 mod copies;
+mod date_rows;
 mod decode;
 mod develop;
 #[cfg(target_os = "macos")]
@@ -82,6 +83,7 @@ mod shell;
 mod smart_sources;
 mod snapshots;
 mod sources;
+mod status_bar;
 #[cfg(test)]
 mod test_app;
 #[cfg(test)]
@@ -117,10 +119,22 @@ const BUFFER_CACHE_CAP: usize = 3;
 const PREVIEW_TEXTURE_BUDGET: usize = 6 * 52 * 1024 * 1024;
 
 fn main() -> eframe::Result<()> {
-    let native_options = eframe::NativeOptions {
+    let mut native_options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
+    // ⚠ MEASUREMENT SWITCH (2026-09-29): `RUSTROOM_DEBUG_WINDOW=1440x875` opens the window at that
+    // inner size, top left of the main display — how the design language's "nothing overlaps on a
+    // 13-inch MacBook Pro" is checked. The window ignores Accessibility resizes, and macOS
+    // otherwise restores whatever size the last instance closed at.
+    if let Some((w, h)) = std::env::var("RUSTROOM_DEBUG_WINDOW")
+        .ok()
+        .and_then(|v| rustroom_app::bar_plan::parse_size(&v))
+    {
+        native_options.viewport = egui::ViewportBuilder::default()
+            .with_inner_size([w, h])
+            .with_position([0.0, 25.0]);
+    }
     eframe::run_native(
         "Rustroom",
         native_options,
@@ -434,6 +448,8 @@ struct RustroomApp {
     /// Which HSL channel the Color section's selector is showing. View state, per app —
     /// like a brush size, it is a property of the tool and not of the photograph.
     hsl_channel: develop::panel::adjustments::HslChannel,
+    /// Point curve or Parametric — view state beside `curve_channel`, never an edit.
+    curve_mode: develop::panel::tone_curve::CurveMode,
     /// Which of the four tone curves the Tone section's editor is showing. View state, per app, for
     /// the same reason as `hsl_channel`.
     ///
@@ -823,6 +839,7 @@ impl RustroomApp {
             // On by default: a freshly added brush mask with no adjustment yet is otherwise
             // completely invisible, which is a poor first five minutes.
             hsl_channel: Default::default(),
+            curve_mode: Default::default(),
             curve_channel: Default::default(),
             mask_hsl_channel: Default::default(),
             mask_grade_range: Default::default(),

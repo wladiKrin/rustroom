@@ -26,8 +26,7 @@ pub fn rendering(
     if ui
         .checkbox(&mut rendered, "Camera rendering")
         .on_hover_text(
-            "Maps the scene's light onto the display the way the camera would. \
-             Off is colorimetric only, which looks flat and is what the CLI renders.",
+            "Renders the photo with the camera's own tone and colour, instead of a flat colorimetric look",
         )
         .changed()
     {

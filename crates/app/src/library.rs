@@ -64,7 +64,7 @@ pub enum CellAction {
 ///
 /// ⚠ Small enough not to crowd a 10 pt thumbnail and large enough to hit — the grid marks settled at
 /// 10–20 pt for the same reason.
-const STACK_BADGE: egui::Vec2 = egui::vec2(18.0, 14.0);
+const STACK_BADGE: egui::Vec2 = egui::vec2(20.0, 16.0);
 
 pub fn menu_targets(lib: &crate::Library, clicked: usize) -> Vec<PhotoId> {
     if lib.selection.contains(clicked) {
@@ -130,12 +130,12 @@ fn empty_library(ui: &mut egui::Ui) -> Option<rustroom_app::menu::Command> {
         ui.label(egui::RichText::new("No photos yet").heading());
         ui.add_space(12.0);
         let big = |text: &str| {
-            egui::Button::new(egui::RichText::new(text).size(15.0))
+            egui::Button::new(egui::RichText::new(text).size(crate::theme::tokens::TITLE))
                 .min_size(egui::vec2(240.0, 36.0))
         };
         if ui
             .add(big("Open a folder…"))
-            .on_hover_text("Browse a folder of photos — ⇧⌘O")
+            .on_hover_text("Opens a folder of photos (⇧⌘O)")
             .clicked()
         {
             picked = Some(rustroom_app::menu::Command::OpenFolder);
@@ -143,7 +143,7 @@ fn empty_library(ui: &mut egui::Ui) -> Option<rustroom_app::menu::Command> {
         ui.add_space(6.0);
         if ui
             .add(big("Import from a card…"))
-            .on_hover_text("Copy new photos from a memory card into dated folders — ⇧⌘I")
+            .on_hover_text("Copies new photos from a memory card into dated folders (⇧⌘I)")
             .clicked()
         {
             picked = Some(rustroom_app::menu::Command::Import);
@@ -449,6 +449,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // thumbnail is what makes a size control look broken at the extremes.
     let cell = app.settings.clamped_cell();
     egui::CentralPanel::default().show(ui, |ui| {
+        // ⚠ The grid's own gap, 12 each way (`docs/DESIGN.md` §5) — scoped to this panel, because
+        // `item_spacing` is also every control row's air and 12 there would double the panel.
+        ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
         // ⚠ Read before `lib` takes a `&mut` borrow of `app`, so the grid can ask which assets are on
         // disk without cloning the set into the draw closure.
         let immich_present = &app.immich_present;
@@ -709,11 +712,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                         // `cell_with` allocates with `Sense::hover()`, and a click
                                         // in this app has to be *collected* and applied after the
                                         // closure releases `lib`. ⚠ Top-right, because the Immich
-                                        // download badge already owns the top-left.
+                                        // download badge already owns the top-left — and the
+                                        // top-right **of the picture**, not of the cell, or a
+                                        // portrait's badge floated in the empty corner beside it.
                                         if let Some(st) = e.stack {
                                             if let Some(k) = rustroom_app::stack::key_of(&e.id.path)
                                             {
-                                                let full = ui.min_rect();
+                                                let full =
+                                                    thumb::image_rect(ui).unwrap_or(cell_resp.rect);
                                                 let pill = egui::Rect::from_min_size(
                                                     egui::pos2(
                                                         full.right() - STACK_BADGE.x - 4.0,
@@ -727,13 +733,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                     egui::Sense::click(),
                                                 );
                                                 let v = ui.visuals();
+                                                // ⚠ The thumbnail badge's colours (§7.10): white
+                                                // on 55 % black at rest, the accent under the
+                                                // pointer because it is a button.
+                                                let hot = r.hovered();
                                                 ui.painter().rect_filled(
                                                     pill,
                                                     4.0,
-                                                    if r.hovered() {
+                                                    if hot {
                                                         v.selection.bg_fill
                                                     } else {
-                                                        v.widgets.inactive.bg_fill
+                                                        egui::Color32::from_black_alpha(140)
                                                     },
                                                 );
                                                 ui.painter().text(
@@ -748,14 +758,20 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                     } else {
                                                         st.count.to_string()
                                                     },
-                                                    egui::FontId::proportional(11.0),
-                                                    v.strong_text_color(),
+                                                    egui::FontId::proportional(
+                                                        crate::theme::tokens::CAPTION,
+                                                    ),
+                                                    if hot {
+                                                        crate::theme::on_accent(v.dark_mode)
+                                                    } else {
+                                                        egui::Color32::WHITE
+                                                    },
                                                 );
                                                 let clicked = r.clicked();
                                                 let _ = r.on_hover_text(if st.expanded {
-                                                    "Collapse this stack"
+                                                    "Collapses this stack to one photo"
                                                 } else {
-                                                    "Expand this stack to see every file"
+                                                    "Shows every file in this stack"
                                                 });
                                                 if clicked {
                                                     stack_toggle = Some(k);
@@ -1031,16 +1047,18 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         } else {
                             lib.selection.select_indices(&hit);
                         }
+                        // ⚠ The accent, not a fixed blue: a band is a selection in progress.
+                        let accent = ui.visuals().selection.bg_fill;
                         ui.painter().rect_stroke(
                             rect,
                             egui::CornerRadius::same(2),
-                            egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 160, 240)),
+                            egui::Stroke::new(1.0, accent),
                             egui::StrokeKind::Inside,
                         );
                         ui.painter().rect_filled(
                             rect,
                             egui::CornerRadius::same(2),
-                            egui::Color32::from_rgba_unmultiplied(120, 160, 240, 24),
+                            accent.gamma_multiply(0.1),
                         );
                     }
                 }

@@ -72,12 +72,13 @@ pub(crate) fn rows(
                 meta: "",
                 selected: selected == Some(k.id),
                 indent: k.depth as f32 * INDENT,
-                hover: "Double-click to rename; drag onto another keyword to move it there",
+                hover:
+                    "Double-click to rename it, or drag it onto another keyword to move it there",
                 actions: &[
                     RowAction {
                         glyph: '×',
                         verb: "Delete",
-                        hover: "Delete, with everything under it",
+                        hover: "Deletes this keyword and every keyword under it",
                         enabled: true,
                     },
                     RowAction {

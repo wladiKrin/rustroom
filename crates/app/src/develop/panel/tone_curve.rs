@@ -44,22 +44,29 @@ const GRAB_TOL: f32 = 0.045;
 /// Quarter-tone grid divisions.
 const GRID: usize = 4;
 
-/// Draw the curve editor, reporting changes through `ed`.
+/// Which curve the Tone section edits: the four point curves, or Lightroom's parametric one (M5.1c) —
+/// four region sliders over three splits, its own view (`parametric_curve::show`) because it edits a
+/// different field.
 ///
-/// Returns the editor's own rect. ⚠ Not decoration: a headless test has to aim a drag at a
-/// point on the curve, and the alternative is hardcoding a screen coordinate — brittle in the
-/// worst way, because a layout change then moves the target while the test keeps passing and
-/// grabbing nothing. `test_ui`'s module doc records that fault happening twice.
-/// Which curve the editor is showing.
+/// ⚠⚠ **Its own row, above the channels, since 2026-09-29** (the author's pick of the options on the
+/// canvas): Parametric used to be a sixth "channel" beside RGB, Red, Green and Blue, but it is a
+/// different *kind* of curve, and five labels in one row shrank to 9.35 pt. Two rows at the body size
+/// say the two choices apart. View state, like [`CurveChannel`].
+#[derive(Default, PartialEq, Eq, Clone, Copy, Debug)]
+pub enum CurveMode {
+    #[default]
+    Point,
+    Parametric,
+}
+
+/// Which of the four point curves the editor is showing.
 ///
 /// ⚠⚠ **View state, never an edit.** It lives on the session beside `HslChannel` — `visualize`'s rule —
 /// because switching channels must not push a history entry. A field in `Edits` would make "look at the
-/// red curve" an undoable act and would travel in a preset.
+/// red curve" an undoable act and would travel in a preset. ⚠ Kept while the Parametric view is shown,
+/// so going back to the point curve returns to the channel you left.
 #[derive(Default, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CurveChannel {
-    /// Lightroom's parametric curve (M5.1c): four region sliders over three splits. Its own view,
-    /// `parametric_curve::show`, since it edits a different field than the four point curves.
-    Parametric,
     #[default]
     Rgb,
     Red,
@@ -68,17 +75,10 @@ pub enum CurveChannel {
 }
 
 impl CurveChannel {
-    pub const ALL: [CurveChannel; 5] = [
-        Self::Parametric,
-        Self::Rgb,
-        Self::Red,
-        Self::Green,
-        Self::Blue,
-    ];
+    pub const ALL: [CurveChannel; 4] = [Self::Rgb, Self::Red, Self::Green, Self::Blue];
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Parametric => "Parametric",
             Self::Rgb => "RGB",
             Self::Red => "Red",
             Self::Green => "Green",
@@ -89,7 +89,7 @@ impl CurveChannel {
     /// The channel's index into a per-channel histogram, or `None` for the composite.
     fn index(self) -> Option<usize> {
         match self {
-            Self::Parametric | Self::Rgb => None,
+            Self::Rgb => None,
             Self::Red => Some(0),
             Self::Green => Some(1),
             Self::Blue => Some(2),
@@ -101,52 +101,110 @@ impl CurveChannel {
     /// so the curve and the ghost under it read as the same channel.
     fn colour(self, v: &egui::Visuals) -> egui::Color32 {
         match self {
-            Self::Parametric | Self::Rgb => v.strong_text_color(),
+            Self::Rgb => v.strong_text_color(),
             Self::Red => egui::Color32::from_rgb(230, 105, 105),
             Self::Green => egui::Color32::from_rgb(110, 210, 110),
             Self::Blue => egui::Color32::from_rgb(120, 150, 240),
         }
     }
+
+    /// The dot its segment carries: the line's own colour, or none for the composite.
+    fn mark(self, v: &egui::Visuals) -> crate::segmented::Mark {
+        match self {
+            Self::Rgb => crate::segmented::Mark::None,
+            c => crate::segmented::Mark::Dot(c.colour(v)),
+        }
+    }
 }
 
+/// The curve block's header: "Tone curve", collapsible, an accent dot while any curve it holds is
+/// not straight, and `reset` — the shown curve's Reset — at the right while open. Returns whether it
+/// is open. See `section::sub_header`.
+pub fn header(
+    ui: &mut egui::Ui,
+    open: &mut bool,
+    modified: bool,
+    reset: impl FnOnce(&mut egui::Ui),
+) -> bool {
+    super::section::sub_header(ui, "Tone curve", open, modified, reset)
+}
+
+/// The Reset for one point curve: clears it, and is disabled on a straight one.
+pub fn reset_button(ui: &mut egui::Ui, curve: &mut ToneCurve, ed: &mut Edited) {
+    // ⚠ Disabled rather than hidden on a neutral curve: a control that appears and
+    // disappears is harder to learn than one that greys out.
+    let r = ui
+        .add_enabled(!curve.points.is_empty(), egui::Button::new("Reset"))
+        .on_hover_text("Resets the curve to a straight line");
+    if r.clicked() {
+        // ⚠ Cleared to *empty*, not to the two identity endpoints: empty is what keeps
+        // `ToneCurveStage` out of the pipeline entirely.
+        curve.points.clear();
+        ed.discrete();
+    }
+}
+
+/// The two selector rows: Point curve or Parametric, then the point curve's channel — greyed while
+/// Parametric is shown, since that curve has no channels.
+///
+/// ⚠ Both at the control row's height with body labels, so neither shrinks below the 11-pt floor.
+/// ⚠ `segmented` never touches `ed`, which is what keeps switching out of the history.
+pub fn selectors(ui: &mut egui::Ui, mode: &mut CurveMode, channel: &mut CurveChannel) {
+    use crate::segmented::{Mark, Segment};
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let row = crate::theme::tokens::CONTROL_ROW;
+    let modes = [
+        Segment {
+            value: CurveMode::Point,
+            label: "Point curve",
+            hover: "Edits the curve by its points, for all channels or one",
+            mark: Mark::None,
+        },
+        Segment {
+            value: CurveMode::Parametric,
+            label: "Parametric",
+            hover: "Edits the curve by four tonal regions and their boundaries",
+            mark: Mark::None,
+        },
+    ];
+    crate::segmented::segmented_marked(ui, mode, &modes, row, font.clone());
+    ui.add_space(2.0);
+    let v = ui.visuals().clone();
+    let channels = CurveChannel::ALL.map(|c| Segment {
+        value: c,
+        label: c.label(),
+        hover: "",
+        mark: c.mark(&v),
+    });
+    ui.add_enabled_ui(*mode == CurveMode::Point, |ui| {
+        crate::segmented::segmented_marked(ui, channel, &channels, row, font)
+    })
+    .response
+    .on_disabled_hover_text("The parametric curve applies to all channels at once");
+}
+
+/// Draw the curve editor, reporting changes through `ed`.
+///
+/// Returns the editor's own rect. ⚠ Not decoration: a headless test has to aim a drag at a
+/// point on the curve, and the alternative is hardcoding a screen coordinate — brittle in the
+/// worst way, because a layout change then moves the target while the test keeps passing and
+/// grabbing nothing. `test_ui`'s module doc records that fault happening twice.
 pub fn show(
     ui: &mut egui::Ui,
     curve: &mut ToneCurve,
     ed: &mut Edited,
     hist: Option<&[[u32; 256]; 3]>,
     // ⚠ `None` for a **mask's** curve, which has no per-channel curves by decision and therefore no
-    // selector — see `build_pipeline`'s mask branch.
-    channel: Option<&mut CurveChannel>,
+    // selector — see `build_pipeline`'s mask branch. Only its colour and histogram are read here; the
+    // selectors are `selectors`, drawn by the caller above.
+    channel: Option<CurveChannel>,
     // ⚠ M5.1c: the global parametric curve, so the composite view can draw the combined curve.
     // `None` for a mask, which has none.
     parametric: Option<&edit_model::ParametricCurve>,
 ) -> egui::Rect {
-    // ⚠ Through `sub_label_with`, never a hand-rolled `horizontal` around a sub-label: that
-    // nesting is what widened the panel every frame on 2026-09-19 — see `theme::sub_label_with`.
-    theme::sub_label_with(ui, "Tone Curve", |ui| {
-        // ⚠ Disabled rather than hidden on a neutral curve: a control that appears and
-        // disappears is harder to learn than one that greys out.
-        let r = ui
-            .add_enabled(!curve.points.is_empty(), egui::Button::new("Reset"))
-            .on_hover_text("Return the curve to a straight line");
-        if r.clicked() {
-            // ⚠ Cleared to *empty*, not to the two identity endpoints: empty is what keeps
-            // `ToneCurveStage` out of the pipeline entirely.
-            curve.points.clear();
-            ed.discrete();
-        }
-    });
-
-    // ⚠ The `hsl_bands` idiom — a selector rather than four nested headers — so one layout is learned
-    // once. ⚠ `theme::segmented` never touches `ed`, which is what keeps switching channels out of the
-    // history.
-    let selected = match &channel {
-        Some(c) => **c,
-        None => CurveChannel::Rgb,
-    };
-    if let Some(c) = channel {
-        theme::segmented(ui, c, &CurveChannel::ALL.map(|c| (c, c.label())));
-    }
+    // The header, its Reset and the selectors are the caller's (`header`, `reset_button`,
+    // `selectors`): the header must be drawn whether or not the curve is.
+    let selected = channel.unwrap_or(CurveChannel::Rgb);
 
     let full = ui.available_width();
     let size = full.min(MAX_SIZE);
@@ -167,6 +225,8 @@ pub fn show(
         });
         allocated.expect("the horizontal closure always runs")
     };
+    // ⚠ How to work it is the hover, never a standing line (`docs/DESIGN.md` §8).
+    let resp = resp.on_hover_text(GESTURE_HELP);
 
     // ⚠ Which point a drag grabbed has to survive between frames, or re-hit-testing each frame
     // would let a fast drag jump to whichever point the pointer happened to pass over. egui's
@@ -319,14 +379,18 @@ pub fn show(
         }
     }
 
-    // ⚠ One line either way, so the panel below it does not jump as the pointer crosses a
-    // control point. The values are display percentages, matching the axes.
+    // ⚠ One line either way — the values, or an empty line — so the panel below it does not
+    // jump as the pointer crosses a control point. The values are display percentages, matching
+    // the axes.
     theme::hint(ui, &readout(&pts, described));
     rect
 }
 
-/// The line under the editor: a control point's input and output when one is in play, else how
-/// to work the thing.
+/// How the point editor is worked — its hover, and the only place the gestures are named.
+const GESTURE_HELP: &str = "Click to add a point, drag to move one, right-click to remove one";
+
+/// The line under the editor: a control point's input and output when one is in play, else
+/// nothing — how to work the editor is its hover ([`GESTURE_HELP`]).
 ///
 /// A free function so the wording is pinned by a test — the gestures are not discoverable from
 /// the widget, so this line *is* the affordance.
@@ -337,7 +401,7 @@ fn readout(points: &[[f32; 2]], described: Option<usize>) -> String {
             tool::to_display(p[0]) * 100.0,
             tool::to_display(p[1]) * 100.0
         ),
-        None => "Click to add a point · right-click to remove".to_string(),
+        None => String::new(),
     }
 }
 
@@ -610,6 +674,7 @@ mod tests {
         };
         let mut ed = Edited::default();
         crate::test_ui::click(&ctx, "Reset", |ui| {
+            reset_button(ui, &mut curve, &mut ed);
             show(ui, &mut curve, &mut ed, None, None, None);
         });
         assert!(curve.points.is_empty(), "{:?}", curve.points);
@@ -619,6 +684,7 @@ mod tests {
         // not tell a working Reset from one that clears on every frame.
         let mut ed2 = Edited::default();
         crate::test_ui::click(&ctx, "Reset", |ui| {
+            reset_button(ui, &mut curve, &mut ed2);
             show(ui, &mut curve, &mut ed2, None, None, None);
         });
         assert!(!ed2.changed && !ed2.settled, "a neutral curve was 'reset'");
@@ -634,10 +700,12 @@ mod tests {
             points: three_points(),
         };
         let mut channel = CurveChannel::Rgb;
+        let mut mode = CurveMode::Point;
         let mut ed = Edited::default();
         crate::test_ui::click(&ctx, "Blue", |ui| {
             ed = Edited::default();
-            show(ui, &mut curve, &mut ed, None, Some(&mut channel), None);
+            selectors(ui, &mut mode, &mut channel);
+            show(ui, &mut curve, &mut ed, None, Some(channel), None);
         });
         assert_eq!(
             channel,
@@ -655,17 +723,102 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **Why the mode has its own row:** going to the Parametric view and back must return to the
+    /// channel you left — when Parametric was a sixth "channel" it replaced the one you were on. And
+    /// under Parametric the channel row is greyed: a click there must change nothing.
+    #[test]
+    fn the_parametric_view_keeps_the_channel_and_greys_the_channel_row() {
+        let ctx = crate::test_ui::ctx();
+        let (mut mode, mut channel) = (CurveMode::Point, CurveChannel::Red);
+        crate::test_ui::click(&ctx, "Parametric", |ui| {
+            selectors(ui, &mut mode, &mut channel)
+        });
+        assert_eq!(
+            mode,
+            CurveMode::Parametric,
+            "sample: the click reached the mode row"
+        );
+        crate::test_ui::click(&ctx, "Green", |ui| selectors(ui, &mut mode, &mut channel));
+        assert_eq!(
+            channel,
+            CurveChannel::Red,
+            "a greyed channel row took a click"
+        );
+        crate::test_ui::click(&ctx, "Point curve", |ui| {
+            selectors(ui, &mut mode, &mut channel)
+        });
+        assert_eq!(
+            (mode, channel),
+            (CurveMode::Point, CurveChannel::Red),
+            "back on the point curve, the channel must be the one left"
+        );
+        crate::test_ui::click(&ctx, "Green", |ui| selectors(ui, &mut mode, &mut channel));
+        assert_eq!(channel, CurveChannel::Green, "and the row works again");
+    }
+
+    /// ⚠ The block collapses to its header and opens again, and `open` is the caller's — the
+    /// setting that keeps it collapsed across a restart. ⚠ Both halves, sampled: open draws the
+    /// selectors, closed draws the header alone.
+    #[test]
+    fn the_curve_block_collapses_to_its_header() {
+        let ctx = crate::test_ui::ctx();
+        let (mut mode, mut channel, mut open) = (CurveMode::Point, CurveChannel::Rgb, true);
+        let mut curve = ToneCurve {
+            points: three_points(),
+        };
+        let mut body = |ui: &mut egui::Ui, open: &mut bool| {
+            let mut ed = Edited::default();
+            if header(ui, open, true, |ui| reset_button(ui, &mut curve, &mut ed)) {
+                selectors(ui, &mut mode, &mut channel);
+                show(ui, &mut curve, &mut ed, None, Some(channel), None);
+            }
+        };
+        let labels = |open: &mut bool, body: &mut dyn FnMut(&mut egui::Ui, &mut bool)| {
+            crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| body(ui, open))
+                .into_iter()
+                .map(|(l, _)| l)
+                .collect::<Vec<_>>()
+        };
+        let shown = labels(&mut open, &mut body);
+        assert!(
+            shown.iter().any(|l| l == "Point curve"),
+            "sample: open draws the selectors: {shown:?}"
+        );
+        crate::test_ui::click(&ctx, "Tone curve", |ui| body(ui, &mut open));
+        assert!(!open, "a click on the header must close it");
+        let closed = labels(&mut open, &mut body);
+        assert!(
+            closed.iter().any(|l| l == "Tone curve"),
+            "the header stays: {closed:?}"
+        );
+        for gone in ["Point curve", "RGB", "Reset"] {
+            assert!(
+                !closed.iter().any(|l| l == gone),
+                "{gone} drawn while closed: {closed:?}"
+            );
+        }
+        crate::test_ui::click(&ctx, "Tone curve", |ui| body(ui, &mut open));
+        assert!(open, "and a second click opens it again");
+    }
+
     /// ⚠ All four are offered, and each label is distinct — a selector with two "Red"s would be
     /// unusable and the harness would click whichever came first.
     #[test]
     fn every_channel_is_offered_once_under_a_distinct_label() {
-        let mut seen: Vec<&str> = CurveChannel::ALL.iter().map(|c| c.label()).collect();
-        // ⚠ Five since M5.1c (Parametric). Written out rather than read from `ALL.len()`, so adding a
-        // mode is a deliberate edit here and not a silent pass.
-        assert_eq!(seen.len(), 5);
+        let ctx = crate::test_ui::ctx();
+        let (mut mode, mut channel) = (CurveMode::Point, CurveChannel::Rgb);
+        let mut seen: Vec<String> = crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            selectors(ui, &mut mode, &mut channel);
+        })
+        .into_iter()
+        .map(|(l, _)| l)
+        .collect();
+        // ⚠ Two modes and four channels since 2026-09-29, drawn and read back. Written out rather
+        // than read from `ALL.len()`, so adding one is a deliberate edit here and not a silent pass.
+        assert_eq!(seen.len(), 6, "{seen:?}");
         seen.sort_unstable();
         seen.dedup();
-        assert_eq!(seen.len(), 5, "two channels share a label");
+        assert_eq!(seen.len(), 6, "two segments share a label");
         assert_eq!(
             CurveChannel::default(),
             CurveChannel::Rgb,
@@ -682,8 +835,14 @@ mod tests {
         let mut curve = ToneCurve {
             points: three_points(),
         };
+        // Drawn as `mask_adjust` draws it: the header, its Reset, the curve — no selectors.
         let labels = crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
-            show(ui, &mut curve, &mut Edited::default(), None, None, None);
+            let mut ed = Edited::default();
+            if header(ui, &mut true, true, |ui| {
+                reset_button(ui, &mut curve, &mut ed)
+            }) {
+                show(ui, &mut curve, &mut ed, None, None, None);
+            }
         });
         for c in CurveChannel::ALL {
             assert!(
@@ -708,14 +867,15 @@ mod tests {
     }
 
     #[test]
-    fn the_readout_falls_back_to_the_gesture_hint() {
-        // The gestures are invisible otherwise — this line is the only thing that teaches them.
+    fn the_gestures_are_named_on_hover_and_the_idle_readout_is_empty() {
+        // The gestures are invisible otherwise, so the hover must name them; since 2026-09-29 it is
+        // the hover and not a standing line of 9-pt text (`docs/DESIGN.md` §8).
+        assert!(GESTURE_HELP.contains("add"), "{GESTURE_HELP}");
+        assert!(GESTURE_HELP.contains("remove"), "{GESTURE_HELP}");
         let pts = tool::IDENTITY.to_vec();
-        let hint = readout(&pts, None);
-        assert!(hint.contains("add"), "{hint}");
-        assert!(hint.contains("remove"), "{hint}");
+        assert_eq!(readout(&pts, None), "");
         // An index that no longer exists must not panic — a point can be removed on the same
         // frame the pointer is still over it.
-        assert_eq!(readout(&pts, Some(9)), hint);
+        assert_eq!(readout(&pts, Some(9)), "");
     }
 }

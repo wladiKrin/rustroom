@@ -46,10 +46,13 @@ impl ThemeChoice {
 /// discarded one. Its cost is that active state falls back to lightness alone, which is
 /// genuinely harder to read.
 ///
-/// ⚠ **Amber is deliberately absent.** The objection is functional, not aesthetic: it sits on
-/// the skin-tone and colour-temperature axis, which is precisely the judgement Temp and Tint
-/// exist to serve, so a warm cast in the image becomes harder to see against it. It also
-/// collides with amber's conventional meaning as a warning.
+/// ⚠ **Orange and Sage were deliberately absent until 2026-09-29**, and the objection still
+/// stands: a warm accent sits on the skin-tone and colour-temperature axis that Temp and Tint
+/// exist to judge, and green is the complement the eye adapts against. They are offered because
+/// the author asked for more choice (`docs/DESIGN.md` §4.2); the **default stays Steel blue**, and
+/// Orange's hover in Settings says why a warm accent can colour a white-balance judgement.
+///
+/// ⚠ Serialised by variant name, so a settings file from before the new variants loads unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Accent {
     Neutral,
@@ -57,22 +60,32 @@ pub enum Accent {
     SteelBlue,
     Teal,
     Violet,
+    Orange,
+    Sage,
+    Rose,
 }
 
 impl Accent {
-    pub const ALL: [Accent; 4] = [
-        Accent::Neutral,
+    /// The order the Settings swatches show them: the default first, Neutral last.
+    pub const ALL: [Accent; 7] = [
         Accent::SteelBlue,
         Accent::Teal,
         Accent::Violet,
+        Accent::Orange,
+        Accent::Sage,
+        Accent::Rose,
+        Accent::Neutral,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
-            Accent::Neutral => "Neutral (no accent)",
+            Accent::Neutral => "Neutral",
             Accent::SteelBlue => "Steel blue",
             Accent::Teal => "Teal",
             Accent::Violet => "Violet",
+            Accent::Orange => "Orange",
+            Accent::Sage => "Sage",
+            Accent::Rose => "Rose",
         }
     }
 }
@@ -510,6 +523,10 @@ pub struct Settings {
     /// Which Library panel sections are expanded. ⚠ Persisted because egui's own collapsing
     /// state does not survive a restart here — see [`PanelSections`].
     pub panel_sections: PanelSections,
+    /// Whether the tone curve is expanded — in the Tone section and in a mask's, one choice for
+    /// both. Open by default; collapsing it is the author's way to keep "quite large" out of the
+    /// way (2026-09-29), so it is **persisted**, for [`Self::panel_sections`]' reason.
+    pub tone_curve_open: bool,
     /// The Develop snapshot strip's outer height in whole points.
     ///
     /// ⚠ `u32`, not `f32`, for the two reasons `library_cell` already carries: `Settings` derives
@@ -961,6 +978,7 @@ impl Default for Settings {
             survey_cell: DEFAULT_SURVEY_CELL,
             custom_aspect: DEFAULT_CUSTOM_ASPECT,
             panel_sections: PanelSections::default(),
+            tone_curve_open: true,
             snapshot_strip_height: DEFAULT_STRIP_HEIGHT,
             dialog_sizes: std::collections::BTreeMap::new(),
             panel_order: PanelSection::ALL.to_vec(),
@@ -1481,6 +1499,19 @@ mod tests {
         assert!(!loaded.panel_sections.smart);
     }
 
+    /// A settings file from before the field loads with the curve open, as it always was.
+    #[test]
+    fn a_settings_file_from_before_the_curve_could_collapse_opens_it() {
+        let f = TempFile::new("tone_curve_open_absent");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete":false}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.confirm_preset_delete, "sample: the file was read");
+        assert!(
+            loaded.tone_curve_open,
+            "an absent field must give the default, open"
+        );
+    }
+
     #[test]
     fn settings_round_trip_carries_the_collapsed_sections() {
         let f = TempFile::new("panel_sections_rt");
@@ -1655,6 +1686,8 @@ mod tests {
                 folders: true,
                 ..PanelSections::default()
             },
+            // Non-default: it defaults to open, so `false` is what proves it round-trips.
+            tone_curve_open: false,
             // Likewise non-default: the preference defaults to *on*, so persisting `false` is
             // what proves it round-trips rather than being re-defaulted.
             // Not the default, so the round trip actually carries it.
@@ -2000,7 +2033,7 @@ mod tests {
     fn every_accent_and_theme_is_in_its_table() {
         // The dialog and the colour lookup both iterate `ALL`; a variant missing from it is
         // invisible in the UI rather than a compile error, so it is worth an explicit check.
-        assert_eq!(Accent::ALL.len(), 4);
+        assert_eq!(Accent::ALL.len(), 7);
         assert_eq!(ThemeChoice::ALL.len(), 3);
         for a in Accent::ALL {
             assert!(!a.label().is_empty());

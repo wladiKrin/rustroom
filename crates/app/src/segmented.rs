@@ -41,20 +41,61 @@ pub fn segmented_with_hover<T: PartialEq + Copy>(
     segmented_sized(ui, current, items, SEGMENTED_HEIGHT, font)
 }
 
-/// The compact segmented control's height: the HSL and grading selectors.
-pub const SEGMENTED_HEIGHT: f32 = 18.0;
-
-/// A segmented control at a given height and font. The Masks panel's mode control is drawn
-/// taller and in the body face (user's call, 2026-09-19: the compact one read too small for
-/// the panel's primary control).
+/// The compact segmented control's height: the HSL and grading selectors, the curve channels.
 ///
-/// ⚠⚠ **It never lets a label overflow its cell.** The columns are the most that still hold
-/// the widest label at this font; when the panel is too narrow for one row the items wrap onto
-/// as many rows as that takes (four items at the panel's default 240 pt become a 2 × 2 block).
-/// The first version drew four body-face labels into one row and they overlapped at the
-/// default width — seen in use, 2026-09-19.
+/// ⚠ 24 with caption labels, where a primary switch (the mask mode, the app switch) is the
+/// control row's 28 with body labels — `docs/DESIGN.md` §7.2. One shape at two sizes.
+pub const SEGMENTED_HEIGHT: f32 = 24.0;
+
 /// How much a segmented control's labels shrink to stay on one row.
 const SHRINK: f32 = 0.85;
+
+/// The size a label shrinks to: 15 % smaller, but **never below Caption** — `docs/DESIGN.md` §3's
+/// floor.
+///
+/// ⚠⚠ Until 2026-09-29 the shrink was unconditional, and 15 % off Caption is 9.35 pt: the tone
+/// curve's five channels rendered exactly there, "all very small" in the author's words. A
+/// Caption-sized control now wraps instead of shrinking.
+pub fn shrunk_size(size: f32) -> f32 {
+    (size * SHRINK).max(crate::theme::tokens::CAPTION)
+}
+
+/// What sits before a segment's label.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Mark {
+    /// The label alone.
+    None,
+    /// An icon-font glyph from `icons.rs` — verified against the bundled cmap, as every glyph must
+    /// be — drawn at `tokens::ICON` in the label's colour.
+    Icon(char),
+    /// A small dot in its own colour: the tone curve's channels.
+    Dot(egui::Color32),
+}
+
+/// A dot mark's diameter.
+const MARK_DOT: f32 = 7.0;
+/// The space between a mark and its label.
+const MARK_GAP: f32 = 6.0;
+
+impl Mark {
+    /// Its width plus the gap after it; nothing for [`Mark::None`].
+    fn width(self) -> f32 {
+        match self {
+            Mark::None => 0.0,
+            Mark::Icon(_) => crate::theme::tokens::ICON + MARK_GAP,
+            Mark::Dot(_) => MARK_DOT + MARK_GAP,
+        }
+    }
+}
+
+/// One segment: its value, its label (also its accessible name), its hover, and what sits before
+/// the label.
+pub struct Segment<'a, T> {
+    pub value: T,
+    pub label: &'a str,
+    pub hover: &'a str,
+    pub mark: Mark,
+}
 
 /// Where a segmented control's items go: how many per row, and whether the labels shrank.
 #[derive(Debug, PartialEq, Eq)]
@@ -64,7 +105,8 @@ pub struct Plan {
 }
 
 /// The layout for `n` items in `inner_w` points: one row at full size if it fits, else one row
-/// at the shrunken size if *that* fits, else as many columns as fit at full size.
+/// at the shrunken size if *that* fits, else the fewest rows that fit at full size, **balanced** —
+/// four items that would fit three to a row are drawn two and two, never three and one.
 pub fn plan(inner_w: f32, n: usize, widest: f32, widest_small: f32) -> Plan {
     const PAD: f32 = 10.0;
     const PAD_SMALL: f32 = 6.0;
@@ -81,16 +123,27 @@ pub fn plan(inner_w: f32, n: usize, widest: f32, widest_small: f32) -> Plan {
             shrink: true,
         };
     }
-    let cols = (1..=n)
+    let fit = (1..=n)
         .rev()
         .find(|&c| inner_w / c as f32 >= widest + PAD)
         .unwrap_or(1);
+    // The fewest rows, then as few columns as fill them: a 3 + 1 block reads as a broken row.
+    let rows = n.div_ceil(fit);
     Plan {
-        cols,
+        cols: n.div_ceil(rows),
         shrink: false,
     }
 }
 
+/// A segmented control at a given height and font. The Masks panel's mode control is drawn
+/// taller and in the body face (user's call, 2026-09-19: the compact one read too small for
+/// the panel's primary control).
+///
+/// ⚠⚠ **It never lets a label overflow its cell.** The columns are the most that still hold
+/// the widest label at this font; when the panel is too narrow for one row the items wrap onto
+/// as many rows as that takes (four items at the panel's default 240 pt become a 2 × 2 block).
+/// The first version drew four body-face labels into one row and they overlapped at the
+/// default width — seen in use, 2026-09-19.
 pub fn segmented_sized<T: PartialEq + Copy>(
     ui: &mut egui::Ui,
     current: &mut T,
@@ -98,50 +151,70 @@ pub fn segmented_sized<T: PartialEq + Copy>(
     height: f32,
     font: egui::FontId,
 ) -> egui::Response {
+    let segments: Vec<Segment<'_, T>> = items
+        .iter()
+        .map(|&(value, label, hover)| Segment {
+            value,
+            label,
+            hover,
+            mark: Mark::None,
+        })
+        .collect();
+    segmented_marked(ui, current, &segments, height, font)
+}
+
+/// [`segmented_sized`] with a [`Mark`] before each label — the mask modes' icons, the curve
+/// channels' dots. The mark is part of the width a cell must hold, and never shrinks.
+pub fn segmented_marked<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    current: &mut T,
+    items: &[Segment<'_, T>],
+    height: f32,
+    font: egui::FontId,
+) -> egui::Response {
     /// Horizontal room around a label inside its cell.
     const GAP: f32 = 2.0;
     let n = items.len().max(1);
     let width = ui.available_width();
-    let widest = ui.fonts_mut(|f| {
-        items
-            .iter()
-            .map(|(_, l, _)| {
-                f.layout_no_wrap((*l).to_owned(), font.clone(), egui::Color32::WHITE)
-                    .size()
-                    .x
-            })
-            .fold(0.0, f32::max)
-    });
+    let widest_at = |ui: &mut egui::Ui, font: &egui::FontId| {
+        ui.fonts_mut(|f| {
+            items
+                .iter()
+                .map(|it| {
+                    f.layout_no_wrap(it.label.to_owned(), font.clone(), egui::Color32::WHITE)
+                        .size()
+                        .x
+                        + it.mark.width()
+                })
+                .fold(0.0, f32::max)
+        })
+    };
+    let widest = widest_at(ui, &font);
     let inner_w = (width - 4.0).max(1.0);
     // ⚠ Shrink before wrapping: at the panel's floor width the five-tab curve selector, the
     // four Retouch modes, the four mask modes and Tint by tone each spilled onto a second row,
     // which both first-use reviews read as a broken control (A-20, P-02). A slightly smaller
     // label that keeps one row beats a second row every time; only when even that does not
-    // fit do the items wrap.
-    let small = egui::FontId::new(font.size * SHRINK, font.family.clone());
-    let widest_small = ui.fonts_mut(|f| {
-        items
-            .iter()
-            .map(|(_, l, _)| {
-                f.layout_no_wrap((*l).to_owned(), small.clone(), egui::Color32::WHITE)
-                    .size()
-                    .x
-            })
-            .fold(0.0, f32::max)
-    });
+    // fit do the items wrap. ⚠ Never below Caption — `shrunk_size`.
+    let small = egui::FontId::new(shrunk_size(font.size), font.family.clone());
+    let widest_small = widest_at(ui, &small);
     let Plan { cols, shrink } = plan(inner_w, n, widest, widest_small);
     let font = if shrink { small } else { font };
     let rows = n.div_ceil(cols);
     let total = rows as f32 * height + (rows as f32 - 1.0) * GAP;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, total), egui::Sense::hover());
-    let v = ui.visuals().clone();
+    let t = theme::tokens::of(ui);
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 4.0, v.extreme_bg_color);
+    // ⚠ A pill well on the canvas colour, the lit cell raised out of it — `docs/DESIGN.md` §7.2.
+    // Wrapped rows keep the radius of one row, so a 2 × 2 block reads as the same control.
+    painter.rect_filled(rect, height / 2.0, t.canvas);
     let inner = rect.shrink(2.0);
     let w = inner.width() / cols as f32;
     let row_h = (inner.height() - (rows as f32 - 1.0) * GAP) / rows as f32;
+    let cell_radius = row_h / 2.0;
     let mut all = resp.clone();
-    for (i, (item, label, hover)) in items.iter().enumerate() {
+    for (i, it) in items.iter().enumerate() {
+        let (item, label, hover) = (&it.value, &it.label, &it.hover);
         let (col, row) = (i % cols, i / cols);
         let cell = egui::Rect::from_min_size(
             egui::pos2(
@@ -166,24 +239,56 @@ pub fn segmented_sized<T: PartialEq + Copy>(
         }
         let lit = *current == *item;
         if lit {
-            painter.rect_filled(cell, 3.0, v.widgets.inactive.bg_fill);
+            lit_cell(&painter, cell, cell_radius, t.raised);
         } else if r.hovered() {
-            painter.rect_filled(cell, 3.0, v.widgets.hovered.weak_bg_fill);
+            painter.rect_filled(cell, cell_radius, t.hover);
         }
-        painter.text(
-            cell.center(),
-            egui::Align2::CENTER_CENTER,
-            *label,
-            font.clone(),
-            if lit {
-                v.strong_text_color()
-            } else {
-                v.text_color()
-            },
+        let colour = if lit { t.text } else { t.text2 };
+        // The mark and the label centred together as one group.
+        let galley = painter.layout_no_wrap(label.to_string(), font.clone(), colour);
+        let group = it.mark.width() + galley.size().x;
+        let left = cell.center().x - group / 2.0;
+        match it.mark {
+            Mark::None => {}
+            Mark::Icon(glyph) => {
+                painter.text(
+                    egui::pos2(left + theme::tokens::ICON / 2.0, cell.center().y),
+                    egui::Align2::CENTER_CENTER,
+                    glyph,
+                    egui::FontId::proportional(theme::tokens::ICON),
+                    colour,
+                );
+            }
+            Mark::Dot(c) => {
+                painter.circle_filled(
+                    egui::pos2(left + MARK_DOT / 2.0, cell.center().y),
+                    MARK_DOT / 2.0,
+                    c,
+                );
+            }
+        }
+        painter.galley(
+            egui::pos2(
+                left + it.mark.width(),
+                cell.center().y - galley.size().y / 2.0,
+            ),
+            galley,
+            colour,
         );
         all = all.union(r);
     }
     all
+}
+
+/// The lit segment: the fill and a one-point shadow under it, so it reads as raised out of the
+/// well rather than painted on it.
+fn lit_cell(painter: &egui::Painter, cell: egui::Rect, radius: f32, fill: egui::Color32) {
+    painter.rect_filled(
+        cell.translate(egui::vec2(0.0, 1.0)),
+        radius,
+        egui::Color32::from_black_alpha(70),
+    );
+    painter.rect_filled(cell, radius, fill);
 }
 
 /// One item of a [`pill`]: its value, its glyph, its label and its hover text.
@@ -204,6 +309,42 @@ pub struct PillStyle {
     /// it is the one accent-filled control in the bar, and a second would cost the first its
     /// meaning.
     pub accent: bool,
+    /// Draw the glyphs alone — the narrow form a bar plan picks. The labels stay the accessible
+    /// names, and the hovers still say them.
+    pub icons_only: bool,
+}
+
+/// The inner padding of a pill cell, either side of its content.
+const PILL_PAD: f32 = 10.0;
+/// The space between a pill cell's glyph and its label.
+const PILL_GAP: f32 = 6.0;
+
+/// The width of one pill cell: the widest glyph, and the widest label unless `icons_only`.
+fn pill_cell_width<T>(ui: &egui::Ui, items: &[PillItem<'_, T>], style: &PillStyle) -> f32 {
+    let icon_font = egui::FontId::proportional(crate::theme::tokens::ICON);
+    let widest = |f: &dyn Fn(&PillItem<'_, T>) -> (String, egui::FontId)| {
+        items
+            .iter()
+            .map(|it| {
+                let (t, font) = f(it);
+                ui.painter()
+                    .layout_no_wrap(t, font, egui::Color32::PLACEHOLDER)
+                    .size()
+                    .x
+            })
+            .fold(0.0, f32::max)
+    };
+    let icon_w = widest(&|it| (it.icon.to_string(), icon_font.clone()));
+    if style.icons_only {
+        return (icon_w + PILL_PAD * 2.0).ceil();
+    }
+    let label_w = widest(&|it| (it.label.to_owned(), style.font.clone()));
+    (icon_w + PILL_GAP + label_w + PILL_PAD * 2.0).ceil()
+}
+
+/// How wide [`pill`] draws `items` in `style` — what a bar plan measures before drawing.
+pub fn pill_width<T>(ui: &egui::Ui, items: &[PillItem<'_, T>], style: &PillStyle) -> f32 {
+    pill_cell_width(ui, items, style) * items.len().max(1) as f32 + 4.0
 }
 
 /// A segmented control sized to its content: every cell as wide as the widest icon + label.
@@ -218,42 +359,19 @@ pub fn pill<T: PartialEq + Copy>(
     items: &[PillItem<'_, T>],
     style: PillStyle,
 ) -> egui::Response {
-    const PAD: f32 = 12.0;
-    const GAP: f32 = 6.0;
-    let icon_font = egui::FontId::proportional(style.font.size + 3.0);
-    let (label_w, icon_w) = ui.fonts_mut(|f| {
-        let lw = items
-            .iter()
-            .map(|it| {
-                f.layout_no_wrap(
-                    it.label.to_owned(),
-                    style.font.clone(),
-                    egui::Color32::WHITE,
-                )
-                .size()
-                .x
-            })
-            .fold(0.0, f32::max);
-        let iw = items
-            .iter()
-            .map(|it| {
-                f.layout_no_wrap(it.icon.to_string(), icon_font.clone(), egui::Color32::WHITE)
-                    .size()
-                    .x
-            })
-            .fold(0.0, f32::max);
-        (lw, iw)
-    });
-    let cell_w = (icon_w + GAP + label_w + PAD * 2.0).ceil();
+    let icon_font = egui::FontId::proportional(crate::theme::tokens::ICON);
+    let cell_w = pill_cell_width(ui, items, &style);
     let n = items.len().max(1) as f32;
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(cell_w * n + 4.0, style.height),
         egui::Sense::hover(),
     );
     let v = ui.visuals().clone();
+    let t = theme::tokens::of(ui);
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 5.0, v.extreme_bg_color);
+    painter.rect_filled(rect, style.height / 2.0, t.canvas);
     let inner = rect.shrink(2.0);
+    let radius = inner.height() / 2.0;
     let mut all = resp.clone();
     for (i, it) in items.iter().enumerate() {
         let cell = egui::Rect::from_min_size(
@@ -281,38 +399,58 @@ pub fn pill<T: PartialEq + Copy>(
         }
         let lit = *current == it.value;
         let colour = if lit && style.accent {
-            painter.rect_filled(cell, 4.0, v.selection.bg_fill);
-            // ⚠ White on the accent in both themes: every accent pair was contrast-checked
-            // against white text (`every_accent_has_usable_contrast`), not against the
-            // theme's strong text, which is near-black on light.
-            egui::Color32::WHITE
+            painter.rect_filled(cell, radius, v.selection.bg_fill);
+            // ⚠ `on_accent`, never white: white on the dark theme's steel blue is 2.4:1.
+            theme::on_accent(v.dark_mode)
         } else if lit {
-            painter.rect_filled(cell, 4.0, v.widgets.inactive.bg_fill);
-            v.strong_text_color()
+            lit_cell(&painter, cell, radius, t.raised);
+            t.text
         } else if r.hovered() {
-            painter.rect_filled(cell, 4.0, v.widgets.hovered.weak_bg_fill);
-            v.strong_text_color()
+            painter.rect_filled(cell, radius, t.hover);
+            t.text
         } else {
-            v.text_color()
+            t.text2
         };
-        let x = cell.left() + PAD;
-        let icon_rect = painter.text(
-            egui::pos2(x, cell.center().y),
-            egui::Align2::LEFT_CENTER,
-            it.icon,
-            icon_font.clone(),
-            colour,
-        );
-        painter.text(
-            egui::pos2(icon_rect.right() + GAP, cell.center().y),
-            egui::Align2::LEFT_CENTER,
-            it.label,
-            style.font.clone(),
-            colour,
-        );
+        if style.icons_only {
+            painter.text(
+                cell.center(),
+                egui::Align2::CENTER_CENTER,
+                it.icon,
+                icon_font.clone(),
+                colour,
+            );
+        } else {
+            let icon_rect = painter.text(
+                egui::pos2(cell.left() + PILL_PAD, cell.center().y),
+                egui::Align2::LEFT_CENTER,
+                it.icon,
+                icon_font.clone(),
+                colour,
+            );
+            painter.text(
+                egui::pos2(icon_rect.right() + PILL_GAP, cell.center().y),
+                egui::Align2::LEFT_CENTER,
+                it.label,
+                style.font.clone(),
+                colour,
+            );
+        }
         all = all.union(r);
     }
     all
+}
+
+/// The dot's radius in a [`chip`].
+const DOT: f32 = 3.5;
+
+/// How wide [`chip`] draws `label` — what the status row's plan measures before drawing.
+pub fn chip_width(ui: &egui::Ui, label: &str, font: &egui::FontId) -> f32 {
+    let w = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
+        .size()
+        .x;
+    w + DOT * 2.0 + 18.0
 }
 
 /// A chip: a dot and a label in a rounded well, toggling `on`. The dot is the accent while on
@@ -322,15 +460,9 @@ pub fn pill<T: PartialEq + Copy>(
 /// not change with its clothes.
 pub fn chip(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
     const H: f32 = 20.0;
-    const DOT: f32 = 3.5;
-    let font = egui::FontId::proportional(11.0);
-    let w = ui.fonts_mut(|f| {
-        f.layout_no_wrap(label.to_owned(), font.clone(), egui::Color32::WHITE)
-            .size()
-            .x
-    });
-    let (rect, mut r) =
-        ui.allocate_exact_size(egui::vec2(w + DOT * 2.0 + 18.0, H), egui::Sense::click());
+    let font = egui::FontId::proportional(crate::theme::tokens::CAPTION);
+    let width = chip_width(ui, label, &font);
+    let (rect, mut r) = ui.allocate_exact_size(egui::vec2(width, H), egui::Sense::click());
     let enabled = ui.is_enabled();
     let was = *on;
     r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, was, label));
@@ -375,6 +507,66 @@ pub fn chip(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
     r
 }
 
+/// One swatch of [`swatches`]: its value, its colour, its name and its hover.
+pub struct Swatch<'a, T> {
+    pub value: T,
+    pub colour: egui::Color32,
+    pub label: &'a str,
+    pub hover: &'a str,
+}
+
+/// A row of colour swatches, one lit — the accent choice in Settings (`docs/DESIGN.md` §4.2).
+///
+/// ⚠ A 22-pt circle each, the chosen one ringed in its own colour with a gap of the panel colour,
+/// so the ring reads on every accent. Each reports `WidgetInfo::selected` with its **name**, so
+/// `test_ui::click(ctx, "Orange", ..)` reaches it and a screen reader says the colour, not "button".
+/// ⚠ `mark_changed`, the lesson `chip` paid for: a hand-drawn widget has to say it changed.
+pub fn swatches<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    current: &mut T,
+    items: &[Swatch<'_, T>],
+) -> egui::Response {
+    const D: f32 = 22.0;
+    const GAP: f32 = 8.0;
+    let n = items.len().max(1) as f32;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(n * D + (n - 1.0) * GAP + 6.0, D + 6.0),
+        egui::Sense::hover(),
+    );
+    let panel = ui.visuals().panel_fill;
+    let enabled = ui.is_enabled();
+    let mut all = resp.clone();
+    for (i, it) in items.iter().enumerate() {
+        let c = egui::pos2(
+            rect.left() + 3.0 + D / 2.0 + i as f32 * (D + GAP),
+            rect.center().y,
+        );
+        let cell = egui::Rect::from_center_size(c, egui::vec2(D + 6.0, D + 6.0));
+        let mut r = ui.interact(cell, resp.id.with(i), egui::Sense::click());
+        let selected = *current == it.value;
+        r.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::RadioButton, enabled, selected, it.label)
+        });
+        if enabled && r.clicked() && !selected {
+            *current = it.value;
+            r.mark_changed();
+        }
+        let r = if it.hover.is_empty() {
+            r.on_hover_text(it.label)
+        } else {
+            r.on_hover_text(it.hover)
+        };
+        let p = ui.painter();
+        if *current == it.value {
+            p.circle_filled(c, D / 2.0 + 3.0, it.colour);
+            p.circle_filled(c, D / 2.0 + 1.0, panel);
+        }
+        p.circle_filled(c, D / 2.0 - 1.0, it.colour);
+        all = all.union(r);
+    }
+    all
+}
+
 /// A chunky sliding switch: a track with a knob that moves left to right, filled with the **accent**
 /// when on.
 ///
@@ -398,7 +590,7 @@ pub fn switch(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
     /// consequential decision, and a label at the same size as every section header read as one more
     /// small control. An explicit size rather than a resolved `TextStyle`, so there is no style to
     /// miss in a bare harness `Context` — the panic `section_font`'s own doc warns about.
-    const LABEL_PT: f32 = 14.0;
+    const LABEL_PT: f32 = crate::theme::tokens::TITLE;
     let gap = ui.spacing().item_spacing.x;
     let font = egui::FontId::proportional(LABEL_PT);
     let text_w = ui.fonts_mut(|f| {
@@ -500,6 +692,32 @@ mod plan_tests {
         assert!(wrapped.cols < 5 && wrapped.cols >= 1, "{wrapped:?}");
     }
 
+    /// Four that would fit three to a row are drawn two and two — a 3 + 1 block reads as a row
+    /// with a straggler. Five that fit three go three and two.
+    #[test]
+    fn a_wrapped_control_is_balanced() {
+        // 300 fits three of 90 (+10) but not four.
+        assert_eq!(plan(300.0, 4, 90.0, 90.0).cols, 2);
+        assert_eq!(plan(300.0, 5, 90.0, 90.0).cols, 3);
+        // ⚠ The positive control: a row that fits stays one row.
+        assert_eq!(plan(500.0, 4, 90.0, 90.0).cols, 4);
+    }
+
+    /// The shrink stops at Caption — `docs/DESIGN.md` §3's floor. ⚠ Both halves: a Body label
+    /// still shrinks, a Caption one does not.
+    #[test]
+    fn a_label_never_shrinks_below_caption() {
+        let caption = crate::theme::tokens::CAPTION;
+        let body = crate::theme::tokens::BODY;
+        assert!(shrunk_size(body) < body, "a body label must still shrink");
+        assert!(shrunk_size(body) >= caption);
+        assert_eq!(
+            shrunk_size(caption),
+            caption,
+            "a caption label shrank below the floor"
+        );
+    }
+
     #[test]
     fn a_single_item_never_wraps() {
         assert_eq!(
@@ -545,7 +763,43 @@ mod tests {
             height: 32.0,
             font: egui::FontId::proportional(13.0),
             accent: true,
+            icons_only: false,
         }
+    }
+
+    #[test]
+    fn the_accent_swatches_select_by_name() {
+        // ⚠ Reached by the colour's name, the way a person and a screen reader refer to it — and the
+        // click must actually change the value, which a hand-drawn widget does only if told to.
+        #[derive(Clone, Copy, PartialEq, Debug)]
+        enum A {
+            Blue,
+            Orange,
+        }
+        let items = [
+            Swatch {
+                value: A::Blue,
+                colour: egui::Color32::LIGHT_BLUE,
+                label: "Steel blue",
+                hover: "",
+            },
+            Swatch {
+                value: A::Orange,
+                colour: egui::Color32::ORANGE,
+                label: "Orange",
+                hover: "",
+            },
+        ];
+        let ctx = crate::test_ui::ctx();
+        let mut cur = A::Blue;
+        let found = crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            swatches(ui, &mut cur, &items);
+        });
+        assert!(found.iter().any(|(l, _)| l == "Orange"), "{found:?}");
+        crate::test_ui::click(&ctx, "Orange", |ui| {
+            swatches(ui, &mut cur, &items);
+        });
+        assert_eq!(cur, A::Orange);
     }
 
     #[test]

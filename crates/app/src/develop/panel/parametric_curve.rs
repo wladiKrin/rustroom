@@ -29,29 +29,31 @@ enum Grab {
     Region(Region, f32),
 }
 
+/// The Reset for the parametric curve: its four regions and three boundaries back to neutral, and
+/// disabled while they are there. Drawn in the curve block's header (`tone_curve::header`).
+pub fn reset_button(ui: &mut egui::Ui, param: &mut edit_model::ParametricCurve, ed: &mut Edited) {
+    let r = ui
+        .add_enabled(
+            *param != edit_model::ParametricCurve::default(),
+            egui::Button::new("Reset"),
+        )
+        .on_hover_text("Resets the four regions and their boundaries");
+    if r.clicked() {
+        *param = edit_model::ParametricCurve::default();
+        ed.mark_changed();
+    }
+}
+
+/// The Parametric view. ⚠ Its header, Reset and the selectors above it are the caller's — see
+/// `tone_curve::selectors`.
 pub fn show(
     ui: &mut egui::Ui,
     param: &mut edit_model::ParametricCurve,
     points: &[[f32; 2]],
     ed: &mut Edited,
     hist: Option<&[[u32; 256]; 3]>,
-    channel: &mut CurveChannel,
     binding: ParametricDrag,
 ) -> egui::Rect {
-    theme::sub_label_with(ui, "Tone Curve", |ui| {
-        let r = ui
-            .add_enabled(
-                *param != edit_model::ParametricCurve::default(),
-                egui::Button::new("Reset"),
-            )
-            .on_hover_text("Return the four regions to zero and the splits to their defaults");
-        if r.clicked() {
-            *param = edit_model::ParametricCurve::default();
-            ed.mark_changed();
-        }
-    });
-    theme::segmented(ui, channel, &CurveChannel::ALL.map(|c| (c, c.label())));
-
     let full = ui.available_width();
     let size = full.min(MAX_SIZE);
     let pad = ((full - size) * 0.5).max(0.0);
@@ -64,6 +66,13 @@ pub fn show(
         });
         allocated.expect("the horizontal closure always runs")
     };
+    // ⚠ How to work it is the hover (`docs/DESIGN.md` §8); the line under it carries only a value.
+    let resp = resp.on_hover_text(match binding {
+        ParametricDrag::Left => {
+            "Drag the handles below to move the region boundaries, or drag on the curve to adjust a region"
+        }
+        ParametricDrag::Off => "Drag the handles below to move the region boundaries",
+    });
     let norm_x = |x: f32| ((x - rect.left()) / rect.width()).clamp(0.0, 1.0);
     let at = |n: [f32; 2]| {
         egui::pos2(
@@ -124,7 +133,7 @@ pub fn show(
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
         let painter = ui.painter_at(rect);
-        backdrop(&painter, rect, v, hist, CurveChannel::Parametric);
+        backdrop(&painter, rect, v, hist, CurveChannel::Rgb);
         // The region under the pointer (or being dragged), shaded so the drag's target is visible.
         if let Some(r) = active {
             let s = pipeline::parametric::sanitised_splits(param.splits);
@@ -167,22 +176,18 @@ pub fn show(
 
     // ---- the four sliders ---------------------------------------------------------------------
     for r in Region::ALL {
+        ed.help_scope = rustroom_app::slider_help::Scope::Parametric;
         ed.slider(ui, r.amount(param), -100.0..=100.0, r.label(), 0.0);
+        ed.help_scope = rustroom_app::slider_help::Scope::Global;
     }
     theme::hint(
         ui,
         &match (active, binding) {
-            (Some(r), ParametricDrag::Left) => {
-                format!("{}: {:+.0} — drag up or down on the curve", r.label(), {
-                    let mut p = *param;
-                    *r.amount(&mut p)
-                })
-            }
-            (Some(r), ParametricDrag::Off) => format!("{}: {:+.0}", r.label(), {
+            (Some(r), _) => format!("{}: {:+.0}", r.label(), {
                 let mut p = *param;
                 *r.amount(&mut p)
             }),
-            (None, _) => "Drag the handles under the curve to move the regions".to_string(),
+            (None, _) => String::new(),
         },
     );
     rect
@@ -202,7 +207,6 @@ mod tests {
     ) -> (edit_model::ParametricCurve, Edited) {
         let ctx = egui::Context::default();
         let mut param = edit_model::ParametricCurve::default();
-        let mut channel = CurveChannel::Parametric;
         let mut ed = Edited::default();
         let mut rect = egui::Rect::NOTHING;
         let at = |r: egui::Rect, n: [f32; 2]| {
@@ -231,7 +235,7 @@ mod tests {
                 _ => {}
             }
             let _ = ctx.run_ui(input, |ui| {
-                rect = show(ui, &mut param, &[], &mut ed, None, &mut channel, binding);
+                rect = show(ui, &mut param, &[], &mut ed, None, binding);
             });
         }
         (param, ed)

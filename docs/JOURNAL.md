@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [The design language: three directions, B chosen, and built (2026-09-29)](#2026-09-29--the-design-language-three-directions-b-chosen-and-built-branch-design-language-merged-2026-09-29)
 - [M9.14 Previews: instant 1:1 in Develop, Compare and Survey (2026-09-29)](#2026-09-29--m914-previews-instant-11-in-develop-compare-and-survey-branch-m914-previews-merged-2026-09-29)
 - [The resident final checkpoint: the tail's input stays on the GPU (2026-09-26)](#2026-09-26--the-resident-final-checkpoint-the-tails-input-stays-on-the-gpu-branch-resident-final)
 - [Per-pixel fusion: a run of per-pixel stages as one pass (2026-09-26)](#2026-09-26--per-pixel-fusion-a-run-of-per-pixel-stages-as-one-pass-branch-per-pixel-fusion)
@@ -159,6 +160,161 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-29 — The design language: three directions, B chosen, and built (branch `design-language`, merged 2026-09-29)
+
+**Input:** the author asked for one cohesive, minimal design language with mockups to choose from,
+naming two irritants — inconsistent font sizes (some tiny with lots of text, hard to read on the 5K;
+others too big) and the Library top row overlapping on the 13-inch MacBook Pro.
+
+**Measured.** *Type:* ten sizes in use — 9, 11, 12, 12.5, 13, 13.5, 14, 15, 17, 18 — plus 26 for
+the rail glyphs; `tune` never set `text_styles`, so egui's defaults (Small 9, Body 13, Heading 18)
+were joined by 24 literal `FontId::proportional` / `.size()` sites across the bin modules. The 9-pt
+sites are exactly the "too small" ones: `hint`, thumbnail badges and captions, the curve hint.
+*Overlap:* reproduced at a 1400×859 window from a scratch profile — the centred status label is
+painted regardless of room, the search field has a fixed width and the bar carries Stack / Expand /
+Reindex / format chips; at Interface size 125 % the whole bar overprints. *Consistency:* four ways of
+showing "selected", three segmented-control looks, buttons that look like labels.
+
+**Three directions on a canvas** (<https://claude.ai/artifact/JK6A3tSpaXPo427cHZTZ7h>), each with
+Library, Develop, Settings and a component kit, sharing the same foundations: A · Studio (the
+current direction disciplined), B · Layered (elevation, rounded, sentence case, roomier), C ·
+Editorial (hairlines, text buttons). **The author chose B**, and added: a **status row** at the
+bottom of the content column carrying the count, format chips, sort, size and ⋯ so the top row only
+navigates and narrows; **no persistent hints** — every control gets one hover sentence; steel blue
+stays the default accent with **Orange, Sage and Rose** added (seven pairs, each checked ≥ 3:1
+against its base and ≥ 4.5:1 for text on it; dark text on the dark-theme accent, where the current
+`primary_button` paints white at 2.4:1). ⚠ Orange was excluded on 2026-08-13 for sitting on the
+colour-temperature axis; offered now at the author's request, with the caveat kept in the rulebook.
+
+**Output:** `docs/DESIGN.md` — the rulebook (type, colour, spacing, the shell and its two rows,
+sixteen components, the hints rule, where every token lives in code, a checklist, a decisions log)
+— and a bullet in `CLAUDE.md`. No code changed. The implementation pass is planned next.
+
+**Built the same day** (plan `docs/superpowers/plans/2026-09-29-design-language.md`, six commits,
+gate green at **3230**). `theme/tokens.rs` holds every surface, grey, size and radius as dark/light
+pairs; `tune` installs 11 / 13 / 15 / 20 and every literal size in the bin modules became a token,
+kept out by `no_literal_font_size_outside_theme` (a source sweep with a positive control). Section
+headers became cards painted **behind** their bodies (`HeaderOut::show_body` fills a shape reserved
+before the header drew — one word per call site, no layout change); segmented wells and pills sit on
+the canvas colour with a raised lit segment. `bar_plan` (lib, pure) decides what a bar shows; the
+Library's top row is app switch · mode · search · Filter, and `status_bar.rs` draws a 32-pt row under
+the content (count or job, the selected photo's name, chips, sort, size, ⋯) and above Develop's
+filmstrip (readout, job). Explanations moved onto hover; the accent is seven swatches.
+
+⚠⚠ *What the gate and the look caught:* **(1)** the light theme's tertiary grey `#9a9aa0` measured
+**2.55:1** on the panel — the test found it, the value moved to `#8a8a90` (3.12:1), and the test's own
+floor (written as 2.4 beside a comment saying 3:1) was corrected rather than the colour excused.
+**(2)** The overlap test's first adversary — a long status line — still **fit** beside the cluster, so a
+sabotage that let the status claim the whole row **passed**; lengthened past any row, the same sabotage
+fails. **(3)** The snapshot strip's body fills its resizable panel on purpose, and the gap a card leaves
+under itself made the content 10 pt taller than the panel **every frame** — the strip grew to its
+half-height cap and squeezed the sliders to two sections. Seen in the first screenshot, not by a test;
+it keeps a plain header, and `show_body`'s doc now says never for a filling body. **(4)** Two more doc
+blocks were found on the wrong item (`format_chips`', sitting on `stack_buttons`; `pressed_command`'s,
+on a constant) — the removed-`///` audit after the scripted move accounted for every line.
+**(5)** A commit went in with clippy red because the chain used `;` — amended before anything else
+landed, and the one earlier commit gated on tests alone was re-checked in a worktree (green).
+
+⚠ *Reversed on its own terms:* Reindex went back behind ⋯, with Expand all / Stack all. The
+2026-09-23 call took it out of a one-item menu and wrote down when to reconsider — "if a second Library
+action ever wants this corner"; two did.
+
+⚠ *Left open:* Title and Display want **Inter Medium**, which is not bundled (it needs a download from
+the Inter release, OFL); hover sentences outside the sliders are not yet tabled with coverage tests.
+(Inter Medium: done in the second round below.)
+
+⚠ *Checking the 13-inch width:* the author runs **AeroSpace**, a tiling window manager, which sized every
+window to the external display and ignored both Accessibility resizes and the initial size — the reason
+`drive resize` "did nothing" on 2026-09-29. `aerospace layout floating --window-id <id>` on the scratch
+window (a runtime change to that window only), then `drive resize 1440 875`. `RUSTROOM_DEBUG_WINDOW`
+sets the initial size for untiled setups.
+
+⚠ *Process notes, in memory too:* three Rustroom instances were up at once (the author's, another
+session's, mine) and the drive tool picked the largest window of any of them — it now honours
+`DRIVE_PID`. Synthetic key events reach egui (Escape closes dialogs, Return opens the grid's
+selection); the 2026-09-28 failure was the native open panel only. `File → Open recent` from a seeded
+`settings.json` avoids that panel entirely. AX resize returned success and did nothing to the eframe
+window.
+
+**Second round, from the author's first look** (five commits, gate green at **3237**). He asked for
+Inter Medium, the photo's name centred in the Library's top row as in Develop, search and Filter at
+the right edge, the rail's growth fixed, and every hover rewritten to one sentence.
+- **Inter Medium** is bundled, subset exactly as Regular (`pyftsubset
+  --unicodes="U+0000-DFFF,U+F900-10FFFF" --layout-features='*'`; 368 KB, cmap 2,107). It is used
+  for Title, Display, panel section names and sub-labels, through `theme::medium_font`, which falls
+  back to Regular in a bare harness context instead of panicking. ⚠ `U+0000-U+DFFF` is rejected by
+  pyftsubset; without `--layout-features='*'` the glyph count does not match the Regular's.
+- **The rail's growth** was the design language's own doing: its wider button padding made the
+  rail's new-item rows ask for 16 pt more than the rail had, and an egui side panel widens to its
+  content on every frame drawn — so every pointer move widened it. ⚠ The bare harness has egui's
+  narrower padding, under which the rows fitted, so the test draws with the **real theme**.
+- **The centred name.** Both views now put what narrows or finishes at the right edge and centre
+  the name in the gap both leave (`shell::shared_gap`). ⚠⚠ **The first build centred the name *with
+  its facts*, and the harness test passed** because both views were drawn with the same facts —
+  shape (a) of the standing lesson, a fixture that makes two different things equal. In use the
+  Library lacks the pixel size until a decode, so its name sat 27 pt left of Develop's; seen in a
+  1440-wide screenshot. The name is now centred alone and the facts truncate after it;
+  `the_name_does_not_move_with_its_facts` differs the facts on purpose, asserts they differ first,
+  and fails on the old centring (675.5 vs 719.0).
+- **Hovers.** "Detail" in Noise reduction explained Sharpening's Detail too, because the help
+  table was keyed by label alone. `slider_help` is now keyed by **scope** (global, parametric, each
+  HSL tab, noise reduction, sharpening, vignette, lens, each mask kind, patch, eye…); a label that
+  means two things has no global entry, so a panel that forgets its scope shows nothing rather than
+  the wrong sentence, and `Edited::missing_help` makes both coverage tests see it. Every hover is
+  one sentence without a full stop, and none says "double-click to reset";
+  `theme::every_hover_is_one_short_sentence` sweeps the sources. Compare's and Survey's key lines
+  left their hovers for the Keyboard shortcuts dialog.
+- ⚠ *What the rewrite script got wrong:* it replaced string literals **by text**, so identical
+  strings that were not hovers changed too — an accessibility verb "Delete", three
+  `Footer::confirm("Delete")` buttons, the menu's "Rotate left/right". All were restored by
+  reading the diff line by line; ⚠ **a text-matching rewrite must be reviewed per hunk, never by
+  the test result**, since a relabelled button compiles and most of its tests pass.
+- ⚠ *Two doc blocks on the wrong item again:* inserting the rail test above
+  `clicking_a_keyword_makes_it_the_parent…` put it **between that test and its doc**, and an Immich
+  doc had already been sitting on the same test since before this branch; the keyboard-reference
+  doc sat on `EXTRA_KEYS` instead of the dialog function. All three were moved back. The scan that
+  found the first one — an added line directly after an unchanged `///` line in `git diff -U1` — is
+  cheap enough to run after every test insertion.
+
+⚠ *Still open:* non-slider hovers are swept but not tabled; `status_bar.rs` is 638 code lines.
+
+**Third round, five comments from use** (three commits, gate green at **3242**):
+- **Counts in one column.** A folder's count stood left of its one action, an Immich album's left
+  of its two, a header's at the edge, and the Dates' inside their labels ("2024 (523)"). The count
+  now ends at `tokens::TRAILING_INSET` on every row and header, at least four digits wide, the
+  actions left of it; the Dates tree and the Immich timeline's years are list rows with the folder
+  tree's triangle, moved into `list_row::disclosure`. `every_count_in_the_rail_ends_at_one_x` reads
+  the **painted text** (sabotage: a count shifted by its action count, 134–224 pt, fails).
+  ⚠ *Caught by the suite, not by me:* with the count at the edge a keyword row's **disabled** Tag
+  and Untag cells stood under the row's centre and ate the click meant to select the keyword. A
+  disabled action now senses hover only (`a_click_on_a_disabled_action_reaches_the_row`).
+- **A default lens correction is not an edit.** With "Apply lens correction to new photos" on, the
+  Lens section measured the photo against all-off, so an untouched photo showed its dot and a reset,
+  and both "Reset adjustments" paths turned the correction off. The sections and both resets now use
+  `Settings::initial_edits(None)` (`SourceInfo::fresh`); each of the three sites sabotage-checked.
+- **The filmstrip through a resize.** It centred the selected photo only when the selection changed,
+  so a resize kept the offset in points while every cell grew — the photo slid right out of view in
+  the test. It re-centres whenever the step or the width changes (`thumb_window::layout_changed`),
+  and its cells now carry their caption as their accessible name.
+- **The tone curve's channels and the mask modes** are a design question, not a fix: the curve's
+  five labels render at **9.35 pt** (the segmented shrink takes 15 % off Caption, below the 11-pt
+  floor) in 57 × 20-pt cells, and the mask modes at 13 pt in 71-pt cells. Options on a canvas
+  (<https://claude.ai/artifact/E5FSgBTobVtqkKvxvTNpL8>), waiting for the author's pick.
+
+**Fourth round: the author picked curve A and masks B, and asked for a collapsible curve** (one
+commit, gate green at **3250**). The curve's mode (`CurveMode`) left `CurveChannel`, so Parametric
+is a row of its own and going there and back keeps the channel; the channel row carries dots and is
+greyed under Parametric. The block collapses under `section::sub_header`, with a dot while any of
+the five curves is bent; its state is `Settings::tone_curve_open`, saved when it changes, shared
+with the masks' curve. The mask modes gained Phosphor icons (plus-circle, plus, minus, intersect —
+read from 2.1.2's stylesheet, whose codepoints for five icons already in `icons.rs` matched, and each
+found in the bundled cmap) and wrap into a 2 × 2 block; the kind buttons are 36 tall with 18-pt
+glyphs. `segmented` gained marks, a Caption floor on the shrink and balanced wrapping — without the
+balance the four modes went three and one. Sabotages: an unbalanced wrap (two tests), no floor, and
+no save each fail. ⚠ *Doc blocks on the wrong item, three more:* the curve editor's doc sat on
+`CurveChannel`, the segmented control's on the `SHRINK` constant, and three struct docs in
+`adjustments` were stacked on the wrong structs — all moved; and my own insertion of `curve_mode`
+landed between `curve_channel` and its doc, caught by reading the diff before building.
 ### 2026-09-29 — M9.14 Previews: instant 1:1 in Develop, Compare and Survey (branch `m9.14-previews`, merged 2026-09-29)
 
 **The ask** (P-20, the professional review's first blocker): a focus check across a shoot is a wall

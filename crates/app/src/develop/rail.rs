@@ -18,16 +18,16 @@ const RAIL_WIDTH: f32 = 48.0;
 ///
 /// ⚠ 26, up from 22 (2026-09-19, user's call): the icons are the rail's only content and
 /// should read as its dominant element rather than as marks in a strip.
-const GLYPH_SIZE: f32 = 26.0;
+const GLYPH_SIZE: f32 = crate::theme::tokens::ICON_LARGE;
 
-/// Padding around the glyph.
-const PAD: f32 = 6.0;
+/// Padding around the glyph: a 32-pt button around a 24-pt glyph, `docs/DESIGN.md` §7.11.
+const PAD: f32 = 4.0;
 
 /// How much of the accent the selected entry's tint carries.
 ///
 /// ⚠ A tint, not a solid block and not a bar: the accent should not shout beside the image —
 /// the visual identity spec's "low chroma near the image". The bar was drafted and rejected.
-const TINT: f32 = 0.18;
+const TINT: f32 = crate::theme::tokens::TINT;
 
 /// Draw the rail.
 ///
@@ -73,11 +73,15 @@ fn entry(ui: &mut egui::Ui, t: Tool, picked: bool) -> egui::Response {
     } else if resp.hovered() {
         (v.widgets.hovered.weak_bg_fill, v.text_color())
     } else {
-        (egui::Color32::TRANSPARENT, v.text_color())
+        // ⚠ The secondary grey at rest, so the active tool's accent is the only strong glyph.
+        (
+            egui::Color32::TRANSPARENT,
+            crate::theme::tokens::of(ui).text2,
+        )
     };
     let painter = ui.painter();
     if fill != egui::Color32::TRANSPARENT {
-        painter.rect_filled(rect.shrink(2.0), 4.0, fill);
+        painter.rect_filled(rect.shrink(2.0), crate::theme::tokens::RADIUS, fill);
     }
     painter.text(
         rect.center(),

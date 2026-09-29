@@ -171,6 +171,7 @@ pub fn for_test() -> RustroomApp {
         brush_auto_mask: false,
         brush_tolerance: rustroom_app::brush_tool::DEFAULTS.tolerance,
         hsl_channel: Default::default(),
+        curve_mode: Default::default(),
         curve_channel: Default::default(),
         mask_hsl_channel: Default::default(),
         mask_grade_range: Default::default(),

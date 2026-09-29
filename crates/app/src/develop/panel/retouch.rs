@@ -56,7 +56,7 @@ pub(crate) fn show_with(
         ed.discrete();
     }
     let picked_before = s.selected_spot;
-    out.state.show_body_unindented(ui, |ui| {
+    out.show_body(ui, |ui| {
         list(ui, s, tool, ed);
         show_all_row(ui, s);
     });
@@ -210,10 +210,9 @@ fn show_all_row(ui: &mut egui::Ui, s: &mut Session) {
     }
 }
 
-const HEAL_HINT: &str = "Matches the source patch to the ring around the destination — what \
-                         makes a spot on a sky disappear rather than leaving a disc of slightly \
-                         different sky.";
-const CLONE_HINT: &str = "A straight copy, blended by the feather.";
+const HEAL_HINT: &str =
+    "Removes a spot by blending in nearby texture that matches its surroundings";
+const CLONE_HINT: &str = "Removes a spot by copying another area exactly";
 
 /// The mode, Size and Feather of the lit row: the selected patch, or the tool's defaults.
 fn settings(
@@ -271,21 +270,19 @@ fn settings(
     let radius = live.as_mut().map_or(&mut tool.radius, |sp| &mut sp.radius);
     let long = s.full_long;
     let mut px = spot_tool::radius_px(*radius, long);
-    let r = ui
-        .add(
-            super::slider::Slider::new(
-                &mut px,
-                spot_tool::radius_px(MIN_RADIUS, long)..=spot_tool::radius_px(MAX_RADIUS, long),
-            )
-            .logarithmic(true)
-            .text("Size")
-            .custom_formatter(|v| format!("{v:.0} px")),
+    let r = ui.add(
+        super::slider::Slider::new(
+            &mut px,
+            spot_tool::radius_px(MIN_RADIUS, long)..=spot_tool::radius_px(MAX_RADIUS, long),
         )
-        .on_hover_text(
-            "The patch's radius in pixels of the full-resolution image. Click on the image to \
-             place a patch; drag out to size it; ⌥-drag to choose the source yourself. Delete \
-             removes the selected patch.",
-        );
+        .logarithmic(true)
+        .text("Size")
+        .help(rustroom_app::slider_help::text(
+            rustroom_app::slider_help::Scope::Patch,
+            "Size",
+        ))
+        .custom_formatter(|v| format!("{v:.0} px")),
+    );
     if r.changed() {
         *radius = spot_tool::radius_from_px(px, long);
     }
@@ -296,13 +293,15 @@ fn settings(
     let feather = live
         .as_mut()
         .map_or(&mut tool.feather, |sp| &mut sp.feather);
-    let r = ui
-        .add(
-            super::slider::Slider::new(feather, 0.0..=100.0)
-                .text("Feather")
-                .reset_to(rustroom_app::spot_tool::SpotTool::default().feather),
-        )
-        .on_hover_text("0 is a hard edge; 100 ramps from the centre to the rim.");
+    let r = ui.add(
+        super::slider::Slider::new(feather, 0.0..=100.0)
+            .text("Feather")
+            .help(rustroom_app::slider_help::text(
+                rustroom_app::slider_help::Scope::Patch,
+                "Feather",
+            ))
+            .reset_to(rustroom_app::spot_tool::SpotTool::default().feather),
+    );
     touched |= r.changed();
     settled |= super::settles(&r);
     dragging |= r.dragged();

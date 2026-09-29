@@ -36,6 +36,8 @@ pub fn show(
     baseline: color::wb::Illuminant,
     channel: &mut adjustments::HslChannel,
     grade: &mut color_wheel::GradeRange,
+    // `Settings::tone_curve_open` — one choice for the global curve and a mask's.
+    curve_open: &mut bool,
     ed: &mut Edited,
 ) -> egui::Rect {
     let mut curve_rect = egui::Rect::NOTHING;
@@ -49,7 +51,7 @@ pub fn show(
                 .modified(a.group_differs(g))
                 .resettable(true),
         );
-        out.state.show_body_unindented(ui, |ui| match g {
+        out.show_body(ui, |ui| match g {
             LocalGroup::WhiteBalance => {
                 adjustments::white_balance(ui, &mut a.white_balance, baseline, None, ed);
             }
@@ -64,7 +66,13 @@ pub fn show(
                 // a mask's curve acts on a region no histogram describes.
                 // ⚠ `None`: a mask's curve is composite-only by decision, so it gets no channel
                 // selector — see `build_pipeline`'s mask branch, which is the other half of that.
-                curve_rect = tone_curve::show(ui, &mut a.tone_curve, ed, None, None, None);
+                // ⚠ Collapsible like the global curve, under the same setting (2026-09-29).
+                let modified = !a.tone_curve.points.is_empty();
+                if tone_curve::header(ui, curve_open, modified, |ui| {
+                    tone_curve::reset_button(ui, &mut a.tone_curve, ed)
+                }) {
+                    curve_rect = tone_curve::show(ui, &mut a.tone_curve, ed, None, None, None);
+                }
                 theme::sub_label(ui, "Presence");
                 ed.slider(
                     ui,
@@ -87,7 +95,7 @@ pub fn show(
                 ed.slider(ui, &mut a.saturation, -100.0..=100.0, "Saturation", 0.0);
                 ui.add_space(4.0);
                 hsl_bands::show(ui, &mut a.hsl, channel, ed);
-                theme::sub_label(ui, "Color Grading");
+                theme::sub_label(ui, "Color grading");
                 theme::segmented(
                     ui,
                     grade,
@@ -97,6 +105,7 @@ pub fn show(
                 {
                     color_wheel::show(ui, &mut a.color_grading, *grade, diameter, ed);
                     let w = grade.wheel_mut(&mut a.color_grading);
+                    ed.help_scope = rustroom_app::slider_help::Scope::TintByTone;
                     ed.slider(ui, &mut w.hue, 0.0..=360.0, "Hue", 0.0);
                     // ⚠ `Strength` here too — the same instrument, see `adjustments`.
                     ed.slider(ui, &mut w.saturation, 0.0..=100.0, "Strength", 0.0);
@@ -112,9 +121,11 @@ pub fn show(
                     edit_model::ColorGrading::default().blending,
                 );
                 ed.slider(ui, &mut cg.balance, -100.0..=100.0, "Balance", 0.0);
+                ed.help_scope = rustroom_app::slider_help::Scope::Global;
             }
             LocalGroup::Detail => {
-                theme::sub_label(ui, "Noise Reduction");
+                theme::sub_label(ui, "Noise reduction");
+                ed.help_scope = rustroom_app::slider_help::Scope::NoiseReduction;
                 ed.slider(
                     ui,
                     &mut a.noise_reduction.luminance,
@@ -138,6 +149,7 @@ pub fn show(
                     edit_model::NoiseReduction::default().smoothness,
                 );
                 theme::sub_label(ui, "Sharpening");
+                ed.help_scope = rustroom_app::slider_help::Scope::Sharpening;
                 ed.slider(ui, &mut a.sharpening.amount, 0.0..=100.0, "Amount", 0.0);
                 ed.slider(
                     ui,
@@ -154,6 +166,7 @@ pub fn show(
                     edit_model::Sharpening::default().detail,
                 );
                 ed.slider(ui, &mut a.sharpening.masking, 0.0..=100.0, "Masking", 0.0);
+                ed.help_scope = rustroom_app::slider_help::Scope::Global;
                 // ⚠ M9.6, Lightroom's meaning: negative protects this area from the global
                 // defringe (a real purple object), positive adds defringe here.
                 theme::sub_label(ui, "Defringe");
@@ -208,6 +221,7 @@ mod tests {
                 color::wb::Illuminant::default(),
                 &mut self.channel,
                 &mut self.grade,
+                &mut true,
                 ed,
             );
         }

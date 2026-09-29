@@ -40,10 +40,8 @@ impl Mode {
     }
 }
 
-pub(super) const RED_EYE_HINT: &str = "Click a red pupil: it is found and the red neutralised. \
-                                        Drag inside the circle to move it, its edge to resize it.";
-pub(super) const PET_EYE_HINT: &str = "Click an animal's glowing pupil — green, yellow or white. \
-                                        It becomes a dark pupil, with an optional catchlight.";
+pub(super) const RED_EYE_HINT: &str = "Removes the red from a pupil you click";
+pub(super) const PET_EYE_HINT: &str = "Darkens an animal's glowing pupil you click";
 
 /// Apply a mode chosen in the selector to the eye side. Returns the spot mode to apply when the
 /// new mode is a patch mode (the caller owns the patch side), `None` otherwise.
@@ -109,7 +107,7 @@ pub(super) fn list(ui: &mut egui::Ui, s: &mut Session, eyes: &mut EyeTool, ed: &
         s.suppressed_eye = None;
         ed.discrete();
     }
-    out.state.show_body_unindented(ui, |ui| {
+    out.show_body(ui, |ui| {
         let long = s.full_long;
         let selected = s.selected_eye.filter(|&i| i < s.edits.eyes.len());
         let (mut pick, mut remove) = (None, None);
@@ -170,16 +168,13 @@ pub(super) fn settings(ui: &mut egui::Ui, s: &mut Session, tool: &mut EyeTool, e
     };
     // ⚠ A tool default is not a photo edit: with nothing selected the sliders must neither render
     // nor push history — `retouch::settings`' rule for its Next patch row.
-    let mut local = Edited::default();
-    local
-        .slider(ui, &mut size, 0.0..=100.0, "Pupil Size", d.pupil_size)
-        .on_hover_text(
-            "How far into weakly coloured pixels the correction reaches. The circle still \
-             bounds it.",
-        );
-    local
-        .slider(ui, &mut dark, 0.0..=100.0, "Darken", d.darken)
-        .on_hover_text("How dark the corrected pupil ends up.");
+    let mut local = Edited {
+        help_scope: rustroom_app::slider_help::Scope::Eye,
+        ..Edited::default()
+    };
+    local.slider(ui, &mut size, 0.0..=100.0, "Pupil Size", d.pupil_size);
+    local.slider(ui, &mut dark, 0.0..=100.0, "Darken", d.darken);
+    ed.missing_help.append(&mut local.missing_help);
     tool.pupil_size = size;
     tool.darken = dark;
     if let Some(i) = sel {
@@ -195,7 +190,7 @@ pub(super) fn settings(ui: &mut egui::Ui, s: &mut Session, tool: &mut EyeTool, e
         let mut on = sel.map_or(tool.catchlight, |i| s.edits.eyes[i].catchlight.is_some());
         if ui
             .checkbox(&mut on, "Catchlight")
-            .on_hover_text("A small highlight in the pupil, so it does not read as a hole.")
+            .on_hover_text("Adds a small highlight to the pupil so it looks alive")
             .changed()
         {
             tool.catchlight = on;
