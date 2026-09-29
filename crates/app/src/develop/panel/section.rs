@@ -209,10 +209,12 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
     });
 
     let caption = theme::section_font(ui.style());
+    // ⚠ A panel section's name in the medium face at body size (`docs/DESIGN.md` §7.5); the rail's
+    // capitals stay regular caption — weight would make a table of contents shout.
     let font = if h.rail {
         caption.clone()
     } else {
-        egui::TextStyle::Body.resolve(ui.style())
+        theme::medium_font(ui.ctx(), tokens::BODY)
     };
     let weak = ui.visuals().weak_text_color();
     // The actions fill in from the right edge; `right` is where the next one ends.

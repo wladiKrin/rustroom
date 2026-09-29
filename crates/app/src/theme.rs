@@ -69,6 +69,45 @@ const ICON_FONT: &[u8] = include_bytes!("../assets/Phosphor.ttf");
 /// and would draw them instead of Phosphor — see `PROPORTIONAL`.
 const TEXT_FONT: &[u8] = include_bytes!("../assets/Inter-Regular.ttf");
 
+/// The medium weight, for titles, the display size and the panel's section names
+/// (`docs/DESIGN.md` §3) — Inter 4.1 Medium, subset exactly as the regular face is (the private-use
+/// block stripped, every layout feature kept; `pyftsubset --unicodes="U+0000-DFFF,U+F900-10FFFF"
+/// --layout-features='*'`), added 2026-09-29.
+const MEDIUM_FONT: &[u8] = include_bytes!("../assets/Inter-Medium.ttf");
+
+/// The named family the medium face is installed under.
+pub const MEDIUM: &str = "medium";
+
+/// The medium family, first to last: the proportional stack with Inter Medium in Inter's place,
+/// for the reason `PROPORTIONAL` gives.
+const MEDIUM_FAMILY: [&str; 6] = [
+    "Inter-Medium",
+    "Ubuntu-Light",
+    "NotoEmoji-Regular",
+    "phosphor",
+    "emoji-icon-font",
+    "Hack",
+];
+
+/// Marks a context whose fonts [`install_fonts`] installed, so the medium family may be named.
+///
+/// ⚠⚠ **egui panics on a font family it does not have**, and the headless harness builds bare
+/// contexts that never install the bundled fonts — 133 of them. So the medium face is used only
+/// where this marker says it exists; anywhere else the same size falls back to the regular face.
+fn fonts_marker() -> egui::Id {
+    egui::Id::new("rustroom_fonts_installed")
+}
+
+/// The medium face at `size` — or the regular face where the bundled fonts were never installed
+/// (the headless harness). For a painter that has no text style to resolve.
+pub fn medium_font(ctx: &egui::Context, size: f32) -> egui::FontId {
+    if ctx.data(|d| d.get_temp::<bool>(fonts_marker()).unwrap_or(false)) {
+        egui::FontId::new(size, egui::FontFamily::Name(MEDIUM.into()))
+    } else {
+        egui::FontId::proportional(size)
+    }
+}
+
 /// The proportional family, first to last.
 ///
 /// ⚠⚠ **The order is the whole point.** egui takes the first font that has a glyph, and both
@@ -101,6 +140,7 @@ const MONOSPACE: [&str; 5] = [
 /// Install the text face, the fallbacks and the icon font. Call once, at startup.
 pub fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(font_definitions());
+    ctx.data_mut(|d| d.insert_temp(fonts_marker(), true));
 }
 
 /// The whole stack as one value, so the tests can take it apart font by font.
@@ -116,6 +156,14 @@ pub(crate) fn font_definitions() -> egui::FontDefinitions {
     defs.font_data.insert(
         "phosphor".to_owned(),
         std::sync::Arc::new(egui::FontData::from_static(ICON_FONT)),
+    );
+    defs.font_data.insert(
+        "Inter-Medium".to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(MEDIUM_FONT)),
+    );
+    defs.families.insert(
+        egui::FontFamily::Name(MEDIUM.into()),
+        MEDIUM_FAMILY.iter().map(|n| (*n).to_owned()).collect(),
     );
     defs.families.insert(
         egui::FontFamily::Proportional,
@@ -152,10 +200,23 @@ pub fn apply(ctx: &egui::Context, settings: &Settings) {
         ThemeChoice::Light => egui::SystemTheme::Light,
         ThemeChoice::System => egui::SystemTheme::SystemDefault,
     }));
+    let medium = ctx.data(|d| d.get_temp::<bool>(fonts_marker()).unwrap_or(false));
     for (theme, dark) in [(egui::Theme::Dark, true), (egui::Theme::Light, false)] {
         let accent = accent_color(settings.accent, dark);
         ctx.style_mut_of(theme, |style| {
             tune(style);
+            // ⚠ Titles and the display size in the medium face — only where it is installed; see
+            // `fonts_marker`.
+            if medium {
+                let family = egui::FontFamily::Name(MEDIUM.into());
+                style.text_styles.insert(
+                    egui::TextStyle::Heading,
+                    egui::FontId::new(tokens::DISPLAY, family.clone()),
+                );
+                style
+                    .text_styles
+                    .insert(title_style(), egui::FontId::new(tokens::TITLE, family));
+            }
             surfaces(style, dark);
             style.visuals.selection.bg_fill = accent;
             style.visuals.widgets.hovered.bg_fill = accent;
@@ -415,7 +476,7 @@ pub fn sub_label_hover(ui: &mut egui::Ui, text: &str, hover: &str) {
 fn sub_label_response(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add_space(8.0);
     let colour = ui.visuals().weak_text_color();
-    let font = section_font(ui.style());
+    let font = medium_font(ui.ctx(), section_font(ui.style()).size);
     ui.add(egui::Label::new(egui::RichText::new(text).font(font).color(colour)).selectable(false))
 }
 
@@ -437,7 +498,7 @@ fn sub_label_response(ui: &mut egui::Ui, text: &str) -> egui::Response {
 pub fn sub_label_with(ui: &mut egui::Ui, text: &str, trailing: impl FnOnce(&mut egui::Ui)) {
     ui.add_space(8.0);
     let colour = ui.visuals().weak_text_color();
-    let font = section_font(ui.style());
+    let font = medium_font(ui.ctx(), section_font(ui.style()).size);
     let galley = ui.painter().layout_no_wrap(text.to_owned(), font, colour);
     let height = galley.size().y.max(ui.spacing().interact_size.y);
     let row = egui::Rect::from_min_size(
@@ -698,10 +759,52 @@ mod tests {
         }
         assert_eq!(first_with('a'), Some("Inter"));
         assert_eq!(first_with('▴'), Some("Hack"));
+        // ⚠ The medium family too: a medium face that kept its private-use block would draw its own
+        // glyphs where the icons belong, exactly as Inter Regular did before it was subset.
+        let medium = &defs.families[&egui::FontFamily::Name(MEDIUM.into())];
+        let first_medium = |c: char| medium.iter().find(|n| maps(n, c)).map(String::as_str);
+        for c in rustroom_app::icons::ALL {
+            assert_eq!(
+                first_medium(c),
+                Some("phosphor"),
+                "U+{:04X} would be drawn by the wrong font in the medium family",
+                c as u32
+            );
+        }
+        assert_eq!(first_medium('a'), Some("Inter-Medium"));
         assert_eq!(
             first_with('\u{2715}'),
             None,
             "✕ is in no bundled font — the control"
+        );
+    }
+
+    #[test]
+    fn titles_are_medium_where_the_fonts_are_installed_and_regular_where_not() {
+        // ⚠ Both halves: the installed context gets the medium family for titles and the display
+        // size; a bare context (every headless harness) gets the regular face, because naming a
+        // family egui does not have panics.
+        let with = egui::Context::default();
+        install_fonts(&with);
+        apply(&with, &Settings::default());
+        let s = with.style_of(egui::Theme::Dark);
+        let medium = egui::FontFamily::Name(MEDIUM.into());
+        assert_eq!(title_font(&s).family, medium);
+        assert_eq!(s.text_styles[&egui::TextStyle::Heading].family, medium);
+        assert_eq!(
+            s.text_styles[&egui::TextStyle::Body].family,
+            egui::FontFamily::Proportional
+        );
+        let _ = with.run_ui(egui::RawInput::default(), |ui| {
+            ui.heading("A title drawn in the medium face");
+        });
+        let without = egui::Context::default();
+        apply(&without, &Settings::default());
+        let s = without.style_of(egui::Theme::Dark);
+        assert_eq!(title_font(&s).family, egui::FontFamily::Proportional);
+        assert_eq!(
+            medium_font(&without, 13.0).family,
+            egui::FontFamily::Proportional
         );
     }
 
