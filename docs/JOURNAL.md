@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.6a: the Immich Timeline at the top (2026-09-29)](#2026-09-29--m106a-the-immich-timeline-at-the-top-branch-m106a-immich-timeline)
 - [The re-plan: every open item becomes Phase 10, release becomes Phase 11 (2026-09-29)](#2026-09-29--the-re-plan-every-open-item-becomes-phase-10-release-becomes-phase-11-branch-replan)
 - [Reordering masks and a mask's components (2026-09-29)](#2026-09-29--reordering-masks-and-a-masks-components-branch-mask-reorder-merged-2026-09-29)
 - [The design language: three directions, B chosen, and built (2026-09-29)](#2026-09-29--the-design-language-three-directions-b-chosen-and-built-branch-design-language-merged-2026-09-29)
@@ -161,6 +162,35 @@ goldens unmoved.
 - ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
+
+### 2026-09-29 — M10.6a: the Immich Timeline at the top (branch `m10.6a-immich-timeline`)
+
+**Input:** the author's to-do, *"For immich folder, move timeline to the top."* Spec
+`2026-09-29-m10.6a-immich-timeline-design.md`, plan `2026-09-29-m10.6a-immich-timeline.md`.
+
+**The author's pick:** two peer rows — **Timeline** first, **Albums** second — each a rail tree row
+(`date_rows::branch_with`, new, taking a `BranchSpec`) with the disclosure triangle and a count in the
+rail's column: photos on the server (`immich_source::photo_total`, the sum of the months) and the number
+of albums, blank until each list is in hand. The section header's count went (as the Dates section's
+never had one). Albums opens by default, so the albums sit where they were, one row lower; the month
+list is now fetched with the section, not when the Timeline is opened, so the closed row shows its
+count. Each row reads its own fetch flag (`ImmichWorker::is_listing_{albums,buckets}`), and a click in
+the same frame always wins over a background request. **3266 → 3273 tests**, goldens unmoved.
+
+**Worth keeping:**
+
+- ⚠⚠ **Keeping the Timeline's open state took TWO things, and the test found both — reading egui did
+  not.** The old `CollapsingHeader` (the rail's last) stored its state under an id that is (1) salted
+  with an **`IdSalt`**, not the bare string, and (2) one level deeper, because `show_dyn` draws the
+  header inside a **`ui.vertical`**, whose child `Ui` adds `IdSalt::new("child")`. The spec had the bare
+  string; planning caught (1); the test against the **real** old header — opened by a click, then
+  `body` asked to draw the Timeline open — failed until (2) was matched by drawing the new rows inside a
+  `ui.vertical` as well. ⚠ A test of `timeline_id` against its own output could have caught neither.
+  Both halves are sabotage-checked separately.
+- ⚠ An open **year** under the Timeline closes once after the update: the years were keyed inside the
+  old header's body `Ui`. Accepted, as planned.
+- Sabotage-checked: the old order, Albums closed by default, the bare-string id, the missing
+  `ui.vertical`, the month request moved back inside the open row, and `Some(0)` for an unknown total.
 
 ### 2026-09-29 — The re-plan: every open item becomes Phase 10, release becomes Phase 11 (branch `replan`)
 
