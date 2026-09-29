@@ -957,20 +957,6 @@ mod tests {
         );
     }
 
-    /// ⚠⚠ **The requirement as a test rather than a list of places to remember** — with the
-    /// integration off, the panel must not offer the Immich **section**.
-    ///
-    /// ⚠⚠ **One deliberate exception, and it is the user revising their own rule (2026-09-24):** the
-    /// downloaded folder keeps the name **"immich (downloaded)"** whether or not the integration is
-    /// on, because those are their photographs and they know where they came from. So this asserts
-    /// the *section* is gone and that nothing else mentions it — not that the word is absent
-    /// entirely, which would be a claim the design no longer makes.
-    ///
-    /// ⚠ Both halves: present when configured, absent when off. An absence alone would pass against
-    /// a panel that drew nothing.
-    /// The new keyword's parent is the keyword last clicked, and a click anywhere else clears it —
-    /// the author's replacement for the parent dropdown. ⚠ Both halves, and the clear is asserted
-    /// from a click OUTSIDE the panel's list, which is the case the rule is about.
     /// ⚠⚠ **Reported in use 2026-09-29: "when moving the mouse in the Library the left sidecar keeps
     /// expanding indefinitely."** Every frame the pointer moves is a frame drawn, and a row that asks
     /// for more than the panel's width makes egui widen the panel by the overflow — then the row asks
@@ -1030,6 +1016,9 @@ mod tests {
         );
     }
 
+    /// The new keyword's parent is the keyword last clicked, and a click anywhere else clears it —
+    /// the author's replacement for the parent dropdown. ⚠ Both halves, and the clear is asserted
+    /// from a click OUTSIDE the panel's list, which is the case the rule is about.
     #[test]
     fn clicking_a_keyword_makes_it_the_parent_and_clicking_elsewhere_clears_it() {
         let ctx = crate::test_ui::ctx();
@@ -1055,6 +1044,17 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **The requirement as a test rather than a list of places to remember** — with the
+    /// integration off, the panel must not offer the Immich **section**.
+    ///
+    /// ⚠⚠ **One deliberate exception, and it is the user revising their own rule (2026-09-24):** the
+    /// downloaded folder keeps the name **"immich (downloaded)"** whether or not the integration is
+    /// on, because those are their photographs and they know where they came from. So this asserts
+    /// the *section* is gone and that nothing else mentions it — not that the word is absent
+    /// entirely, which would be a claim the design no longer makes.
+    ///
+    /// ⚠ Both halves: present when configured, absent when off. An absence alone would pass against
+    /// a panel that drew nothing.
     #[test]
     fn the_immich_section_appears_only_when_the_integration_is_on() {
         let labels = |enabled: bool| -> Vec<String> {

@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [The design language: three directions, B chosen, and built (2026-09-29)](#2026-09-29--the-design-language-three-directions-b-chosen-and-built-branch-design-language-awaiting-use)
 - [M9.14 Previews: instant 1:1 in Develop, Compare and Survey (2026-09-29)](#2026-09-29--m914-previews-instant-11-in-develop-compare-and-survey-branch-m914-previews-merged-2026-09-29)
 - [The resident final checkpoint: the tail's input stays on the GPU (2026-09-26)](#2026-09-26--the-resident-final-checkpoint-the-tails-input-stays-on-the-gpu-branch-resident-final)
 - [Per-pixel fusion: a run of per-pixel stages as one pass (2026-09-26)](#2026-09-26--per-pixel-fusion-a-run-of-per-pixel-stages-as-one-pass-branch-per-pixel-fusion)
@@ -220,6 +221,7 @@ action ever wants this corner"; two did.
 
 ⚠ *Left open:* Title and Display want **Inter Medium**, which is not bundled (it needs a download from
 the Inter release, OFL); hover sentences outside the sliders are not yet tabled with coverage tests.
+(Inter Medium: done in the second round below.)
 
 ⚠ *Checking the 13-inch width:* the author runs **AeroSpace**, a tiling window manager, which sized every
 window to the external display and ignored both Accessibility resizes and the initial size — the reason
@@ -233,6 +235,48 @@ session's, mine) and the drive tool picked the largest window of any of them —
 selection); the 2026-09-28 failure was the native open panel only. `File → Open recent` from a seeded
 `settings.json` avoids that panel entirely. AX resize returned success and did nothing to the eframe
 window.
+
+**Second round, from the author's first look** (five commits, gate green at **3237**). He asked for
+Inter Medium, the photo's name centred in the Library's top row as in Develop, search and Filter at
+the right edge, the rail's growth fixed, and every hover rewritten to one sentence.
+- **Inter Medium** is bundled, subset exactly as Regular (`pyftsubset
+  --unicodes="U+0000-DFFF,U+F900-10FFFF" --layout-features='*'`; 368 KB, cmap 2,107). It is used
+  for Title, Display, panel section names and sub-labels, through `theme::medium_font`, which falls
+  back to Regular in a bare harness context instead of panicking. ⚠ `U+0000-U+DFFF` is rejected by
+  pyftsubset; without `--layout-features='*'` the glyph count does not match the Regular's.
+- **The rail's growth** was the design language's own doing: its wider button padding made the
+  rail's new-item rows ask for 16 pt more than the rail had, and an egui side panel widens to its
+  content on every frame drawn — so every pointer move widened it. ⚠ The bare harness has egui's
+  narrower padding, under which the rows fitted, so the test draws with the **real theme**.
+- **The centred name.** Both views now put what narrows or finishes at the right edge and centre
+  the name in the gap both leave (`shell::shared_gap`). ⚠⚠ **The first build centred the name *with
+  its facts*, and the harness test passed** because both views were drawn with the same facts —
+  shape (a) of the standing lesson, a fixture that makes two different things equal. In use the
+  Library lacks the pixel size until a decode, so its name sat 27 pt left of Develop's; seen in a
+  1440-wide screenshot. The name is now centred alone and the facts truncate after it;
+  `the_name_does_not_move_with_its_facts` differs the facts on purpose, asserts they differ first,
+  and fails on the old centring (675.5 vs 719.0).
+- **Hovers.** "Detail" in Noise reduction explained Sharpening's Detail too, because the help
+  table was keyed by label alone. `slider_help` is now keyed by **scope** (global, parametric, each
+  HSL tab, noise reduction, sharpening, vignette, lens, each mask kind, patch, eye…); a label that
+  means two things has no global entry, so a panel that forgets its scope shows nothing rather than
+  the wrong sentence, and `Edited::missing_help` makes both coverage tests see it. Every hover is
+  one sentence without a full stop, and none says "double-click to reset";
+  `theme::every_hover_is_one_short_sentence` sweeps the sources. Compare's and Survey's key lines
+  left their hovers for the Keyboard shortcuts dialog.
+- ⚠ *What the rewrite script got wrong:* it replaced string literals **by text**, so identical
+  strings that were not hovers changed too — an accessibility verb "Delete", three
+  `Footer::confirm("Delete")` buttons, the menu's "Rotate left/right". All were restored by
+  reading the diff line by line; ⚠ **a text-matching rewrite must be reviewed per hunk, never by
+  the test result**, since a relabelled button compiles and most of its tests pass.
+- ⚠ *Two doc blocks on the wrong item again:* inserting the rail test above
+  `clicking_a_keyword_makes_it_the_parent…` put it **between that test and its doc**, and an Immich
+  doc had already been sitting on the same test since before this branch; the keyboard-reference
+  doc sat on `EXTRA_KEYS` instead of the dialog function. All three were moved back. The scan that
+  found the first one — an added line directly after an unchanged `///` line in `git diff -U1` — is
+  cheap enough to run after every test insertion.
+
+⚠ *Still open:* non-slider hovers are swept but not tabled; `status_bar.rs` is 638 code lines.
 ### 2026-09-29 — M9.14 Previews: instant 1:1 in Develop, Compare and Survey (branch `m9.14-previews`, merged 2026-09-29)
 
 **The ask** (P-20, the professional review's first blocker): a focus check across a shoot is a wall

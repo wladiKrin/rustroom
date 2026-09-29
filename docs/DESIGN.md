@@ -44,8 +44,8 @@ Phosphor is the icon face. Hack is the monospace fallback and is never used for 
 | Role | Size | Weight | egui `TextStyle` | Used for |
 |---|---|---|---|---|
 | Caption | **11** | Regular | `Small` | section names (uppercase in the Library rail only, see §7.5), counts, thumbnail captions and badges, chips, kbd chips, footer status |
-| Body | **13** | Regular | `Body`, `Button`, `Monospace` | labels, controls, list rows, menus, tooltips, slider values |
-| Title | **15** | Medium | named `"title"` | dialog titles, the open photo's name in the Develop bar, empty-state buttons |
+| Body | **13** | Regular | `Body`, `Button`, `Monospace` | labels, controls, list rows, menus, tooltips, slider values, the photo's name in the top row (in `strong`) |
+| Title | **15** | Medium | named `"title"` | dialog titles |
 | Display | **20** | Medium | `Heading` | empty-state headings, nothing else |
 
 Rules:
@@ -53,9 +53,15 @@ Rules:
 - **Set sizes only through `TextStyle`.** A literal `FontId::proportional(n)` outside `theme.rs`
   is a defect. `RichText::small()` is Caption; `.heading()` is Display. The named `"title"` style
   is resolved through a `theme::title_font()` helper with a fallback, the `section_font` pattern.
-- **Weight needs a face.** Only Inter Regular is bundled today; Title and Display need
-  **Inter Medium** bundled and subset the same way (OFL, licence beside it). Until it is, Title
-  and Display render Regular — do not fake weight with a larger size.
+- **Weight needs a face.** Inter **Regular** and **Medium** are both bundled
+  (`crates/app/assets/`, one OFL licence beside them), subset the same way so their coverage
+  matches: `pyftsubset --unicodes="U+0000-DFFF,U+F900-10FFFF" --layout-features='*'`. Medium is
+  the named family `theme::MEDIUM` and is used for exactly four things: Title, Display, panel
+  section names (§7.5) and sub-labels. Reach it through `theme::medium_font(ctx, size)`, which
+  falls back to Regular where the bundled fonts are not installed (a bare harness context) rather
+  than panicking; `titles_are_medium_where_the_fonts_are_installed_and_regular_where_not` pins
+  both halves, and `no_bundled_font_shadows_an_icon` covers the Medium face too. Never fake
+  weight with a larger size.
 - **Icons are not text sizes.** Inline in text 14 · toolbar and buttons 16 · tool rail and empty
   states 24. Glyphs come from `icons.rs`, verified against the cmap (its warning stands).
 - **Numbers that change while you watch** (readout, slider values, counts) are laid out at a
@@ -153,14 +159,14 @@ control never changes shape on hover (the existing rule).
 
 ```
 ┌ top bar 44 ──────────────────────────────────────────────────────────────┐
-│ Library: [Library|Develop] | [Grid|Compare|Survey] | search 240 | Filter │
-│ Develop: [Library|Develop] | ↶ ↷ | [− fit 1:1 +] | Before/After | name · camera line | Export │
+│ Library: [Library|Develop] | [Grid|Compare|Survey] |   name · facts   | search 240 | Filter │
+│ Develop: [Library|Develop] | ↶ ↷ | [− fit 1:1 +] | Before/After |   name · facts   | Export │
 ├────────────┬──────────────────────────────────────────────┬──────┬──────┤
 │ rail 240   │ content                                      │panel │ tool │
 │ (Library)  │                                              │ 316  │ rail │
 │            │                                              │(Dev.)│  48  │
 │            ├ status row 32 ───────────────────────────────┤      │      │
-│            │ Library: count │ name · facts │ chips · sort · size · ⋯ │   │
+│            │ Library: count / job           chips · sort · size · ⋯ │   │
 │            │ Develop: readout               progress / ready      │      │
 │            ├ filmstrip 92 (Develop only) ──────────────────┤      │      │
 └────────────┴──────────────────────────────────────────────┴──────┴──────┘
@@ -171,16 +177,26 @@ control never changes shape on hover (the existing rule).
   Before/After · name and camera line · Export (Develop). When a lower item does not fit, first
   its labels drop to icons (mode switch, Filter, Before/After), then it folds into ⋯. Search
   shrinks from 240 to 120 before anything folds.
+- **The photo's name sits at the same x in both views** (`shell::centre_info`). Both views put
+  what narrows or finishes at the right edge — the Library's search and Filter (Filter
+  rightmost), Develop's Export — so the name is centred on the row and clamped into the gap
+  **both** views leave (`shell::shared_gap` records each view's edges; Develop's are measured by
+  `develop::toolbar_width` until it has been drawn). ⚠⚠ **The name is centred alone, never with
+  its facts**: the Library knows no pixel size before a decode, so a centred name-and-facts block
+  put the name 27 pt further left in the Library than in Develop. The facts follow the name and
+  truncate into what is left. `the_centred_name_sits_at_the_same_x_in_both_views` and
+  `the_name_does_not_move_with_its_facts` (sabotage-checked). Click the name to rename.
 - **The status row informs and sets the view** (`status_bar.rs`). Library: at the left the photo
   and file count, or the running export / preview build / Immich download with its Cancel, or the
-  last status message — truncated into whatever is left, never pushing; in the centre the selected
-  photo's name and facts (click to rename — it moved here from the top row); at the right the
+  last status message — truncated into whatever is left, never pushing; at the right the
   format chips, Download / Remove downloads (Immich sources with a selection), the sort, the size
   slider and ⋯ (Reindex, Expand all / Stack all, and anything folded). Develop: the readout swatch
   and numbers at the left; "Full resolution ready" or the running job at the right. Folding
   order: chips first, then the Immich buttons, then the size slider; the sort drops its label.
   ⚠ The first draft put the chips at the left and a zoom percentage in Develop's row; the chips
-  sit with the view settings they are, and the zoom percentage was not built.
+  sit with the view settings they are, and the zoom percentage was not built. ⚠ The first build
+  also named the photo in the Library's status row; the name moved back to the top row so it does
+  not jump when the view switches.
 - **A bar is laid out by a plan, not by hope.** `rustroom_app::bar_plan` (pure, tested with a
   sweep from 100 to 2000 pt) decides what shows, what drops its label and what folds; the bin
   measures with the widgets' own fonts (`segmented::pill_width`, `chip_width`) and draws the
@@ -222,8 +238,8 @@ must never look alike.
 Three columns: label 78 · rail · value 44, right-aligned, 10 gap, 28 tall. Rail 4 px on `line`;
 the trailing fill in the accent runs **from the default value to the knob** (from the centre on
 a bipolar slider, from the left on Temp); knob 14 px, `#f2f2f4`, soft shadow. Double-click
-resets (existing). Every slider has a hover sentence from the `slider_help` table (existing,
-with coverage tests) — that table is the pattern for every other control (§8).
+resets (existing) — and the hover does **not** say so; that is a property of every slider, taught
+once in Help, not repeated on each. Every slider has a hover sentence from `slider_help` (§8).
 
 ### 7.5 Section (card) and header
 A section is a `card` with 8 × 10 padding and 10 radius, separated by 8. Its header is 26 tall:
@@ -236,8 +252,15 @@ Caption** (`Header::rail`), so the rail reads as a table of contents and the pan
 A card is painted **behind** its header and body (`HeaderOut::show_body`) — never for a body that
 fills its container, whose card gap would grow a resizable panel every frame (the snapshot strip
 did). Names are sentence-cased when painted (`header_text`), not renamed: they are also the
-accessible labels and the Sync dialog's rows. ⚠ Headers render Regular until Inter Medium is
-bundled (§3).
+accessible labels and the Sync dialog's rows.
+
+⚠⚠ **A row that asks for more width than the rail has grows the rail every frame.** egui's side
+panels widen to their content, so a row laid out wider than the panel pushes it out a little on
+each repaint — seen in use as the Library rail "expanding indefinitely" while the pointer moved.
+The rail's new-item rows (collection, smart collection, keyword) lay out at exactly the width
+they are given, `+` first from the right (`collections_panel::new_item_row`);
+`the_rail_keeps_its_width_while_the_pointer_moves` draws the rail across many frames and fails on
+any growth.
 
 ### 7.6 List row
 30 tall, 6 radius, name in Body, count or meta in Caption `text3` at the right; indent 14 per
@@ -299,16 +322,29 @@ export, preview builds and Immich downloads (existing rule).
   note, the curve's "click to add a point", the Compare and Survey key lines, dialog footer
   notes, the Settings explanations. `theme::error_hint` stays, shown only while the field is
   invalid, in `error_fg_color`.
-- **Every control gets one hover sentence.** Sliders take theirs from the `slider_help` table,
-  whose coverage tests fail when a slider is added without one — **the shape to copy**; every other
-  control carries its sentence at the call site (`.on_hover_text`) today. ⚠ Tabling the rest per
-  panel, with the same coverage test, is the open half of this rule.
+- **Every control gets one hover sentence: what it does, here, exactly.** No second sentence,
+  no "see also", no mention of a same-named control elsewhere, no "double-click to reset", no
+  full stop, no ⚠. `theme::every_hover_is_one_short_sentence` sweeps every `on_hover_text("…")`,
+  every `hover: "…"` and every `*_HINT` / `*_HELP` / `*_NOTE` / `HOVER` constant and fails on
+  text over 110 characters, a second sentence, a semicolon, a newline, a trailing full stop, ⚠ or
+  the reset phrase.
+- **A slider's sentence depends on where it is** (`slider_help::text(scope, label)`). "Detail"
+  in Noise reduction and "Detail" in Sharpening are different controls, so each **scope** —
+  global, parametric curve, each HSL tab, tint by tone, look, noise reduction, sharpening,
+  vignette, lens, each mask kind, patch, eye — has its own table, and a label that means
+  different things in two places has **no** global entry, so a panel that forgets its scope gets
+  no sentence rather than the wrong one. The panel sets `Edited::help_scope`; a slider without a
+  sentence is recorded in `Edited::missing_help`, which both coverage tests
+  (`every_edit_slider_has_hover_help`, `every_geometry_slider_has_hover_help`) require to be
+  empty. `a_shared_label_says_what_it_does_where_it_is` and `an_ambiguous_label_needs_its_scope`
+  pin the rule. **This is the shape to copy** for any other control that wants a table. Every
+  other control still carries its sentence at the call site (`.on_hover_text`), under the sweep.
 - **What moved on 2026-09-29:** the camera-profile note (the combo), the curve's gestures (the
   curve; a value still shows while a point is in play), the parametric and defringe instructions,
   the Settings tier / resampler / Immich paragraphs (their controls, the chosen option's line
   first), the Import and Export token lines (`filename_template::token_hover`), the DNG note (the
-  Format combo), the Information note (its field labels), and Compare's and Survey's key lines (their
-  mode segments). What stayed, at Caption: values and readouts, chosen paths, ticked counts,
+  Format combo), the Information note (its field labels), and Compare's and Survey's key lines
+  (Help → Keyboard shortcuts, in their own Compare and Survey sections — `modals::EXTRA_KEYS`). What stayed, at Caption: values and readouts, chosen paths, ticked counts,
   empty-list notes, transient states (an AI mask waiting), warnings, and dialog body sentences.
 - **Keyboard shortcuts are discoverable three ways and no more:** the menu bar, the tooltip's
   kbd chip, and Help → Keyboard shortcuts. Never as prose in a bar.
@@ -335,11 +371,12 @@ segment is also lighter).
 
 | Rule | Code |
 |---|---|
-| Text styles (§3) | `theme::tune`: `Small` 11, `Body`/`Button`/`Monospace` 13, `Heading` 20, named `"section"` 11 and `"title"` 15; `theme::title_font`; `no_literal_font_size_outside_theme` sweeps the sources |
+| Text styles (§3) | `theme::tune`: `Small` 11, `Body`/`Button`/`Monospace` 13, `Heading` 20, named `"section"` 11 and `"title"` 15; `theme::title_font`, `theme::medium_font`; `no_literal_font_size_outside_theme` sweeps the sources |
+| Hover sentences (§8) | `slider_help.rs` (lib: `Scope`, `HslTab`, `text`); `Edited::help_scope` / `missing_help`; `theme::every_hover_is_one_short_sentence` sweeps the rest |
 | Surfaces, text greys, sizes, radii (§4.1, §5) | `theme::tokens` (`tokens::of(ui)` for a painter); `theme::surfaces` maps them onto egui's slots, per theme |
 | Accent pairs, text on the accent (§4.2) | `settings::Accent` + `theme::accent_color`; `theme::on_accent`; `text_on_every_accent_is_readable` |
 | Metrics (§5) | `theme::tune`: `interact_size.y` 28, `item_spacing` 8 × 2, `button_padding` 10 × 4, radius 6, dialogs and menus 12, `tooltip_delay` 0.4, `tooltip_width` 280 |
-| Two rows and the plan (§6) | `shell::top_bar` + `plan_library_bar`; `status_bar.rs` (bin); `bar_plan.rs` (lib, pure) |
+| Two rows and the plan (§6) | `shell::top_bar` + `plan_library_bar`, `shared_gap`, `centre_info`; `status_bar.rs` (bin); `bar_plan.rs` (lib, pure) |
 | Segmented, pill, chip, swatches (§7.2, §7.7) | `segmented.rs`: the well, `pill` / `pill_width` / `icons_only`, `chip` / `chip_width`, `swatches` |
 | Section card (§7.5) | `develop/panel/section.rs`: `Header::rail`, `HeaderOut::show_body`, `header_text` |
 | Dialog anatomy (§7.8) | `modals/shell.rs`: head 44 with the title in `title_font`, foot 52; `theme::DialogSize` |
@@ -373,4 +410,5 @@ data in the lib crate and testable headless; only the drawing lives in the bin m
 | 2026-09-19 | Icon-only tool rail at 26; chevron left, actions right on section headers | labelled rail, chevron right |
 | 2026-09-28 | Inter Regular as the text face; panel floor 300; segments shrink before wrapping; Interface size setting | Ubuntu Light |
 | 2026-09-29 | **Direction B · Layered** chosen from three; four text sizes, nothing below 11; a status row and the two-row priority rule; hover text replaces every on-screen hint; seven accents including Orange and Sage at the author's request (default stays Steel blue); dark text on the dark-theme accent | ten sizes; one overloaded bar; persistent hints; four accents; white on accent |
+| 2026-09-29 | **Inter Medium** bundled for Title, Display, section names and sub-labels; the photo's name back in the top row, centred alone at the same x in both views, with the Library's search and Filter at the right edge; one scoped hover sentence per control, no reset phrase | Regular-only titles; the name in the Library's status row; hovers that explained the same-named control elsewhere |
 | 2026-09-29 | **Built.** Reindex moved back behind ⋯ with Expand all / Stack all — the 2026-09-23 call took it out of a one-item menu and set the condition "if a second Library action ever wants this corner, reconsider the menu then"; that happened | Reindex as a bar button |
