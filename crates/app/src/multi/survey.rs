@@ -7,11 +7,14 @@
 //! choosing between; and `×` on a tile removes it from the selection, which is how a survey is
 //! narrowed down to the keeper.
 //!
-//! ⚠⚠ **A scrolling, virtualised grid, and it did not start that way.** It used to fill one
-//! screenful, capped at 24 tiles, and say "showing 24 of 39" — which named the problem and gave
-//! no way out: the remaining photographs were simply unreachable. Virtualised, the cap is gone
-//! *and* the memory bound it existed for is stronger, because `retain_window` now pins only what
-//! is actually on screen. The Library grid solved the identical problem the identical way.
+//! ⚠⚠ **Fills one screenful when the selection fits, scrolls when it does not — and it has been
+//! each of those alone before.** It started as a fill layout capped at 24 tiles ("showing 24 of
+//! 39", the rest unreachable), became a scrolling, virtualised grid with a pinch-sized tile, and
+//! on 2026-09-29 the author asked for the grid's tightness and larger pictures: a survey of a
+//! handful should use the whole window. So `tile_layout::survey` sizes the tiles to the window
+//! whenever that gives at least [`MIN_TILE`]; a selection too large for that falls back to the
+//! scrolling grid at `MIN_TILE`, which keeps `retain_window`'s memory bound. No pinch: the size
+//! follows the window and the count.
 
 use crate::multi;
 use crate::{LibraryMode, RustroomApp};
@@ -23,11 +26,15 @@ use rustroom_app::selection::Selection;
 use rustroom_app::thumb_loader::ThumbRequest;
 use rustroom_app::tile_layout;
 
-/// The hint line under the toolbar. Also swept by `theme::every_menu_string_is_renderable`.
 /// A cell whose image area exceeds this on either side draws the preview rather than the
 /// 512-px thumbnail (M9.14).
 pub(crate) const PREVIEW_CELL_PX: f32 = 512.0;
 
+/// The smallest tile the fill layout may produce before the survey scrolls instead: below this
+/// the photographs are too small to choose between, and the window would be pinning hundreds.
+pub(crate) const MIN_TILE: f32 = 180.0;
+
+/// The hint line under the toolbar. Also swept by `theme::every_menu_string_is_renderable`.
 pub(crate) const INSTRUCTION: &str =
     "Arrows move · digits rate · P and X decide it and take it off the wall · \
      Enter opens · pinch or ctrl+scroll resizes";
@@ -71,20 +78,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let scroll_was = app.survey_scroll;
     let mut out = Outcome::default();
 
-    // ⚠⚠ **Pinch, or ctrl/cmd+scroll, resizes the tiles — the same gesture the Library grid
-    // takes**, because a survey of three photos on a large monitor should be able to fill it.
-    // `zoom_delta` folds trackpad pinch and ctrl+scroll into one **multiplicative factor that is
-    // 1.0 when idle**, which is what leaves plain scrolling free to scroll.
-    let zoom = ui.ctx().input(|i| i.zoom_delta());
-    if zoom != 1.0 {
-        app.settings.survey_cell = app.settings.zoomed_survey_cell(zoom);
-        app.cell_zoom_pending = true;
-    } else if app.cell_zoom_pending {
-        // ⚠ Saved when the gesture *settles*, not per frame — a pinch runs at 60 Hz.
-        app.cell_zoom_pending = false;
-        app.save_settings();
-    }
-    let cell = app.settings.clamped_survey_cell();
     // M9.14: a cell larger than a thumbnail draws the preview at fit. Shaped here, where the
     // settings are reachable; the closure below holds the library.
     let fresh = app.settings.initial_edits(None);
@@ -119,12 +112,42 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         let typing = ui.ctx().memory(|m| m.focused().is_some());
 
         // ── Layout ───────────────────────────────────────────────────────────────────────
+        //
+        // The wall is sized to the window: `tile_layout::survey` picks the column count that
+        // shows the selection largest, and that is the layout whenever its tiles reach
+        // `MIN_TILE`. Beyond that the survey scrolls at `MIN_TILE`, virtualised.
+        let n = rows_list.len();
         let spacing = ui.spacing().item_spacing.x;
-        let cols = grid_columns(ui.available_width(), cell, spacing);
-        // ⚠ Aspect-shaped, not square: a survey is looked at rather than scanned, and a square
-        // cell gives a 3:2 photograph two grey bars for nothing. The Library grid is square
-        // because it is scanned.
-        let tile_h = cell / tile_layout::NOMINAL_ASPECT + multi::CAPTION_H;
+        // ⚠ The stage as it will be after the hint line: `available_rect_before_wrap` here still
+        // includes the line, so it is taken off explicitly.
+        let hint_h = ui.text_style_height(&egui::TextStyle::Body) + spacing;
+        let stage = {
+            let r = multi::stage(ui);
+            egui::Rect::from_min_max(egui::pos2(r.min.x, r.min.y + hint_h), r.max)
+        };
+        let fill = tile_layout::survey(n, stage.width(), stage.height(), multi::GAP);
+        let fills = fill
+            .first()
+            .is_some_and(|t| t.w >= MIN_TILE && t.h >= MIN_TILE);
+        let (cols, cell, tile_h) = if fills {
+            let cols = tile_layout::columns(
+                n,
+                stage.width(),
+                stage.height(),
+                multi::GAP,
+                tile_layout::NOMINAL_ASPECT,
+            );
+            (cols, fill[0].w, fill[0].h)
+        } else {
+            let cell = MIN_TILE;
+            // ⚠ Aspect-shaped, not square: a survey is looked at rather than scanned, and a
+            // square cell gives a 3:2 photograph two grey bars for nothing.
+            (
+                grid_columns(ui.available_width(), cell, spacing),
+                cell,
+                cell / tile_layout::NOMINAL_ASPECT + multi::CAPTION_H,
+            )
+        };
 
         ui.input(|i| {
             if typing {
@@ -186,113 +209,115 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // ── Draw ─────────────────────────────────────────────────────────────────────────
         ui.label(egui::RichText::new(INSTRUCTION).weak());
 
-        let grid_rows = rows_list.len().div_ceil(cols);
         let mut window: Vec<ThumbRequest> = Vec::new();
-        // ⚠ `show_rows` adds `item_spacing.y` between rows itself, so the pitch is the tile plus
-        // that gap — using the bare tile height drifts further from the truth with every row and
-        // centres the wrong photo near the bottom of a long grid.
-        let pitch = tile_h + ui.spacing().item_spacing.y;
-        let viewport_h = ui.available_height();
-        // ⚠⚠ **A scrolling, virtualised grid rather than one screenful.** It used to cap at
-        // `MAX_TILES` and say "showing 24 of 39" — which named the problem without offering a
-        // way out, and the remaining photos were simply unreachable. Virtualised, the cap is
-        // gone *and* the memory bound it existed for is stronger: `retain_window` now pins only
-        // what is actually on screen, exactly as the Library grid does.
-        let mut area = egui::ScrollArea::vertical()
-            // ⚠ Pins the scrollbar to the panel edge rather than letting it track the widest
-            // row — the fix the Library grid needed for the same reason.
-            .auto_shrink([false, false]);
-        if let Some(offset) = out.centre_on.and_then(|pos| {
-            rustroom_app::grid_nav::follow_offset(
-                pos, cols, pitch, viewport_h, grid_rows, scroll_was,
-            )
-        }) {
-            area = area.vertical_scroll_offset(offset);
-        }
-        let drawn = area.show_rows(ui, tile_h, grid_rows, |ui, row_range| {
-            for grid_row in row_range {
-                ui.horizontal(|ui| {
-                    let first = grid_row * cols;
-                    let last = (first + cols).min(rows_list.len());
-                    for &row in &rows_list[first..last] {
-                        let (_, rect) = ui.allocate_space(egui::vec2(cell, tile_h));
-                        let req = lib.thumb_request(row, live.as_ref());
-                        let tex = lib
-                            .cache
-                            .get(&req.key())
-                            // ⚠ This photo's previous render rather than grey while a
-                            // re-render lands.
-                            .or_else(|| lib.cache.get_stale(&lib.entries[row].id));
-                        let marks = lib
-                            .marks
-                            .get(&lib.entries[row].id)
-                            .copied()
-                            .unwrap_or_default();
-                        // ⚠⚠ A stable id per photo, not egui's auto-id counter: under
-                        // `show_rows` that counter shifts with the scroll position, which
-                        // silently detaches every widget's state from its photo. The
-                        // Library grid records the same trap.
-                        let base = ui.id().with(&lib.entries[row].id);
-                        // ⚠ Only a cell the thumbnail cannot fill asks for a preview, so a wall
-                        // of two dozen small cells costs nothing new.
-                        let img_area = multi::image_area(rect);
-                        let preview = if img_area.width().max(img_area.height()) > PREVIEW_CELL_PX {
-                            let preq = PreviewRequest {
-                                untouched: is_untouched(&req.edits, &fresh),
-                                tier,
-                                id: req.id.clone(),
-                                edits: req.edits.clone(),
-                            };
-                            let found = previews.get(&preq.key()).map(|(t, _)| t);
-                            preview_reqs.push(preq);
-                            found
-                        } else {
-                            None
-                        };
-                        let image = match preview {
-                            Some(t) => multi::TileImage::Pane {
-                                tex: t,
-                                scale: (img_area.width() / t.size_vec2().x.max(1.0))
-                                    .min(img_area.height() / t.size_vec2().y.max(1.0)),
-                                offset: egui::Vec2::ZERO,
-                            },
-                            None => multi::TileImage::Thumb(tex),
-                        };
-                        let resp = multi::tile(
-                            ui,
-                            rect,
-                            base.with("tile"),
-                            image,
-                            &lib.entries[row].caption(),
-                            marks,
-                            focused == Some(row),
-                        );
-                        if resp.double_clicked() {
-                            out.open = Some(row);
-                        } else if resp.clicked() {
-                            out.focus = Some(row);
-                        }
-                        match tile_buttons(ui, rect, base, focused == Some(row)) {
-                            Some(TileAction::Pick) => {
-                                if let Some(e) = lib.entries.get(row) {
-                                    out.mark = Some((
-                                        e.id.clone(),
-                                        rustroom_app::marks::MarkAction::Flag(
-                                            catalog::db::Flag::Pick,
-                                        ),
-                                    ));
-                                }
-                            }
-                            Some(TileAction::Remove) => out.drop = Some(row),
-                            None => {}
-                        }
-                        window.push(req);
-                    }
-                });
+        // One tile, drawn wherever the layout put it — the fill wall and the scrolling grid
+        // share it, so the two cannot drift apart in what a tile shows or does.
+        let mut draw_tile = |ui: &mut egui::Ui, row: usize, rect: egui::Rect| {
+            let req = lib.thumb_request(row, live.as_ref());
+            let tex = lib
+                .cache
+                .get(&req.key())
+                // ⚠ This photo's previous render rather than grey while a
+                // re-render lands.
+                .or_else(|| lib.cache.get_stale(&lib.entries[row].id));
+            let marks = lib
+                .marks
+                .get(&lib.entries[row].id)
+                .copied()
+                .unwrap_or_default();
+            // ⚠⚠ A stable id per photo, not egui's auto-id counter: under
+            // `show_rows` that counter shifts with the scroll position, which
+            // silently detaches every widget's state from its photo. The
+            // Library grid records the same trap.
+            let base = ui.id().with(&lib.entries[row].id);
+            // ⚠ Only a cell the thumbnail cannot fill asks for a preview, so a wall
+            // of two dozen small cells costs nothing new.
+            let img_area = multi::image_area(rect);
+            let preview = if img_area.width().max(img_area.height()) > PREVIEW_CELL_PX {
+                let preq = PreviewRequest {
+                    untouched: is_untouched(&req.edits, &fresh),
+                    tier,
+                    id: req.id.clone(),
+                    edits: req.edits.clone(),
+                };
+                let found = previews.get(&preq.key()).map(|(t, _)| t);
+                preview_reqs.push(preq);
+                found
+            } else {
+                None
+            };
+            let image = match preview {
+                Some(t) => multi::TileImage::Pane {
+                    tex: t,
+                    scale: (img_area.width() / t.size_vec2().x.max(1.0))
+                        .min(img_area.height() / t.size_vec2().y.max(1.0)),
+                    offset: egui::Vec2::ZERO,
+                },
+                None => multi::TileImage::Thumb(tex),
+            };
+            let resp = multi::tile(
+                ui,
+                rect,
+                base.with("tile"),
+                image,
+                &lib.entries[row].caption(),
+                marks,
+                focused == Some(row),
+            );
+            if resp.double_clicked() {
+                out.open = Some(row);
+            } else if resp.clicked() {
+                out.focus = Some(row);
             }
-        });
-        // ⚠ Remembered for the *next* frame's follow decision — see `RustroomApp::grid_scroll`.
-        out.scroll = Some(drawn.state.offset.y);
+            match tile_buttons(ui, rect, base, focused == Some(row)) {
+                Some(TileAction::Pick) => {
+                    if let Some(e) = lib.entries.get(row) {
+                        out.mark = Some((
+                            e.id.clone(),
+                            rustroom_app::marks::MarkAction::Flag(catalog::db::Flag::Pick),
+                        ));
+                    }
+                }
+                Some(TileAction::Remove) => out.drop = Some(row),
+                None => {}
+            }
+            window.push(req);
+        };
+        if fills {
+            for (k, &row) in rows_list.iter().enumerate() {
+                let rect = multi::tile_rect(stage, fill[k]);
+                draw_tile(ui, row, rect);
+            }
+            out.scroll = Some(0.0);
+        } else {
+            let grid_rows = n.div_ceil(cols);
+            // ⚠ `show_rows` adds `item_spacing.y` between rows itself, so the pitch is the tile
+            // plus that gap — the bare tile height drifts further from the truth with every row.
+            let pitch = tile_h + ui.spacing().item_spacing.y;
+            let viewport_h = ui.available_height();
+            let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+            if let Some(offset) = out.centre_on.and_then(|pos| {
+                rustroom_app::grid_nav::follow_offset(
+                    pos, cols, pitch, viewport_h, grid_rows, scroll_was,
+                )
+            }) {
+                area = area.vertical_scroll_offset(offset);
+            }
+            let drawn = area.show_rows(ui, tile_h, grid_rows, |ui, row_range| {
+                for grid_row in row_range {
+                    ui.horizontal(|ui| {
+                        let first = grid_row * cols;
+                        let last = (first + cols).min(n);
+                        for &row in &rows_list[first..last] {
+                            let (_, rect) = ui.allocate_space(egui::vec2(cell, tile_h));
+                            draw_tile(ui, row, rect);
+                        }
+                    });
+                }
+            });
+            // ⚠ Remembered for the *next* frame's follow decision — see `RustroomApp::grid_scroll`.
+            out.scroll = Some(drawn.state.offset.y);
+        }
         // ⚠⚠ Everything drawn, or `retain_window` leaves these photos unpinned and evictable
         // while they are the only thing on screen.
         lib.sync_thumb_window(&window);
@@ -484,23 +509,24 @@ mod tests {
     }
 
     /// M9.14: only a cell the thumbnail cannot fill asks the preview loader for anything.
+    /// M9.14 / 2026-09-29: a survey that fits the window draws previews in its large tiles;
+    /// one that falls back to the scrolling grid draws thumbnails and asks for no preview.
     #[test]
-    fn a_large_survey_cell_asks_for_a_preview_and_a_small_one_does_not() {
+    fn a_survey_that_fills_the_window_asks_for_previews_and_a_scrolling_one_does_not() {
         let ctx = crate::test_ui::ctx();
         let mut app = app_with(2, &[0, 1]);
-        app.settings.survey_cell = rustroom_app::settings::SURVEY_CELL_RANGE.0;
+        frame(&mut app, &ctx, Vec::new());
+        assert_eq!(
+            app.preview_want.len(),
+            2,
+            "two photos on the wall are two large tiles, each wanting its preview"
+        );
+        let all: Vec<usize> = (0..300).collect();
+        let mut app = app_with(300, &all);
         frame(&mut app, &ctx, Vec::new());
         assert!(
             app.preview_want.is_empty(),
-            "a {}-pt cell asked for a preview",
-            rustroom_app::settings::SURVEY_CELL_RANGE.0
-        );
-        app.settings.survey_cell = rustroom_app::settings::SURVEY_CELL_RANGE.1;
-        frame(&mut app, &ctx, Vec::new());
-        assert!(
-            !app.preview_want.is_empty(),
-            "a {}-pt cell did not ask for a preview",
-            rustroom_app::settings::SURVEY_CELL_RANGE.1
+            "a scrolling survey at the minimum tile asked for previews"
         );
     }
 
@@ -602,10 +628,8 @@ mod tests {
         let ctx = crate::test_ui::ctx();
         let sel: Vec<usize> = (0..12).collect();
         let mut app = app_with(40, &sel);
-        // ⚠ The harness screen is 400x300 and the default tile is 320 wide, which gives **one**
-        // column — where a row and a step are the same thing and this test could not see the
-        // difference it names. The smallest tile fits two.
-        app.settings.survey_cell = rustroom_app::settings::SURVEY_CELL_RANGE.0;
+        // ⚠ Twelve photos on the 400×1400 harness screen fill it two columns wide — a row and a
+        // step differ, which is the difference this test names. Checked below, not assumed.
         frame(&mut app, &ctx, Vec::new());
         app.library.as_mut().unwrap().selection.focus(0);
 
@@ -630,7 +654,6 @@ mod tests {
     fn the_arrows_clamp_at_the_ends() {
         let ctx = crate::test_ui::ctx();
         let mut app = app_with(40, &[2, 5, 9]);
-        app.settings.survey_cell = rustroom_app::settings::SURVEY_CELL_RANGE.0;
         frame(&mut app, &ctx, Vec::new());
         app.library.as_mut().unwrap().selection.focus(2);
         frame(&mut app, &ctx, vec![key(egui::Key::ArrowUp)]);
@@ -640,42 +663,30 @@ mod tests {
         assert_eq!(app.library.as_ref().unwrap().selection.active(), Some(9));
     }
 
-    /// ⚠ Pinch resizes the tiles and **persists**, so a survey opened again is the size you left
-    /// it. `zoom_delta` is a factor that is 1.0 when idle, not a delta — treating it as a delta
-    /// collapses the size to nothing on every idle frame, which this project has paid for once
-    /// already in the canvas navigation work.
+    /// The fill layout's tiles are as large as the window allows and never below `MIN_TILE`;
+    /// past that the wall scrolls at `MIN_TILE` instead.
     #[test]
-    fn pinching_resizes_the_tiles() {
-        let ctx = crate::test_ui::ctx();
-        let mut app = app_with(20, &[1, 4]);
-        let before = app.settings.survey_cell;
-        let _ = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(crate::test_ui::screen()),
-                events: vec![egui::Event::Zoom(1.5)],
-                ..Default::default()
-            },
-            |ui| {
-                let c = ui.ctx().clone();
-                show(&mut app, ui, &c);
-            },
+    fn a_small_survey_fills_the_window_and_a_large_one_falls_back_to_the_minimum_tile() {
+        let (w, h) = (
+            crate::test_ui::screen().width() - 2.0 * multi::GAP,
+            crate::test_ui::screen().height() - 2.0 * multi::GAP,
+        );
+        let three = tile_layout::survey(3, w, h, multi::GAP);
+        assert!(
+            three[0].w >= MIN_TILE && three[0].h >= MIN_TILE,
+            "{:?}",
+            three[0]
         );
         assert!(
-            app.settings.survey_cell > before,
-            "a pinch left the tile size at {before}"
+            three[0].w > 300.0,
+            "three photos should get most of the width"
         );
-    }
-
-    /// ⚠ And an idle frame must not move it: the guard against reading `zoom_delta` as a delta.
-    #[test]
-    fn an_idle_frame_leaves_the_tile_size_alone() {
-        let ctx = crate::test_ui::ctx();
-        let mut app = app_with(20, &[1, 4]);
-        let before = app.settings.survey_cell;
-        for _ in 0..3 {
-            frame(&mut app, &ctx, Vec::new());
-        }
-        assert_eq!(app.settings.survey_cell, before);
+        let many = tile_layout::survey(300, w, h, multi::GAP);
+        assert!(
+            many[0].w < MIN_TILE || many[0].h < MIN_TILE,
+            "300 photos cannot fill a window at the minimum tile: {:?}",
+            many[0]
+        );
     }
 
     #[test]

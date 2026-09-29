@@ -19,7 +19,7 @@ mod straighten_overlay;
 mod test_support;
 
 use crate::develop::canvas_geom;
-use crate::{PendingOpen, RustroomApp, Session, PREVIEW_MAX_DIM};
+use crate::{PendingOpen, RustroomApp, Session};
 use crop_overlay::draw_crop_overlay;
 use eframe::egui;
 use guide_overlay::{draw_guide_overlay, GuideDrag};
@@ -196,14 +196,15 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     egui::CentralPanel::default()
         .frame(crate::theme::canvas_frame(ui.style()))
         .show(ui, |ui| {
-            if let Some(p) = &app.pending {
+            if let Some(p) = &mut app.pending {
                 // M9.14: the camera JPEG or a rendered preview, when it has landed, takes the
-                // thumbnail placeholder's place — sharp instead of a 512-px blur.
+                // thumbnail placeholder's place — sharp instead of a 512-px blur — and it zooms
+                // and pans while the decode runs; the session inherits the view.
                 let preview = app
                     .preview_textures
                     .get(&p.preview_request.key())
                     .map(|(t, _)| t);
-                draw_pending_canvas(ui, p, app.session.as_ref(), preview);
+                draw_pending_canvas(ui, p, app.session.as_ref(), preview, app_pan_drag);
                 return;
             }
             // ⚠ A disjoint field borrow, taken before `app.session` is borrowed mutably below.
@@ -830,9 +831,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
 /// up to fill, since thumbnails are ≤512 px), else the previous photo dimmed, else a spinner.
 fn draw_pending_canvas(
     ui: &mut egui::Ui,
-    pending: &PendingOpen,
+    pending: &mut PendingOpen,
     session: Option<&Session>,
     preview: Option<&egui::TextureHandle>,
+    pan_binding: rustroom_app::settings::PanDrag,
 ) {
     let showing_placeholder = pending.placeholder.is_some() || preview.is_some();
     let fallback = session.and_then(|s| s.texture.as_ref());
@@ -843,17 +845,35 @@ fn draw_pending_canvas(
         return;
     };
 
-    // Lay the placeholder out where the decoded preview will land, so the swap happens in
-    // place instead of snapping: the preview's long side is exactly PREVIEW_MAX_DIM, so
-    // predict that size from this texture's aspect and then apply the session's fit rule.
+    // The same placement the session will use: the picture fitted to the canvas, times the
+    // zoom, about the centre plus the pan — so the swap happens in place instead of snapping.
     let tex_size = tex.size_vec2();
-    let long = tex_size.x.max(tex_size.y).max(1.0);
-    let preview_size = tex_size * (PREVIEW_MAX_DIM as f32 / long);
     let avail = ui.available_size();
-    let fit = (avail.x / preview_size.x)
-        .min(avail.y / preview_size.y)
-        .min(1.0);
-    let rect = egui::Rect::from_center_size(ui.max_rect().center(), preview_size * fit);
+    let fit = (avail.x / tex_size.x.max(1.0)).min(avail.y / tex_size.y.max(1.0));
+    let centre = ui.max_rect().center();
+    let rect = egui::Rect::from_center_size(centre + pending.pan, tex_size * fit * pending.zoom);
+    let resp = ui.allocate_rect(rect, egui::Sense::drag());
+
+    // Zoom about the cursor, then pan — the session canvas's rule, on the pending view.
+    let zoom_factor = ui.input(|i| i.zoom_delta());
+    if zoom_factor != 1.0 && resp.hovered() {
+        let old = pending.zoom;
+        pending.zoom = view_region::zoom_step(old, zoom_factor);
+        if let Some(p) = ui.input(|i| i.pointer.hover_pos()) {
+            let anchor = centre + pending.pan;
+            let (dx, dy) =
+                view_region::zoom_anchor_shift((p.x, p.y), (anchor.x, anchor.y), old, pending.zoom);
+            pending.pan += egui::vec2(dx, dy);
+        }
+    }
+    let scroll = ui.input(|i| i.smooth_scroll_delta);
+    let space_down = ui.input(|i| i.key_down(egui::Key::Space));
+    let text_focused = ui.ctx().memory(|m| m.focused().is_some());
+    pending.pan += pan_delta(&resp, scroll, space_down, pan_binding, text_focused);
+    if pending.zoom <= view_region::MIN_ZOOM {
+        pending.pan = egui::Vec2::ZERO;
+    }
+    let rect = egui::Rect::from_center_size(centre + pending.pan, tex_size * fit * pending.zoom);
     egui::Image::new(tex).paint_at(ui, rect);
 
     if !showing_placeholder {
@@ -1132,6 +1152,58 @@ mod tests {
             "the full buffer wins at every zoom"
         );
         assert!(!full.contains(&preview_id));
+    }
+
+    /// 2026-09-29: while the decode runs, the preview zooms with the pinch and the session
+    /// inherits that view — "it takes three seconds to be responsive" was the wait for exactly
+    /// this.
+    #[test]
+    fn a_pending_photo_zooms_on_its_preview_and_the_session_inherits_the_view() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        let id = rustroom_app::photo_id::PhotoId::original(std::path::PathBuf::from(
+            "/test/pending.RAF",
+        ));
+        let req = app.preview_request(id.clone(), app.settings.initial_edits(None));
+        let preview = crate::test_app::texture(&ctx, "pending-preview", 800, 400);
+        app.preview_textures.insert(
+            req.key(),
+            (preview, rustroom_app::preview_loader::PreviewSource::Camera),
+            800 * 400 * 4,
+        );
+        app.view = crate::AppView::Develop;
+        app.pending = Some(crate::PendingOpen {
+            id: id.clone(),
+            placeholder: None,
+            start_at: std::time::Instant::now() + std::time::Duration::from_secs(3600),
+            seq: None,
+            preview_request: req,
+            zoom: 1.0,
+            pan: egui::Vec2::ZERO,
+        });
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        let c = ctx.clone();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(super::test_support::screen()),
+                events: vec![egui::Event::PointerMoved(centre), egui::Event::Zoom(2.0)],
+                ..Default::default()
+            },
+            |ui| {
+                super::show(&mut app, ui, &c);
+            },
+        );
+        let zoom = app.pending.as_ref().expect("still pending").zoom;
+        assert!(
+            zoom > 1.0,
+            "the pinch did not zoom the pending preview: {zoom}"
+        );
+
+        let view = app.pending.as_ref().map(|p| (p.zoom, p.pan)).unwrap();
+        app.pending = None;
+        app.finalize_session_with_view(&ctx, id, crate::test_app::fake_decode(), view);
+        let s = app.session.as_ref().expect("session");
+        assert_eq!(s.zoom, zoom, "the session did not inherit the pending zoom");
     }
 
     /// ⚠ A backdrop from a different framing is dropped rather than stretched. A crop or an

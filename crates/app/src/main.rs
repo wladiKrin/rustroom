@@ -98,6 +98,12 @@ pub(crate) use rustroom_app::view_region::PREVIEW_MAX_DIM;
 /// How long the selection must sit still before we commit to a decode. Holding an arrow key
 /// therefore starts zero decodes until you settle.
 const DECODE_DEBOUNCE: Duration = Duration::from_millis(180);
+
+/// Milliseconds since the process started, for the `RUSTROOM_DEBUG_RENDER` open-path trace.
+fn debug_ms() -> f64 {
+    static START: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
+    START.elapsed().as_secs_f64() * 1e3
+}
 /// Superseded decodes are abandoned rather than aborted, so cap how many run at once.
 const MAX_CONCURRENT_DECODES: usize = 2;
 
@@ -276,6 +282,10 @@ struct PendingOpen {
     /// What to ask the preview loader for while the decode runs (M9.14): the camera JPEG or a
     /// rendered preview stands in for the thumbnail placeholder the moment it lands.
     preview_request: rustroom_app::preview_loader::PreviewRequest,
+    /// The view the user has already made on the preview — zoom and pan work while the decode
+    /// runs, and the session inherits them so nothing jumps when it lands (M9.14).
+    zoom: f32,
+    pan: egui::Vec2,
 }
 
 struct RustroomApp {

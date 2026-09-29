@@ -74,6 +74,14 @@ impl RustroomApp {
                 egui::TextureOptions::LINEAR,
             );
             self.preview_textures.insert(res.key, (tex, source), bytes);
+            if std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some() {
+                eprintln!(
+                    "open  {:8.1} ms  preview landed {}x{} {source:?}",
+                    crate::debug_ms(),
+                    t.width,
+                    t.height
+                );
+            }
             ctx.request_repaint();
         }
     }
@@ -271,8 +279,11 @@ mod tests {
         let fresh = app.settings.initial_edits(None);
         assert!(app.preview_request(id.clone(), fresh.clone()).untouched);
         assert!(
-            !app.preview_request(id, Edits::default()).untouched,
-            "the edit model's defaults are not a fresh open's"
+            app.preview_request(id.clone(), Edits::default()).untouched,
+            "a never-opened photo's catalog edits are the bare defaults, and it is untouched"
         );
+        let mut edited = fresh;
+        edited.contrast = 5.0;
+        assert!(!app.preview_request(id, edited).untouched);
     }
 }

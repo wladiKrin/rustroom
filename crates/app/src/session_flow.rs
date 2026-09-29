@@ -443,6 +443,9 @@ impl RustroomApp {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         self.status = format!("Decoding {name}…");
+        if std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some() {
+            eprintln!("open  {:8.1} ms  pending {name}", crate::debug_ms());
+        }
         // ⚠ The sidecar's edits through the same defaults a session gets, so the request's
         // untouched flag agrees with what `finalize_session` will hold a second later.
         let preview_request = self.preview_request(
@@ -456,6 +459,8 @@ impl RustroomApp {
             start_at: Instant::now() + DECODE_DEBOUNCE,
             seq: None,
             preview_request,
+            zoom: 1.0,
+            pan: egui::Vec2::ZERO,
         });
     }
 
@@ -524,6 +529,18 @@ impl RustroomApp {
         ctx: &egui::Context,
         id: PhotoId,
         decoded: Arc<Decoded>,
+    ) {
+        self.finalize_session_with_view(ctx, id, decoded, (1.0, egui::Vec2::ZERO));
+    }
+
+    /// `finalize_session` with the view the pending preview was left at — the zoom and pan the
+    /// user made while the decode ran carry over, so the picture does not jump back to fit.
+    pub(crate) fn finalize_session_with_view(
+        &mut self,
+        ctx: &egui::Context,
+        id: PhotoId,
+        decoded: Arc<Decoded>,
+        view: (f32, egui::Vec2),
     ) {
         let path = id.path.clone();
         // ⚠ The only place `self.session` is ever assigned, and so the only choke point the
@@ -679,9 +696,9 @@ impl RustroomApp {
             buffer: decoded.buffer.clone(),
             picking_wb: false,
             picking_fringe: false,
-            zoom: 1.0,
+            zoom: view.0,
             fit_scale: 1.0,
-            pan: egui::Vec2::ZERO,
+            pan: view.1,
             history,
             show_before: false,
             active_handle: None,
@@ -720,6 +737,9 @@ impl RustroomApp {
             render_rung: view_region::fit_cap(buffer_long, PREVIEW_MAX_DIM),
         });
         self.status.clear();
+        if std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some() {
+            eprintln!("open  {:8.1} ms  session ready", crate::debug_ms());
+        }
     }
 
     /// Per-frame: start the full-resolution decode once the session has settled.
@@ -847,6 +867,9 @@ impl RustroomApp {
                     // `p` borrows `self.pending`, the call borrows `self.decoder` — disjoint
                     // fields, so the borrow checker allows both at once.
                     p.seq = Some(self.decoder.request(path, PREVIEW_MAX_DIM));
+                    if std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some() {
+                        eprintln!("open  {:8.1} ms  decode requested", crate::debug_ms());
+                    }
                 } else {
                     ctx.request_repaint_after(p.start_at - now);
                 }
@@ -859,15 +882,24 @@ impl RustroomApp {
                 Ok(decoded) => {
                     // Cache even superseded decodes — that work is already paid for.
                     self.cache.insert(res.path.clone(), decoded.clone());
+                    if std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some() {
+                        eprintln!(
+                            "open  {:8.1} ms  decode landed (current={is_current})",
+                            crate::debug_ms()
+                        );
+                    }
                     if is_current {
                         // ⚠ The **pending** id, not `res.path`: the decode is keyed by file, but
-                        // which *copy* was being opened is only known here.
-                        let id = self
+                        // which *copy* was being opened is only known here. The view made on the
+                        // preview meanwhile comes along with it.
+                        let (id, view) = self
                             .pending
                             .take()
-                            .map(|p| p.id)
-                            .unwrap_or_else(|| PhotoId::original(res.path.clone()));
-                        self.finalize_session(ctx, id, decoded);
+                            .map(|p| (p.id, (p.zoom, p.pan)))
+                            .unwrap_or_else(|| {
+                                (PhotoId::original(res.path.clone()), (1.0, egui::Vec2::ZERO))
+                            });
+                        self.finalize_session_with_view(ctx, id, decoded, view);
                     }
                 }
                 Err(e) => {

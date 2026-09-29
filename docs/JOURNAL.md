@@ -211,6 +211,21 @@ the on-screen size before the cap. **A milestone that had every unit test green 
 a per-cell zoom would fight both. A large cell draws the preview at fit; Enter opens the photo in
 Develop, where the same preview stands in at 1:1.
 
+**The author's first look (02:10):** *(1)* "Develop still takes three seconds to be responsive"
+— the picture was on screen at 0.2 s, but zoom, pan and the sliders waited for the half-size
+decode, measured at **1.4–1.5 s** on his RAFs, plus the 180 ms debounce and the first render, and
+more under load. Fixed for the view: the pending preview zooms and pans (`PendingOpen::{zoom,
+pan}`, the canvas's own rule on the pending texture) and the session inherits the view
+(`finalize_session_with_view`); the sliders still wait for the decode, which is inherent. A
+`RUSTROOM_DEBUG_RENDER` trace now prints the open path's timeline. *(2)* ⚠⚠ "Compare is blurry
+and dead except for photos opened in Develop" — the untouched rule accepted only the fresh-open
+edits, while a photo never opened carries `Edits::default()` in the catalog (no sidecar), so no
+camera preview and no pane. Both spellings are untouched now. *(3)* Survey: "much looser than the
+grid, and the photos should be larger" — Survey fills the window again (`tile_layout::survey`)
+whenever its tiles reach `MIN_TILE` (180 pt), scrolls at that size beyond, and the tile box is
+gone: a tile is its photograph, the focus stroke and marks follow the painted picture. The pinch-
+sized `survey_cell` setting is removed. Compare's panes lose the box too.
+
 **Not verified in use, and why:** the driven look was attempted at 01:35 and the screen was at
 the login window — nothing could be captured. The author's look: an untouched RAF at 1:1 in
 Develop shows "Camera preview" within a fraction of a second and hands over to the live render

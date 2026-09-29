@@ -29,7 +29,11 @@ pub fn stable_fingerprint(edits: &Edits) -> u64 {
 /// every freshly opened photo edited, since a fresh photo carries the camera rendering —
 /// `a_fresh_photo_is_untouched_while_the_sidecar_rule_calls_it_edited` pins the difference.
 pub fn is_untouched(edits: &Edits, fresh: &Edits) -> bool {
-    edits == fresh
+    // ⚠⚠ Both spellings of "never edited", and the second was missing on the first day: a photo
+    // that has never been opened carries `Edits::default()` in the catalog (no sidecar), a photo
+    // opened once carries the fresh-open defaults — so Compare showed the camera JPEG only for
+    // photos already opened in Develop. Reported in use, 2026-09-29.
+    edits == fresh || *edits == Edits::default()
 }
 
 /// What a rendered preview on disk is of.
@@ -105,6 +109,10 @@ mod tests {
     fn a_fresh_photo_is_untouched_while_the_sidecar_rule_calls_it_edited() {
         let fresh = Settings::default().initial_edits(None);
         assert!(is_untouched(&fresh, &fresh));
+        assert!(
+            is_untouched(&Edits::default(), &fresh),
+            "a photo never opened carries the bare defaults and is untouched too"
+        );
         // ⚠ The fixture check: the two rules must disagree, or this test proves nothing.
         assert_ne!(
             fresh,
