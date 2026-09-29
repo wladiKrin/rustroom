@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [The re-plan: every open item becomes Phase 10, release becomes Phase 11 (2026-09-29)](#2026-09-29--the-re-plan-every-open-item-becomes-phase-10-release-becomes-phase-11-branch-replan)
 - [Reordering masks and a mask's components (2026-09-29)](#2026-09-29--reordering-masks-and-a-masks-components-branch-mask-reorder-merged-2026-09-29)
 - [The design language: three directions, B chosen, and built (2026-09-29)](#2026-09-29--the-design-language-three-directions-b-chosen-and-built-branch-design-language-merged-2026-09-29)
 - [M9.14 Previews: instant 1:1 in Develop, Compare and Survey (2026-09-29)](#2026-09-29--m914-previews-instant-11-in-develop-compare-and-survey-branch-m914-previews-merged-2026-09-29)
@@ -161,6 +162,49 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-29 — The re-plan: every open item becomes Phase 10, release becomes Phase 11 (branch `replan`)
+
+**Input:** after the mask reorder, the author asked for the remaining open items in chronological order,
+then — on seeing the sweep — to keep **every** item, add back the ones earlier decisions had put out of
+scope, make them the new **Phase 10**, move the old Phase 10 to **Phase 11**, and bring every document
+into agreement.
+
+**The sweep.** Sources: `docs/BACKLOG.md`, `CLAUDE.md`'s open items and next action, this journal's
+"left open" notes, the first-session reviews (P-21 to P-26), the vault's `01-lightroom-capabilities.md`
+and the author's new `to dos.md`. Each item was checked against the **code**, not the previous sweep
+(the lesson the vault's M7.1c marker taught). Dates are when an item was first recorded, from
+`git blame` on the backlog and `CLAUDE.md`. **41 open items**, plus **10 added back** by the author
+(P-25's five modules, three Immich leftovers, two-way sync, nested composites) — **51**, grouped into
+**M10.6–M10.18** with sub-items by letter. The author then moved two to **M11.4** — the welcome screen and
+the empty Library's text — leaving **49** in Phase 10.
+
+**What the sweep found already shipped, and struck:**
+- *"The camera rendering does not reach an export"* — fixed 2026-09-18 (`batch_export/render.rs`).
+- *"Export is sequential"* — parallel since M8.10. *"No thumbnail cache, no subfolders"* — M8.2, M9.9.
+- *"The accent reaches only egui's widgets"* — settled by `DESIGN.md` §4.2. *"A nicer decode
+  placeholder"* — superseded by M9.14, and against the author's no-stand-in rule.
+- The 2026-09-01 map table's ⬜ rows for GPU local contrast (M8.3n), shader caching (M8.3f), the mask
+  loop (M8.3e–q) and auto-mask (2026-09-09) — ⚠ missed by the first pass, which grepped headings and
+  bullets but not table cells.
+- `CLAUDE.md`'s GPU coverage-cache item: its serial repack was fixed 2026-09-17 (`0064ff2`) and the
+  same file already listed the cache itself as declined.
+- The capabilities note carried ~ten stale ⬜ (keyword renaming, folder tree, persistent history, the
+  parametric curve, defringe, DNG, rendering intents, Clone, the built-in presets) and schema v7 (it is
+  **v9**). Every remaining ⬜ there now names its milestone.
+
+**Decisions:**
+- ⚠⚠ **Phase 10 starts at M10.6.** M10.1–M10.5 already meant the withdrawn licence, Windows/Linux,
+  the docs, `v0.1` and plugins throughout this file; they moved with their work to **M11.1–M11.5**
+  (trailing digit kept) — the rule M9.6 set when M9.2–M9.5 became M10.2–M10.5. History above this
+  entry keeps the names things had at the time.
+- **Milestone order is a working order** — the author's own to-dos first, then code health (the file
+  splits before features grow them further), then Library, Develop and output features small to large,
+  the multi-session capabilities last. Within a milestone, oldest first; ⏸ parked or blocked items last.
+- **One canonical list:** the vault's `03-plan-of-action.md` *Phase 10*. `CLAUDE.md` carries a
+  one-line-per-milestone table; `docs/BACKLOG.md` maps its entries to ids and keeps the reasoning.
+- The vault folder had been renamed `opensource_lightroom` → `rustroom`; paths and the notes' tags
+  follow it.
+
 ### 2026-09-29 — Reordering masks and a mask's components (branch `mask-reorder`, merged 2026-09-29)
 
 **Input:** the backlog's *"Reorder a mask's components"* (recorded 2026-09-10, the author's *"the
@@ -199,7 +243,7 @@ drop on release — one `Edited::discrete`, none for a drop where the row starte
   the plan's full-stop sabotage on `MASK_ROW_HOVER` **stayed green**. Fixed by dropping the space (the
   reader already skips whitespace before the quote); the widened sweep then flagged one constant,
   `EMPTY_LIBRARY_HINT` — empty-state prose (§7.14), not a hover — so both empty-state texts became
-  `*_TEXT`. ⚠ That text is **two sentences** where §7.14 says one; left for the author.
+  `*_TEXT`. ⚠ That text is **two sentences** where §7.14 says one; left for the author (now **M11.4**).
 - ⚠ A "nothing changed" panel test also passes when the drag went nowhere, so each has a twin aimed at
   the same point that must change something (`a_subtract_is_never_dropped_on_top` ↔
   `an_add_dropped_on_top_becomes_the_base`). The harness reaches component slot 0 through the **mask**
@@ -6798,7 +6842,7 @@ Run it through **brainstorm → spec → plan → executing-plans, all inline** 
 
 **Standing perf items:** none. `downscale_to`, the full-resolution 1:1 buffer, the RGBA8 pack, the per-stage prefix checkpoints and libraw's `user_qual` are all **done** — see their sections below. Docs live in `docs/superpowers/`.
 
-**Roadmap status** lives in the user's Obsidian vault at `~/Documents/obsidian/private/opensource_lightroom/03-plan-of-action.md` — ⚠ **fully swept 2026-09-08**: the phase table reads **0–6 ✅ · 7 🟡 · 8 🟡 (M8.1 partly) · 9 ⬜**; the Phase 3 prose (M3.2/M3.3/M3.4) is ✅ at last; M7.2's wrong "before geometry" note is corrected; an emergent-work block covers 2026-09-06 → 08; the sequencing notes' ▶ Next points at Phase 7's remainder then M8.4. `01-lightroom-capabilities.md` was re-annotated the same day (it had last been swept 2026-08-26 and still said the catalog was ⬜), and `docs/BACKLOG.md`'s scheduling table marks every shipped row ✅. ⚠ Superseded: **markers updated 2026-09-05**: the phase table now reads **3 ✅ · 5 ✅ · 6 🟡 · 7 🟡**, **M6.4 / M7.1 / M7.2 / M7.4 / M7.5 are all ✅**, M6.5's `d` colour readout is recorded with `c` auto-advance left outstanding, and **the hue LUT is under *Emergent work*** with the scoping lesson attached. ⚠ Its per-milestone **prose** is still older text and lags this file's sections — **only the markers and their one-line annotations are current.** Superseded: **markers updated 2026-09-03** (Phase 5 ✅, M6.1/M6.3 ✅, M6.5/M7.1/M7.6 🟡, M7.5 unblocked, W4 noted); its prose then was the 2026-08-26 text. Earlier note, superseded: Phase 3 🟡 substantially complete, M3.4 🟡 with its naming/`Reindex` follow-up recorded, colour management logged under emergent work, and the stale lcms2 and `main.rs`-size gaps corrected. Superseded 2026-08-11 note follows: **updated 2026-08-11 and now accurate**: M2.3 ✅, M2.4 ✅, Phase 2 ✅, with the demosaic/PNG-TIFF/filmstrip work recorded under "Emergent work" and the `user_qual` and lcms2 entries in "Known gaps" revised. ⚠ Its lcms2 line now says explicitly that **lcms2 being in the build does not mean colour management is solved** — it emits one static sRGB profile and nothing else. We are **past Phase 2**; Phase 3 has not started.
+**Roadmap status** lives in the user's Obsidian vault at `~/Documents/obsidian/private/rustroom/03-plan-of-action.md` (the folder was `opensource_lightroom` until 2026-09-29) — ⚠ **fully swept 2026-09-08**: the phase table reads **0–6 ✅ · 7 🟡 · 8 🟡 (M8.1 partly) · 9 ⬜**; the Phase 3 prose (M3.2/M3.3/M3.4) is ✅ at last; M7.2's wrong "before geometry" note is corrected; an emergent-work block covers 2026-09-06 → 08; the sequencing notes' ▶ Next points at Phase 7's remainder then M8.4. `01-lightroom-capabilities.md` was re-annotated the same day (it had last been swept 2026-08-26 and still said the catalog was ⬜), and `docs/BACKLOG.md`'s scheduling table marks every shipped row ✅. ⚠ Superseded: **markers updated 2026-09-05**: the phase table now reads **3 ✅ · 5 ✅ · 6 🟡 · 7 🟡**, **M6.4 / M7.1 / M7.2 / M7.4 / M7.5 are all ✅**, M6.5's `d` colour readout is recorded with `c` auto-advance left outstanding, and **the hue LUT is under *Emergent work*** with the scoping lesson attached. ⚠ Its per-milestone **prose** is still older text and lags this file's sections — **only the markers and their one-line annotations are current.** Superseded: **markers updated 2026-09-03** (Phase 5 ✅, M6.1/M6.3 ✅, M6.5/M7.1/M7.6 🟡, M7.5 unblocked, W4 noted); its prose then was the 2026-08-26 text. Earlier note, superseded: Phase 3 🟡 substantially complete, M3.4 🟡 with its naming/`Reindex` follow-up recorded, colour management logged under emergent work, and the stale lcms2 and `main.rs`-size gaps corrected. Superseded 2026-08-11 note follows: **updated 2026-08-11 and now accurate**: M2.3 ✅, M2.4 ✅, Phase 2 ✅, with the demosaic/PNG-TIFF/filmstrip work recorded under "Emergent work" and the `user_qual` and lcms2 entries in "Known gaps" revised. ⚠ Its lcms2 line now says explicitly that **lcms2 being in the build does not mean colour management is solved** — it emits one static sRGB profile and nothing else. We are **past Phase 2**; Phase 3 has not started.
 
 **The user wants the GUI launched after every big update so they can cross-check it themselves** — start it in the background without being asked, and say what to look at. Skip it for small follow-up tweaks in a tuning loop.
 
