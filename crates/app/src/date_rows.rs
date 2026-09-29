@@ -75,6 +75,18 @@ pub(crate) fn rows(
     out
 }
 
+/// A branch row's description, for [`branch_with`].
+pub(crate) struct BranchSpec<'a> {
+    pub name: &'a str,
+    /// `None` paints no count — a list not yet in hand.
+    pub count: Option<i64>,
+    pub depth: usize,
+    /// The state for an id nothing has stored yet.
+    pub default_open: bool,
+    /// One sentence, or empty for none.
+    pub hover: &'a str,
+}
+
 /// A year or a month: a row that opens and closes the level beneath, by a click anywhere on it or
 /// on its triangle. Returns whether it is open now.
 pub(crate) fn branch(
@@ -84,18 +96,34 @@ pub(crate) fn branch(
     count: i64,
     depth: usize,
 ) -> bool {
-    let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    branch_with(
+        ui,
+        id,
+        BranchSpec {
+            name,
+            count: Some(count),
+            depth,
+            default_open: false,
+            hover: "",
+        },
+    )
+}
+
+/// [`branch`] with a default open state, an optional count and a hover — the Immich section's two
+/// rows (M10.6a).
+pub(crate) fn branch_with(ui: &mut egui::Ui, id: egui::Id, spec: BranchSpec<'_>) -> bool {
+    let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, spec.default_open);
     let open = state.is_open();
-    let indent = list_row::tree_indent(depth);
+    let indent = list_row::tree_indent(spec.depth);
     let r = list_row::row(
         ui,
         RowSpec {
-            name,
-            count: Some(count),
+            name: spec.name,
+            count: spec.count,
             meta: "",
             selected: false,
             indent,
-            hover: "",
+            hover: spec.hover,
             actions: &[],
         },
     );

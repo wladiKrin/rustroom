@@ -219,6 +219,11 @@ pub struct BucketMonth {
     pub bucket: String,
 }
 
+/// How many photos the server holds: the sum of its month counts, for the Timeline row.
+pub fn photo_total(buckets: &[immich::Bucket]) -> u64 {
+    buckets.iter().map(|b| u64::from(b.count)).sum()
+}
+
 /// Group the server's buckets into **years newest first, months chronological within each year**.
 ///
 /// ⚠⚠ Not `date_tree::group`. Immich's buckets are monthly, and pushing them through that
@@ -767,6 +772,15 @@ mod tests {
             time_bucket: s.to_string(),
             count: n,
         }
+    }
+
+    #[test]
+    fn photo_total_is_the_sum_of_the_months() {
+        assert_eq!(
+            photo_total(&[bucket("2025-03-01", 57), bucket("2025-04-01", 43)]),
+            100
+        );
+        assert_eq!(photo_total(&[]), 0);
     }
 
     /// ⚠⚠ **Years newest first, months chronological inside them.** Both levels descending was tried

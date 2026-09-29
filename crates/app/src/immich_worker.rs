@@ -165,6 +165,16 @@ impl ImmichWorker {
         self.pending_albums || self.pending_buckets
     }
 
+    /// Is the **album** list's automatic fetch outstanding? The Albums row's own flag.
+    pub fn is_listing_albums(&self) -> bool {
+        self.pending_albums
+    }
+
+    /// Is the **month** list's automatic fetch outstanding? The Timeline row's own flag.
+    pub fn is_listing_buckets(&self) -> bool {
+        self.pending_buckets
+    }
+
     /// Enqueue a job. A duplicate download of one asset, and a second list while one is in
     /// flight, are dropped rather than queued.
     pub fn request(&mut self, job: Job) {
@@ -705,6 +715,19 @@ mod tests {
             jobs.contains(&Job::Buckets),
             "and the bucket list must NOT be swallowed by it: {jobs:?}"
         );
+    }
+
+    /// ⚠ Each row of the rail reads its own list's flag: the Timeline must not say "Loading…"
+    /// while only the albums are on their way, nor hold back its own request for them.
+    #[test]
+    fn each_list_reports_only_its_own_fetch() {
+        let (mut w, _seen) = worker_recording_jobs();
+        assert!(!w.is_listing_albums() && !w.is_listing_buckets());
+        w.request(Job::Albums);
+        assert!(w.is_listing_albums(), "the album fetch is outstanding");
+        assert!(!w.is_listing_buckets(), "and says nothing about the months");
+        w.request(Job::Buckets);
+        assert!(w.is_listing_buckets());
     }
 
     /// ⚠ The per-frame guard must still guard: the rail asks on every frame while it has no list, and
