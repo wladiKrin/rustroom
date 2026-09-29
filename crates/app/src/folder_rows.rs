@@ -4,10 +4,7 @@
 //! ⚠ Its own module for `keyword_rows`' reason: `collections_panel.rs` is past 850 lines of code.
 //! The tree itself is `rustroom_app::folder_tree`, pure and tested; this draws it.
 //!
-//! ⚠⚠ **The triangle is PAINTED, not a glyph.** The icon font is Phosphor with a version-3 `post`
-//! table — no glyph names — so a caret codepoint could only be taken from its stylesheet on trust,
-//! and this project has shipped glyphs that rendered as empty boxes twice (`icons.rs` records it).
-//! A painted triangle cannot be missing from a font.
+//! The triangle is `list_row::disclosure` — painted, not a glyph; its doc says why.
 
 use crate::list_row::{self, RowAction, RowSpec};
 use catalog::db::FolderRow;
@@ -20,10 +17,6 @@ pub(crate) enum Out {
     Open(PathBuf),
     Forget(i64, PathBuf, i64),
 }
-
-const INDENT: f32 = 12.0;
-/// The triangle's gutter, left of the name, in points.
-const DISCLOSURE: f32 = 12.0;
 
 pub(crate) struct View<'a> {
     pub folders: &'a [FolderRow],
@@ -60,7 +53,7 @@ pub(crate) fn rows(
             node.count
         };
         let path = node.path.to_string_lossy().to_string();
-        let indent = node.depth as f32 * INDENT + DISCLOSURE;
+        let indent = list_row::tree_indent(node.depth);
         let r = list_row::row(
             ui,
             RowSpec {
@@ -81,32 +74,8 @@ pub(crate) fn rows(
         let mut toggled = false;
         if node.has_children {
             let open = !collapsed.contains(&node.path);
-            let centre = egui::pos2(r.rect.left() + indent - DISCLOSURE / 2.0, r.rect.center().y);
-            // ⚠ Registered after the row, so it wins the click there — the row's own actions work
-            // the same way.
-            let hit = ui.interact(
-                egui::Rect::from_center_size(centre, egui::vec2(DISCLOSURE, r.rect.height())),
-                ui.id().with(("folder_disclosure", &node.path)),
-                egui::Sense::click(),
-            );
-            let colour = ui.visuals().text_color();
-            let s = 3.5;
-            let pts = if open {
-                vec![
-                    centre + egui::vec2(-s, -s * 0.6),
-                    centre + egui::vec2(s, -s * 0.6),
-                    centre + egui::vec2(0.0, s * 0.8),
-                ]
-            } else {
-                vec![
-                    centre + egui::vec2(-s * 0.6, -s),
-                    centre + egui::vec2(s * 0.8, 0.0),
-                    centre + egui::vec2(-s * 0.6, s),
-                ]
-            };
-            ui.painter()
-                .add(egui::Shape::convex_polygon(pts, colour, egui::Stroke::NONE));
-            if hit.clicked() {
+            let id = ui.id().with(("folder_disclosure", &node.path));
+            if list_row::disclosure(ui, r.rect, indent, open, id) {
                 toggled = true;
                 if open {
                     collapsed.insert(node.path.clone());
@@ -188,7 +157,7 @@ mod tests {
         };
         let fuji = test_ui::find(&ctx, "fuji", &mut body).expect("fuji is drawn");
         // The row's rect starts at the panel's left edge; the triangle is DISCLOSURE/2 in.
-        let triangle = egui::pos2(DISCLOSURE / 2.0 + 1.0, fuji.y);
+        let triangle = egui::pos2(list_row::DISCLOSURE / 2.0 + 1.0, fuji.y);
         test_ui::click_at(&ctx, triangle, false, &mut body);
         assert!(
             collapsed.contains(Path::new("/p/fuji")),

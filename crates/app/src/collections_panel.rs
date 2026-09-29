@@ -483,63 +483,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     }
                                     _ => Vec::new(),
                                 };
-                            for y in rustroom_app::date_tree::group(&days) {
-                                // ⚠ `id_salt` on every header: egui's auto-ids shift with what was drawn
-                                // before them — the hazard the grid's `push_id` fixed — so two years with
-                                // the same month number would otherwise collapse together.
-                                egui::CollapsingHeader::new(format!("{} ({})", y.year, y.count))
-                                    .id_salt(("year", y.year))
-                                    .show(ui, |ui| {
-                                        let sel = open_periods.contains(&(y.year, None, None));
-                                        if ui
-                                            .selectable_label(sel, format!("All of {}", y.year))
-                                            .clicked()
-                                        {
-                                            action = Action::OpenPeriod(
-                                                (y.year, None, None),
-                                                ui.input(|i| i.modifiers),
-                                            );
-                                        }
-                                        for m in &y.months {
-                                            let name = rustroom_app::date_tree::month_name(m.month);
-                                            egui::CollapsingHeader::new(format!(
-                                                "{name} ({})",
-                                                m.count
-                                            ))
-                                            .id_salt(("month", y.year, m.month))
-                                            .show(ui, |ui| {
-                                                let sel = open_periods.contains(&(
-                                                    y.year,
-                                                    Some(m.month),
-                                                    None,
-                                                ));
-                                                if ui
-                                                    .selectable_label(sel, format!("All of {name}"))
-                                                    .clicked()
-                                                {
-                                                    action = Action::OpenPeriod(
-                                                        (y.year, Some(m.month), None),
-                                                        ui.input(|i| i.modifiers),
-                                                    );
-                                                }
-                                                for d in &m.days {
-                                                    let sel = open_periods.contains(&(
-                                                        y.year,
-                                                        Some(m.month),
-                                                        Some(d.day),
-                                                    ));
-                                                    let label =
-                                                        format!("{} {name} ({})", d.day, d.count);
-                                                    if ui.selectable_label(sel, label).clicked() {
-                                                        action = Action::OpenPeriod(
-                                                            (y.year, Some(m.month), Some(d.day)),
-                                                            ui.input(|i| i.modifiers),
-                                                        );
-                                                    }
-                                                }
-                                            });
-                                        }
-                                    });
+                            // ⚠ Rows with their counts in the rail's column, not collapsing headers — `date_rows`.
+                            if let Some((period, mods)) = crate::date_rows::rows(ui, &days, &open_periods) {
+                                action = Action::OpenPeriod(period, mods);
                             }
                         })
                             }
@@ -1041,6 +987,109 @@ mod tests {
         assert_eq!(
             app.new_keyword_parent, None,
             "a click elsewhere must clear it"
+        );
+    }
+
+    /// ⚠⚠ **Reported in use 2026-09-29:** "the numbers indicating the amount of photos are not in
+    /// one column" — a folder's count stood left of its one action, an Immich album's left of its
+    /// two, a header's at the edge, and the Dates' inside their labels. Every count the rail paints
+    /// must end at one x. Found as painted text, which is what the eye sees.
+    ///
+    /// ⚠ The sample: counts from a header, a one-action row, a two-action row, a no-action row and
+    /// a tree row, or "one x" could be the same kind of row five times.
+    #[test]
+    fn every_count_in_the_rail_ends_at_one_x() {
+        let ctx = crate::test_ui::ctx();
+        crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+        let mut app = crate::test_app::for_test();
+        app.library = Some(crate::test_app::library_of(3));
+        crate::test_app::catalog_library(&mut app);
+        {
+            let cat = app.catalog.as_ref().unwrap();
+            let first = app.library.as_ref().unwrap().entries[0].id.path.clone();
+            // 2026-05-17, as days since the epoch — the catalog's own fixture date.
+            cat.set_capture(
+                &first,
+                &core_image::Capture {
+                    taken: Some(20_590 * 86_400),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            cat.create_collection("Trips").unwrap();
+            cat.create_keyword("Europe", None).unwrap();
+        }
+        let s = &mut app.settings.panel_sections;
+        s.folders = true;
+        s.collections = true;
+        s.smart = true;
+        s.keywords = true;
+        s.dates = true;
+        s.immich = true;
+        app.settings.immich_enabled = true;
+        app.settings.immich_url = "https://immich.example".to_string();
+        app.settings.immich_key = "a-key".to_string();
+        app.immich_albums = Some(Ok(vec![immich::AlbumSummary {
+            id: "a1".to_string(),
+            album_name: "Holiday".to_string(),
+            asset_count: 1234,
+            last_modified_asset_timestamp: None,
+        }]));
+        app.immich_buckets = Some(Ok(vec![immich::Bucket {
+            time_bucket: "2025-03-01T00:00:00.000Z".to_string(),
+            count: 57,
+        }]));
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 1600.0));
+        let draw = |app: &mut crate::RustroomApp| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    ..Default::default()
+                },
+                |ui| super::show(app, ui, &ctx),
+            )
+        };
+        // Open the Immich timeline, so its years are drawn too.
+        let _ = draw(&mut app);
+        crate::test_ui::click(&ctx, "Timeline", |ui| super::show(&mut app, ui, &ctx));
+        let _ = draw(&mut app);
+        let out = draw(&mut app);
+
+        fn walk(shape: &egui::Shape, found: &mut Vec<(String, f32)>) {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, found)),
+                egui::Shape::Text(t) => {
+                    let text = t.galley.text();
+                    if !text.is_empty() && text.chars().all(|c| c.is_ascii_digit()) {
+                        found.push((text.to_owned(), t.pos.x + t.galley.size().x));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut counts = Vec::new();
+        for c in &out.shapes {
+            walk(&c.shape, &mut counts);
+        }
+        let texts: Vec<&str> = counts.iter().map(|(t, _)| t.as_str()).collect();
+        // 1234: the album, two actions. 3: the folder, one. 57: the Immich year, a tree row.
+        // 2026 and 2025 are the two years' NAMES, painted at the left, and are left out below —
+        // asserted present first, so the filter is known to remove something real.
+        for want in ["1234", "3", "57", "2026", "2025"] {
+            assert!(
+                texts.contains(&want),
+                "sample: {want} was not painted: {texts:?}"
+            );
+        }
+        let column: Vec<&(String, f32)> = counts
+            .iter()
+            .filter(|(t, _)| t != "2026" && t != "2025")
+            .collect();
+        assert!(column.len() >= 6, "sample: too few counts: {column:?}");
+        let x = column[0].1;
+        assert!(
+            column.iter().all(|(_, r)| (r - x).abs() < 0.5),
+            "the counts do not end at one x: {column:?}"
         );
     }
 

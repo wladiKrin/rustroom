@@ -52,6 +52,7 @@ mod catalog_ops;
 mod collections_panel;
 mod commands;
 mod copies;
+mod date_rows;
 mod decode;
 mod develop;
 #[cfg(target_os = "macos")]

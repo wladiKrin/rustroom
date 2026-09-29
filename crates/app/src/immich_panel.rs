@@ -223,41 +223,42 @@ pub fn body(app: &RustroomApp, ui: &mut egui::Ui) -> Action {
                     ui.label(egui::RichText::new("Nothing on the server").weak().small());
                 }
                 for y in years {
-                    // ⚠ `id_salt` on every header: egui's auto-ids shift with what was drawn before
-                    // them, so two years would otherwise collapse together — the hazard the Dates
-                    // section already documents.
-                    egui::CollapsingHeader::new(format!("{} ({})", y.year, y.count))
-                        .id_salt(("immich_year", y.year))
-                        .show(ui, |ui| {
-                            for m in &y.months {
-                                let label = format!("{} {}", month_name(m.month), y.year);
-                                let selected = app.immich_opening.as_deref()
-                                    == Some(m.bucket.as_str())
-                                    || matches!(
-                                        app.library.as_ref().map(|l| &l.source),
-                                        Some(crate::LibrarySource::ImmichBucket { bucket, .. })
-                                            if bucket == &m.bucket
-                                    );
-                                let r = list_row::row(
-                                    ui,
-                                    RowSpec {
-                                        name: &label,
-                                        count: Some(m.count as i64),
-                                        meta: "",
-                                        selected,
-                                        indent: 8.0,
-                                        hover: "Shows these photos, downloading each one when you open it",
-                                        actions: &[],
-                                    },
+                    // ⚠ A row with its count in the rail's column, not a collapsing header whose
+                    // label carried it — `date_rows` says why. The id is the header's old one, so an
+                    // open year stays open; salted, because egui's auto-ids shift with what was
+                    // drawn before them and two years would otherwise collapse together.
+                    let year_id = ui.make_persistent_id(("immich_year", y.year));
+                    if crate::date_rows::branch(ui, year_id, &y.year.to_string(), y.count as i64, 0)
+                    {
+                        for m in &y.months {
+                            let label = format!("{} {}", month_name(m.month), y.year);
+                            let selected = app.immich_opening.as_deref() == Some(m.bucket.as_str())
+                                || matches!(
+                                    app.library.as_ref().map(|l| &l.source),
+                                    Some(crate::LibrarySource::ImmichBucket { bucket, .. })
+                                        if bucket == &m.bucket
                                 );
-                                if r.clicked {
-                                    action = Action::OpenBucket {
-                                        bucket: m.bucket.clone(),
-                                        label,
-                                    };
-                                }
+                            let r = list_row::row(
+                                ui,
+                                RowSpec {
+                                    name: &label,
+                                    count: Some(m.count as i64),
+                                    meta: "",
+                                    selected,
+                                    indent: list_row::tree_indent(1),
+                                    hover:
+                                        "Shows these photos, downloading each one when you open it",
+                                    actions: &[],
+                                },
+                            );
+                            if r.clicked {
+                                action = Action::OpenBucket {
+                                    bucket: m.bucket.clone(),
+                                    label,
+                                };
                             }
-                        });
+                        }
+                    }
                 }
             }
         });

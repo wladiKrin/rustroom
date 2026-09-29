@@ -121,6 +121,10 @@ pub const CONTROL_ROW: f32 = 28.0;
 pub const LIST_ROW: f32 = 30.0;
 /// A section header.
 pub const HEADER_ROW: f32 = 26.0;
+/// Where a row's trailing count or text ends, in from the row's right edge — list rows and
+/// section headers alike, so every count in the Library rail sits in one column (`docs/DESIGN.md`
+/// §7.6). The same 8 the name keeps from the left edge.
+pub const TRAILING_INSET: f32 = 8.0;
 /// The top bar.
 pub const TOP_BAR: f32 = 44.0;
 

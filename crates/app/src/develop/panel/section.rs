@@ -254,9 +254,11 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
         let painter = ui.painter_at(rect);
         if let Some(text) = h.trailing {
             let galley = painter.layout_no_wrap(text.to_owned(), caption.clone(), weak);
+            // ⚠ At the list rows' inset, so a rail header's count and its rows' counts are one
+            // column (`list_row`, `tokens::TRAILING_INSET`).
             painter.galley(
                 egui::pos2(
-                    right - galley.size().x - 4.0,
+                    right - galley.size().x - tokens::TRAILING_INSET,
                     rect.center().y - galley.size().y / 2.0,
                 ),
                 galley,
