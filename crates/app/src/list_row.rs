@@ -508,7 +508,11 @@ mod tests {
                 .unwrap_or_else(|| panic!("no {label:?}: {all:?}"))
         };
         assert_eq!(faces(&ctx, at("Portraits")), 0, "on the name, no face");
-        assert_eq!(faces(&ctx, at("Delete Portraits")), 1, "on a button, its face");
+        assert_eq!(
+            faces(&ctx, at("Delete Portraits")),
+            1,
+            "on a button, its face"
+        );
     }
 
     /// Tighter: neighbouring cells stand `ROW_ACTION` apart, not a row height.

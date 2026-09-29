@@ -139,7 +139,7 @@ of controls · **16** panel and dialog padding · **24** between sections in a d
 | Element | Size |
 |---|---|
 | Control row (buttons, fields, combos, slider rows, checkboxes) | **28** tall |
-| List row (rail, mask list, snapshots, presets) | **30** |
+| List row (rail, mask list, snapshots, presets) | **30**; action cells **20** wide |
 | Section header | **26** |
 | Top bar | **44** |
 | Status row | **32** |
@@ -293,10 +293,12 @@ any growth.
 Library rail stands in one column (the author's rule, 2026-09-29: "all the numbers should be to the
 most right, with the buttons to the left of them"). A count column is at least four digits wide,
 so the actions beside it line up too; a meta text (a snapshot's time) takes the same place at its
-own width. **Hover** = `hover` fill, and the row's actions appear as icon cells **left of the
-count** (download, remove); their room is kept while hidden, so a name never shortens under the
-pointer, and a disabled action senses the pointer but not a click, so a click there reaches the
-row. **Open** = accent 18 % tint, count in `text2`. **Trees** (folders, dates, the Immich timeline)
+own width. **Hover** = `hover` fill. The row's actions are icon cells **left of the count**
+(download, remove), **20 wide** (`tokens::ROW_ACTION`) and the row's height tall, and they are **always
+drawn**: `text3` at rest, `text` while the pointer is anywhere on the row, and the `raised` face under the
+one the pointer is on (not `hover` — the row already wears it). A disabled action stays at `text3`
+45 %, never pops and senses the pointer but not a click, so a click there reaches the row. (The author,
+2026-09-29, reversing the first-use review's P-13, which had hidden them until hover.) **Open** = accent 18 % tint, count in `text2`. **Trees** (folders, dates, the Immich timeline)
 indent 12 per level and carry a painted disclosure triangle in a 12-pt gutter left of the name
 (`list_row::disclosure`); a count never goes inside a label — the Dates' "2024 (523)" was the
 counter-example. `collections_panel`'s `every_count_in_the_rail_ends_at_one_x` checks the painted
@@ -453,3 +455,4 @@ data in the lib crate and testable headless; only the drawing lives in the bin m
 | 2026-09-29 | Counts in one column at the rail's right edge, actions left of them; Dates and the Immich timeline as tree rows; a default lens correction is the photo's starting point, not an edit; the filmstrip keeps the selected photo in place through a resize | counts left of the actions; counts inside labels |
 | 2026-09-29 | **Inter Medium** bundled for Title, Display, section names and sub-labels; the photo's name back in the top row, centred alone at the same x in both views, with the Library's search and Filter at the right edge; one scoped hover sentence per control, no reset phrase | Regular-only titles; the name in the Library's status row; hovers that explained the same-named control elsewhere |
 | 2026-09-29 | **Built.** Reindex moved back behind ⋯ with Expand all / Stack all — the 2026-09-23 call took it out of a one-item menu and set the condition "if a second Library action ever wants this corner, reconsider the menu then"; that happened | Reindex as a bar button |
+| 2026-09-29 | A list row's actions **always drawn**, `text3` at rest and `text` under the pointer on the row, a `raised` face under the pointed one; action cells **20** wide (`tokens::ROW_ACTION`) — the author, after trying M10.6a | actions drawn only under the pointer (P-13); 30-wide cells |

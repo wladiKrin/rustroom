@@ -193,6 +193,17 @@ by use 2026-09-29** (*"works"*), with a round on the row buttons requested in th
 - Sabotage-checked: the old order, Albums closed by default, the bare-string id, the missing
   `ui.vertical`, the month request moved back inside the open row, and `Some(0)` for an unknown total.
 
+**A round on the row buttons, the same day** (spec `2026-09-29-row-buttons-design.md`). The author:
+the `×` and download buttons *"always, lightly visible with a greyed out color, and their color only
+pops when hovering above said folder"*, and *"the layout of all buttons tighter"* — scope chosen: every
+list row. `list_row` now paints the actions always: **`text3`** at rest (3.6:1 dark, 3.1:1 light — the
+§10 floor holds), **`text`** with the pointer anywhere on the row, and a **`raised`** face under the
+pointed cell; cells **20 pt** wide (`tokens::ROW_ACTION`, was the row's 30). ⚠ This **reverses P-13**,
+the first-use review's "a × on every folder row read as a standing threat" — the author's call.
+⚠ The spec first said a `hover` fill under the pointed cell; the row under the pointer **already** wears
+`hover`, so it would have been invisible — `raised` shows in both themes. 4 tests, sabotage-checked
+(always drawn, the pop, the width, the face).
+
 ### 2026-09-29 — The re-plan: every open item becomes Phase 10, release becomes Phase 11 (branch `replan`)
 
 **Input:** after the mask reorder, the author asked for the remaining open items in chronological order,

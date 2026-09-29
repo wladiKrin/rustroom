@@ -4,7 +4,7 @@
 > **Commits carry no `Co-Authored-By` trailer. Never push.**
 
 **Goal:** list-row action glyphs always drawn at `text3`, `text` when the pointer is on the row, a
-`hover` fill under the pointed cell; cells 20 pt wide.
+`raised` fill under the pointed cell; cells 20 pt wide.
 
 **Spec:** `docs/superpowers/specs/2026-09-29-row-buttons-design.md`.
 
@@ -20,7 +20,8 @@
    "Delete {row}" and the second action are `ROW_ACTION` apart. Run → (a)–(c) fail.
 3. [ ] **Implement** in `row_with`: cell width `tokens::ROW_ACTION`; colour per cell —
    disabled `text3.gamma_multiply(0.45)`, else `text` when `pointer_here`, else `text3`; remember
-   `r.hovered() && on` per cell and paint a `tk.hover` rounded fill under that cell before its glyph;
+   `r.hovered() && on` per cell and paint a `tk.raised` rounded fill under that cell before its glyph
+   (not `hover` — the hovered row already has it);
    paint the glyphs unconditionally. Rewrite the P-13 comment: reversed by the author 2026-09-29.
 4. [ ] **Run** `cargo test --workspace list_row` and `every_count_in_the_rail` → pass.
 5. [ ] **Sabotages** (each red, reverted): paint under `pointer_here` only; `text3` for both states;

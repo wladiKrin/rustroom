@@ -23,8 +23,11 @@ author's decision (2026-09-29).**
   - at rest: **`text3`** — the counts' grey; 3.6:1 on the dark panel, 3.1:1 on the light one, above
     `DESIGN.md` §10's 3:1 non-text floor;
   - the pointer anywhere on the row: **`text`**, the name's colour — the pop;
-  - the pointer on one cell: that cell also gets the **`hover`** fill (radius `tokens::RADIUS`), so the
-    one a click will hit is plain — §9, hover changes fill only.
+  - the pointer on one cell: that cell also gets the **`raised`** fill (radius `tokens::RADIUS`) — a
+    button's face — so the one a click will hit is plain (§9: hover changes fill only). ⚠ Not `hover`,
+    as first written: the row under the pointer already carries the `hover` fill, so a `hover` cell on it
+    would be invisible. `raised` is darker than `hover` in the dark theme and lighter in the light one,
+    so it shows in both.
 - **A disabled action** (Tag/Untag with nothing picked) is `text3` at 45 % in every state, and gets no
   fill: it neither pops nor claims the click.
 - **Tighter:** each cell is **20 pt** wide — a new `tokens::ROW_ACTION`, since sizes are tokens — and
