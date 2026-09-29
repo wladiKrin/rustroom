@@ -300,6 +300,21 @@ the right edge, the rail's growth fixed, and every hover rewritten to one senten
   five labels render at **9.35 pt** (the segmented shrink takes 15 % off Caption, below the 11-pt
   floor) in 57 × 20-pt cells, and the mask modes at 13 pt in 71-pt cells. Options on a canvas
   (<https://claude.ai/artifact/E5FSgBTobVtqkKvxvTNpL8>), waiting for the author's pick.
+
+**Fourth round: the author picked curve A and masks B, and asked for a collapsible curve** (one
+commit, gate green at **3250**). The curve's mode (`CurveMode`) left `CurveChannel`, so Parametric
+is a row of its own and going there and back keeps the channel; the channel row carries dots and is
+greyed under Parametric. The block collapses under `section::sub_header`, with a dot while any of
+the five curves is bent; its state is `Settings::tone_curve_open`, saved when it changes, shared
+with the masks' curve. The mask modes gained Phosphor icons (plus-circle, plus, minus, intersect —
+read from 2.1.2's stylesheet, whose codepoints for five icons already in `icons.rs` matched, and each
+found in the bundled cmap) and wrap into a 2 × 2 block; the kind buttons are 36 tall with 18-pt
+glyphs. `segmented` gained marks, a Caption floor on the shrink and balanced wrapping — without the
+balance the four modes went three and one. Sabotages: an unbalanced wrap (two tests), no floor, and
+no save each fail. ⚠ *Doc blocks on the wrong item, three more:* the curve editor's doc sat on
+`CurveChannel`, the segmented control's on the `SHRINK` constant, and three struct docs in
+`adjustments` were stacked on the wrong structs — all moved; and my own insertion of `curve_mode`
+landed between `curve_channel` and its doc, caught by reading the diff before building.
 ### 2026-09-29 — M9.14 Previews: instant 1:1 in Develop, Compare and Survey (branch `m9.14-previews`, merged 2026-09-29)
 
 **The ask** (P-20, the professional review's first blocker): a focus check across a shoot is a wall

@@ -63,7 +63,9 @@ Rules:
   both halves, and `no_bundled_font_shadows_an_icon` covers the Medium face too. Never fake
   weight with a larger size.
 - **Icons are not text sizes.** Inline in text 14 · toolbar and buttons 16 · tool rail and empty
-  states 24. Glyphs come from `icons.rs`, verified against the cmap (its warning stands).
+  states 24. Glyphs come from `icons.rs`, verified against the cmap (its warning stands). ⚠ One
+  exception, drawn rather than a font glyph: the mask kinds' painted glyphs are 18 in their 36-pt
+  buttons (option B of the 2026-09-29 canvas, as the author picked it).
 - **Numbers that change while you watch** (readout, slider values, counts) are laid out at a
   fixed width measured from the widest value — the readout's precedent — never left to jump.
 - **Case:** sentence case everywhere (buttons, menu items, section names, dialog titles). The
@@ -221,19 +223,28 @@ accessibility label; **Disabled** 40 % opacity, never hidden. No outline variant
 ### 7.2 Segmented control
 A pill well on the `canvas` colour, 2 px inset, segments full-radius; the lit segment is `raised`
 with a 1 px shadow and `text`; unlit segments `text2`. **Two sizes of one shape:** 28 tall with
-Body labels for a primary switch (app, mode, mask mode, dialog tabs), 24 with Caption labels for a
-compact view switch in the panel (curve channels, HSL, grading range) — five Body labels do not fit
-the panel's width. **The app switch is the only
-segment lit with the accent.** Icon + label when there is room, icon only (with tooltip) when
-there is not; labels shrink 15 % before wrapping (`segmented::plan`). Used for: app switch,
-mode switch, zoom group, curve channels, Retouch modes, mask modes, Interface size, dialog tabs.
+Body labels for a primary switch (app, mode, mask mode, the tone curve's two rows, dialog tabs), 24
+with Caption labels for a compact view switch in the panel (HSL, grading range). **The app switch
+is the only segment lit with the accent.** A segment may carry a **mark** before its label
+(`segmented::Mark`): an icon (the mask modes) or a dot in its own colour (the curve's Red, Green and
+Blue); the mark counts in the width a cell must hold and never shrinks. Used for: app switch, mode
+switch, zoom group, the curve's mode and channels, Retouch modes, mask modes, Interface size, dialog
+tabs.
 
-⚠⚠ **Open — the shrink breaks the 11-pt floor on a Caption-sized control.** 15 % off Caption is
-9.35 pt, and the tone curve's five channels render exactly there, in 57 × 20-pt cells; the author
-found them "all very small" (2026-09-29), and the mask modes too (13 pt, but in 71-pt cells that
-the widest label nearly fills). A new setup for both is waiting for the author's pick from the
-options at <https://claude.ai/artifact/E5FSgBTobVtqkKvxvTNpL8>; when it lands, the shrink must never
-go below Caption.
+**When it does not fit:** labels shrink 15 % — **never below Caption** (`segmented::shrunk_size`) —
+and if that is not enough the items wrap into **balanced** rows: four that would fit three to a row
+go two and two, never three and one (`segmented::plan`). ⚠ Until 2026-09-29 the shrink was
+unconditional and the tone curve's five channels rendered at 9.35 pt in 20-pt cells, "all very
+small"; the author then picked a new setup for the curve and the mask modes from the options at
+<https://claude.ai/artifact/E5FSgBTobVtqkKvxvTNpL8>:
+
+- **The tone curve (option A):** two rows at the control height — *Point curve · Parametric*, then
+  *RGB · Red · Green · Blue* with channel dots. Parametric is a different kind of curve, not a
+  fifth channel; under it the channel row is greyed and keeps the channel you left
+  (`tone_curve::selectors`).
+- **The mask modes (option B):** *New mask · Add · Subtract · Intersect* with an icon each, which
+  wraps them into a 2 × 2 block of 32-pt segments at the panel's width; the kind buttons under them
+  are 36 tall.
 
 ### 7.3 Field and combo
 A **field** (you type) sits on `card` with a 1 px `line` border, placeholder in `text3`, an
@@ -260,6 +271,13 @@ A card is painted **behind** its header and body (`HeaderOut::show_body`) — ne
 fills its container, whose card gap would grow a resizable panel every frame (the snapshot strip
 did). Names are sentence-cased when painted (`header_text`), not renamed: they are also the
 accessible labels and the Sync dialog's rows.
+
+**A collapsible block inside a card** (`section::sub_header`) — the tone curve, globally and in a
+mask: the section chevron, the name in the sub-label face, an accent dot while the block differs
+from neutral, and its own Reset at the right while it is open. Collapsed, only that row remains.
+Its open state is a **setting** (`Settings::tone_curve_open`, one for both curves) because egui's
+memory does not survive a restart here, and a block the author collapsed "because it's quite large
+and may be in the way" must stay collapsed.
 
 ⚠⚠ **A row that asks for more width than the rail has grows the rail every frame.** egui's side
 panels widen to their content, so a row laid out wider than the panel pushes it out a little on
@@ -427,6 +445,7 @@ data in the lib crate and testable headless; only the drawing lives in the bin m
 | 2026-09-19 | Icon-only tool rail at 26; chevron left, actions right on section headers | labelled rail, chevron right |
 | 2026-09-28 | Inter Regular as the text face; panel floor 300; segments shrink before wrapping; Interface size setting | Ubuntu Light |
 | 2026-09-29 | **Direction B · Layered** chosen from three; four text sizes, nothing below 11; a status row and the two-row priority rule; hover text replaces every on-screen hint; seven accents including Orange and Sage at the author's request (default stays Steel blue); dark text on the dark-theme accent | ten sizes; one overloaded bar; persistent hints; four accents; white on accent |
+| 2026-09-29 | The tone curve as two rows (Point curve · Parametric, then the channels with dots), collapsible, its state saved; the mask modes as a 2 × 2 block with icons and 36-pt kind buttons; a segmented label never below Caption, wrapped rows balanced | the five-channel compact selector at 9.35 pt; a 28-pt mask mode row; an unconditional shrink |
 | 2026-09-29 | Counts in one column at the rail's right edge, actions left of them; Dates and the Immich timeline as tree rows; a default lens correction is the photo's starting point, not an edit; the filmstrip keeps the selected photo in place through a resize | counts left of the actions; counts inside labels |
 | 2026-09-29 | **Inter Medium** bundled for Title, Display, section names and sub-labels; the photo's name back in the top row, centred alone at the same x in both views, with the Library's search and Filter at the right edge; one scoped hover sentence per control, no reset phrase | Regular-only titles; the name in the Library's status row; hovers that explained the same-named control elsewhere |
 | 2026-09-29 | **Built.** Reindex moved back behind ⋯ with Expand all / Stack all — the 2026-09-23 call took it out of a one-item menu and set the condition "if a second Library action ever wants this corner, reconsider the menu then"; that happened | Reindex as a bar button |
