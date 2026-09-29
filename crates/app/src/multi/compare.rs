@@ -170,6 +170,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         app.compare_view.sync(&ids);
     }
     let previews = &app.preview_textures;
+    let misses = &app.preview_misses;
     // Two disjoint `&mut` fields, which is legal where a closure capturing `app` twice is E0499 —
     // the shape `masks::BrushTool` already uses.
     let view = &mut app.compare_view;
@@ -374,14 +375,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 }
                 preview.map(|t| (t, pane.draw_scale(img_area, t.size_vec2()), pane.pan))
             });
+            // ⚠ The thumbnail only once the loader has said there is no preview (an edited
+            // photo whose preview has not been built): while a preview may be on its way the
+            // pane stays dark rather than flashing a 512-px picture (the author's call).
+            let missed = reqs.get(slot).is_some_and(|r| misses.contains(&r.key()));
             let image = match pane_img {
                 Some((t, scale, offset)) => multi::TileImage::Pane {
                     tex: t,
                     scale,
                     offset,
                 },
-                // The thumbnail, until the preview lands or builds.
-                None => match tex {
+                None => match tex.filter(|_| missed) {
                     Some(t) => multi::TileImage::Placeholder(t),
                     None => multi::TileImage::Thumb(None),
                 },

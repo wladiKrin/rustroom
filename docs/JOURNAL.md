@@ -261,6 +261,19 @@ a portrait one), the cell is exactly the box, the caption and the marks row, and
 sits on the box's bottom edge. The minority orientation is smaller inside that box; no uniform
 box avoids that, and the majority is what the eye scans.
 
+**The author's fourth look (03:00):** *(1)* The grid box is a **fixed 3:2** for every photo
+(`cell_layout::BOX_ASPECT`) — the majority-orientation box "behaved weirdly", jumping as
+thumbnails loaded; a portrait frame is simply smaller inside the box, which he called fine.
+*(2)* "A short flicker of a lower-resolution image" on opening in Develop and on cycling in
+Compare: the 512-px picture, in three places — the ghost's own first render before the camera
+preview lands (~0.2 s), Compare's thumbnail placeholder, and the old pending placeholder. Since
+the camera preview is that quick, none of them shows any more while a preview may be on its
+way: the app remembers the keys the loader answered with **nothing** (`preview_misses`), and only
+then does a view fall back to the thumbnail. Develop shows the previous photo dimmed
+(`Session::stale`) or a spinner meanwhile; Compare's pane stays dark; an edited photo with no
+rendered preview gets its ghost render after the loader's instant miss.
+`a_ghost_waits_for_its_preview_and_shows_its_own_render_only_after_a_miss` pins it.
+
 **Not verified in use, and why:** the driven look was attempted at 01:35 and the screen was at
 the login window — nothing could be captured. The author's look: an untouched RAF at 1:1 in
 Develop shows "Camera preview" within a fraction of a second and hands over to the live render

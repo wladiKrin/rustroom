@@ -41,6 +41,7 @@ impl RustroomApp {
     pub(crate) fn sync_preview_window(&mut self, window: &[PreviewRequest]) {
         let keys: Vec<ThumbKey> = window.iter().map(|r| r.key()).collect();
         self.preview_textures.retain_window(&keys);
+        self.preview_misses.retain(|k| keys.contains(k));
         let missing: Vec<PreviewRequest> = window
             .iter()
             .filter(|r| !self.preview_textures.contains(&r.key()))
@@ -56,6 +57,9 @@ impl RustroomApp {
     pub(crate) fn pump_previews(&mut self, ctx: &egui::Context) {
         for res in self.previews.drain() {
             let Some((t, source)) = res.preview else {
+                // ⚠ Remembered: a view shows the thumbnail only once the loader has said there
+                // is no preview, never while the answer is on its way.
+                self.preview_misses.insert(res.key);
                 continue;
             };
             if t.width == 0 || t.height == 0 {
@@ -89,16 +93,20 @@ impl RustroomApp {
     /// Develop's window: the pending photo's preview, or the open one's until the full decode
     /// lands — after that the live buffer has every pixel and a stand-in would only cost memory.
     pub(crate) fn sync_develop_previews(&mut self) {
-        let window: Vec<PreviewRequest> = if let Some(p) = &self.pending {
-            vec![p.preview_request.clone()]
-        } else if let Some(s) = &self.session {
-            if s.buffer_is_full_res {
-                Vec::new()
-            } else {
+        // ⚠ The session's **current** edits when it covers the pending photo (a ghost): an edit
+        // made on the ghost changes the key, and the loader's answer for the new key — a miss —
+        // is what lets the canvas show the ghost's own render rather than wait forever.
+        let session_covers = self
+            .session
+            .as_ref()
+            .zip(self.pending.as_ref())
+            .is_some_and(|(s, p)| s.path == p.id.path && s.copy == p.id.copy);
+        let window: Vec<PreviewRequest> = match (&self.pending, &self.session) {
+            (Some(p), _) if !session_covers => vec![p.preview_request.clone()],
+            (_, Some(s)) if !s.buffer_is_full_res => {
                 vec![self.preview_request(PhotoId::new(s.path.clone(), s.copy), s.edits.clone())]
             }
-        } else {
-            Vec::new()
+            _ => Vec::new(),
         };
         self.sync_preview_window(&window);
     }

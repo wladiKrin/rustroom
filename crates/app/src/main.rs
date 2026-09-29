@@ -372,6 +372,10 @@ struct RustroomApp {
     preview_store: rustroom_app::preview_store::PreviewStore,
     /// The last want-list handed to the preview loader, so it is re-sent only when it changes.
     preview_want: Vec<rustroom_app::preview_loader::PreviewRequest>,
+    /// Keys the loader answered with **nothing** — an edited photo with no rendered preview yet.
+    /// Only then does a view fall back to the 512-px thumbnail; while an answer is pending it
+    /// shows nothing low-resolution at all (the author's call, 2026-09-29).
+    preview_misses: std::collections::HashSet<rustroom_app::thumb_key::ThumbKey>,
     /// Edited photos left without a preview, built one at a time in the background.
     leave_queue: rustroom_app::preview_build::LeaveQueue,
     /// The build in flight, if any, and whether it was asked for or came from the leave queue.
@@ -797,6 +801,7 @@ impl RustroomApp {
             preview_textures: rustroom_app::thumb_cache::ThumbCache::new(PREVIEW_TEXTURE_BUDGET),
             preview_store,
             preview_want: Vec::new(),
+            preview_misses: Default::default(),
             leave_queue: Default::default(),
             preview_builder: None,
             preview_progress: String::new(),
@@ -929,6 +934,9 @@ pub struct Session {
     engine: RenderEngine,
     edits: Edits,
     texture: Option<egui::TextureHandle>,
+    /// The previous photo's last frame, shown dimmed while a ghost session waits for its
+    /// preview — never the ghost's own 512-px render, which read as a low-resolution flash.
+    stale: Option<egui::TextureHandle>,
     baseline: egui::TextureHandle,
     hist: [[u32; 256]; 3],
     make_model: String,

@@ -208,16 +208,16 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     // M9.14: the camera JPEG or a rendered preview, when it has landed, takes
                     // the thumbnail placeholder's place — sharp instead of a 512-px blur — and
                     // it zooms and pans while the decode runs; the session inherits the view.
-                    let preview = app
-                        .preview_textures
-                        .get(&p.preview_request.key())
-                        .map(|(t, _)| t);
-                    draw_pending_canvas(ui, p, app.session.as_ref(), preview, app_pan_drag);
+                    let key = p.preview_request.key();
+                    let preview = app.preview_textures.get(&key).map(|(t, _)| t);
+                    let missed = app.preview_misses.contains(&key);
+                    draw_pending_canvas(ui, p, app.session.as_ref(), preview, missed, app_pan_drag);
                     return;
                 }
             }
-            // ⚠ A disjoint field borrow, taken before `app.session` is borrowed mutably below.
+            // ⚠ Disjoint field borrows, taken before `app.session` is borrowed mutably below.
             let preview_textures = &app.preview_textures;
+            let preview_misses = &app.preview_misses;
             match &mut app.session {
                 Some(s) => {
                     if let Some(tex) = &s.texture {
@@ -484,6 +484,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                 }
                             }
                         }
+                        // ⚠ A ghost whose preview has not answered yet shows the previous
+                        // photo dimmed, never its own 512-px render — the author called that a
+                        // low-resolution flash (2026-09-29). Once the loader has said there is
+                        // no preview (an edited photo without one), the ghost's render is all
+                        // there is and it shows.
+                        let waiting = s.buffer_is_ghost
+                            && stand_in.is_none()
+                            && !preview_misses.contains(&stand_in_key);
                         match &stand_in {
                             // ⚠ At `frame_rect`, the whole post-geometry frame: a camera JPEG
                             // is the camera's framing, which for an untouched photo is the frame;
@@ -512,6 +520,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                     egui::Color32::from_black_alpha(140),
                                 );
                                 ui.painter().galley(at, galley, egui::Color32::WHITE);
+                            }
+                            None if waiting => {
+                                paint_stale(ui, s.stale.as_ref());
                             }
                             None => {
                                 egui::Image::new(shown).paint_at(ui, resp.rect);
@@ -812,11 +823,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                             Some((tex, _)) => {
                                 paint_fitted(ui, tex, s.zoom, s.pan);
                             }
-                            None => {
-                                ui.centered_and_justified(|ui| {
-                                    ui.spinner();
-                                });
-                            }
+                            None => paint_stale(ui, s.stale.as_ref()),
                         }
                     }
                 }
@@ -856,11 +863,15 @@ fn draw_pending_canvas(
     pending: &mut PendingOpen,
     session: Option<&Session>,
     preview: Option<&egui::TextureHandle>,
+    missed: bool,
     pan_binding: rustroom_app::settings::PanDrag,
 ) {
-    let showing_placeholder = pending.placeholder.is_some() || preview.is_some();
+    // ⚠ The 512-px placeholder only once the loader has said there is no preview; while one
+    // may be on its way, the previous photo's frame, dimmed.
+    let placeholder = pending.placeholder.as_ref().filter(|_| missed);
+    let showing_placeholder = placeholder.is_some() || preview.is_some();
     let fallback = session.and_then(|s| s.texture.as_ref());
-    let Some(tex) = preview.or(pending.placeholder.as_ref()).or(fallback) else {
+    let Some(tex) = preview.or(placeholder).or(fallback) else {
         ui.centered_and_justified(|ui| {
             ui.spinner();
         });
@@ -922,6 +933,26 @@ fn paint_fitted(
     let rect = egui::Rect::from_center_size(ui.max_rect().center() + pan, tex_size * fit * zoom);
     egui::Image::new(tex).paint_at(ui, rect);
     rect
+}
+
+/// The previous photo's last frame, fitted and dimmed so it reads as stale — or a spinner on
+/// a first open, when there is none.
+fn paint_stale(ui: &mut egui::Ui, stale: Option<&egui::TextureHandle>) {
+    match stale {
+        Some(tex) => {
+            let rect = paint_fitted(ui, tex, 1.0, egui::Vec2::ZERO);
+            ui.painter().rect_filled(
+                rect,
+                egui::CornerRadius::ZERO,
+                egui::Color32::from_black_alpha(140),
+            );
+        }
+        None => {
+            ui.centered_and_justified(|ui| {
+                ui.spinner();
+            });
+        }
+    }
 }
 
 /// Set the white balance from a pixel the user clicked.
@@ -1133,6 +1164,39 @@ mod tests {
     }
 
     /// M9.14: at fit the live render is painted; asked for more pixels than the buffer has,
+    /// 2026-09-29: a ghost whose preview has not answered shows no 512-px render — the
+    /// previous frame dimmed, or a spinner — and shows its own render only once the loader has
+    /// said there is no preview.
+    #[test]
+    fn a_ghost_waits_for_its_preview_and_shows_its_own_render_only_after_a_miss() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 800, 400);
+        let (live_id, key) = {
+            let s = app.session.as_mut().expect("session");
+            s.buffer_is_ghost = true;
+            s.buffer_is_full_res = false;
+            s.buffer_long = 800;
+            s.fit_image_size = egui::vec2(800.0, 400.0);
+            let key = rustroom_app::thumb_key::ThumbKey::new(
+                rustroom_app::photo_id::PhotoId::new(s.path.clone(), s.copy),
+                &s.edits,
+            );
+            (s.texture.as_ref().expect("live texture").id(), key)
+        };
+        let waiting = painted_texture_ids(&mut app, &ctx);
+        assert!(
+            !waiting.contains(&live_id),
+            "the ghost's own render was painted while its preview was still on its way"
+        );
+        app.preview_misses.insert(key);
+        let after_miss = painted_texture_ids(&mut app, &ctx);
+        assert!(
+            after_miss.contains(&live_id),
+            "with no preview to come, the ghost's render is all there is and must show"
+        );
+    }
+
     /// the preview is painted in its place; once the buffer is full resolution, the live render
     /// again. Pixel-level, through the real `show`.
     #[test]

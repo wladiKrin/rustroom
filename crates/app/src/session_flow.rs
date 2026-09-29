@@ -563,6 +563,7 @@ impl RustroomApp {
         // ⚠ The only place `self.session` is ever assigned, and so the only choke point the
         // stash needs: the outgoing history is put away here whether the switch came from a
         // cache hit or from a finished background decode.
+        let stale = self.session.as_ref().and_then(|old| old.texture.clone());
         if let Some(old) = self.session.take() {
             let old_id = PhotoId::new(old.path, old.copy);
             // ⚠ Persisted at the same choke point it is stashed at (M9.7), so the catalog and the
@@ -704,6 +705,7 @@ impl RustroomApp {
             engine,
             edits,
             texture: None,
+            stale,
             baseline,
             hist: [[0; 256]; 3],
             make_model: decoded.label.clone(),
@@ -870,6 +872,7 @@ impl RustroomApp {
         s.buffer = decoded.buffer.clone();
         s.buffer_is_full_res = full_res;
         s.buffer_is_ghost = false;
+        s.stale = None;
         // ⚠ Load-bearing. Region rects are in *rendered* pixels, and those coordinates change
         // with the buffer — reusing them would describe the wrong part of the image. Clearing
         // both forces the next frame to re-request against the new resolution.
