@@ -196,16 +196,25 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     egui::CentralPanel::default()
         .frame(crate::theme::canvas_frame(ui.style()))
         .show(ui, |ui| {
-            if let Some(p) = &mut app.pending {
-                // M9.14: the camera JPEG or a rendered preview, when it has landed, takes the
-                // thumbnail placeholder's place — sharp instead of a 512-px blur — and it zooms
-                // and pans while the decode runs; the session inherits the view.
-                let preview = app
-                    .preview_textures
-                    .get(&p.preview_request.key())
-                    .map(|(t, _)| t);
-                draw_pending_canvas(ui, p, app.session.as_ref(), preview, app_pan_drag);
-                return;
+            // ⚠ With a ghost session for the pending photo the session branch below draws it —
+            // the pending branch is the fallback for a photo with no cached thumbnail.
+            let ghost_covers = app
+                .session
+                .as_ref()
+                .zip(app.pending.as_ref())
+                .is_some_and(|(s, p)| s.path == p.id.path && s.copy == p.id.copy);
+            if !ghost_covers {
+                if let Some(p) = &mut app.pending {
+                    // M9.14: the camera JPEG or a rendered preview, when it has landed, takes
+                    // the thumbnail placeholder's place — sharp instead of a 512-px blur — and
+                    // it zooms and pans while the decode runs; the session inherits the view.
+                    let preview = app
+                        .preview_textures
+                        .get(&p.preview_request.key())
+                        .map(|(t, _)| t);
+                    draw_pending_canvas(ui, p, app.session.as_ref(), preview, app_pan_drag);
+                    return;
+                }
             }
             // ⚠ A disjoint field borrow, taken before `app.session` is borrowed mutably below.
             let preview_textures = &app.preview_textures;
@@ -793,9 +802,22 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                             }
                         }
                     } else {
-                        ui.centered_and_justified(|ui| {
-                            ui.spinner();
-                        });
+                        // No frame yet — a ghost session's first render is a few ms away. The
+                        // preview, when it has landed, fills those frames at the session's view.
+                        let key = rustroom_app::thumb_key::ThumbKey::new(
+                            rustroom_app::photo_id::PhotoId::new(s.path.clone(), s.copy),
+                            &s.edits,
+                        );
+                        match preview_textures.get(&key) {
+                            Some((tex, _)) => {
+                                paint_fitted(ui, tex, s.zoom, s.pan);
+                            }
+                            None => {
+                                ui.centered_and_justified(|ui| {
+                                    ui.spinner();
+                                });
+                            }
+                        }
                     }
                 }
                 None => {
@@ -874,8 +896,7 @@ fn draw_pending_canvas(
     if pending.zoom <= view_region::MIN_ZOOM {
         pending.pan = egui::Vec2::ZERO;
     }
-    let rect = egui::Rect::from_center_size(centre + pending.pan, tex_size * fit * pending.zoom);
-    egui::Image::new(tex).paint_at(ui, rect);
+    let rect = paint_fitted(ui, tex, pending.zoom, pending.pan);
 
     if !showing_placeholder {
         // This is the *previous* photo — dim it so it reads as stale.
@@ -885,6 +906,22 @@ fn draw_pending_canvas(
             egui::Color32::from_black_alpha(140),
         );
     }
+}
+
+/// Paint a texture fitted to the canvas, times `zoom`, about the centre plus `pan` — the
+/// placement a session frame gets, so a swap happens in place instead of snapping.
+fn paint_fitted(
+    ui: &mut egui::Ui,
+    tex: &egui::TextureHandle,
+    zoom: f32,
+    pan: egui::Vec2,
+) -> egui::Rect {
+    let tex_size = tex.size_vec2();
+    let avail = ui.available_size();
+    let fit = (avail.x / tex_size.x.max(1.0)).min(avail.y / tex_size.y.max(1.0));
+    let rect = egui::Rect::from_center_size(ui.max_rect().center() + pan, tex_size * fit * zoom);
+    egui::Image::new(tex).paint_at(ui, rect);
+    rect
 }
 
 /// Set the white balance from a pixel the user clicked.

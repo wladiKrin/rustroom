@@ -123,6 +123,20 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
                     }
                 }
             } else if let Some(s) = &mut app.session {
+                // ⚠ A ghost session's buffer is the 512-px thumbnail; its 1:1 is the preview's
+                // (the camera JPEG standing in), else the thumbnail's — never "no zoom".
+                let native_long = if s.buffer_is_ghost {
+                    let key = rustroom_app::thumb_key::ThumbKey::new(
+                        rustroom_app::photo_id::PhotoId::new(s.path.clone(), s.copy),
+                        &s.edits,
+                    );
+                    app.preview_textures
+                        .get(&key)
+                        .map(|(t, _)| t.size()[0].max(t.size()[1]))
+                        .unwrap_or(s.buffer_long)
+                } else {
+                    s.buffer_long
+                };
                 // ⚠ 1:1 against the **editing buffer**, which is what this app's "native" rung
                 // has always meant. `fit_image_size` is measured at the fit cap, so the buffer
                 // is `buffer_long / fit_cap` times larger; dividing by the canvas's fit scale
@@ -132,7 +146,7 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
                 // and a second derivation is how the two come to disagree.
                 let fit_cap = s.fit_cap() as f32;
                 if fit_cap > 0.0 && s.fit_scale > 0.0 {
-                    let target = (s.buffer_long as f32 / fit_cap) / s.fit_scale;
+                    let target = (native_long as f32 / fit_cap) / s.fit_scale;
                     // ⚠ Through `zoom_step` from 1.0 rather than a separate clamp helper, so
                     // the MIN/MAX rule lives in exactly one place.
                     s.zoom = view_region::zoom_step(1.0, target);

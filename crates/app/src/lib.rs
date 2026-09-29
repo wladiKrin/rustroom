@@ -32,6 +32,7 @@ pub mod filename_template;
 pub mod folder_tree;
 pub mod format_filter;
 pub mod full_res;
+pub mod ghost;
 pub mod grade_view;
 pub mod grid_nav;
 pub mod histogram;

@@ -233,6 +233,23 @@ panel greyed out during the decode and read as "nothing loaded": it is still ine
 opacity, and the snapshot strip stays. ⚠ **Take a report about "the grid" literally; the
 survey is a grid too, and I guessed wrong.**
 
+**The author's second look (02:30):** five more, and three of them had one cause — nothing
+existed for a photo until its decode landed: the composition guides "jumped in" after the
+decode, the picture and both histograms flickered at the handover (the session started with no
+texture and an empty histogram), and on a first open the panel appeared only with the session.
+So the session now exists **at the click**: `ghost.rs` turns the cached 512-px preview
+(`ThumbStore`, ~2 ms) into a display-referred `Decoded`, `finalize_session` builds a real
+session from it, and the half decode lands through `adopt_decoded` — the full-resolution
+handover generalised: engine and buffer swapped, edits, history, view and texture kept, the
+lens, white-balance baseline and camera taken from the real decode. The full-res upgrade waits
+for the half decode (`buffer_is_ghost`). ⌘1 on a ghost is 1:1 against the preview standing in.
+The panel is live on the ghost (its sliders render on the thumbnail) and inert only for a photo
+with no thumbnail yet. The engine already strips the camera rendering for display-referred
+sources, so a ghost renders like the thumbnails do. *(4)* The grid: the cell is no longer
+square — a **square picture box** with the picture sitting on its bottom edge, and the cell
+exactly the box, the caption and the marks row (`cell_layout::grid_cell`). *(5)* Survey's pinch
+ceiling 900 → 2400 pt. ⚠ The Survey rebuild of the first look stays reverted.
+
 **Not verified in use, and why:** the driven look was attempted at 01:35 and the screen was at
 the login window — nothing could be captured. The author's look: an untouched RAF at 1:1 in
 Develop shows "Camera preview" within a fraction of a second and hands over to the live render

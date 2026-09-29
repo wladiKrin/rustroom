@@ -152,11 +152,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
         .min_size(300.0)
         .frame(theme::panel_frame(ui.style()))
         .show(ui, |ui| {
-            if app.pending.is_some() {
-                // ⚠ Inert but **not faded** (the author's call, 2026-09-29): a greyed panel
-                // reads as "nothing loaded yet", and the wait is the decode's ~1.5 s. Disabled,
-                // the sliders cannot touch the previous session behind the new photo; at full
-                // opacity the panel looks the way it will a second later.
+            // ⚠ A ghost session (`ghost.rs`) is the pending photo's own, and its sliders work
+            // on the 512-px buffer until the decode lands. Only a pending photo with **no**
+            // session yet leaves the previous session behind it, and then the panel is inert —
+            // but **not faded** (the author's call, 2026-09-29): a greyed panel reads as
+            // "nothing loaded yet".
+            let ghost_covers = app
+                .session
+                .as_ref()
+                .zip(app.pending.as_ref())
+                .is_some_and(|(s, p)| s.path == p.id.path && s.copy == p.id.copy);
+            if app.pending.is_some() && !ghost_covers {
                 ui.disable();
                 ui.set_opacity(1.0);
             }

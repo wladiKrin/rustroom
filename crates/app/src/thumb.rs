@@ -81,7 +81,31 @@ pub fn cell(
 ) -> egui::Response {
     // ⚠ `false`: the filmstrip carries no downloaded indicator. Turning it on there later is one
     // argument, but it is a Develop-side strip where the photo is open and therefore downloaded.
-    cell_with(ui, box_size, thumb, badge, marks, true, false)
+    cell_with(
+        ui,
+        box_size,
+        thumb,
+        badge,
+        marks,
+        CellStyle {
+            overlay_marks: true,
+            downloaded: false,
+            sit_on_bottom: false,
+        },
+    )
+}
+
+/// How a cell is drawn beyond its picture.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CellStyle {
+    /// Paint the marks over the picture's bottom edge (the filmstrip, which has no room under
+    /// it) rather than leaving them to a [`marks_row`] the caller draws (the Library grid).
+    pub overlay_marks: bool,
+    /// Show the downloaded indicator.
+    pub downloaded: bool,
+    /// Sit the picture on the box's bottom edge, so the caption under the box is right under
+    /// the picture whatever its shape; `false` centres it.
+    pub sit_on_bottom: bool,
 }
 
 /// The thumbnail's corner radius in points.
@@ -96,23 +120,33 @@ pub fn cell_with(
     thumb: Option<&egui::TextureHandle>,
     badge: Option<&str>,
     marks: catalog::db::Marks,
-    overlay_marks: bool,
-    downloaded: bool,
+    style: CellStyle,
 ) -> egui::Response {
+    let CellStyle {
+        overlay_marks,
+        downloaded,
+        sit_on_bottom,
+    } = style;
     let (rect, resp) = ui.allocate_exact_size(box_size, egui::Sense::hover());
     match thumb {
         Some(tex) => {
-            // Fit inside the cell without upscaling, then centre — the same result
+            // Fit inside the cell without upscaling — the same result
             // `Image::max_size(..).maintain_aspect_ratio(true)` produced, minus the effect
             // on layout.
             let size = tex.size_vec2();
             let scale = (box_size.x / size.x).min(box_size.y / size.y).min(1.0);
+            let painted = size * scale;
+            let at = if sit_on_bottom {
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.center().x - painted.x * 0.5, rect.bottom() - painted.y),
+                    painted,
+                )
+            } else {
+                egui::Rect::from_center_size(rect.center(), painted)
+            };
             egui::Image::new(tex)
                 .corner_radius(egui::CornerRadius::same(CORNER))
-                .paint_at(
-                    ui,
-                    egui::Rect::from_center_size(rect.center(), size * scale),
-                );
+                .paint_at(ui, at);
         }
         None => {
             ui.painter().rect_filled(
@@ -478,7 +512,14 @@ mod tests {
                 .allocate_ui(egui::vec2(CELL, CELL), |ui| {
                     ui.set_min_size(egui::vec2(CELL, CELL));
                     ui.vertical_centered(|ui| {
-                        cell_with(ui, box_size, tex.as_ref(), None, marks, false, false);
+                        cell_with(
+                            ui,
+                            box_size,
+                            tex.as_ref(),
+                            None,
+                            marks,
+                            CellStyle::default(),
+                        );
                         ui.label(egui::RichText::new("DSCF6509.RAF").small());
                         marks_row(ui, box_size.x, marks, 9.0);
                     });

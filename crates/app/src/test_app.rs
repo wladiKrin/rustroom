@@ -138,6 +138,7 @@ pub fn for_test() -> RustroomApp {
         full_decoder: DecodeWorker::new(stub, 1, || {}),
         full_pending: None,
         cache: BufferCache::new(BUFFER_CACHE_CAP),
+        ghost_store: rustroom_app::thumb_store::ThumbStore::new(dir.0.join("thumbs"), u64::MAX),
         previews: rustroom_app::preview_loader::PreviewLoader::with_loader(
             std::sync::Arc::new(|_: &rustroom_app::preview_loader::PreviewRequest| None),
             color::OutputSpace::Srgb,
@@ -290,6 +291,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         buffer_long: w.max(h),
         full_long: w.max(h),
         buffer_is_full_res: true,
+        buffer_is_ghost: false,
         opened_at: std::time::Instant::now(),
         // ⚠ The fit cap, as a real session starts. `render_max_dim` returns this now, so a
         // zero here would make every panel-driven render ask for nothing.

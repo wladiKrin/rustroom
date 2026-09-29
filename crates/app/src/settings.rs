@@ -710,7 +710,7 @@ pub const CUSTOM_ASPECT_RANGE: (u32, u32) = (1, 1000);
 /// Survey's tile range, in points. ⚠ Wider at the top than the grid's: a survey of three photos
 /// on a large monitor should be able to fill it, which is the whole complaint that put a size
 /// control here.
-pub const SURVEY_CELL_RANGE: (u32, u32) = (140, 900);
+pub const SURVEY_CELL_RANGE: (u32, u32) = (140, 2400);
 
 /// Survey's default tile size. Larger than [`DEFAULT_CELL`] because a survey holds a handful of
 /// photographs where the grid holds hundreds.

@@ -198,12 +198,16 @@ fn thumbnail_edits(edits: &Edits) -> Edits {
 ///
 /// ⚠ The output dimensions come from the rendered image, **not** from the input — a crop changes
 /// them, and reusing the input's would paint a cropped photo into the original's rect and skew it.
-fn render_edits(
-    thumb: Thumbnail,
-    edits: &Edits,
-    resampler: pipeline::Resampler,
-    look: Option<&Arc<pipeline::lut::Cube>>,
-) -> Thumbnail {
+/// A thumbnail's sRGB 8-bit pixels as a **linear ProPhoto** buffer — the pipeline's working
+/// space, which is what every edit expects to receive.
+///
+/// ⚠⚠ **`srgb_to_prophoto`, and leaving it out is a bug this shipped once.** The pipeline's
+/// output transform converts ProPhoto→sRGB on the way out; handing it linear *sRGB* means that
+/// matrix is applied to data that was never in ProPhoto, and the result is heavily
+/// **oversaturated** — reported as "the saturation is very exaggerated". `image_decode::decode`
+/// does exactly this pair of steps for the same reason. Shared by the thumbnails and the ghost
+/// session (`ghost.rs`).
+pub fn linear_prophoto_from_srgb8(thumb: &Thumbnail) -> core_image::ImageBuf {
     let mut buf = core_image::ImageBuf::new(thumb.width, thumb.height);
     {
         let d = buf.data_mut();
@@ -213,16 +217,16 @@ fn render_edits(
             }
         }
     }
-    // ⚠⚠ **`srgb_to_prophoto`, and leaving it out is a bug this shipped once.** The pipeline's
-    // working space is linear **ProPhoto**, and its output transform converts ProPhoto→sRGB on the
-    // way out. Handing it linear *sRGB* means that matrix is applied to data that was never in
-    // ProPhoto, and the result is heavily **oversaturated** — reported as "the saturation is very
-    // exaggerated". `image_decode::decode` does exactly this pair of steps for the same reason,
-    // and its own comment warns about it in the same words.
-    //
-    // ⚠ It bit only *edited* photos, because a neutral one takes the early return above and never
-    // reaches the pipeline at all — which made the effect look arbitrary rather than systematic.
-    let buf = buf.map_pixels(color::srgb_to_prophoto);
+    buf.map_pixels(color::srgb_to_prophoto)
+}
+
+fn render_edits(
+    thumb: Thumbnail,
+    edits: &Edits,
+    resampler: pipeline::Resampler,
+    look: Option<&Arc<pipeline::lut::Cube>>,
+) -> Thumbnail {
+    let buf = linear_prophoto_from_srgb8(&thumb);
     // ⚠⚠ **The look, and its absence was reported by use**: *"the look is not reflected or shown in
     // any way in the thumbnail picture"*. `build_pipeline_with` takes no `ProfileRendering` at all,
     // so every thumbnail rendered every edit **except** the user's `.cube` — the third path to lose

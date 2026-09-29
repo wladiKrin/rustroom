@@ -359,6 +359,8 @@ struct RustroomApp {
     /// Path and sequence number of the full-resolution decode in flight, if any.
     full_pending: Option<(PathBuf, u64)>,
     cache: BufferCache,
+    /// The on-disk thumbnail cache, read at the click for the ghost session's buffer.
+    ghost_store: rustroom_app::thumb_store::ThumbStore,
     /// M9.14: the preview worker — the camera's JPEG or a rendered preview, one thread.
     previews: rustroom_app::preview_loader::PreviewLoader,
     /// Preview textures on the GPU, pinned by the on-screen window exactly as thumbnails are.
@@ -772,6 +774,9 @@ impl RustroomApp {
             full_decoder: full_res_worker(settings.view_demosaic, None, ctx),
             full_pending: None,
             cache: BufferCache::new(BUFFER_CACHE_CAP),
+            ghost_store: rustroom_app::thumb_store::ThumbStore::user_default(
+                settings.thumb_budget_mb as u64 * 1024 * 1024,
+            ),
             previews: {
                 let ctx3 = ctx.clone();
                 // ⚠ The device's own limit, not a constant: an X-T4's 4416 px fits any GPU this
@@ -1138,6 +1143,9 @@ pub struct Session {
     ///
     /// True from the start for JPEG/PNG/TIFF, which are decoded at full size already.
     buffer_is_full_res: bool,
+    /// Whether `engine`'s buffer is the 512-px ghost (`ghost.rs`): the session exists, the real
+    /// decode is on its way, and the full-resolution upgrade waits for it.
+    buffer_is_ghost: bool,
     /// When this session was created — the dwell the upgrade trigger waits on.
     opened_at: Instant,
     /// The rung the canvas last chose, so an edit made from a panel re-renders at the tier
