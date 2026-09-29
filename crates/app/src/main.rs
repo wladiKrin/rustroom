@@ -286,6 +286,9 @@ struct PendingOpen {
     /// runs, and the session inherits them so nothing jumps when it lands (M9.14).
     zoom: f32,
     pan: egui::Vec2,
+    /// The preview's fitted long edge in points at zoom 1, written by the canvas each frame —
+    /// what ⌘1 divides the preview's pixel size by. Zero until the canvas has drawn once.
+    fit_long: f32,
 }
 
 struct RustroomApp {

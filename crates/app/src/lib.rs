@@ -9,6 +9,7 @@ pub mod auto_tone_tool;
 pub mod batch_export;
 pub mod brush_tool;
 pub mod buffer_cache;
+pub mod cell_layout;
 pub mod clipping;
 pub mod collections;
 pub mod color_readout;

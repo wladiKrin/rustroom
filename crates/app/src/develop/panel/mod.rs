@@ -153,13 +153,20 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
         .frame(theme::panel_frame(ui.style()))
         .show(ui, |ui| {
             if app.pending.is_some() {
+                // ⚠ Inert but **not faded** (the author's call, 2026-09-29): a greyed panel
+                // reads as "nothing loaded yet", and the wait is the decode's ~1.5 s. Disabled,
+                // the sliders cannot touch the previous session behind the new photo; at full
+                // opacity the panel looks the way it will a second later.
                 ui.disable();
+                ui.set_opacity(1.0);
             }
             // ⚠⚠ **Before the scroll area, and that ordering is the whole feature.** egui
             // allocates in call order, so the strip takes its height from the panel's bottom
             // edge and the scroll area gets what is left — which is what pins the strip while
             // forty sliders scroll behind it. Moved after, it would scroll away with them.
-            if app.pending.is_none() {
+            {
+                // ⚠ Drawn while pending too, inert like the sliders — the strip vanishing and
+                // returning was half of what made an open look slow.
                 let ctx = ui.ctx().clone();
                 photo_edited |= snapshots::show(app, ui, &ctx);
             }

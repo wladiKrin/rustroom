@@ -220,11 +220,18 @@ pan}`, the canvas's own rule on the pending texture) and the session inherits th
 `RUSTROOM_DEBUG_RENDER` trace now prints the open path's timeline. *(2)* ⚠⚠ "Compare is blurry
 and dead except for photos opened in Develop" — the untouched rule accepted only the fresh-open
 edits, while a photo never opened carries `Edits::default()` in the catalog (no sidecar), so no
-camera preview and no pane. Both spellings are untouched now. *(3)* Survey: "much looser than the
-grid, and the photos should be larger" — Survey fills the window again (`tile_layout::survey`)
-whenever its tiles reach `MIN_TILE` (180 pt), scrolls at that size beyond, and the tile box is
-gone: a tile is its photograph, the focus stroke and marks follow the painted picture. The pinch-
-sized `survey_cell` setting is removed. Compare's panes lose the box too.
+camera preview and no pane. Both spellings are untouched now. *(3)* ⚠⚠ **A misread, reverted within the hour:** I rebuilt Survey as a
+fill-the-window wall without its box — the complaint was about the **Library grid**, and the
+rebuilt Survey lost its scrolling and clipped its focus stroke. Survey, the tile painter and the
+`survey_cell` setting are back exactly as they were. The grid's real defect: the picture box was
+a landscape strip two thirds of the cell tall whatever the photograph's shape, so a portrait
+frame used under half of the cell's width. `cell_layout::thumb_box` now gives the picture the
+cell's height minus the caption and the marks row. *(4)* ⌘1 while a photo decodes did nothing —
+the zoom keys reached only the previous session behind the pending picture; they act on the
+pending preview now (1:1 against the preview's own pixels, `PendingOpen::fit_long`). *(5)* The
+panel greyed out during the decode and read as "nothing loaded": it is still inert, at full
+opacity, and the snapshot strip stays. ⚠ **Take a report about "the grid" literally; the
+survey is a grid too, and I guessed wrong.**
 
 **Not verified in use, and why:** the driven look was attempted at 01:35 and the screen was at
 the login window — nothing could be captured. The author's look: an untouched RAF at 1:1 in

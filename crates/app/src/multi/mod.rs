@@ -35,7 +35,7 @@ use crate::thumb;
 use eframe::egui;
 
 /// The gap between tiles, and the inset from the viewport's edge.
-pub(crate) const GAP: f32 = 10.0;
+const GAP: f32 = 10.0;
 
 /// How tall the caption strip under a photo is.
 const CAPTION_H: f32 = 20.0;
@@ -106,40 +106,51 @@ pub(crate) fn tile(
 
     // The photo gets everything above the caption strip.
     let img = image_area(rect);
-    // ⚠ No box behind the picture (2026-09-29, the author's call): a tile is its photograph,
-    // and a fixed box around a portrait in a landscape cell read as "far apart". `painted` is
-    // where the picture actually went; the focus stroke and the marks follow it.
-    let mut painted = img;
+    p.rect_filled(
+        rect,
+        egui::CornerRadius::same(3),
+        egui::Color32::from_gray(24),
+    );
     match image {
         TileImage::Placeholder(t) => {
             let size = t.size_vec2();
             if size.x > 0.0 && size.y > 0.0 && img.width() > 0.0 && img.height() > 0.0 {
+                // No `MAX_UPSCALE`: see the variant.
                 let scale = (img.width() / size.x).min(img.height() / size.y);
-                painted = egui::Rect::from_center_size(img.center(), size * scale);
-                egui::Image::new(t).paint_at(ui, painted);
+                egui::Image::new(t)
+                    .paint_at(ui, egui::Rect::from_center_size(img.center(), size * scale));
             }
         }
         TileImage::Thumb(Some(t)) => {
+            // Fit, then centre. Magnified up to `MAX_UPSCALE` so a large tile is filled rather
+            // than holding a small photo in a field of grey — see that constant for the trade.
             let size = t.size_vec2();
             if size.x > 0.0 && size.y > 0.0 && img.width() > 0.0 && img.height() > 0.0 {
                 let scale = (img.width() / size.x)
                     .min(img.height() / size.y)
                     .min(MAX_UPSCALE);
-                painted = egui::Rect::from_center_size(img.center(), size * scale);
-                egui::Image::new(t).paint_at(ui, painted);
+                egui::Image::new(t)
+                    .paint_at(ui, egui::Rect::from_center_size(img.center(), size * scale));
             }
         }
         TileImage::Pane { tex, scale, offset } => {
             let size = tex.size_vec2();
             if size.x > 0.0 && size.y > 0.0 && img.width() > 0.0 && img.height() > 0.0 {
+                // ⚠⚠ **Clipped explicitly.** At zoom the picture is larger than the pane, and
+                // `paint_at` honours the `Ui`'s clip rect rather than its layout rect — so
+                // without `set_clip_rect` the zoomed photo spills across the divider and over
+                // its neighbour, which is the one thing a comparison view must never do.
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(img));
                 child.set_clip_rect(img);
-                let at = egui::Rect::from_center_size(img.center() + offset, size * scale);
-                egui::Image::new(tex).paint_at(&child, at);
-                painted = at.intersect(img);
+                egui::Image::new(tex).paint_at(
+                    &child,
+                    egui::Rect::from_center_size(img.center() + offset, size * scale),
+                );
             }
         }
         TileImage::Thumb(None) => {
+            // ⚠ A placeholder, not nothing: a tile that vanished while its thumbnail loaded
+            // would make the whole layout look broken rather than merely unfinished.
             p.rect_filled(
                 img,
                 egui::CornerRadius::same(3),
@@ -148,7 +159,10 @@ pub(crate) fn tile(
         }
     }
 
-    thumb::paint_marks(&p, painted, marks, painted.height() * 0.05);
+    // ⚠ The badge size is derived from the *image* area rather than the whole tile, and clamped
+    // by `paint_marks` — a Survey tile can be several hundred points tall and a star scaled to
+    // match would be absurd.
+    thumb::paint_marks(&p, img, marks, img.height() * 0.05);
 
     if !caption.is_empty() && rect.height() > CAPTION_H {
         p.text(
@@ -164,7 +178,7 @@ pub(crate) fn tile(
     // drawn last, over the photo, rather than under it.
     if focused {
         p.rect_stroke(
-            painted.expand(2.0),
+            rect,
             egui::CornerRadius::same(3),
             // The accent, not a colour of its own (P-09).
             egui::Stroke::new(2.0, ui.visuals().selection.bg_fill),

@@ -461,6 +461,7 @@ impl RustroomApp {
             preview_request,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
+            fit_long: 0.0,
         });
     }
 

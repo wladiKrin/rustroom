@@ -18,7 +18,14 @@ use rustroom_app::view_region;
 const ZOOM_STEP: f32 = 1.25;
 
 fn zoom_by(app: &mut RustroomApp, factor: f32) {
-    if let Some(s) = &mut app.session {
+    // ⚠ The pending preview first (M9.14, 2026-09-29): while a photo decodes, the zoom keys act
+    // on the picture that is on screen, not on the previous session behind it.
+    if let Some(p) = &mut app.pending {
+        p.zoom = view_region::zoom_step(p.zoom, factor);
+        if p.zoom <= view_region::MIN_ZOOM {
+            p.pan = egui::Vec2::ZERO;
+        }
+    } else if let Some(s) = &mut app.session {
         s.zoom = view_region::zoom_step(s.zoom, factor);
     }
 }
@@ -86,13 +93,36 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
         Command::ZoomIn => zoom_by(app, ZOOM_STEP),
         Command::ZoomOut => zoom_by(app, 1.0 / ZOOM_STEP),
         Command::FitView => {
-            if let Some(s) = &mut app.session {
+            if let Some(p) = &mut app.pending {
+                p.zoom = 1.0;
+                p.pan = egui::Vec2::ZERO;
+            } else if let Some(s) = &mut app.session {
                 s.zoom = 1.0;
                 s.pan = egui::Vec2::ZERO;
             }
         }
         Command::ZoomActual => {
-            if let Some(s) = &mut app.session {
+            if let Some(p) = &mut app.pending {
+                // ⚠ 1:1 against the **preview** while the photo decodes: one preview pixel per
+                // point. On an X-T4 the camera JPEG is 71% of the RAW, so this sits between the
+                // half-size buffer's 1:1 and the true one; the session inherits the zoom, and
+                // the preview keeps standing in there until the full decode lands.
+                let long = app
+                    .preview_textures
+                    .get(&p.preview_request.key())
+                    .map(|(t, _)| t.size()[0].max(t.size()[1]) as f32)
+                    .or_else(|| {
+                        p.placeholder
+                            .as_ref()
+                            .map(|t| t.size()[0].max(t.size()[1]) as f32)
+                    });
+                if let Some(long) = long {
+                    if p.fit_long > 0.0 {
+                        p.zoom = view_region::zoom_step(1.0, long / p.fit_long);
+                        p.pan = egui::Vec2::ZERO;
+                    }
+                }
+            } else if let Some(s) = &mut app.session {
                 // ⚠ 1:1 against the **editing buffer**, which is what this app's "native" rung
                 // has always meant. `fit_image_size` is measured at the fit cap, so the buffer
                 // is `buffer_long / fit_cap` times larger; dividing by the canvas's fit scale
@@ -223,6 +253,47 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
 mod tests {
     use super::*;
     use rustroom_app::composition_guides::CompositionGuide;
+
+    /// 2026-09-29: ⌘1 while a photo decodes zooms the pending preview to its own 1:1; ⌘0 and
+    /// ⌘− act on it too. Before, the keys reached only the previous session behind it.
+    #[test]
+    fn the_zoom_keys_act_on_the_pending_preview_while_a_photo_decodes() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        let id = rustroom_app::photo_id::PhotoId::original(std::path::PathBuf::from(
+            "/test/pending.RAF",
+        ));
+        let req = app.preview_request(id.clone(), app.settings.initial_edits(None));
+        app.preview_textures.insert(
+            req.key(),
+            (
+                crate::test_app::texture(&ctx, "pending-preview", 1600, 800),
+                rustroom_app::preview_loader::PreviewSource::Camera,
+            ),
+            1600 * 800 * 4,
+        );
+        app.pending = Some(crate::PendingOpen {
+            id,
+            placeholder: None,
+            start_at: std::time::Instant::now() + std::time::Duration::from_secs(3600),
+            seq: None,
+            preview_request: req,
+            zoom: 1.0,
+            pan: egui::Vec2::ZERO,
+            // The canvas fitted the 1600-px preview to 400 points.
+            fit_long: 400.0,
+        });
+        execute(&mut app, &ctx, Command::ZoomActual);
+        let zoom = app.pending.as_ref().unwrap().zoom;
+        assert!(
+            (zoom - 4.0).abs() < 1e-3,
+            "1:1 on a 1600-px preview fitted to 400 pt is 4×, got {zoom}"
+        );
+        execute(&mut app, &ctx, Command::ZoomOut);
+        assert!(app.pending.as_ref().unwrap().zoom < 4.0);
+        execute(&mut app, &ctx, Command::FitView);
+        assert_eq!(app.pending.as_ref().unwrap().zoom, 1.0);
+    }
 
     #[test]
     fn the_guide_key_cycles_the_setting_and_persists_it() {

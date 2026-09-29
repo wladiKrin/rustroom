@@ -650,7 +650,18 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         // borrow of `lib.entries` in the argument would conflict with it.
                         let cell_id = lib.entries[i].id.clone();
                         ui.push_id(&cell_id, |ui| {
-                            let box_size = egui::vec2(cell - 12.0, (cell - 12.0) * 0.66);
+                            // The picture gets the cell's height minus the caption and the
+                            // marks row — `cell_layout::thumb_box`'s rule.
+                            let box_size = {
+                                let spacing_y = ui.spacing().item_spacing.y;
+                                let (w, h) = rustroom_app::cell_layout::thumb_box(
+                                    cell,
+                                    name_size + spacing_y,
+                                    thumb::marks_row_height(name_size * MARK_SCALE),
+                                    spacing_y,
+                                );
+                                egui::vec2(w, h)
+                            };
                             let resp = ui
                                 .allocate_ui(egui::vec2(cell, cell), |ui| {
                                     // Pin the cell to its full size. Without this

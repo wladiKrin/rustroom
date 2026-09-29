@@ -490,6 +490,11 @@ pub struct Settings {
     /// ⚠ Still clamped by [`Settings::clamped_cell`] rather than trusted: this is read from a
     /// file a user can edit, and a zero cell divides by zero when the column count is worked out.
     pub library_cell: u32,
+    /// Survey's tile size in points.
+    ///
+    /// ⚠ Clamped by [`Settings::clamped_survey_cell`] rather than trusted — the file is
+    /// hand-editable, `library_cell`'s rule.
+    pub survey_cell: u32,
     /// The last custom crop ratio entered in the Geometry panel, as whole numbers W : H.
     ///
     /// ⚠ `u32`, for the two reasons `library_cell` carries: `Settings` derives `Eq`, which no
@@ -702,6 +707,14 @@ pub const DEFAULT_CUSTOM_ASPECT: [u32; 2] = [5, 4];
 /// Each side of a custom ratio, inclusive. 1000 lets 2.35:1 be written as 235:100.
 pub const CUSTOM_ASPECT_RANGE: (u32, u32) = (1, 1000);
 
+/// Survey's tile range, in points. ⚠ Wider at the top than the grid's: a survey of three photos
+/// on a large monitor should be able to fill it, which is the whole complaint that put a size
+/// control here.
+pub const SURVEY_CELL_RANGE: (u32, u32) = (140, 900);
+
+/// Survey's default tile size. Larger than [`DEFAULT_CELL`] because a survey holds a handful of
+/// photographs where the grid holds hundreds.
+pub const DEFAULT_SURVEY_CELL: u32 = 320;
 /// How much one press of the grid-size buttons moves the cell.
 pub const CELL_STEP: u32 = 28;
 
@@ -771,6 +784,35 @@ impl Settings {
         let w = w.clamp(CUSTOM_ASPECT_RANGE.0, CUSTOM_ASPECT_RANGE.1) as f32;
         let h = h.clamp(CUSTOM_ASPECT_RANGE.0, CUSTOM_ASPECT_RANGE.1) as f32;
         w / h
+    }
+
+    /// Survey's tile size in points, guaranteed usable.
+    ///
+    /// ⚠ Its **own** value rather than the grid's, because the two are used for opposite things:
+    /// the grid is for finding a photo among hundreds and wants small cells, a survey is for
+    /// looking at a handful and wants large ones. Sharing the number would make sizing one
+    /// resize the other.
+    pub fn clamped_survey_cell(&self) -> f32 {
+        self.survey_cell
+            .clamp(SURVEY_CELL_RANGE.0, SURVEY_CELL_RANGE.1) as f32
+    }
+
+    /// The survey tile size a pinch of `factor` would give. [`Self::zoomed_cell`]'s rule, over
+    /// the survey's own wider range.
+    pub fn zoomed_survey_cell(&self, factor: f32) -> u32 {
+        let now = self.clamped_survey_cell() as u32;
+        if !factor.is_finite() || factor <= 0.0 {
+            return now;
+        }
+        let mut next = (now as f32 * factor).round() as u32;
+        if next == now {
+            match factor.partial_cmp(&1.0) {
+                Some(std::cmp::Ordering::Greater) => next = now.saturating_add(1),
+                Some(std::cmp::Ordering::Less) => next = now.saturating_sub(1),
+                _ => {}
+            }
+        }
+        next.clamp(SURVEY_CELL_RANGE.0, SURVEY_CELL_RANGE.1)
     }
 
     /// The panel's section order, guaranteed to contain every section exactly once.
@@ -916,6 +958,7 @@ impl Default for Settings {
             library_sort: catalog::SortOrder::default(),
             export_concurrency: DEFAULT_EXPORT_WIDTH,
             library_cell: DEFAULT_CELL,
+            survey_cell: DEFAULT_SURVEY_CELL,
             custom_aspect: DEFAULT_CUSTOM_ASPECT,
             panel_sections: PanelSections::default(),
             snapshot_strip_height: DEFAULT_STRIP_HEIGHT,
@@ -1597,6 +1640,7 @@ mod tests {
             // like it round-tripped.
             library_sort: catalog::SortOrder::ModifiedDesc,
             library_cell: DEFAULT_CELL + CELL_STEP,
+            survey_cell: DEFAULT_SURVEY_CELL,
             custom_aspect: DEFAULT_CUSTOM_ASPECT,
             // Likewise non-default, and inside `STRIP_HEIGHT_RANGE` so `clamped_strip_height`
             // cannot mask a field that failed to round-trip.

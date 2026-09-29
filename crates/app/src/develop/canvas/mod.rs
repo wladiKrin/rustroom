@@ -850,6 +850,7 @@ fn draw_pending_canvas(
     let tex_size = tex.size_vec2();
     let avail = ui.available_size();
     let fit = (avail.x / tex_size.x.max(1.0)).min(avail.y / tex_size.y.max(1.0));
+    pending.fit_long = tex_size.x.max(tex_size.y) * fit;
     let centre = ui.max_rect().center();
     let rect = egui::Rect::from_center_size(centre + pending.pan, tex_size * fit * pending.zoom);
     let resp = ui.allocate_rect(rect, egui::Sense::drag());
@@ -1180,6 +1181,7 @@ mod tests {
             preview_request: req,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
+            fit_long: 0.0,
         });
         let centre = super::test_support::canvas_centre(&mut app, &ctx);
         let c = ctx.clone();
