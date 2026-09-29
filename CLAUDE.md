@@ -173,7 +173,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-28)
 
-**3211 tests**, **82 goldens**, gate green on `main`; **3237** on `design-language` (unmerged). ⚠⚠ **Run the git command above rather than
+**3211 tests**, **82 goldens**, gate green on `main`; **3242** on `design-language` (unmerged). ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -226,7 +226,10 @@ Previews** (P-20) merged 2026-09-29, confirmed by use — in the table above.
 awaiting use** — tokens, four text sizes, section cards, a status row under the Library and above the
 filmstrip, hover text instead of hints, seven accents; second round from the author's first look —
 Inter Medium, the photo's name centred alone at one x in both views, one hover sentence per control
-keyed by **scope** (`slider_help::Scope`), the rail's growth fixed. `grep -n 'design language' docs/JOURNAL.md`.
+keyed by **scope** (`slider_help::Scope`), the rail's growth fixed; third round — rail counts in one
+column, a default lens correction no longer an edit, the filmstrip steady through a resize. ⚠ **Open:**
+the tone curve's channel selector and the mask modes wait for the author's pick of a new setup
+(canvas <https://claude.ai/artifact/E5FSgBTobVtqkKvxvTNpL8>). `grep -n 'design language' docs/JOURNAL.md`.
 ✅ **Phase 9 is complete** (M9.13 merged 2026-09-28). Next is **Phase 10** (was 9), integration and
 release: M10.2
 Windows + the Linux GUI (never run), M10.3 contributor docs, M10.4 `v0.1`, M10.5 plugins. ⛔ **M10.1 was

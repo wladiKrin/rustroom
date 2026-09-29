@@ -228,6 +228,13 @@ segment lit with the accent.** Icon + label when there is room, icon only (with 
 there is not; labels shrink 15 % before wrapping (`segmented::plan`). Used for: app switch,
 mode switch, zoom group, curve channels, Retouch modes, mask modes, Interface size, dialog tabs.
 
+⚠⚠ **Open — the shrink breaks the 11-pt floor on a Caption-sized control.** 15 % off Caption is
+9.35 pt, and the tone curve's five channels render exactly there, in 57 × 20-pt cells; the author
+found them "all very small" (2026-09-29), and the mask modes too (13 pt, but in 71-pt cells that
+the widest label nearly fills). A new setup for both is waiting for the author's pick from the
+options at <https://claude.ai/artifact/E5FSgBTobVtqkKvxvTNpL8>; when it lands, the shrink must never
+go below Caption.
+
 ### 7.3 Field and combo
 A **field** (you type) sits on `card` with a 1 px `line` border, placeholder in `text3`, an
 icon 14 at the left when it is a search, a kbd chip at the right when it has a shortcut.
@@ -263,9 +270,19 @@ they are given, `+` first from the right (`collections_panel::new_item_row`);
 any growth.
 
 ### 7.6 List row
-30 tall, 6 radius, name in Body, count or meta in Caption `text3` at the right; indent 14 per
-level; disclosure chevron 12. **Open** = accent 18 % tint, count in `text2`. **Hover** = `hover`
-fill and the row's actions appear at the right edge as icon buttons (download, remove).
+30 tall, 6 radius, name in Body. **The count ends 8 pt from the right edge**
+(`tokens::TRAILING_INSET`), in Caption `text3` — the same x as a section header's count, so every count in the
+Library rail stands in one column (the author's rule, 2026-09-29: "all the numbers should be to the
+most right, with the buttons to the left of them"). A count column is at least four digits wide,
+so the actions beside it line up too; a meta text (a snapshot's time) takes the same place at its
+own width. **Hover** = `hover` fill, and the row's actions appear as icon cells **left of the
+count** (download, remove); their room is kept while hidden, so a name never shortens under the
+pointer, and a disabled action senses the pointer but not a click, so a click there reaches the
+row. **Open** = accent 18 % tint, count in `text2`. **Trees** (folders, dates, the Immich timeline)
+indent 12 per level and carry a painted disclosure triangle in a 12-pt gutter left of the name
+(`list_row::disclosure`); a count never goes inside a label — the Dates' "2024 (523)" was the
+counter-example. `collections_panel`'s `every_count_in_the_rail_ends_at_one_x` checks the painted
+text.
 
 ### 7.7 Chip
 20 tall, full radius, Caption text on `raised`; a 6 px dot in the accent for a format that is
@@ -410,5 +427,6 @@ data in the lib crate and testable headless; only the drawing lives in the bin m
 | 2026-09-19 | Icon-only tool rail at 26; chevron left, actions right on section headers | labelled rail, chevron right |
 | 2026-09-28 | Inter Regular as the text face; panel floor 300; segments shrink before wrapping; Interface size setting | Ubuntu Light |
 | 2026-09-29 | **Direction B · Layered** chosen from three; four text sizes, nothing below 11; a status row and the two-row priority rule; hover text replaces every on-screen hint; seven accents including Orange and Sage at the author's request (default stays Steel blue); dark text on the dark-theme accent | ten sizes; one overloaded bar; persistent hints; four accents; white on accent |
+| 2026-09-29 | Counts in one column at the rail's right edge, actions left of them; Dates and the Immich timeline as tree rows; a default lens correction is the photo's starting point, not an edit; the filmstrip keeps the selected photo in place through a resize | counts left of the actions; counts inside labels |
 | 2026-09-29 | **Inter Medium** bundled for Title, Display, section names and sub-labels; the photo's name back in the top row, centred alone at the same x in both views, with the Library's search and Filter at the right edge; one scoped hover sentence per control, no reset phrase | Regular-only titles; the name in the Library's status row; hovers that explained the same-named control elsewhere |
 | 2026-09-29 | **Built.** Reindex moved back behind ⋯ with Expand all / Stack all — the 2026-09-23 call took it out of a one-item menu and set the condition "if a second Library action ever wants this corner, reconsider the menu then"; that happened | Reindex as a bar button |

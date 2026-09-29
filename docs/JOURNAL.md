@@ -277,6 +277,29 @@ the right edge, the rail's growth fixed, and every hover rewritten to one senten
   cheap enough to run after every test insertion.
 
 ⚠ *Still open:* non-slider hovers are swept but not tabled; `status_bar.rs` is 638 code lines.
+
+**Third round, five comments from use** (three commits, gate green at **3242**):
+- **Counts in one column.** A folder's count stood left of its one action, an Immich album's left
+  of its two, a header's at the edge, and the Dates' inside their labels ("2024 (523)"). The count
+  now ends at `tokens::TRAILING_INSET` on every row and header, at least four digits wide, the
+  actions left of it; the Dates tree and the Immich timeline's years are list rows with the folder
+  tree's triangle, moved into `list_row::disclosure`. `every_count_in_the_rail_ends_at_one_x` reads
+  the **painted text** (sabotage: a count shifted by its action count, 134–224 pt, fails).
+  ⚠ *Caught by the suite, not by me:* with the count at the edge a keyword row's **disabled** Tag
+  and Untag cells stood under the row's centre and ate the click meant to select the keyword. A
+  disabled action now senses hover only (`a_click_on_a_disabled_action_reaches_the_row`).
+- **A default lens correction is not an edit.** With "Apply lens correction to new photos" on, the
+  Lens section measured the photo against all-off, so an untouched photo showed its dot and a reset,
+  and both "Reset adjustments" paths turned the correction off. The sections and both resets now use
+  `Settings::initial_edits(None)` (`SourceInfo::fresh`); each of the three sites sabotage-checked.
+- **The filmstrip through a resize.** It centred the selected photo only when the selection changed,
+  so a resize kept the offset in points while every cell grew — the photo slid right out of view in
+  the test. It re-centres whenever the step or the width changes (`thumb_window::layout_changed`),
+  and its cells now carry their caption as their accessible name.
+- **The tone curve's channels and the mask modes** are a design question, not a fix: the curve's
+  five labels render at **9.35 pt** (the segmented shrink takes 15 % off Caption, below the 11-pt
+  floor) in 57 × 20-pt cells, and the mask modes at 13 pt in 71-pt cells. Options on a canvas
+  (<https://claude.ai/artifact/E5FSgBTobVtqkKvxvTNpL8>), waiting for the author's pick.
 ### 2026-09-29 — M9.14 Previews: instant 1:1 in Develop, Compare and Survey (branch `m9.14-previews`, merged 2026-09-29)
 
 **The ask** (P-20, the professional review's first blocker): a focus check across a shoot is a wall
