@@ -198,13 +198,18 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
     };
     let mut cells: Vec<egui::Rect> = Vec::with_capacity(spec.actions.len());
     let mut colours: Vec<egui::Color32> = Vec::with_capacity(spec.actions.len());
-    // ⚠ The actions exist on every row — a screen reader or a test finds them by name — but
-    // they are **drawn only under the pointer**: a "×" on every folder row at all times read as
-    // a standing threat (P-13). A click is always under the pointer, so nothing is lost.
+    // The cell the pointer is on, if any — it alone gets the button face.
+    let mut pointed: Option<usize> = None;
+    // ⚠⚠ **Always drawn, greyed, and brought up by the row's hover** — the author's call
+    // (2026-09-29), reversing P-13, which had drawn them only under the pointer because "a × on
+    // every folder row at all times read as a standing threat". `text3` at rest (the counts' grey),
+    // `text` with the pointer anywhere on the row, and the `raised` face under the pointed cell.
     let pointer_here = ui.rect_contains_pointer(rect);
     for (i, a) in spec.actions.iter().enumerate() {
+        // ⚠ Narrower than the row is tall (`ROW_ACTION`), and as tall: "make the layout of all
+        // buttons tighter" (2026-09-29).
         let cell = egui::Rect::from_min_max(
-            egui::pos2(right - ROW_HEIGHT, rect.top()),
+            egui::pos2(right - crate::theme::tokens::ROW_ACTION, rect.top()),
             egui::pos2(right, rect.bottom()),
         );
         let name = format!("{} {}", a.verb, spec.name);
@@ -234,12 +239,16 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
         if a.enabled && r.clicked() {
             action = Some(i);
         }
-        colours.push(if !a.enabled {
-            v.weak_text_color().gamma_multiply(0.45)
-        } else if r.hovered() {
-            v.strong_text_color()
+        if on && r.hovered() {
+            pointed = Some(i);
+        }
+        // ⚠ A disabled action neither pops nor takes the face: it is not the one a click hits.
+        colours.push(if !on {
+            tk.text3.gamma_multiply(0.45)
+        } else if pointer_here {
+            tk.text
         } else {
-            v.weak_text_color()
+            tk.text3
         });
         // ⚠ Advance, or the next cell lands on this one's hit area and wins the tie.
         right = cell.left();
@@ -293,16 +302,17 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
                 count_colour,
             );
         }
-        if pointer_here {
-            for ((a, colour), cell) in spec.actions.iter().zip(colours).zip(&cells) {
-                painter.text(
-                    cell.center(),
-                    egui::Align2::CENTER_CENTER,
-                    a.glyph,
-                    egui::FontId::proportional(crate::theme::tokens::ICON),
-                    colour,
-                );
+        for (i, ((a, colour), cell)) in spec.actions.iter().zip(colours).zip(&cells).enumerate() {
+            if pointed == Some(i) {
+                painter.rect_filled(*cell, crate::theme::tokens::RADIUS, tk.raised);
             }
+            painter.text(
+                cell.center(),
+                egui::Align2::CENTER_CENTER,
+                a.glyph,
+                egui::FontId::proportional(crate::theme::tokens::ICON),
+                colour,
+            );
         }
     }
     RowOut {
@@ -383,6 +393,141 @@ mod tests {
         let mut out = (false, None);
         test_ui::click(&ctx, "Add to Portraits", |ui| draw(ui, &mut out));
         assert_eq!(out.1, Some(1), "the second cell was not reached");
+    }
+
+    /// The action glyphs painted in one frame, with their colours, and the theme's tokens —
+    /// `pointer` places the pointer (on the row's name, away from its cells) or leaves it off-screen.
+    fn painted_glyphs(
+        ctx: &egui::Context,
+        pointer: Option<egui::Pos2>,
+    ) -> (Vec<(String, egui::Color32)>, crate::theme::tokens::Tokens) {
+        let mut tk = None;
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(test_ui::screen()),
+                events: pointer
+                    .map(|p| vec![egui::Event::PointerMoved(p)])
+                    .unwrap_or_default(),
+                ..Default::default()
+            },
+            |ui| {
+                tk = Some(*crate::theme::tokens::of(ui));
+                draw(ui, &mut (false, None));
+            },
+        );
+        fn walk(shape: &egui::Shape, found: &mut Vec<(String, egui::Color32)>) {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, found)),
+                egui::Shape::Text(t) => {
+                    let text = t.galley.text();
+                    if text == "×" || text == "+" {
+                        let colour = t
+                            .galley
+                            .job
+                            .sections
+                            .first()
+                            .map_or(t.fallback_color, |s| s.format.color);
+                        found.push((text.to_owned(), colour));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        for c in &out.shapes {
+            walk(&c.shape, &mut found);
+        }
+        (found, tk.expect("drawn"))
+    }
+
+    /// ⚠ The author's call (2026-09-29), reversing P-13: the buttons are always there, greyed.
+    #[test]
+    fn the_buttons_are_drawn_with_no_pointer_on_the_row() {
+        let (glyphs, tk) = painted_glyphs(&test_ui::ctx(), None);
+        assert_eq!(glyphs.len(), 2, "both glyphs, at rest: {glyphs:?}");
+        assert!(glyphs.iter().all(|(_, c)| *c == tk.text3), "{glyphs:?}");
+    }
+
+    /// The pop: `text3` at rest, `text` with the pointer anywhere on the row.
+    #[test]
+    fn the_buttons_pop_when_the_pointer_is_on_the_row() {
+        let ctx = test_ui::ctx();
+        let (rest, tk) = painted_glyphs(&ctx, None);
+        // ⚠ Proven different before anything is asserted about which is which (lesson (c)).
+        assert_ne!(tk.text3, tk.text, "the two states must be told apart");
+        let name = test_ui::labelled_centres(&ctx, Vec::new(), |ui| draw(ui, &mut (false, None)))
+            .into_iter()
+            .find(|(l, _)| l == "Portraits")
+            .map(|(_, p)| p)
+            .expect("the row is named");
+        // The row's own centre is on its name, well left of the cells at the right edge.
+        let (hot, _) = painted_glyphs(&ctx, Some(name));
+        assert!(rest.iter().all(|(_, c)| *c == tk.text3), "rest: {rest:?}");
+        assert_eq!(hot.len(), 2, "{hot:?}");
+        assert!(hot.iter().all(|(_, c)| *c == tk.text), "hovered: {hot:?}");
+    }
+
+    /// How many cell faces (`raised` fills) one frame paints, with the pointer at `pointer`.
+    fn faces(ctx: &egui::Context, pointer: egui::Pos2) -> usize {
+        let mut raised = None;
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(test_ui::screen()),
+                events: vec![egui::Event::PointerMoved(pointer)],
+                ..Default::default()
+            },
+            |ui| {
+                raised = Some(crate::theme::tokens::of(ui).raised);
+                draw(ui, &mut (false, None));
+            },
+        );
+        let raised = raised.expect("drawn");
+        fn walk(shape: &egui::Shape, raised: egui::Color32, n: &mut usize) {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, raised, n)),
+                egui::Shape::Rect(r) if r.fill == raised => *n += 1,
+                _ => {}
+            }
+        }
+        let mut n = 0;
+        for c in &out.shapes {
+            walk(&c.shape, raised, &mut n);
+        }
+        n
+    }
+
+    /// The pointed button alone gets a face — both halves, so a face painted everywhere fails too.
+    #[test]
+    fn the_pointed_button_gets_a_face() {
+        let ctx = test_ui::ctx();
+        let all = test_ui::labelled_centres(&ctx, Vec::new(), |ui| draw(ui, &mut (false, None)));
+        let at = |label: &str| {
+            all.iter()
+                .find(|(l, _)| l == label)
+                .map(|(_, p)| *p)
+                .unwrap_or_else(|| panic!("no {label:?}: {all:?}"))
+        };
+        assert_eq!(faces(&ctx, at("Portraits")), 0, "on the name, no face");
+        assert_eq!(faces(&ctx, at("Delete Portraits")), 1, "on a button, its face");
+    }
+
+    /// Tighter: neighbouring cells stand `ROW_ACTION` apart, not a row height.
+    #[test]
+    fn the_buttons_stand_a_row_action_apart() {
+        let ctx = test_ui::ctx();
+        let all = test_ui::labelled_centres(&ctx, Vec::new(), |ui| draw(ui, &mut (false, None)));
+        let x = |label: &str| {
+            all.iter()
+                .find(|(l, _)| l == label)
+                .map(|(_, p)| p.x)
+                .unwrap_or_else(|| panic!("no {label:?}: {all:?}"))
+        };
+        let gap = x("Delete Portraits") - x("Add to Portraits");
+        assert!(
+            (gap - crate::theme::tokens::ROW_ACTION).abs() < 0.5,
+            "cells {gap} apart, want {}",
+            crate::theme::tokens::ROW_ACTION
+        );
     }
 
     /// ⚠ A disabled action must not eat a click meant for its row — the keyword row's Tag and Untag

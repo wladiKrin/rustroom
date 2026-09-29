@@ -119,6 +119,9 @@ pub const ICON_LARGE: f32 = 24.0;
 pub const CONTROL_ROW: f32 = 28.0;
 /// Rail, mask list, snapshots, presets.
 pub const LIST_ROW: f32 = 30.0;
+/// The width of a list row's action cell (`×`, `⬇`) — tighter than the row is tall, which the cell
+/// keeps (the author, 2026-09-29: "make the layout of all buttons tighter").
+pub const ROW_ACTION: f32 = 20.0;
 /// A section header.
 pub const HEADER_ROW: f32 = 26.0;
 /// Where a row's trailing count or text ends, in from the row's right edge — list rows and
