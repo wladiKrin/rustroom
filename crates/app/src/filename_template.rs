@@ -133,6 +133,18 @@ pub fn token_help() -> [(&'static str, &'static str); 5] {
     ]
 }
 
+/// The tokens and what each means, one per line — the naming fields' hover in Import and Export.
+///
+/// ⚠ It replaced a line of bare tokens under each field (`{name}  {seq}  …`) that named them but
+/// said nothing about them, in 9-pt text (`docs/DESIGN.md` §8).
+pub fn token_hover() -> String {
+    token_help()
+        .iter()
+        .map(|(tok, what)| format!("{tok} — {what}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// A parsed filename template.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Template {
@@ -348,6 +360,18 @@ fn non_blank(s: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_token_hover_names_every_token_with_its_meaning() {
+        let h = token_hover();
+        assert_eq!(h.lines().count(), token_help().len());
+        for (tok, what) in token_help() {
+            assert!(
+                h.contains(&format!("{tok} — {what}")),
+                "{tok} missing from {h:?}"
+            );
+        }
+    }
 
     /// A landscape shot, fully described: every token has a value.
     fn facts() -> NameFacts<'static> {

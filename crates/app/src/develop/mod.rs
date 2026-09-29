@@ -105,6 +105,11 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     if app.show_filmstrip && app.show_panels && app.library.is_some() {
         filmstrip::show(app, ui, ctx);
     }
+    // ⚠ After the filmstrip, so it sits above it: egui stacks bottom panels outward in call
+    // order. It spans the canvas column, the rail and the panel having taken their sides.
+    if app.session.is_some() && app.show_panels {
+        crate::status_bar::develop(app, ui);
+    }
     photo_edited |= canvas::show(app, ui, ctx);
     photo_edited |= delete_selected_retouch(app, ctx);
 
@@ -244,7 +249,8 @@ const TOOL_HEIGHT: f32 = 28.0;
 /// allocates nothing, so the row stays the buttons' height.
 /// `the_bar_is_the_same_height_in_both_views` measures it.
 fn well<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let fill = ui.visuals().extreme_bg_color;
+    // ⚠ The segmented well's colour and shape (`docs/DESIGN.md` §7.2): the canvas colour, a pill.
+    let fill = crate::theme::tokens::of(ui).canvas;
     let bg = ui.painter().add(egui::Shape::Noop);
     let spacing = ui.spacing().item_spacing.x;
     ui.spacing_mut().item_spacing.x = 2.0;
@@ -258,17 +264,19 @@ fn well<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
         egui::pos2(right, cy + TOOL_HEIGHT / 2.0),
     )
     .expand(2.0);
-    ui.painter()
-        .set(bg, egui::epaint::RectShape::filled(rect, 5.0, fill));
+    ui.painter().set(
+        bg,
+        egui::epaint::RectShape::filled(rect, rect.height() / 2.0, fill),
+    );
     inner
 }
 
 /// One toolbar icon at [`ICON_SIZE`].
 ///
-/// ⚠ Sized explicitly rather than inheriting the body text size. `theme::tune` deliberately
-/// makes body text compact, because the panel stacks twenty-odd sliders — but an icon carries
-/// the *whole* meaning of its button, where a word has letters to be recognised by, so the same
-/// size reads as too small. One helper, so the toolbar cannot end up with two icon sizes.
+/// ⚠ Sized explicitly at the toolbar icon size (`tokens::ICON`, 16) rather than inheriting the
+/// 13-pt body text: an icon carries the *whole* meaning of its button, where a word has letters
+/// to be recognised by, so the body size reads as too small. One helper, so the toolbar cannot
+/// end up with two icon sizes.
 fn icon_text(glyph: char) -> egui::RichText {
     egui::RichText::new(glyph).size(ICON_SIZE)
 }

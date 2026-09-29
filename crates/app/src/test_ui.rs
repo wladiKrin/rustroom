@@ -89,6 +89,43 @@ pub fn labelled_centres_on(
         .collect()
 }
 
+/// Every labelled widget's **rect** after laying `body` out once on `screen_rect` — what an
+/// overlap check needs, where [`labelled_centres_on`] gives only a point.
+pub fn labelled_rects_on(
+    ctx: &egui::Context,
+    screen_rect: egui::Rect,
+    body: impl FnMut(&mut egui::Ui),
+) -> Vec<(String, egui::Rect)> {
+    let out = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(screen_rect),
+            ..Default::default()
+        },
+        body,
+    );
+    let Some(update) = out.platform_output.accesskit_update else {
+        return Vec::new();
+    };
+    update
+        .nodes
+        .iter()
+        .filter_map(|(_, node)| {
+            let label = node
+                .label()
+                .map(str::to_owned)
+                .or_else(|| node.value().map(str::to_owned))?;
+            let b = node.bounds()?;
+            Some((
+                label,
+                egui::Rect::from_min_max(
+                    egui::pos2(b.x0 as f32, b.y0 as f32),
+                    egui::pos2(b.x1 as f32, b.y1 as f32),
+                ),
+            ))
+        })
+        .collect()
+}
+
 /// The numeric value of every widget that reports one — a `Slider` or a `DragValue` — after
 /// laying `body` out once.
 ///

@@ -502,8 +502,13 @@ fn camera_profile_row(app: &mut RustroomApp, ui: &mut egui::Ui) {
         })
         .unwrap_or_else(|| "Built-in (libraw)".to_string());
 
+    // ⚠ The explanation is the combo's hover (`docs/DESIGN.md` §8), not three lines of 9-pt text
+    // under it: it said the same thing on every photo, which is what the author could not read.
+    const PROFILE_HELP: &str = "Colours come from Rustroom's built-in camera data. To use a \
+                                profile from your camera maker instead, put its .dcp file in the \
+                                profiles folder next to your settings.";
     ui.horizontal(|ui| {
-        ui.label("Camera profile");
+        ui.label("Camera profile").on_hover_text(PROFILE_HELP);
         egui::ComboBox::from_id_salt("camera_profile_pick")
             .selected_text(label)
             .show_ui(ui, |ui| {
@@ -514,15 +519,10 @@ fn camera_profile_row(app: &mut RustroomApp, ui: &mut egui::Ui) {
                 for e in &app.camera_profiles_cache {
                     ui.selectable_value(&mut chosen, Some(e.path.clone()), &e.name);
                 }
-            });
+            })
+            .response
+            .on_hover_text(PROFILE_HELP);
     });
-    if app.camera_profiles_cache.is_empty() {
-        theme::hint(
-            ui,
-            "Colours come from Rustroom's built-in camera data. To use a profile from your camera \
-             maker instead, put its .dcp file in the profiles folder next to your settings.",
-        );
-    }
     // ⚠ A change guard like its neighbours: this body runs every frame, and `apply_camera_profile`
     // rebuilds two decode workers and re-decodes the open photo.
     if chosen != current {

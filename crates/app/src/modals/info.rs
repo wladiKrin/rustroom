@@ -8,6 +8,10 @@ use crate::theme;
 use crate::RustroomApp;
 use eframe::egui;
 
+/// The description fields' hover. ⚠ It was a paragraph under them (`docs/DESIGN.md` §8).
+const SHARED_NOTE: &str = "Shared by every copy of this file. Written into exports and, for RAW \
+                           files, the XMP sidecar. The original is never modified.";
+
 /// A shutter speed as a photographer writes it.
 ///
 /// ⚠ The stored value is `0.0199999995529652`; showing that is technically honest and practically
@@ -213,28 +217,27 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                 }),
                 3 => {
                     grid(ui, "info_description", |ui| {
-                        ui.label(egui::RichText::new("Title").weak());
+                        ui.label(egui::RichText::new("Title").weak())
+                            .on_hover_text(SHARED_NOTE);
                         ui.text_edit_singleline(&mut draft.edited.title);
                         ui.end_row();
-                        ui.label(egui::RichText::new("Caption").weak());
+                        ui.label(egui::RichText::new("Caption").weak())
+                            .on_hover_text(SHARED_NOTE);
                         ui.add(
                             egui::TextEdit::multiline(&mut draft.edited.caption)
                                 .desired_rows(2)
                                 .desired_width(f32::INFINITY),
                         );
                         ui.end_row();
-                        ui.label(egui::RichText::new("Copyright").weak());
+                        ui.label(egui::RichText::new("Copyright").weak())
+                            .on_hover_text(SHARED_NOTE);
                         ui.text_edit_singleline(&mut draft.edited.copyright);
                         ui.end_row();
-                        ui.label(egui::RichText::new("Creator").weak());
+                        ui.label(egui::RichText::new("Creator").weak())
+                            .on_hover_text(SHARED_NOTE);
                         ui.text_edit_singleline(&mut draft.edited.creator);
                         ui.end_row();
                     });
-                    theme::hint(
-                        ui,
-                        "Shared by every copy of this file. Written into exports and, for RAW \
-                         files, the XMP sidecar. The original is never modified.",
-                    );
                 }
                 _ => grid(ui, "info_marks", |ui| {
                     row(

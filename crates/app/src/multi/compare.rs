@@ -309,7 +309,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         });
 
         // ── Draw ─────────────────────────────────────────────────────────────────────────
-        ui.label(egui::RichText::new(INSTRUCTION).weak());
 
         let stage = multi::stage(ui);
         // ⚠ `pair`, never `survey(2, ..)`: Compare is side by side at every window shape,

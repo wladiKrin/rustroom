@@ -217,6 +217,42 @@ pub struct PillStyle {
     /// it is the one accent-filled control in the bar, and a second would cost the first its
     /// meaning.
     pub accent: bool,
+    /// Draw the glyphs alone — the narrow form a bar plan picks. The labels stay the accessible
+    /// names, and the hovers still say them.
+    pub icons_only: bool,
+}
+
+/// The inner padding of a pill cell, either side of its content.
+const PILL_PAD: f32 = 10.0;
+/// The space between a pill cell's glyph and its label.
+const PILL_GAP: f32 = 6.0;
+
+/// The width of one pill cell: the widest glyph, and the widest label unless `icons_only`.
+fn pill_cell_width<T>(ui: &egui::Ui, items: &[PillItem<'_, T>], style: &PillStyle) -> f32 {
+    let icon_font = egui::FontId::proportional(crate::theme::tokens::ICON);
+    let widest = |f: &dyn Fn(&PillItem<'_, T>) -> (String, egui::FontId)| {
+        items
+            .iter()
+            .map(|it| {
+                let (t, font) = f(it);
+                ui.painter()
+                    .layout_no_wrap(t, font, egui::Color32::PLACEHOLDER)
+                    .size()
+                    .x
+            })
+            .fold(0.0, f32::max)
+    };
+    let icon_w = widest(&|it| (it.icon.to_string(), icon_font.clone()));
+    if style.icons_only {
+        return (icon_w + PILL_PAD * 2.0).ceil();
+    }
+    let label_w = widest(&|it| (it.label.to_owned(), style.font.clone()));
+    (icon_w + PILL_GAP + label_w + PILL_PAD * 2.0).ceil()
+}
+
+/// How wide [`pill`] draws `items` in `style` — what a bar plan measures before drawing.
+pub fn pill_width<T>(ui: &egui::Ui, items: &[PillItem<'_, T>], style: &PillStyle) -> f32 {
+    pill_cell_width(ui, items, style) * items.len().max(1) as f32 + 4.0
 }
 
 /// A segmented control sized to its content: every cell as wide as the widest icon + label.
@@ -231,33 +267,8 @@ pub fn pill<T: PartialEq + Copy>(
     items: &[PillItem<'_, T>],
     style: PillStyle,
 ) -> egui::Response {
-    const PAD: f32 = 10.0;
-    const GAP: f32 = 6.0;
     let icon_font = egui::FontId::proportional(crate::theme::tokens::ICON);
-    let (label_w, icon_w) = ui.fonts_mut(|f| {
-        let lw = items
-            .iter()
-            .map(|it| {
-                f.layout_no_wrap(
-                    it.label.to_owned(),
-                    style.font.clone(),
-                    egui::Color32::WHITE,
-                )
-                .size()
-                .x
-            })
-            .fold(0.0, f32::max);
-        let iw = items
-            .iter()
-            .map(|it| {
-                f.layout_no_wrap(it.icon.to_string(), icon_font.clone(), egui::Color32::WHITE)
-                    .size()
-                    .x
-            })
-            .fold(0.0, f32::max);
-        (lw, iw)
-    });
-    let cell_w = (icon_w + GAP + label_w + PAD * 2.0).ceil();
+    let cell_w = pill_cell_width(ui, items, &style);
     let n = items.len().max(1) as f32;
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(cell_w * n + 4.0, style.height),
@@ -308,24 +319,46 @@ pub fn pill<T: PartialEq + Copy>(
         } else {
             t.text2
         };
-        let x = cell.left() + PAD;
-        let icon_rect = painter.text(
-            egui::pos2(x, cell.center().y),
-            egui::Align2::LEFT_CENTER,
-            it.icon,
-            icon_font.clone(),
-            colour,
-        );
-        painter.text(
-            egui::pos2(icon_rect.right() + GAP, cell.center().y),
-            egui::Align2::LEFT_CENTER,
-            it.label,
-            style.font.clone(),
-            colour,
-        );
+        if style.icons_only {
+            painter.text(
+                cell.center(),
+                egui::Align2::CENTER_CENTER,
+                it.icon,
+                icon_font.clone(),
+                colour,
+            );
+        } else {
+            let icon_rect = painter.text(
+                egui::pos2(cell.left() + PILL_PAD, cell.center().y),
+                egui::Align2::LEFT_CENTER,
+                it.icon,
+                icon_font.clone(),
+                colour,
+            );
+            painter.text(
+                egui::pos2(icon_rect.right() + PILL_GAP, cell.center().y),
+                egui::Align2::LEFT_CENTER,
+                it.label,
+                style.font.clone(),
+                colour,
+            );
+        }
         all = all.union(r);
     }
     all
+}
+
+/// The dot's radius in a [`chip`].
+const DOT: f32 = 3.5;
+
+/// How wide [`chip`] draws `label` — what the status row's plan measures before drawing.
+pub fn chip_width(ui: &egui::Ui, label: &str, font: &egui::FontId) -> f32 {
+    let w = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
+        .size()
+        .x;
+    w + DOT * 2.0 + 18.0
 }
 
 /// A chip: a dot and a label in a rounded well, toggling `on`. The dot is the accent while on
@@ -335,15 +368,9 @@ pub fn pill<T: PartialEq + Copy>(
 /// not change with its clothes.
 pub fn chip(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
     const H: f32 = 20.0;
-    const DOT: f32 = 3.5;
     let font = egui::FontId::proportional(crate::theme::tokens::CAPTION);
-    let w = ui.fonts_mut(|f| {
-        f.layout_no_wrap(label.to_owned(), font.clone(), egui::Color32::WHITE)
-            .size()
-            .x
-    });
-    let (rect, mut r) =
-        ui.allocate_exact_size(egui::vec2(w + DOT * 2.0 + 18.0, H), egui::Sense::click());
+    let width = chip_width(ui, label, &font);
+    let (rect, mut r) = ui.allocate_exact_size(egui::vec2(width, H), egui::Sense::click());
     let enabled = ui.is_enabled();
     let was = *on;
     r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, was, label));
@@ -386,6 +413,66 @@ pub fn chip(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
         text,
     );
     r
+}
+
+/// One swatch of [`swatches`]: its value, its colour, its name and its hover.
+pub struct Swatch<'a, T> {
+    pub value: T,
+    pub colour: egui::Color32,
+    pub label: &'a str,
+    pub hover: &'a str,
+}
+
+/// A row of colour swatches, one lit — the accent choice in Settings (`docs/DESIGN.md` §4.2).
+///
+/// ⚠ A 22-pt circle each, the chosen one ringed in its own colour with a gap of the panel colour,
+/// so the ring reads on every accent. Each reports `WidgetInfo::selected` with its **name**, so
+/// `test_ui::click(ctx, "Orange", ..)` reaches it and a screen reader says the colour, not "button".
+/// ⚠ `mark_changed`, the lesson `chip` paid for: a hand-drawn widget has to say it changed.
+pub fn swatches<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    current: &mut T,
+    items: &[Swatch<'_, T>],
+) -> egui::Response {
+    const D: f32 = 22.0;
+    const GAP: f32 = 8.0;
+    let n = items.len().max(1) as f32;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(n * D + (n - 1.0) * GAP + 6.0, D + 6.0),
+        egui::Sense::hover(),
+    );
+    let panel = ui.visuals().panel_fill;
+    let enabled = ui.is_enabled();
+    let mut all = resp.clone();
+    for (i, it) in items.iter().enumerate() {
+        let c = egui::pos2(
+            rect.left() + 3.0 + D / 2.0 + i as f32 * (D + GAP),
+            rect.center().y,
+        );
+        let cell = egui::Rect::from_center_size(c, egui::vec2(D + 6.0, D + 6.0));
+        let mut r = ui.interact(cell, resp.id.with(i), egui::Sense::click());
+        let selected = *current == it.value;
+        r.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::RadioButton, enabled, selected, it.label)
+        });
+        if enabled && r.clicked() && !selected {
+            *current = it.value;
+            r.mark_changed();
+        }
+        let r = if it.hover.is_empty() {
+            r.on_hover_text(it.label)
+        } else {
+            r.on_hover_text(it.hover)
+        };
+        let p = ui.painter();
+        if *current == it.value {
+            p.circle_filled(c, D / 2.0 + 3.0, it.colour);
+            p.circle_filled(c, D / 2.0 + 1.0, panel);
+        }
+        p.circle_filled(c, D / 2.0 - 1.0, it.colour);
+        all = all.union(r);
+    }
+    all
 }
 
 /// A chunky sliding switch: a track with a knob that moves left to right, filled with the **accent**
@@ -558,7 +645,43 @@ mod tests {
             height: 32.0,
             font: egui::FontId::proportional(13.0),
             accent: true,
+            icons_only: false,
         }
+    }
+
+    #[test]
+    fn the_accent_swatches_select_by_name() {
+        // ⚠ Reached by the colour's name, the way a person and a screen reader refer to it — and the
+        // click must actually change the value, which a hand-drawn widget does only if told to.
+        #[derive(Clone, Copy, PartialEq, Debug)]
+        enum A {
+            Blue,
+            Orange,
+        }
+        let items = [
+            Swatch {
+                value: A::Blue,
+                colour: egui::Color32::LIGHT_BLUE,
+                label: "Steel blue",
+                hover: "",
+            },
+            Swatch {
+                value: A::Orange,
+                colour: egui::Color32::ORANGE,
+                label: "Orange",
+                hover: "",
+            },
+        ];
+        let ctx = crate::test_ui::ctx();
+        let mut cur = A::Blue;
+        let found = crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            swatches(ui, &mut cur, &items);
+        });
+        assert!(found.iter().any(|(l, _)| l == "Orange"), "{found:?}");
+        crate::test_ui::click(&ctx, "Orange", |ui| {
+            swatches(ui, &mut cur, &items);
+        });
+        assert_eq!(cur, A::Orange);
     }
 
     #[test]

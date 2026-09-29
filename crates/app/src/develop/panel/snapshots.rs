@@ -149,7 +149,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) -> bo
                 true,
                 Header::new("Snapshots").trailing(&count),
             );
-            out.show_body(ui, |ui| {
+            // ⚠⚠ **No card here** — `state.show_body_unindented`, not `show_body`. This body fills
+            // its resizable panel on purpose (below), and the gap a card leaves under itself made
+            // the content 10 pt taller than the panel every frame, so the strip grew until it hit
+            // its half-height cap and squeezed the sliders to two sections (seen 2026-09-29). The
+            // strip's own panel frame already sets it apart.
+            out.state.show_body_unindented(ui, |ui| {
                 // Fill the panel's height so egui stores the panel size, not the smaller content
                 // size — otherwise a resizable panel shrinks back each frame.
                 ui.set_min_height(ui.available_height());

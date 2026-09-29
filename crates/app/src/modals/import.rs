@@ -8,9 +8,12 @@ use crate::import_flow::Tick;
 use crate::theme;
 use crate::RustroomApp;
 use eframe::egui;
-use rustroom_app::filename_template::{token_help, Template};
+use rustroom_app::filename_template::Template;
 use rustroom_app::ingest::options::Layout;
 use std::path::PathBuf;
+
+/// The metadata fields' hover. ⚠ It was a line under them (`docs/DESIGN.md` §8).
+const EMPTY_CHANGES_NOTHING: &str = "Left empty, the imported photos keep whatever they carry.";
 
 /// The source column's width; the settings column takes the rest.
 const GRID_W: f32 = 520.0;
@@ -73,16 +76,19 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                         new_source = Some(c.root.clone());
                                     }
                                 }
-                                if ui.button("Choose folder…").clicked() {
+                                if ui
+                                    .button("Choose folder…")
+                                    .on_hover_text(
+                                        "A card is a drive with a DCIM folder; any folder of \
+                                         photos works too.",
+                                    )
+                                    .clicked()
+                                {
                                     pick_source = true;
                                 }
                             });
                             if st.cards.is_empty() {
-                                theme::hint(
-                                    ui,
-                                    "No card found — a card is a drive with a DCIM folder. \
-                                     Choose any folder instead.",
-                                );
+                                theme::hint(ui, "No card found — choose a folder.");
                             }
                             if let Some(src) = &st.source {
                                 theme::hint(ui, &src.display().to_string());
@@ -152,9 +158,8 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         ui.add(
                             egui::TextEdit::singleline(&mut d.template)
                                 .desired_width(f32::INFINITY),
-                        );
-                        let tokens: Vec<&str> = token_help().iter().map(|(t, _)| *t).collect();
-                        theme::hint(ui, &tokens.join("  "));
+                        )
+                        .on_hover_text(rustroom_app::filename_template::token_hover());
                         if let Err(e) = Template::parse(&d.template) {
                             theme::error_hint(ui, &e.to_string());
                         }
@@ -175,17 +180,19 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             .num_columns(2)
                             .show(ui, |ui| {
                                 ui.label("Copyright");
-                                ui.text_edit_singleline(&mut d.copyright);
+                                ui.text_edit_singleline(&mut d.copyright)
+                                    .on_hover_text(EMPTY_CHANGES_NOTHING);
                                 ui.end_row();
                                 ui.label("Creator");
-                                ui.text_edit_singleline(&mut d.creator);
+                                ui.text_edit_singleline(&mut d.creator)
+                                    .on_hover_text(EMPTY_CHANGES_NOTHING);
                                 ui.end_row();
                                 ui.label("Keywords");
-                                ui.text_edit_singleline(&mut d.keywords)
-                                    .on_hover_text("Comma-separated; created if missing");
+                                ui.text_edit_singleline(&mut d.keywords).on_hover_text(
+                                    "Comma-separated; created if missing. Empty changes nothing.",
+                                );
                                 ui.end_row();
                             });
-                        theme::hint(ui, "An empty field changes nothing.");
                         ui.add_space(6.0);
                         theme::sub_label(ui, "Develop preset");
                         let shown = d.preset.clone().unwrap_or_else(|| "None".into());

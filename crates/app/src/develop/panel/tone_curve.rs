@@ -167,6 +167,8 @@ pub fn show(
         });
         allocated.expect("the horizontal closure always runs")
     };
+    // ⚠ How to work it is the hover, never a standing line (`docs/DESIGN.md` §8).
+    let resp = resp.on_hover_text(GESTURE_HELP);
 
     // ⚠ Which point a drag grabbed has to survive between frames, or re-hit-testing each frame
     // would let a fast drag jump to whichever point the pointer happened to pass over. egui's
@@ -319,14 +321,18 @@ pub fn show(
         }
     }
 
-    // ⚠ One line either way, so the panel below it does not jump as the pointer crosses a
-    // control point. The values are display percentages, matching the axes.
+    // ⚠ One line either way — the values, or an empty line — so the panel below it does not
+    // jump as the pointer crosses a control point. The values are display percentages, matching
+    // the axes.
     theme::hint(ui, &readout(&pts, described));
     rect
 }
 
-/// The line under the editor: a control point's input and output when one is in play, else how
-/// to work the thing.
+/// How the point editor is worked — its hover, and the only place the gestures are named.
+const GESTURE_HELP: &str = "Click to add a point · drag one to move it · right-click removes it";
+
+/// The line under the editor: a control point's input and output when one is in play, else
+/// nothing — how to work the editor is its hover ([`GESTURE_HELP`]).
 ///
 /// A free function so the wording is pinned by a test — the gestures are not discoverable from
 /// the widget, so this line *is* the affordance.
@@ -337,7 +343,7 @@ fn readout(points: &[[f32; 2]], described: Option<usize>) -> String {
             tool::to_display(p[0]) * 100.0,
             tool::to_display(p[1]) * 100.0
         ),
-        None => "Click to add a point · right-click to remove".to_string(),
+        None => String::new(),
     }
 }
 
@@ -708,14 +714,15 @@ mod tests {
     }
 
     #[test]
-    fn the_readout_falls_back_to_the_gesture_hint() {
-        // The gestures are invisible otherwise — this line is the only thing that teaches them.
+    fn the_gestures_are_named_on_hover_and_the_idle_readout_is_empty() {
+        // The gestures are invisible otherwise, so the hover must name them; since 2026-09-29 it is
+        // the hover and not a standing line of 9-pt text (`docs/DESIGN.md` §8).
+        assert!(GESTURE_HELP.contains("add"), "{GESTURE_HELP}");
+        assert!(GESTURE_HELP.contains("remove"), "{GESTURE_HELP}");
         let pts = tool::IDENTITY.to_vec();
-        let hint = readout(&pts, None);
-        assert!(hint.contains("add"), "{hint}");
-        assert!(hint.contains("remove"), "{hint}");
+        assert_eq!(readout(&pts, None), "");
         // An index that no longer exists must not panic — a point can be removed on the same
         // frame the pointer is still over it.
-        assert_eq!(readout(&pts, Some(9)), hint);
+        assert_eq!(readout(&pts, Some(9)), "");
     }
 }

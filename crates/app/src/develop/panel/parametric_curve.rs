@@ -64,6 +64,14 @@ pub fn show(
         });
         allocated.expect("the horizontal closure always runs")
     };
+    // ⚠ How to work it is the hover (`docs/DESIGN.md` §8); the line under it carries only a value.
+    let resp = resp.on_hover_text(match binding {
+        ParametricDrag::Left => {
+            "Drag the handles under the curve to move the regions · drag up or down on the curve \
+             to set the region under the pointer"
+        }
+        ParametricDrag::Off => "Drag the handles under the curve to move the regions",
+    });
     let norm_x = |x: f32| ((x - rect.left()) / rect.width()).clamp(0.0, 1.0);
     let at = |n: [f32; 2]| {
         egui::pos2(
@@ -172,17 +180,11 @@ pub fn show(
     theme::hint(
         ui,
         &match (active, binding) {
-            (Some(r), ParametricDrag::Left) => {
-                format!("{}: {:+.0} — drag up or down on the curve", r.label(), {
-                    let mut p = *param;
-                    *r.amount(&mut p)
-                })
-            }
-            (Some(r), ParametricDrag::Off) => format!("{}: {:+.0}", r.label(), {
+            (Some(r), _) => format!("{}: {:+.0}", r.label(), {
                 let mut p = *param;
                 *r.amount(&mut p)
             }),
-            (None, _) => "Drag the handles under the curve to move the regions".to_string(),
+            (None, _) => String::new(),
         },
     );
     rect

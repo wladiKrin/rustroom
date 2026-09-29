@@ -142,6 +142,10 @@ impl HeaderOut {
     /// costs a caller one word (`show_body` for `state.show_body_unindented`) and changes no
     /// layout. A header whose body is shown the old way (the dialogs, the rail) keeps its
     /// hairline and gets no card.
+    ///
+    /// ⚠⚠ **Never for a body that fills its container** (`set_min_height(available_height)`): the
+    /// gap left under the card makes the content taller than the container every frame, and a
+    /// resizable panel then grows by that much per frame — the snapshot strip did, 2026-09-29.
     pub fn show_body<R>(
         &mut self,
         ui: &mut egui::Ui,

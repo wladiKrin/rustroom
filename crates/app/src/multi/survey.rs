@@ -184,7 +184,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         });
 
         // ── Draw ─────────────────────────────────────────────────────────────────────────
-        ui.label(egui::RichText::new(INSTRUCTION).weak());
 
         let grid_rows = rows_list.len().div_ceil(cols);
         let mut window: Vec<ThumbRequest> = Vec::new();

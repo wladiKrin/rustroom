@@ -82,6 +82,7 @@ mod shell;
 mod smart_sources;
 mod snapshots;
 mod sources;
+mod status_bar;
 #[cfg(test)]
 mod test_app;
 #[cfg(test)]

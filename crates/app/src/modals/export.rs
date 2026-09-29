@@ -16,6 +16,13 @@ use rustroom_app::export_summary;
 use rustroom_app::filename_template::{NameFacts, Template};
 use rustroom_app::settings::ConfirmOutcome;
 
+/// What a DNG is — the Format combo's hover. ⚠ It was a paragraph under the Colour section,
+/// shown whenever DNG was chosen (`docs/DESIGN.md` §8).
+const DNG_NOTE: &str = "DNG holds the finished picture as linear ProPhoto, 16-bit, losslessly \
+                        compressed; the application that opens it converts. ⚠ darktable adds its \
+                        own exposure and tone mapping to raw files unless its workflow is set to \
+                        \"none\".";
+
 /// The first photo of the run, as the filename preview needs it.
 ///
 /// ⚠ Owned strings rather than borrows: it is read *inside* the dialog closure, which cannot
@@ -406,12 +413,8 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                         ui.add(
                             egui::TextEdit::singleline(&mut opts.filename_template)
                                 .desired_width(f32::INFINITY),
-                        );
-                        let tokens: Vec<String> = rustroom_app::filename_template::token_help()
-                            .iter()
-                            .map(|(tok, _)| tok.to_string())
-                            .collect();
-                        theme::hint(ui, &tokens.join("  "));
+                        )
+                        .on_hover_text(rustroom_app::filename_template::token_hover());
                         if let Err(e) = Template::parse(&opts.filename_template) {
                             theme::error_hint(ui, &e.to_string());
                         }
@@ -428,7 +431,9 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                         for f in export::ExportFormat::ALL {
                                             ui.selectable_value(&mut opts.format, f, f.label());
                                         }
-                                    });
+                                    })
+                                    .response
+                                    .on_hover_text(DNG_NOTE);
                                 ui.end_row();
                             });
                         // ⚠ Hidden, not disabled, for a lossless format: at this size a disabled
@@ -484,15 +489,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                         if let Some(msg) = banding_warning(opts.space, opts.format) {
                             theme::hint(ui, msg);
                         }
-                        if opts.format.fixed_space().is_some() {
-                            theme::hint(
-                                ui,
-                                "A DNG holds the finished picture as linear ProPhoto, 16-bit, \
-                                 losslessly compressed; the application that opens it converts. \
-                                 ⚠ darktable adds its own exposure and tone mapping to raw files \
-                                 unless its workflow is set to \"none\".",
-                            );
-                        }
+
                     });
                     section(ui, "Size", &export_summary::size(&opts), false, |ui| {
                         let mut resize = opts.max_edge.is_some();

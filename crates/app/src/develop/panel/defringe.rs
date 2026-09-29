@@ -58,6 +58,7 @@ fn hue_range(ui: &mut egui::Ui, id: &str, range: &mut [f32; 2], ed: &mut Edited)
     let width = ui.available_width();
     let (rect, resp) =
         ui.allocate_exact_size(egui::vec2(width, STRIP_H), egui::Sense::click_and_drag());
+    let resp = resp.on_hover_text("Drag an end to widen the range, the middle to move it");
     let to_x = |deg: f32| rect.left() + deg / 360.0 * rect.width();
     let to_deg = |x: f32| ((x - rect.left()) / rect.width() * 360.0).clamp(0.0, 360.0);
 
@@ -129,12 +130,6 @@ fn hue_range(ui: &mut egui::Ui, id: &str, range: &mut [f32; 2], ed: &mut Edited)
             );
         }
     }
-    theme::hint(
-        ui,
-        &format!(
-            "Hue {:.0}°–{:.0}° — drag an end to widen, the middle to move",
-            range[0], range[1]
-        ),
-    );
+    theme::hint(ui, &format!("Hue {:.0}°–{:.0}°", range[0], range[1]));
     changed
 }

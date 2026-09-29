@@ -365,18 +365,27 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 );
                             ui.end_row();
 
-                            ui.label("Accent");
-                            egui::ComboBox::from_id_salt("accent_pick")
-                                .selected_text(d.accent.label())
-                                .show_ui(ui, |ui| {
-                                    for a in Accent::ALL {
-                                        ui.selectable_value(&mut d.accent, a, a.label());
-                                    }
+                            ui.label("Accent").on_hover_text(
+                                "The accent marks what is selected and what is set; Neutral \
+                                 turns it grey.",
+                            );
+                            // ⚠ Swatches, not a list of names: the choice is a colour, so it is
+                            // made by looking. Shown in the theme's own half of each pair.
+                            let dark = ui.visuals().dark_mode;
+                            let orange_hover = "Orange — ⚠ a warm accent sits on the colour \
+                                                temperature axis, so it can colour how you judge \
+                                                white balance. Steel blue is the default for that \
+                                                reason.";
+                            let items: Vec<crate::segmented::Swatch<'_, Accent>> = Accent::ALL
+                                .iter()
+                                .map(|&a| crate::segmented::Swatch {
+                                    value: a,
+                                    colour: theme::accent_color(a, dark),
+                                    label: a.label(),
+                                    hover: if a == Accent::Orange { orange_hover } else { "" },
                                 })
-                                .response
-                                .on_hover_text(
-                                    "The accent marks active controls; Neutral turns it off.",
-                                );
+                                .collect();
+                            crate::segmented::swatches(ui, &mut d.accent, &items);
                             ui.end_row();
                             ui.label("Interface size");
                             egui::ComboBox::from_id_salt("ui_scale_pick")
@@ -478,16 +487,19 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 }
                             })
                             .response
-                            .on_hover_text(
-                                "RAW only, and separate from the export setting. Sets the demosaic \
-                                 used for the zoomed view. A slower tier costs that much extra on \
-                                 every photo you stop on, not just on export — the full-resolution \
-                                 decode starts on its own. The default is Better: Fast is 2.4x \
-                                 quicker but visibly smears fine foliage, and Best is \
+                            // ⚠ The chosen tier's cost leads the hover; it used to be a line of
+                            // 9-pt text beside the combo (`docs/DESIGN.md` §8).
+                            .on_hover_text(format!(
+                                "{}: {}.\n\nRAW only, and separate from the export setting. Sets \
+                                 the demosaic used for the zoomed view. A slower tier costs that \
+                                 much extra on every photo you stop on, not just on export — the \
+                                 full-resolution decode starts on its own. The default is Better: \
+                                 Fast is 2.4x quicker but visibly smears fine foliage, and Best is \
                                  indistinguishable from Better at 4x. Changing this re-decodes the \
                                  open photo.",
-                            );
-                        theme::hint(ui, view_quality_hint(d.tier));
+                                d.tier.label(),
+                                view_quality_hint(d.tier)
+                            ));
                     });
 
                     theme::sub_label(ui, "Preview quality");
@@ -621,15 +633,17 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 }
                             })
                             .response
-                            .on_hover_text(
-                                "How pixels are read when straightening, correcting perspective \
-                                 or applying a lens profile — the only three things that resample. \
-                                 One setting for the preview and the export, so what you judge is \
-                                 what you get. Sharper kernels recover detail a bilinear pass \
-                                 throws away and ring slightly on hard edges; bilinear is the only \
-                                 one that provably cannot, and is what Rustroom used before.",
-                            );
-                        theme::hint(ui, d.resampler.hint());
+                            .on_hover_text(format!(
+                                "{}: {}\n\nHow pixels are read when straightening, correcting \
+                                 perspective or applying a lens profile — the only three things \
+                                 that resample. One setting for the preview and the export, so \
+                                 what you judge is what you get. Sharper kernels recover detail a \
+                                 bilinear pass throws away and ring slightly on hard edges; \
+                                 bilinear is the only one that provably cannot, and is what \
+                                 Rustroom used before.",
+                                d.resampler.label(),
+                                d.resampler.hint()
+                            ));
                     });
 
                     theme::sub_label(ui, "AI subject model");
@@ -730,14 +744,15 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                     // tab holds a switch and nothing else.
                     // ⚠ A switch rather than a tick box: enabling or disabling a whole integration
                     // is a decision, not one preference among many (user's call, 2026-09-24).
-                    theme::hint(
-                        ui,
-                        "Immich is a self-hosted photo server (immich.app). With a server and an API \
-                         key, its albums appear in the Library and exports can upload to it.",
-                    );
+                    // ⚠ What Immich is, and what switching it off does, are the switch's hover
+                    // (`docs/DESIGN.md` §8) — they were a paragraph above it.
                     crate::segmented::switch(ui, &mut d.immich_enabled, "Enable Immich")
                         .on_hover_text(
-                            "When off, Immich disappears from the rest of Rustroom — the left \
+                            "Immich is a self-hosted photo server (immich.app). With a server and \
+                             an API key, its albums appear in the Library and exports can upload \
+                             to it. Photos are downloaded when you open them, and your edits are \
+                             saved beside the downloaded copy — nothing is written back to the \
+                             server.\n\nWhen off, Immich disappears from the rest of Rustroom — the left \
                              panel, the export dialog and the toolbar. Nothing is deleted: photos \
                              you have already downloaded stay under “immich (downloaded)” in \
                              Folders, with their edits and marks, and everything comes back when \
@@ -883,13 +898,6 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         "How much disk Immich thumbnails may use. Separate from the local cache's \
                          budget, so neither can evict the other's entries.",
                     );
-
-                        crate::theme::hint(
-                            ui,
-                            "Albums appear in the Immich section of the left panel. Photos are \
-                         downloaded when you open them, and your edits are saved beside the \
-                         downloaded copy — nothing is written back to the server.",
-                        );
                     }
                 }
             }
