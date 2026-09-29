@@ -407,8 +407,14 @@ mod tests {
         let ctx = test_ui::ctx();
         let a = app(Some(vec![57]));
         let all = labels(&ctx, &a);
-        assert!(all.iter().any(|(l, _)| l == "Holiday"), "albums closed: {all:?}");
-        assert!(!all.iter().any(|(l, _)| l == "2025"), "timeline open: {all:?}");
+        assert!(
+            all.iter().any(|(l, _)| l == "Holiday"),
+            "albums closed: {all:?}"
+        );
+        assert!(
+            !all.iter().any(|(l, _)| l == "2025"),
+            "timeline open: {all:?}"
+        );
         test_ui::click(&ctx, "Timeline", |ui| {
             let _ = body(&a, ui);
         });
