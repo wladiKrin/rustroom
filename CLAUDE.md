@@ -102,7 +102,7 @@ opensource_lightroom/
 │   ├── xmp/                  # ✅ stem.xmp read / merge-write: rating, label, keywords, title/caption/rights/creator (M6.3 + M6.2); zero GUI, zero catalog
 │   ├── immich/               # ✅ Immich client (zero GUI, `ureq`): search/buckets/album/stacks/**upload** (+ `multipart.rs`, hand-rolled — ureq has none), `Asset`/`AlbumSummary`/`Bucket`/`Upload`. ⚠ DTOs deliberately narrow; nullable-vs-required audited against a *captured* reply
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
-│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is **1,147 total but only 78 of code** (2026-09-24; it said 681, then 1,116 — **measure by code, do not quote either number**); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. ⚠⚠ **THE MODULE LIST THAT USED TO SIT HERE IS GONE ON PURPOSE.** It enumerated ~50 of the **152 `.rs` files** under `crates/app/src` and had silently gone half-stale — it was missing `multi/{compare,survey,pane}`, `menu`, `menu_bar`, `native_menu`, `commands`, `tone_curve_tool`, `brush_tool`, `mask_tool`, `looks`, `marks` and ~40 more, which is worse than no list because this one is the *placement guide*. **`ls crates/app/src/` is the inventory; what belongs here is the RULE:** `lib.rs` declares **73** modules and **not one of them uses egui** — verify with `grep -lE '^\s*use .*egui|egui::' $(...)`, which returns empty — while `main.rs` declares **33** bin modules and egui lives only there. Logic goes in the lib, widgets in the bin.
+│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is **1,147 total but only 78 of code** (2026-09-24; it said 681, then 1,116 — **measure by code, do not quote either number**); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. ⚠⚠ **THE MODULE LIST THAT USED TO SIT HERE IS GONE ON PURPOSE.** It enumerated ~50 of the **152 `.rs` files** under `crates/app/src` and had silently gone half-stale — it was missing `multi/{compare,survey,pane}`, `menu`, `menu_bar`, `native_menu`, `commands`, `tone_curve_tool`, `brush_tool`, `mask_tool`, `looks`, `marks` and ~40 more, which is worse than no list because this one is the *placement guide*. **`ls crates/app/src/` is the inventory; what belongs here is the RULE:** `lib.rs` declares **97** modules and **not one of them uses egui** (2026-09-29: six mention `egui::`, all in comments) while `main.rs` declares **41** bin modules and egui lives only there. ⚠ Re-measure, never requote — it said 73 and 33 for weeks: count with `grep -c '^pub mod [a-z_0-9]*;' crates/app/src/lib.rs` (BSD `grep -E` has no `\s`, and zsh does not word-split a `$files` list — pipe it through `xargs`). Logic goes in the lib, widgets in the bin.
 │   └── catalog/              # ✅ scan_folder → RAW+JPEG/PNG/TIFF entries (+ mtime); SortOrder/sort (name/modified/edited, case-insensitive, name tie-break); is_raw/is_supported (in-memory; SQLite DAM later) + Description per file (v7, M6.2)
 │   ⚠⚠ THE TREE ABOVE LISTS 12 OF 15 CRATES — it omits `gpu-pipeline`, `lens-profile` and `camera-profile`, and did so while also claiming to omit `immich`, which it lists. **`ls crates/` is the answer; this tree is a sketch.**
 ├── docs/
@@ -173,7 +173,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-28)
 
-**3250 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
+**3266 tests**, **82 goldens**, gate green on `mask-reorder` (3250 on `main`). ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -225,10 +225,19 @@ Previews** (P-20) merged 2026-09-29, confirmed by use — in the table above.
 ✅ **The design language** (`docs/DESIGN.md`, direction B) — merged 2026-09-29, confirmed by use:
 tokens, four text sizes, section cards, the status row, one scoped hover sentence per control, seven
 accents, and four rounds of the author's fixes. `grep -n 'design language' docs/JOURNAL.md`.
-✅ **Phase 9 is complete** (M9.13 merged 2026-09-28). Next is **Phase 10** (was 9), integration and
-release: M10.2
-Windows + the Linux GUI (never run), M10.3 contributor docs, M10.4 `v0.1`, M10.5 plugins. ⛔ **M10.1 was
-WITHDRAWN — it was never real** (the licence has been committed since `e71330d`); do not re-open it.
+✅ **Phase 9 is complete** (M9.13 merged 2026-09-28).
+⚠⚠ **THE AGREED ORDER (the author, 2026-09-29): every other open item first, CHRONOLOGICALLY by when
+it was recorded — Phase 10 LAST.** Do not propose Phase 10 before the queue is empty.
+1. 🟡 **Reordering masks and a mask's components** — built on branch `mask-reorder`, gate green,
+   waiting for the author's try (`grep -n 'Reordering masks' docs/JOURNAL.md`).
+2. ⬜ **Next: sweep the open items into one dated queue** and let the author prune it — `docs/BACKLOG.md`
+   has stale entries (it still lists an on-disk thumbnail cache and subfolders as missing; M8.2 and
+   M9.9 built them) and "deliberately not scheduled" ones whose status is the author's call. The oldest open
+   non-Phase-10 item is **film negative inversion (recorded 2026-08-26)**.
+
+Phase 10 when the queue is done: M10.2 Windows + the Linux GUI (never run), M10.3 contributor docs,
+M10.4 `v0.1`, M10.5 plugins. ⛔ **M10.1 was WITHDRAWN — it was never real** (the licence has been
+committed since `e71330d`); do not re-open it.
 ⚠ M5.1c and M6.4c keep their own ids; Phase 9's new items start at M9.6 because M9.1–M9.5 are retired.
 
 **How the author works** (and has every milestone this session): brainstorm → spec → plan → execute

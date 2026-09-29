@@ -29,7 +29,7 @@ still carries the reasoning that matters — read the entry, then build it under
 | EXIF/IPTC metadata editing | ✅ **M6.2, 2026-09-08** — edited in the catalog, embedded at export, in the sidecar |
 | Export filename templating · output/print sharpening | ✅ **M6.1a** / ✅ **M6.1d**, both 2026-09-01 |
 | Mask intersection and subtraction | ✅ **M7.1c, 2026-09-10** — confirmed by use; Add / Subtract / Intersect between masks, and **M7.1 is complete** |
-| Reorder a mask's components | ⬜ **wanted (user's call, 2026-09-10)** — order is observable, and the list is append-only today |
+| Reorder a mask's components | ✅ **2026-09-29, widened to the masks themselves** — drag a row; the top component must add; `grep -n 'Reordering masks' docs/JOURNAL.md` |
 | A better interpolator for the geometric stages | ✅ **M7.3a, 2026-09-01** — a `Settings` choice defaulting to Catmull-Rom, both samplers |
 | Fuse perspective into `GeometryStage` | ✅ **M7.3b, 2026-09-25** — one gather; acutance 0.00700 → 0.00823; prefix reordered (journal) |
 | Automatic vertical detection (Hough) | ✅ **M7.4, 2026-09-04** — reshaped into `Auto` / `Refine guides` |
@@ -357,7 +357,8 @@ above. Only *anchoring* wants the forward map.
   paint step and `Subtract` is its `erase`, and the raster calls `MaskOp::combine` now, so the two
   cannot drift. `min`/`max` were rejected because they agree with those rules only at 0 and 1.
 
-- **Reorder a mask's components** (recorded 2026-09-10, **wanted** — user's call: *"the reordering
+- ✅ **BUILT 2026-09-29, masks included** (`mask_order`; `grep -n 'Reordering masks' docs/JOURNAL.md`). The
+  original entry: **Reorder a mask's components** (recorded 2026-09-10, **wanted** — user's call: *"the reordering
   is something we should do at some point"*). Components are **append-only, delete-any** today, and
   **order is observable**: the fold runs left to right, so subtract-then-intersect is not
   intersect-then-subtract. ⚠ The gesture is already solved — `panel_order::{drop_index, moved}` is

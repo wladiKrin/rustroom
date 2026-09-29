@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [Reordering masks and a mask's components (2026-09-29)](#2026-09-29--reordering-masks-and-a-masks-components-branch-mask-reorder)
 - [The design language: three directions, B chosen, and built (2026-09-29)](#2026-09-29--the-design-language-three-directions-b-chosen-and-built-branch-design-language-merged-2026-09-29)
 - [M9.14 Previews: instant 1:1 in Develop, Compare and Survey (2026-09-29)](#2026-09-29--m914-previews-instant-11-in-develop-compare-and-survey-branch-m914-previews-merged-2026-09-29)
 - [The resident final checkpoint: the tail's input stays on the GPU (2026-09-26)](#2026-09-26--the-resident-final-checkpoint-the-tails-input-stays-on-the-gpu-branch-resident-final)
@@ -159,6 +160,59 @@ goldens unmoved.
 - ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
+
+### 2026-09-29 — Reordering masks and a mask's components (branch `mask-reorder`)
+
+**Input:** the backlog's *"Reorder a mask's components"* (recorded 2026-09-10, the author's *"the
+reordering is something we should do at some point"*) — the first item of the agreed order: every
+open item chronologically, Phase 10 last. Spec `2026-09-29-mask-reorder-design.md`, plan
+`2026-09-29-mask-reorder.md`.
+
+**Widened in brainstorm, the author's two calls.** (1) **Masks too, not only components** — the tail
+builds one `MaskStage` per mask in list order (`pipeline/src/lib.rs`), so mask order is as observable
+as component order and was just as append-only. (2) **Any row may move anywhere, the base included,
+as long as the row that ends on top is an Add.** The base is an Add onto nothing, so exchanging it
+with an Add refinement is exact; a Subtract or Intersect on top would fold onto zero and leave
+nothing, so that slot is simply never offered — nothing is reinterpreted, and every order that
+changes the picture stays reachable. (Rejected: dropping the op of whatever lands on top, which turns
+a hole into the shape; and a fixed base, which cannot reach *(Brush − Radial) ∪ Gradient*.)
+
+**Built.** Lib `mask_order` (no egui): `component_drop_allowed`, `move_component`, `move_mask` and
+`index_after_move`, the moves updating their own selection so the bin cannot apply one and forget the
+other; `panel_order::moved` generic over one in-place rule (`move_in_place`), so a mask drop does not
+clone every stroke list. Bin: `mask_components::row` senses drag where `RowSpec::reorder` gives it a
+hover; `masks::list` and `mask_components::rows` paint the Library's 2-pt accent line and apply the
+drop on release — one `Edited::discrete`, none for a drop where the row started. The eye
+(`mask_shown`) moves with its mask. Names stay positional ("Radial 2" moved up reads "Radial 1").
+**3250 → 3266 tests**, goldens unmoved; `edit-model`, the sidecar, the pipeline and the GPU untouched
+(the brush coverage cache is keyed on content with no component index, so a move cannot hit stale).
+
+**Worth keeping:**
+
+- ⚠ **Drop slots by the rows' MIDPOINTS, not their tops** — a refinement made while planning. The
+  Library's past-the-top rule suits tall section headers; on a 30-pt row, dragging onto the centre
+  of the row above lands where the row started and nothing happens.
+- ⚠⚠ **The hover sweep was blind to every wrapped constant.** Its patterns were `"HINT: &str = "`
+  *with a trailing space*, so any constant long enough for rustfmt to move its literal to the next
+  line — i.e. exactly the long ones — was never read: **seven** existing constants (the DNG and
+  profile notes, which `DESIGN.md` names as swept, among them) and both new row hovers. Found because
+  the plan's full-stop sabotage on `MASK_ROW_HOVER` **stayed green**. Fixed by dropping the space (the
+  reader already skips whitespace before the quote); the widened sweep then flagged one constant,
+  `EMPTY_LIBRARY_HINT` — empty-state prose (§7.14), not a hover — so both empty-state texts became
+  `*_TEXT`. ⚠ That text is **two sentences** where §7.14 says one; left for the author.
+- ⚠ A "nothing changed" panel test also passes when the drag went nowhere, so each has a twin aimed at
+  the same point that must change something (`a_subtract_is_never_dropped_on_top` ↔
+  `an_add_dropped_on_top_becomes_the_base`). The harness reaches component slot 0 through the **mask**
+  row's lower half: "Gradient" names both the base component row and the kind button.
+- Sabotage-checked: the top-row rule (lib and panel), the selection following (lib and panel), the eye
+  flags (lib and panel), the hover. Skipping the panel's own `offered` guard stays green by design —
+  `move_component` refuses too.
+- ⚠ **Accepted cost:** undoing a mask reorder restores the order, not the eyes (view state outside the
+  edits) — the same as undoing a mask delete already was.
+- ⚠ **CLAUDE.md's module counts were stale:** `lib.rs` declares **97** modules (it said 73) and
+  `main.rs` **41** (it said 33). The no-egui claim holds — six lib files mention `egui::`, all in
+  comments. ⚠ Measuring it tripped twice: BSD `grep -E` has no `\s`, and zsh does not word-split
+  `$files`; the count that worked is `grep -c '^pub mod [a-z_0-9]*;'`.
 
 ### 2026-09-29 — The design language: three directions, B chosen, and built (branch `design-language`, merged 2026-09-29)
 
