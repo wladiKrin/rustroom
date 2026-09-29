@@ -51,6 +51,8 @@ pub struct SettingsDraft {
     immich_upload_key: String,
     thumb_budget_mb: u32,
     immich_thumb_budget_mb: u32,
+    preview_demosaic: Option<raw_decode::Demosaic>,
+    preview_budget_mb: u32,
 }
 
 /// Which formats take part in stacking, as chips.
@@ -111,6 +113,8 @@ impl SettingsDraft {
             immich_upload_key: s.immich_upload_key.clone(),
             thumb_budget_mb: s.thumb_budget_mb,
             immich_thumb_budget_mb: s.immich_thumb_budget_mb,
+            preview_demosaic: s.preview_demosaic,
+            preview_budget_mb: s.preview_budget_mb,
         }
     }
 
@@ -222,6 +226,14 @@ impl SettingsDraft {
         }
         if self.immich_thumb_budget_mb != app.settings.immich_thumb_budget_mb {
             app.settings.immich_thumb_budget_mb = self.immich_thumb_budget_mb;
+            plain = true;
+        }
+        if self.preview_demosaic != app.settings.preview_demosaic {
+            app.settings.preview_demosaic = self.preview_demosaic;
+            plain = true;
+        }
+        if self.preview_budget_mb != app.settings.preview_budget_mb {
+            app.settings.preview_budget_mb = self.preview_budget_mb;
             plain = true;
         }
         if self.ai_subject != app.settings.ai_subject_model {
@@ -477,6 +489,68 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             );
                         theme::hint(ui, view_quality_hint(d.tier));
                     });
+
+                    theme::sub_label(ui, "Preview quality");
+                    ui.horizontal(|ui| {
+                        let label = |t: Option<raw_decode::Demosaic>| match t {
+                            None => "Same as 1:1 view".to_string(),
+                            Some(t) => t.label().to_string(),
+                        };
+                        egui::ComboBox::from_id_salt("preview_demosaic_pick")
+                            .selected_text(label(d.preview_demosaic))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut d.preview_demosaic, None, label(None));
+                                for t in raw_decode::Demosaic::ALL {
+                                    ui.selectable_value(
+                                        &mut d.preview_demosaic,
+                                        Some(t),
+                                        t.label(),
+                                    );
+                                }
+                            })
+                            .response
+                            .on_hover_text(
+                                "The demosaic tier for the previews Rustroom renders of edited \
+                                 photos — built when you leave a photo, or on demand from \
+                                 Library → Build previews. Same as 1:1 view means a preview shows \
+                                 exactly what Develop will. Lower it to build faster: on an X-T4 a \
+                                 frame takes about 16 s at Better, 7 s at Fast and 3 s at Fastest. \
+                                 Untouched photos never build anything — they show the camera's \
+                                 own JPEG.",
+                            );
+                    });
+
+                    theme::sub_label(ui, "Preview cache");
+                    ui.horizontal(|ui| {
+                        let store = rustroom_app::preview_store::PreviewStore::user_default(
+                            d.preview_budget_mb as u64 * 1024 * 1024,
+                        );
+                        let bytes = *app
+                            .preview_cache_bytes
+                            .get_or_insert_with(|| store.size_bytes());
+                        ui.label(format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0));
+                        if ui
+                            .button("Clear")
+                            .on_hover_text(
+                                "Rendered previews of edited photos. Each is rebuilt when its \
+                                 photo is next left or asked for. Takes effect at once, not on \
+                                 Apply.",
+                            )
+                            .clicked()
+                        {
+                            store.clear();
+                            app.preview_cache_bytes = Some(0);
+                        }
+                    });
+                    ui.add(
+                        egui::Slider::new(&mut d.preview_budget_mb, 1024..=102400)
+                            .step_by(1024.0)
+                            .text("MB budget"),
+                    )
+                    .on_hover_text(
+                        "How much disk rendered previews may use — about 6 to 10 MB each. The \
+                         least recently seen are deleted when it is exceeded.",
+                    );
 
                     theme::sub_label(ui, "Rendering");
                     ui.checkbox(&mut d.gpu_tail, "Use the GPU").on_hover_text(

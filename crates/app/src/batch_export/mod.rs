@@ -30,4 +30,4 @@ pub use render::*;
 pub use worker::*;
 
 #[cfg(test)]
-mod fixtures;
+pub(crate) mod fixtures;

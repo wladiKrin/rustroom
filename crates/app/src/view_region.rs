@@ -83,9 +83,19 @@ pub fn zoom_anchor_shift(
 /// The ladder falls out of the buffer rather than being enumerated, so a half-size buffer
 /// yields two rungs and a full-resolution one yields three, on any sensor, with nothing to
 /// extend when the buffer is upgraded underneath it.
+/// The long edge, in pixels, the frame occupies on screen at `fit × zoom`: what the canvas
+/// *needs*, before the ladder clamps it to what the buffer *has*.
+///
+/// ⚠ M9.14's stand-in rule reads this, not [`tier_max_dim`]: the rung is capped at the buffer's
+/// long edge, so "the rung exceeds the buffer" can never be true and a rule on it never fires —
+/// `a_preview_stands_in_only_where_the_buffer_falls_short` found exactly that.
+pub fn needed_long(fit_long: usize, fit: f32, zoom: f32) -> usize {
+    (fit * zoom * fit_long.max(1) as f32).ceil().max(1.0) as usize
+}
+
 pub fn tier_max_dim(fit_long: usize, buffer_long: usize, fit: f32, zoom: f32) -> usize {
     let fit_long = fit_long.max(1);
-    let needed = (fit * zoom * fit_long as f32).ceil().max(1.0) as usize;
+    let needed = needed_long(fit_long, fit, zoom);
     let mut rung = fit_long;
     while rung < needed && rung < buffer_long {
         rung = (rung * 2).min(buffer_long);
@@ -253,6 +263,21 @@ pub fn contains(outer: RegionRect, inner: RegionRect) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M9.14: what the canvas needs is not clamped to the buffer, so the stand-in rule can see
+    /// a zoom the buffer cannot supply; the rung, by contrast, never exceeds the buffer.
+    #[test]
+    fn needed_long_is_the_screen_size_and_the_rung_is_capped_by_the_buffer() {
+        assert_eq!(needed_long(1600, 0.5, 1.0), 800);
+        assert_eq!(needed_long(1600, 0.5, 8.0), 6400);
+        assert_eq!(
+            tier_max_dim(1600, 3120, 0.5, 8.0),
+            3120,
+            "the rung stops at the buffer"
+        );
+        assert!(needed_long(1600, 0.5, 8.0) > 3120, "the need does not");
+        assert_eq!(needed_long(0, 0.0, 0.0), 1, "never zero");
+    }
 
     #[test]
     fn the_ladder_doubles_from_fit_to_the_buffer() {

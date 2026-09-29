@@ -64,7 +64,7 @@ pub fn buffer(w: usize, h: usize) -> std::sync::Arc<core_image::ImageBuf> {
     std::sync::Arc::new(b)
 }
 
-fn texture(ctx: &egui::Context, name: &str, w: usize, h: usize) -> egui::TextureHandle {
+pub fn texture(ctx: &egui::Context, name: &str, w: usize, h: usize) -> egui::TextureHandle {
     let img = egui::ColorImage::new([w, h], vec![egui::Color32::GRAY; w * h]);
     ctx.load_texture(name, img, egui::TextureOptions::default())
 }
@@ -138,6 +138,23 @@ pub fn for_test() -> RustroomApp {
         full_decoder: DecodeWorker::new(stub, 1, || {}),
         full_pending: None,
         cache: BufferCache::new(BUFFER_CACHE_CAP),
+        ghost_store: rustroom_app::thumb_store::ThumbStore::new(dir.0.join("thumbs"), u64::MAX),
+        previews: rustroom_app::preview_loader::PreviewLoader::with_loader(
+            std::sync::Arc::new(|_: &rustroom_app::preview_loader::PreviewRequest| None),
+            color::OutputSpace::Srgb,
+            8192,
+            || {},
+        ),
+        preview_textures: rustroom_app::thumb_cache::ThumbCache::new(crate::PREVIEW_TEXTURE_BUDGET),
+        preview_store: rustroom_app::preview_store::PreviewStore::new(
+            dir.0.join("previews"),
+            u64::MAX,
+        ),
+        preview_want: Vec::new(),
+        preview_misses: Default::default(),
+        leave_queue: Default::default(),
+        preview_builder: None,
+        preview_progress: String::new(),
         histories: HistoryStash::default(),
         status: String::new(),
         show_filmstrip: false,
@@ -198,6 +215,7 @@ pub fn for_test() -> RustroomApp {
         modal: Modal::None,
         thumb_cache_bytes: None,
         immich_thumb_cache_bytes: None,
+        preview_cache_bytes: None,
         settings_draft: None,
         actions: ActionLog::default(),
         // ⚠ Empty, and deliberately not pointed at the real looks directory: a test that found
@@ -237,6 +255,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         engine,
         edits: Edits::default(),
         texture: Some(texture(ctx, "frame", w, h)),
+        stale: None,
         baseline: texture(ctx, "baseline", w, h),
         hist: [[0; 256]; 3],
         make_model: "Test Camera".to_string(),
@@ -274,6 +293,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         buffer_long: w.max(h),
         full_long: w.max(h),
         buffer_is_full_res: true,
+        buffer_is_ghost: false,
         opened_at: std::time::Instant::now(),
         // ⚠ The fit cap, as a real session starts. `render_max_dim` returns this now, so a
         // zero here would make every panel-driven render ask for nothing.

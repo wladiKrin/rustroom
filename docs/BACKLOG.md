@@ -71,7 +71,7 @@ deleted when their fix pass merged (`grep -n 'First-use review fixes' docs/JOURN
 small shipped; these are the items that are a milestone each, kept here with the numbers the
 reviews measured so the deletion loses nothing. Ids are the professional review's.
 
-- **P-20 · No pre-rendered full-size previews — SCHEDULED, the author's pick at the merge.** A RAW
+- **P-20 · No pre-rendered full-size previews — ✅ M9.14, merged 2026-09-29, confirmed by use.** ⚠ The 7.4 s below is the three-parallel per-frame figure; a single Better decode is 16 s (`grep -n 'M9.14' docs/JOURNAL.md`). The folder-wide build was declined on that cost; the camera's embedded JPEG is the free 1:1 instead. The original entry: A RAW
   opens editable at half size in ~1 s; true 1:1 waits for the full decode, which costs **1.3 s
   (Fastest) · 3.0 s (Fast) · 7.4 s (Better, the default)** on X-T4 frames
   (`specs/2026-09-10-demosaic-decision.md`), and the session saw "Full resolution ready" ~11 s after

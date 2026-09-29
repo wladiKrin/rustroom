@@ -98,6 +98,13 @@ pub fn extract_thumbnail(path: &Path) -> Result<Thumbnail, DecodeError> {
     backend_rsraw::extract_thumbnail(&bytes)
 }
 
+/// The largest JPEG the camera embedded, at its own size and oriented like the thumbnail —
+/// M9.14's camera preview. 4416×2944 on an X-T4, 71% of the RAW's 6240 px on each axis.
+pub fn extract_preview(path: &Path) -> Result<Thumbnail, DecodeError> {
+    let bytes = std::fs::read(path)?;
+    backend_rsraw::extract_preview(&bytes)
+}
+
 /// The capture facts and the embedded thumbnail from **one** read of the file (M9.12's import
 /// survey). ⚠ Reading dominates both — ~11–15 ms for a 29 MB RAF from an SSD, far more from a
 /// card — so calling [`read_capture`] then [`extract_thumbnail`] would read every RAW twice.
@@ -298,6 +305,31 @@ pub fn decode_raw(path: &Path, opts: &DecodeOptions) -> Result<DecodedRaw, Decod
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_embedded_preview_is_larger_than_the_thumbnail_and_oriented_the_same_way() {
+        // ⚠ Gated on the fixture, so it skips without it — a green run does not mean this ran.
+        let Ok(path) = std::env::var("RAW_FIXTURE") else {
+            return;
+        };
+        let p = std::path::Path::new(&path);
+        let thumb = extract_thumbnail(p).expect("thumbnail");
+        let preview = extract_preview(p).expect("preview");
+        assert!(
+            preview.width > thumb.width && preview.height > thumb.height,
+            "the preview is not larger than the thumbnail: {}x{} vs {}x{}",
+            preview.width,
+            preview.height,
+            thumb.width,
+            thumb.height
+        );
+        assert_eq!(
+            preview.width > preview.height,
+            thumb.width > thumb.height,
+            "the two disagree about the orientation"
+        );
+        assert_eq!(preview.rgba.len(), preview.width * preview.height * 4);
+    }
 
     #[test]
     fn source_scale_reflects_half_size_decoding() {

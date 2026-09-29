@@ -152,14 +152,27 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
         .min_size(300.0)
         .frame(theme::panel_frame(ui.style()))
         .show(ui, |ui| {
-            if app.pending.is_some() {
+            // ⚠ A ghost session (`ghost.rs`) is the pending photo's own, and its sliders work
+            // on the 512-px buffer until the decode lands. Only a pending photo with **no**
+            // session yet leaves the previous session behind it, and then the panel is inert —
+            // but **not faded** (the author's call, 2026-09-29): a greyed panel reads as
+            // "nothing loaded yet".
+            let ghost_covers = app
+                .session
+                .as_ref()
+                .zip(app.pending.as_ref())
+                .is_some_and(|(s, p)| s.path == p.id.path && s.copy == p.id.copy);
+            if app.pending.is_some() && !ghost_covers {
                 ui.disable();
+                ui.set_opacity(1.0);
             }
             // ⚠⚠ **Before the scroll area, and that ordering is the whole feature.** egui
             // allocates in call order, so the strip takes its height from the panel's bottom
             // edge and the scroll area gets what is left — which is what pins the strip while
             // forty sliders scroll behind it. Moved after, it would scroll away with them.
-            if app.pending.is_none() {
+            {
+                // ⚠ Drawn while pending too, inert like the sliders — the strip vanishing and
+                // returning was half of what made an open look slow.
                 let ctx = ui.ctx().clone();
                 photo_edited |= snapshots::show(app, ui, &ctx);
             }

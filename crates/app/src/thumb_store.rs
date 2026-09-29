@@ -21,7 +21,7 @@
 ///
 /// Five lines and stable by definition, which beats a dependency — the argument that already
 /// kept CRC-32 hand-rolled here.
-fn fnv1a(bytes: &[u8]) -> u64 {
+pub(crate) fn fnv1a(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in bytes {
         h ^= *b as u64;
@@ -99,7 +99,7 @@ impl Identity {
 
     /// The bytes the filename hash is taken over. Kept separate from [`Self::file_name`] so a test
     /// can reason about the input without reproducing the hash.
-    fn key_bytes(&self) -> Vec<u8> {
+    pub(crate) fn key_bytes(&self) -> Vec<u8> {
         let mut v = Vec::new();
         match self {
             // ⚠⚠ **BYTE-IDENTICAL to the pre-enum version, and it must stay that way.** Any change

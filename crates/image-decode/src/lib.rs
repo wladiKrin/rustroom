@@ -93,6 +93,30 @@ pub fn thumbnail(path: &Path) -> Result<Thumbnail, ImageDecodeError> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_preview_is_the_whole_picture() {
+        let dir = std::env::temp_dir().join(format!("rustroom_preview_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("p.png");
+        let img = image::RgbaImage::from_fn(30, 20, |x, _| {
+            if x < 15 {
+                image::Rgba([255, 0, 0, 255])
+            } else {
+                image::Rgba([0, 0, 255, 255])
+            }
+        });
+        img.save(&path).unwrap();
+        let p = preview(&path).expect("preview");
+        assert_eq!((p.width, p.height), (30, 20));
+        assert_eq!(&p.rgba[0..4], &[255, 0, 0, 255], "the first pixel is red");
+        assert_eq!(
+            &p.rgba[(20 * 4)..(20 * 4 + 4)],
+            &[0, 0, 255, 255],
+            "pixel 20 is blue"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A path no other test will pick.
     ///
     /// ⚠ Uniqueness is **structural** — process id plus a monotonic counter — not taken from
@@ -307,6 +331,16 @@ mod tests {
         assert_eq!(first_parsable_date(&[]), None);
         assert_eq!(first_parsable_date(&[None, None]), None);
     }
+}
+
+/// The whole picture at full size, oriented — a JPEG/PNG/TIFF is its own preview (M9.14).
+pub fn preview(path: &Path) -> Result<Thumbnail, ImageDecodeError> {
+    let img = open_oriented(path)?.to_rgba8();
+    Ok(Thumbnail {
+        width: img.width() as usize,
+        height: img.height() as usize,
+        rgba: img.into_raw(),
+    })
 }
 
 /// Read an image file's EXIF, if it has any.

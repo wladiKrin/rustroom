@@ -589,9 +589,21 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // cannot both happen from one gesture.
         bg_clicked = bg.clicked();
 
+        // The cell's geometry: a fixed 3:2 picture box and a height that is exactly the box,
+        // the caption and the marks row — `cell_layout::grid_cell`'s rule.
+        let layout = {
+            let spacing_y = ui.spacing().item_spacing.y;
+            let caption_h = ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(name_size)));
+            rustroom_app::cell_layout::grid_cell(
+                cell,
+                caption_h,
+                thumb::marks_row_height(name_size * MARK_SCALE),
+                spacing_y,
+            )
+        };
         // ⚠ `show_rows` adds `item_spacing.y` itself, so the height passed is the bare cell —
         // and the *pitch* the centring works in is therefore the cell plus that gap.
-        let pitch = cell + ui.spacing().item_spacing.y;
+        let pitch = layout.height + ui.spacing().item_spacing.y;
         let viewport_h = ui.available_height();
         let mut area = egui::ScrollArea::vertical()
             // ⚠ The scrollbar belongs at the window's right edge, not hugging the rightmost
@@ -633,7 +645,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         } else {
             Vec::new()
         };
-        let drawn = area.show_rows(ui, cell, rows, |ui, row_range| {
+        let drawn = area.show_rows(ui, layout.height, rows, |ui, row_range| {
             for row in row_range.clone() {
                 ui.horizontal(|ui| {
                     for pos in cells_in_row(row, cols, visible.len()) {
@@ -650,14 +662,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         // borrow of `lib.entries` in the argument would conflict with it.
                         let cell_id = lib.entries[i].id.clone();
                         ui.push_id(&cell_id, |ui| {
-                            let box_size = egui::vec2(cell - 12.0, (cell - 12.0) * 0.66);
+                            // The picture gets the cell's height minus the caption and the
+                            // marks row — `cell_layout::thumb_box`'s rule.
+                            let box_size = egui::vec2(layout.box_w, layout.box_h);
+                            let cell_size = egui::vec2(cell, layout.height);
                             let resp = ui
-                                .allocate_ui(egui::vec2(cell, cell), |ui| {
+                                .allocate_ui(cell_size, |ui| {
                                     // Pin the cell to its full size. Without this
                                     // `allocate_ui` reports only the space the content used,
                                     // so cells varied with their thumbnail — the filmstrip's
                                     // reflow bug in its grid form.
-                                    ui.set_min_size(egui::vec2(cell, cell));
+                                    ui.set_min_size(cell_size);
                                     ui.vertical_centered(|ui| {
                                         let marks = lib
                                             .marks
@@ -679,8 +694,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                 }),
                                             lib.entries[i].badge().as_deref(),
                                             marks,
-                                            false,
-                                            downloaded.get(i).copied().unwrap_or(false),
+                                            thumb::CellStyle {
+                                                overlay_marks: false,
+                                                downloaded: downloaded
+                                                    .get(i)
+                                                    .copied()
+                                                    .unwrap_or(false),
+                                                sit_on_bottom: true,
+                                            },
                                         );
                                         let e = &lib.entries[i];
                                         // ⚠⚠ Drawn **here** rather than inside `cell_with`, and for

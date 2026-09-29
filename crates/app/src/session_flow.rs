@@ -416,7 +416,17 @@ impl RustroomApp {
                 return;
             }
         }
+        // M9.14: the photo being left — if edited and without a preview, it is built behind you.
+        let leaving = self
+            .session
+            .as_ref()
+            .map(|s| (PhotoId::new(s.path.clone(), s.copy), s.edits.clone()));
         self.persist_current_session();
+        if let Some((left, edits)) = leaving {
+            if left != id {
+                self.queue_leave_build(left, edits);
+            }
+        }
 
         // ⚠ The cache is keyed by **path**, so opening a copy of an already-decoded file is a
         // hit — which is exactly M3.4's "no storage cost".
@@ -426,6 +436,22 @@ impl RustroomApp {
             return;
         }
 
+        // 2026-09-29: a **ghost session** at the click — the cached 512-px preview as the
+        // editing buffer, so the panel, the histogram, the guides and the zoom keys exist now
+        // rather than ~1.5 s later when the half decode lands and replaces the buffer
+        // (`adopt_decoded`). Nothing is cached from it; a miss simply waits as before.
+        let ghost = rustroom_app::thumb_store::Identity::of(&id.path)
+            .and_then(|ident| self.ghost_store.get(&ident));
+        if let Some(thumb) = ghost {
+            let decoded = rustroom_app::ghost::ghost_decoded(&thumb, PREVIEW_MAX_DIM);
+            self.finalize_session_with_view(ctx, id.clone(), decoded, (1.0, egui::Vec2::ZERO));
+            if let Some(s) = self.session.as_mut() {
+                s.buffer_is_ghost = true;
+                // ⚠ Whatever the format: a JPEG file's ghost is 512 px, not the file.
+                s.buffer_is_full_res = false;
+            }
+        }
+
         let placeholder = self.thumbnail_for(&id);
         let path = id.path.clone();
         let name = path
@@ -433,11 +459,25 @@ impl RustroomApp {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         self.status = format!("Decoding {name}…");
+        if std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some() {
+            eprintln!("open  {:8.1} ms  pending {name}", crate::debug_ms());
+        }
+        // ⚠ The sidecar's edits through the same defaults a session gets, so the request's
+        // untouched flag agrees with what `finalize_session` will hold a second later.
+        let preview_request = self.preview_request(
+            id.clone(),
+            self.settings
+                .initial_edits(sidecar::load_copy(&id.path, id.copy)),
+        );
         self.pending = Some(PendingOpen {
             id,
             placeholder,
             start_at: Instant::now() + DECODE_DEBOUNCE,
             seq: None,
+            preview_request,
+            zoom: 1.0,
+            pan: egui::Vec2::ZERO,
+            fit_long: 0.0,
         });
     }
 
@@ -507,10 +547,23 @@ impl RustroomApp {
         id: PhotoId,
         decoded: Arc<Decoded>,
     ) {
+        self.finalize_session_with_view(ctx, id, decoded, (1.0, egui::Vec2::ZERO));
+    }
+
+    /// `finalize_session` with the view the pending preview was left at — the zoom and pan the
+    /// user made while the decode ran carry over, so the picture does not jump back to fit.
+    pub(crate) fn finalize_session_with_view(
+        &mut self,
+        ctx: &egui::Context,
+        id: PhotoId,
+        decoded: Arc<Decoded>,
+        view: (f32, egui::Vec2),
+    ) {
         let path = id.path.clone();
         // ⚠ The only place `self.session` is ever assigned, and so the only choke point the
         // stash needs: the outgoing history is put away here whether the switch came from a
         // cache hit or from a finished background decode.
+        let stale = self.session.as_ref().and_then(|old| old.texture.clone());
         if let Some(old) = self.session.take() {
             let old_id = PhotoId::new(old.path, old.copy);
             // ⚠ Persisted at the same choke point it is stashed at (M9.7), so the catalog and the
@@ -652,6 +705,7 @@ impl RustroomApp {
             engine,
             edits,
             texture: None,
+            stale,
             baseline,
             hist: [[0; 256]; 3],
             make_model: decoded.label.clone(),
@@ -661,9 +715,9 @@ impl RustroomApp {
             buffer: decoded.buffer.clone(),
             picking_wb: false,
             picking_fringe: false,
-            zoom: 1.0,
+            zoom: view.0,
             fit_scale: 1.0,
-            pan: egui::Vec2::ZERO,
+            pan: view.1,
             history,
             show_before: false,
             active_handle: None,
@@ -696,12 +750,16 @@ impl RustroomApp {
             buffer_long,
             full_long,
             buffer_is_full_res,
+            buffer_is_ghost: false,
             opened_at: Instant::now(),
             // ⚠ `fit_cap`, not `PREVIEW_MAX_DIM`: they differ for an image smaller than the
             // cap, and this value is now what every panel-driven render asks for.
             render_rung: view_region::fit_cap(buffer_long, PREVIEW_MAX_DIM),
         });
         self.status.clear();
+        if std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some() {
+            eprintln!("open  {:8.1} ms  session ready", crate::debug_ms());
+        }
     }
 
     /// Per-frame: start the full-resolution decode once the session has settled.
@@ -714,7 +772,9 @@ impl RustroomApp {
         let Some(s) = self.session.as_ref() else {
             return;
         };
-        if !catalog::is_raw(&s.path) || s.buffer_is_full_res || in_flight {
+        // ⚠ A ghost waits for its half decode first: two RAW decodes of one file at once would
+        // only slow the one the user is waiting on.
+        if !catalog::is_raw(&s.path) || s.buffer_is_full_res || s.buffer_is_ghost || in_flight {
             return;
         }
         let age = s.opened_at.elapsed();
@@ -730,7 +790,6 @@ impl RustroomApp {
 
     /// Per-frame: absorb a finished full-resolution decode into the live session.
     pub(crate) fn pump_full_res(&mut self, ctx: &egui::Context) {
-        let tool = self.tool;
         for res in self.full_decoder.poll() {
             let is_current = self.full_pending.as_ref().map(|(_, seq)| *seq) == Some(res.seq);
             if is_current {
@@ -738,84 +797,95 @@ impl RustroomApp {
             }
             // A result for a photo we have since navigated away from is dropped: the buffer is
             // per-session and dies with it, so there is nothing to keep it in.
-            let Some(s) = self.session.as_mut() else {
-                continue;
-            };
-            if !is_current || s.path != res.path {
+            let same_photo = self.session.as_ref().is_some_and(|s| s.path == res.path);
+            if !is_current || !same_photo {
                 continue;
             }
             match res.outcome {
                 Ok(decoded) => {
-                    // ⚠ The baseline `DecodeWorker` rendered is discarded on purpose: the
-                    // existing preview-resolution one stays, so before/after does not change
-                    // under the user. The waste is one ~60 ms render on a background thread
-                    // during a 3 s decode.
-                    // ⚠ The old engine is *replaced*, not kept alongside: once every rung
-                    // renders from the full buffer the half-size one is dead weight. Dropping
-                    // it disconnects its channel, so its worker thread returns on its own. Its
-                    // prefix cache goes too — a one-off cost at the moment of upgrade.
-                    let ctx2 = ctx.clone();
-                    s.buffer_long = decoded.buffer.width().max(decoded.buffer.height());
-                    s.engine = RenderEngine::new(
-                        decoded.buffer.clone(),
-                        decoded.source_scale,
-                        // ⚠ The profile must be carried across the full-resolution handover, or
-                        // corrections would silently switch off the moment the upgrade lands.
-                        s.lens.shot.clone(),
-                        // ⚠ Carried across the handover for the same reason the profile is: a
-                        // baseline that reverted to D65 here would shift the white balance of
-                        // every RAW the moment the full-resolution decode landed.
-                        s.wb_baseline,
-                        // ⚠⚠ **Not `decoded.profile` — see `handover_profile`.** The decode
-                        // sets `looks_dir: None` by design, so rebuilding straight from it
-                        // dropped the looks directory and every creative look stopped loading
-                        // ~4 s after the photo opened.
-                        handover_profile(&decoded.profile, s.engine.looks_dir()),
-                        decoded.scene_referred,
-                        move || ctx2.request_repaint(),
-                    );
-                    // ⚠ Replaced with the engine's, or the eyedropper would read the half-size
-                    // buffer at full-resolution coordinates.
-                    s.buffer = decoded.buffer.clone();
-                    s.buffer_is_full_res = true;
-                    // ⚠ Load-bearing. Region rects are in *rendered* pixels, and those
-                    // coordinates change with the buffer — reusing them would describe the
-                    // wrong part of the image. Clearing both forces the next frame to
-                    // re-request against the new resolution.
-                    s.rendered_region = None;
-                    s.requested_region = None;
-                    // ⚠ Ask for a frame explicitly. The canvas would otherwise see an unchanged
-                    // rung and a covered region and request nothing at all — leaving the old
-                    // buffer's texture on screen, so the upgrade would be invisible until
-                    // something else happened to trigger a render.
-                    //
-                    // ⚠⚠ **At the CURRENT rung, not the fit cap.** Only the resolution was wrong:
-                    // at 7.72x zoom `fit_cap` is an 8.9x magnified blur, and it was measured held
-                    // for 18 frames on every photo — four times the softening `Faster` gives.
-                    //
-                    // ⚠ `s.render_rung` is no longer reset to the fit cap either. It existed to
-                    // make the canvas re-request, which clearing the region rects above already
-                    // achieves, and it would make this request ask for the fit cap by another
-                    // route.
-                    //
-                    // ⚠ The region stays `None`: `rendered_region` and `requested_region` were
-                    // just cleared, because region rects are in *rendered* pixels and those
-                    // coordinates change with the buffer, so no region describes anything yet.
-                    // The canvas re-derives one on its next frame.
-                    s.request(s.view_edits(tool), s.render_rung, None);
-                    // ⚠ Only worth saying where it is visible. A full-resolution decode can
-                    // finish while the user is browsing the Library, where the message means
-                    // nothing and merely displaces something that does.
+                    self.adopt_decoded(ctx, &decoded, true);
                     if self.view == AppView::Develop {
                         self.status = "Full resolution ready".to_string();
                     }
                 }
                 Err(e) => {
-                    // The ladder simply tops out at the half-size buffer, i.e. the behaviour
-                    // before this feature existed.
                     self.status = format!("Full-resolution decode failed: {e}");
                 }
             }
+        }
+    }
+
+    /// Swap the open session's buffer for a better decode of the same photo, keeping its
+    /// edits, history, view and texture — the half decode replacing a ghost, and the full
+    /// decode replacing the half. `full_res` says which the new buffer is.
+    ///
+    /// ⚠ The engine is *replaced*, not kept alongside: once every rung renders from the new
+    /// buffer the old one is dead weight. Dropping it disconnects its channel, so its worker
+    /// thread returns on its own. Its prefix cache goes too — a one-off cost at the moment of
+    /// upgrade.
+    ///
+    /// ⚠⚠ A ghost carried defaults for the lens, the white-balance baseline, the camera and the
+    /// full size, so a ghost handover takes all of those from the decode; a half→full handover
+    /// keeps the session's, which came from the same file's real decode — a baseline that
+    /// reverted to D65 here would shift the white balance the moment the upgrade landed.
+    pub(crate) fn adopt_decoded(
+        &mut self,
+        ctx: &egui::Context,
+        decoded: &Arc<Decoded>,
+        full_res: bool,
+    ) {
+        let tool = self.tool;
+        let Some(s) = self.session.as_mut() else {
+            return;
+        };
+        let was_ghost = s.buffer_is_ghost;
+        let buffer_long = decoded.buffer.width().max(decoded.buffer.height());
+        if was_ghost {
+            s.lens = decoded.lens.clone();
+            s.wb_baseline = decoded.wb_baseline;
+            s.baseline_ev = decoded.profile.baseline_ev;
+            s.make_model = decoded.label.clone();
+            s.full_long = if decoded.source_scale > 0.0 {
+                (buffer_long as f32 / decoded.source_scale).round() as usize
+            } else {
+                buffer_long
+            };
+            // ⚠ The ghost's rung was its own 512 px; the new buffer's ladder starts at its fit cap.
+            s.render_rung = view_region::fit_cap(buffer_long, PREVIEW_MAX_DIM);
+        }
+        let ctx2 = ctx.clone();
+        s.buffer_long = buffer_long;
+        s.engine = RenderEngine::new(
+            decoded.buffer.clone(),
+            decoded.source_scale,
+            s.lens.shot.clone(),
+            s.wb_baseline,
+            // ⚠⚠ **Not `decoded.profile` — see `handover_profile`.** The decode sets
+            // `looks_dir: None` by design, so rebuilding straight from it dropped the looks
+            // directory and every creative look stopped loading ~4 s after the photo opened.
+            handover_profile(&decoded.profile, s.engine.looks_dir()),
+            decoded.scene_referred,
+            move || ctx2.request_repaint(),
+        );
+        // ⚠ Replaced with the engine's, or the eyedropper would read the old buffer at the new
+        // buffer's coordinates.
+        s.buffer = decoded.buffer.clone();
+        s.buffer_is_full_res = full_res;
+        s.buffer_is_ghost = false;
+        s.stale = None;
+        // ⚠ Load-bearing. Region rects are in *rendered* pixels, and those coordinates change
+        // with the buffer — reusing them would describe the wrong part of the image. Clearing
+        // both forces the next frame to re-request against the new resolution.
+        s.rendered_region = None;
+        s.requested_region = None;
+        // ⚠ Ask for a frame explicitly, at the CURRENT rung: the canvas would otherwise see an
+        // unchanged rung and a covered region and request nothing at all.
+        s.request(s.view_edits(tool), s.render_rung, None);
+        if was_ghost {
+            self.camera_profiles_cache = camera_profile::store::ProfileStore::user_default(
+                &dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from(".")),
+            )
+            .list_for(&decoded.label);
         }
     }
 
@@ -829,6 +899,9 @@ impl RustroomApp {
                     // `p` borrows `self.pending`, the call borrows `self.decoder` — disjoint
                     // fields, so the borrow checker allows both at once.
                     p.seq = Some(self.decoder.request(path, PREVIEW_MAX_DIM));
+                    if std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some() {
+                        eprintln!("open  {:8.1} ms  decode requested", crate::debug_ms());
+                    }
                 } else {
                     ctx.request_repaint_after(p.start_at - now);
                 }
@@ -841,15 +914,35 @@ impl RustroomApp {
                 Ok(decoded) => {
                     // Cache even superseded decodes — that work is already paid for.
                     self.cache.insert(res.path.clone(), decoded.clone());
+                    if std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some() {
+                        eprintln!(
+                            "open  {:8.1} ms  decode landed (current={is_current})",
+                            crate::debug_ms()
+                        );
+                    }
                     if is_current {
                         // ⚠ The **pending** id, not `res.path`: the decode is keyed by file, but
-                        // which *copy* was being opened is only known here.
-                        let id = self
+                        // which *copy* was being opened is only known here. The view made on the
+                        // preview meanwhile comes along with it.
+                        let (id, view) = self
                             .pending
                             .take()
-                            .map(|p| p.id)
-                            .unwrap_or_else(|| PhotoId::original(res.path.clone()));
-                        self.finalize_session(ctx, id, decoded);
+                            .map(|p| (p.id, (p.zoom, p.pan)))
+                            .unwrap_or_else(|| {
+                                (PhotoId::original(res.path.clone()), (1.0, egui::Vec2::ZERO))
+                            });
+                        // A ghost session for this photo adopts the buffer and keeps its edits,
+                        // history and view; without one the session is built now.
+                        let ghost_here = self.session.as_ref().is_some_and(|s| {
+                            s.buffer_is_ghost && s.path == id.path && s.copy == id.copy
+                        });
+                        if ghost_here {
+                            let full = !catalog::is_raw(&id.path);
+                            self.adopt_decoded(ctx, &decoded, full);
+                            self.status.clear();
+                        } else {
+                            self.finalize_session_with_view(ctx, id, decoded, view);
+                        }
                     }
                 }
                 Err(e) => {
@@ -924,6 +1017,84 @@ fn handover_profile(
 mod tests {
     use super::*;
     use crate::{test_app, test_ui};
+
+    /// 2026-09-29: a cached thumbnail makes a **ghost session** at the click — the panel, the
+    /// histogram and the zoom keys exist before the decode; the pending decode still runs.
+    #[test]
+    fn a_cached_thumbnail_makes_a_ghost_session_at_the_click() {
+        let dir = crate::test_app::TestDir::new("ghost");
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        let photo = dir.0.join("a.RAF");
+        std::fs::write(&photo, b"raw").unwrap();
+        let ident = rustroom_app::thumb_store::Identity::of(&photo).expect("identity");
+        app.ghost_store.put(
+            &ident,
+            &core_image::Thumbnail {
+                width: 6,
+                height: 4,
+                rgba: vec![128; 6 * 4 * 4],
+            },
+        );
+        assert!(app.session.is_none(), "fixture check");
+
+        app.open_path(&ctx, PhotoId::original(photo.clone()));
+
+        let s = app.session.as_ref().expect("a ghost session at the click");
+        assert!(s.buffer_is_ghost);
+        assert!(!s.buffer_is_full_res);
+        assert_eq!(s.path, photo);
+        assert_eq!(s.buffer_long, 6, "the ghost's buffer is the thumbnail");
+        assert!(app.pending.is_some(), "the real decode is still on its way");
+        // And a photo with no cached thumbnail gets no ghost, as before.
+        let other = dir.0.join("b.RAF");
+        std::fs::write(&other, b"raw").unwrap();
+        app.open_path(&ctx, PhotoId::original(other.clone()));
+        assert!(
+            app.session.as_ref().is_some_and(|s| s.path == photo),
+            "without a thumbnail the previous session stays until the decode lands"
+        );
+    }
+
+    /// The decode landing on a ghost keeps what the user did meanwhile — edits, view — and
+    /// takes the facts the ghost only had defaults for from the real decode.
+    #[test]
+    fn adopting_a_decode_keeps_the_edits_and_the_view_and_drops_the_ghost() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        test_app::open_test_photo(&mut app, &ctx, 4, 2);
+        {
+            let s = app.session.as_mut().expect("session");
+            s.buffer_is_ghost = true;
+            s.buffer_is_full_res = false;
+            s.make_model = String::new();
+            s.edits.exposure = 0.7;
+            s.zoom = 3.0;
+            s.pan = egui::vec2(5.0, -7.0);
+        }
+        app.adopt_decoded(&ctx, &test_app::fake_decode(), false);
+        let s = app.session.as_ref().expect("session");
+        assert!(!s.buffer_is_ghost);
+        assert!(
+            !s.buffer_is_full_res,
+            "a half decode is not full resolution"
+        );
+        assert_eq!(
+            s.buffer_long, 8,
+            "the decode's buffer replaced the thumbnail"
+        );
+        assert_eq!(s.edits.exposure, 0.7, "an edit made on the ghost survived");
+        assert_eq!(
+            (s.zoom, s.pan),
+            (3.0, egui::vec2(5.0, -7.0)),
+            "and so did the view"
+        );
+        assert_eq!(
+            s.make_model, "Test Camera",
+            "the camera comes from the real decode"
+        );
+        assert_eq!(s.full_long, 8);
+    }
 
     /// ⚠⚠ **The handover must not throw a zoomed view back to fit resolution.** The explicit
     /// request is necessary — without it the canvas sees an unchanged rung and a covered region

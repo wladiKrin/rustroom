@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M9.14 Previews: instant 1:1 in Develop, Compare and Survey (2026-09-29)](#2026-09-29--m914-previews-instant-11-in-develop-compare-and-survey-branch-m914-previews-merged-2026-09-29)
 - [The resident final checkpoint: the tail's input stays on the GPU (2026-09-26)](#2026-09-26--the-resident-final-checkpoint-the-tails-input-stays-on-the-gpu-branch-resident-final)
 - [Per-pixel fusion: a run of per-pixel stages as one pass (2026-09-26)](#2026-09-26--per-pixel-fusion-a-run-of-per-pixel-stages-as-one-pass-branch-per-pixel-fusion)
 - [GPU timestamps: per-pass GPU time in the running app (2026-09-26)](#2026-09-26--gpu-timestamps-per-pass-gpu-time-in-the-running-app-branch-gpu-timestamps)
@@ -157,6 +158,139 @@ goldens unmoved.
 - ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
+
+### 2026-09-29 — M9.14 Previews: instant 1:1 in Develop, Compare and Survey (branch `m9.14-previews`, merged 2026-09-29)
+
+**The ask** (P-20, the professional review's first blocker): a focus check across a shoot is a wall
+of seconds per frame, because true 1:1 waits for the full decode. **Spec**
+`docs/superpowers/specs/2026-09-28-m9.14-previews-design.md`, **plan**
+`docs/superpowers/plans/2026-09-29-m9.14-previews.md`; the gate green at **3,201 tests**.
+
+**Measured before deciding** (this Mac, 8 cores / 16 GB, one X-T4 RAF, decode only): Better
+**16.0 s** a frame alone and **7.4 s** each with three in parallel, Fast 7.3 / 3.0, Fastest 3.0 /
+1.8. ⚠ The 7.4 s the demosaic decision quoted for Better is the *three-parallel per-frame* figure;
+the X-T4 is X-Trans and its 3-pass demosaic is the cost. So a folder-wide rendered-preview build is
+about an hour and 4 GB per 500 frames at the default tier — **declined by the author on that
+number.** The X-T4 embeds a **4416×2944** JPEG (71% of 1:1), 4 MB, reachable through libraw's
+thumbnail list; every RAW in the author's library is an X-T4 file.
+
+**What the author chose:** *1* the camera's own JPEG as the free preview of an untouched photo,
+*2* Rustroom's rendering for an edited photo, built when it is left, *3* the same on demand for a
+selection at a chosen tier. Consumers: Develop, Compare and Survey; **no Loupe** — Develop plays
+that role. Declined: decode-ahead in memory, a GPU demosaic, edits applied over the camera JPEG.
+
+**What shipped.** `raw_decode::extract_preview` / `image_decode::preview` (the largest embedded
+JPEG at its own size, oriented; `extract_thumbnail` is that plus the 512-px shrink). Lib:
+`preview_key` (identity + a **stable** FNV-1a fingerprint of the serialized edits + the tier —
+⚠ not `DefaultHasher`, which names nothing on disk), `preview_store` (`<config>/rustroom/previews`,
+plain `<hash>.jpg`, `ThumbStore`'s budget sweep, 10 GB default), `preview_loader` (one thread:
+rendered from the store, else the camera JPEG for an untouched photo, else nothing; capped to the
+GPU's texture limit; converted to the display space like thumbnails), `preview_build` (a
+`LeaveQueue` that replaces a re-edited entry in place, and **a build is an export job** —
+`ExportWorker` with JPEG 90 sRGB full size at the tier, the `{copy}` template rendering the key's
+hash), `stand_in::prefer_preview`. Bin: `preview_flow` (the request shaped from the settings, a
+second `ThumbCache` of textures pinned by the on-screen window, the pumps, the leave hook in the
+photo switch, Photo → Build previews with progress and cancel), the canvas stand-in painted at
+`frame_rect` with a "Camera preview" / "Preview" corner label, `multi/preview_pane` replacing the
+`RenderEngine` panes (Compare no longer decodes anything), Survey cells over 512 px drawing the
+preview at fit, Settings → Display "Preview quality" (*Same as 1:1 view* by default) and "Preview
+cache".
+
+**Untouched, precisely:** equality with `Settings::initial_edits(None)` — the camera rendering and
+the lens decision from the settings, everything else default. ⚠ **Not** the sidecar's `is_neutral`,
+which compares against `Edits::default()` and would call every freshly opened photo edited;
+`a_fresh_photo_is_untouched_while_the_sidecar_rule_calls_it_edited` pins the difference.
+
+**Two things the plan got wrong, caught in execution.** *(1)* ⚠⚠ The stand-in rule was fed the
+**rung** the canvas asks for, and `tier_max_dim` caps the rung at the buffer's long edge — so "the
+rung exceeds the buffer" could never be true and the preview would never have shown. The
+pixel-level test `a_preview_stands_in_only_where_the_buffer_falls_short` (through the real `show`,
+asserting which texture id was painted) found it; the rule now reads `view_region::needed_long`,
+the on-screen size before the cap. **A milestone that had every unit test green and no picture.**
+*(2)* Survey cannot zoom a cell: its pinch already resizes the wall and its scroll scrolls it, so
+a per-cell zoom would fight both. A large cell draws the preview at fit; Enter opens the photo in
+Develop, where the same preview stands in at 1:1.
+
+**The author's first look (02:10):** *(1)* "Develop still takes three seconds to be responsive"
+— the picture was on screen at 0.2 s, but zoom, pan and the sliders waited for the half-size
+decode, measured at **1.4–1.5 s** on his RAFs, plus the 180 ms debounce and the first render, and
+more under load. Fixed for the view: the pending preview zooms and pans (`PendingOpen::{zoom,
+pan}`, the canvas's own rule on the pending texture) and the session inherits the view
+(`finalize_session_with_view`); the sliders still wait for the decode, which is inherent. A
+`RUSTROOM_DEBUG_RENDER` trace now prints the open path's timeline. *(2)* ⚠⚠ "Compare is blurry
+and dead except for photos opened in Develop" — the untouched rule accepted only the fresh-open
+edits, while a photo never opened carries `Edits::default()` in the catalog (no sidecar), so no
+camera preview and no pane. Both spellings are untouched now. *(3)* ⚠⚠ **A misread, reverted within the hour:** I rebuilt Survey as a
+fill-the-window wall without its box — the complaint was about the **Library grid**, and the
+rebuilt Survey lost its scrolling and clipped its focus stroke. Survey, the tile painter and the
+`survey_cell` setting are back exactly as they were. The grid's real defect: the picture box was
+a landscape strip two thirds of the cell tall whatever the photograph's shape, so a portrait
+frame used under half of the cell's width. `cell_layout::thumb_box` now gives the picture the
+cell's height minus the caption and the marks row. *(4)* ⌘1 while a photo decodes did nothing —
+the zoom keys reached only the previous session behind the pending picture; they act on the
+pending preview now (1:1 against the preview's own pixels, `PendingOpen::fit_long`). *(5)* The
+panel greyed out during the decode and read as "nothing loaded": it is still inert, at full
+opacity, and the snapshot strip stays. ⚠ **Take a report about "the grid" literally; the
+survey is a grid too, and I guessed wrong.**
+
+**The author's second look (02:30):** five more, and three of them had one cause — nothing
+existed for a photo until its decode landed: the composition guides "jumped in" after the
+decode, the picture and both histograms flickered at the handover (the session started with no
+texture and an empty histogram), and on a first open the panel appeared only with the session.
+So the session now exists **at the click**: `ghost.rs` turns the cached 512-px preview
+(`ThumbStore`, ~2 ms) into a display-referred `Decoded`, `finalize_session` builds a real
+session from it, and the half decode lands through `adopt_decoded` — the full-resolution
+handover generalised: engine and buffer swapped, edits, history, view and texture kept, the
+lens, white-balance baseline and camera taken from the real decode. The full-res upgrade waits
+for the half decode (`buffer_is_ghost`). ⌘1 on a ghost is 1:1 against the preview standing in.
+The panel is live on the ghost (its sliders render on the thumbnail) and inert only for a photo
+with no thumbnail yet. The engine already strips the camera rendering for display-referred
+sources, so a ghost renders like the thumbnails do. *(4)* The grid: the cell is no longer
+square — a **square picture box** with the picture sitting on its bottom edge, and the cell
+exactly the box, the caption and the marks row (`cell_layout::grid_cell`). *(5)* Survey's pinch
+ceiling 900 → 2400 pt. ⚠ The Survey rebuild of the first look stays reverted.
+
+**The author's third look (02:45):** *(1)* ⌘1 dead again — the zoom commands checked
+`pending` first, and with a ghost session the pending entry still exists for the decode, so ⌘1
+moved a pending view the canvas never draws. `commands::pending_is_the_view` now says which of
+the two is on screen; pinned by `the_zoom_keys_reach_a_ghost_session_not_the_pending_view_behind_it`.
+*(2)* The grid "became worse: elongated, even larger gaps" — the square box stretched every
+landscape cell. The box now takes the **aspect of the majority orientation on screen**
+(`cell_layout::majority_aspect` over the loaded thumbnails: 3:2 for a landscape folder, 2:3 for
+a portrait one), the cell is exactly the box, the caption and the marks row, and the picture
+sits on the box's bottom edge. The minority orientation is smaller inside that box; no uniform
+box avoids that, and the majority is what the eye scans.
+
+**The author's fourth look (03:00):** *(1)* The grid box is a **fixed 3:2** for every photo
+(`cell_layout::BOX_ASPECT`) — the majority-orientation box "behaved weirdly", jumping as
+thumbnails loaded; a portrait frame is simply smaller inside the box, which he called fine.
+*(2)* "A short flicker of a lower-resolution image" on opening in Develop and on cycling in
+Compare: the 512-px picture, in three places — the ghost's own first render before the camera
+preview lands (~0.2 s), Compare's thumbnail placeholder, and the old pending placeholder. Since
+the camera preview is that quick, none of them shows any more while a preview may be on its
+way: the app remembers the keys the loader answered with **nothing** (`preview_misses`), and only
+then does a view fall back to the thumbnail. Develop shows the previous photo dimmed
+(`Session::stale`) or a spinner meanwhile; Compare's pane stays dark; an edited photo with no
+rendered preview gets its ghost render after the loader's instant miss.
+`a_ghost_waits_for_its_preview_and_shows_its_own_render_only_after_a_miss` pins it.
+
+**The author's fifth look (03:15):** "a short flash of a black image every time I move around
+in Develop or Compare — I thought the embedded JPEG takes only 0.2 s; I'd like it to feel
+instant." The wait had become visible: Develop dimmed the previous frame to near-black and a
+Compare pane stayed dark until the loader answered, and a preview is never instant on its own —
+reading and decoding a 13-Mpx JPEG plus the texture upload is 0.15–0.25 s. So the neighbours
+are **fetched ahead**: Develop asks for the filmstrip's next and previous after the open photo
+(`preview_flow::filmstrip_neighbours`), Compare for the candidates either side (`Plan::neighbours`),
+the loader works the list in that order, and the texture budget holds six previews. The dim on
+the previous frame is light (48, was 140) so a click on a far photo reads as a crossfade; the
+upload copies instead of premultiplying 13 M opaque pixels. Pinned by
+`develop_prefetches_the_filmstrip_neighbours_after_the_open_photo`.
+
+**Confirmed by use and merged, 2026-09-29 ("works, merge it and delete the branch")** after five
+looks in one night — see the paragraphs above for each. The driven look at 01:35 found the screen
+at the login window; every defect after that was the author's, taken literally, and the five
+rounds are the record of what "instant" turned out to mean: a session at the click, no
+low-resolution picture ever, and the neighbours fetched ahead. **3,211 tests**, `--no-ff`.
 
 ### 2026-09-28 — First-use review fixes (branch `first-use-fixes`, merged 2026-09-28)
 
