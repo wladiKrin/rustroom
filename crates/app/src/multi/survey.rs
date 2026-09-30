@@ -14,6 +14,7 @@
 //! is actually on screen. The Library grid solved the identical problem the identical way.
 
 use crate::multi;
+use crate::theme::Hover as _;
 use crate::{LibraryMode, RustroomApp};
 use eframe::egui;
 use rustroom_app::photo_id::PhotoId;
@@ -374,7 +375,7 @@ fn tile_buttons(
         }
         let r = ui
             .interact(at, base.with(("tilebtn", i)), egui::Sense::click())
-            .on_hover_text(hint);
+            .hover(hint);
         if r.hovered() || focused {
             ui.painter().text(
                 at.center(),

@@ -12,6 +12,7 @@
 //! inside the tool `match` with the others.
 
 use crate::develop::panel::{mask_components, section};
+use crate::theme::Hover as _;
 use crate::{Modal, RustroomApp};
 use edit_model::EditGroups;
 use eframe::egui;
@@ -56,7 +57,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             |ui| {
                 let r = ui
                     .button("+ Save current…")
-                    .on_hover_text("Saves this photo's settings as a new preset");
+                    .hover("Saves this photo's settings as a new preset");
                 // ⚠ The accessible name is the old sentence: the harness and a screen reader
                 // get what the button does, not its short form.
                 let enabled = ui.is_enabled();
@@ -145,7 +146,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     indent: 0.0,
                     eye: None,
                     hold: None,
-                    reorder: None,
+                    hover: "Applies this preset to the photo",
+                    draggable: false,
                 },
             );
             if out.delete {
@@ -211,6 +213,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     }
 }
 
+/// What a starter's preview and name do on a click — the same, so one sentence (M10.6b).
+const STARTER_HOVER: &str = "Applies this look to the photo";
+
 /// One starter: a small preview of the open photo through it, then its name. The whole row
 /// is the button. Without a preview yet, a quiet box of the same size holds the place.
 fn starter_row(
@@ -223,6 +228,7 @@ fn starter_row(
     let mut clicked = false;
     ui.horizontal(|ui| {
         let (rect, r) = ui.allocate_exact_size(BOX, egui::Sense::click());
+        let r = r.hover(STARTER_HOVER);
         clicked |= r.clicked();
         match tex {
             Some(t) => {
@@ -236,7 +242,7 @@ fn starter_row(
                     .rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
             }
         }
-        let label = ui.selectable_label(has, name);
+        let label = ui.selectable_label(has, name).hover(STARTER_HOVER);
         clicked |= label.clicked();
     });
     clicked

@@ -6,6 +6,7 @@
 
 use super::{dialog, Footer};
 use crate::list_row::{self, RowAction, RowSpec};
+use crate::theme::Hover as _;
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
 use rustroom_app::batch_export::{banding_warning, can_export, Collision, Decision, ExportOptions};
@@ -71,7 +72,7 @@ fn metadata_body(ui: &mut egui::Ui, opts: &mut ExportOptions) {
                     export::MetadataScope::CopyrightOnly,
                 ] {
                     ui.selectable_value(&mut opts.metadata.scope, s, s.label())
-                        .on_hover_text(HOVER);
+                        .hover(HOVER);
                 }
             });
             ui.end_row();
@@ -86,7 +87,7 @@ fn watermark_body(ui: &mut egui::Ui, opts: &mut ExportOptions) {
         .show(ui, |ui| {
             ui.label("Text");
             ui.text_edit_singleline(&mut opts.watermark.text)
-                .on_hover_text("Sets the watermark text, which scales with the exported image");
+                .hover("Sets the watermark text, which scales with the exported image");
             ui.end_row();
             ui.label("Corner");
             egui::ComboBox::from_id_salt("watermark_corner")
@@ -109,7 +110,11 @@ fn watermark_body(ui: &mut egui::Ui, opts: &mut ExportOptions) {
 /// the Immich ticks are present.
 fn folder_row(ui: &mut egui::Ui, opts: &ExportOptions, pick_dir: &mut bool) {
     ui.horizontal(|ui| {
-        if ui.button("Choose…").clicked() {
+        if ui
+            .button("Choose…")
+            .hover("Chooses the folder the exports are written to")
+            .clicked()
+        {
             *pick_dir = true;
         }
         let shown = if opts.dest_dir.as_os_str().is_empty() {
@@ -236,6 +241,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
         theme::DialogSize::Wide,
         Footer::confirm(
             "Export",
+            "Exports the chosen photos with these settings",
             can_export(
                 &opts,
                 upload_avail == rustroom_app::immich_upload::Availability::Ready,
@@ -281,7 +287,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                         ui.add_space(6.0);
                         let save = ui
                             .button("+ Save current…")
-                            .on_hover_text("Saves these export settings as a preset");
+                            .hover("Saves these export settings as a preset");
                         // ⚠ The accessible name is the sentence, as the Presets panel's.
                         save.widget_info(|| {
                             egui::WidgetInfo::labeled(
@@ -358,7 +364,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                                 ui.label(
                                                     egui::RichText::new(format!("→ {when}")).weak(),
                                                 )
-                                                .on_hover_text(
+                                                .hover(
                                                     "Sets the date the photo carries in Immich",
                                                 );
                                             }
@@ -368,7 +374,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                             // IS a new picture, and replacing the old asset would
                                             // mean deleting one.
                                             ui.label(egui::RichText::new(note).weak())
-                                                .on_hover_text(
+                                                .hover(
                                                     "Exporting again uploads a second photo unless the file is byte-identical",
                                                 );
                                         }
@@ -404,7 +410,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                             egui::TextEdit::singleline(&mut opts.filename_template)
                                 .desired_width(f32::INFINITY),
                         )
-                        .on_hover_text(rustroom_app::filename_template::token_hover());
+                        .hover(rustroom_app::filename_template::token_hover());
                         if let Err(e) = Template::parse(&opts.filename_template) {
                             theme::error_hint(ui, &e.to_string());
                         }
@@ -423,7 +429,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                         }
                                     })
                                     .response
-                                    .on_hover_text(DNG_NOTE);
+                                    .hover(DNG_NOTE);
                                 ui.end_row();
                             });
                         // ⚠ Hidden, not disabled, for a lossless format: at this size a disabled
@@ -431,7 +437,8 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                         if opts.format.is_lossy() {
                             ui.add(
                                 egui::Slider::new(&mut opts.quality, 1..=100).text("JPEG quality"),
-                            );
+                            )
+                            .hover("Trades file size for detail, higher keeping more");
                         }
                     });
                     // ⚠ Its own collapsed section: colour space and rendering intent are the two
@@ -452,7 +459,9 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                         for s in color::OutputSpace::ALL {
                                             ui.selectable_value(&mut opts.space, s, s.label());
                                         }
-                                    }));
+                                    })
+                                    .response
+                                    .hover("Sets the colour space the files are written in"));
                                 ui.end_row();
                                 ui.label("Rendering intent");
                                 // ⚠ Disabled, not hidden, for ProPhoto: the working space maps
@@ -466,7 +475,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                             }
                                         })
                                         .response
-                                        .on_hover_text(
+                                        .hover(
                                             "Chooses how colours outside the output's range are brought inside it",
                                         );
                                 });
@@ -479,10 +488,12 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                     });
                     section(ui, "Size", &export_summary::size(&opts), false, |ui| {
                         let mut resize = opts.max_edge.is_some();
-                        ui.checkbox(&mut resize, "Fit within a long edge");
+                        ui.checkbox(&mut resize, "Fit within a long edge")
+                            .hover("Scales each photo down so its long edge fits the size below");
                         if resize {
                             let mut edge = opts.max_edge.unwrap_or(2048);
-                            ui.add(egui::Slider::new(&mut edge, 256..=8192).text("Long edge (px)"));
+                            ui.add(egui::Slider::new(&mut edge, 256..=8192).text("Long edge (px)"))
+                                .hover("Sets the longest side of each exported photo, in pixels");
                             opts.max_edge = Some(edge);
                         } else {
                             opts.max_edge = None;
@@ -498,7 +509,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                 egui::Slider::new(&mut opts.output_sharpening.amount, 0..=100)
                                     .text("Amount"),
                             )
-                            .on_hover_text(
+                            .hover(
                                 "Sharpens the finished file to restore the edges lost in resizing",
                             );
                         },
@@ -517,7 +528,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                 }
                             })
                             .response
-                            .on_hover_text(
+                            .hover(
                                 "Sets the RAW demosaic quality for this export, where higher is slower",
                             );
                         },
@@ -603,7 +614,12 @@ pub fn save_preset(app: &mut RustroomApp, ctx: &egui::Context) {
         "save_export_preset",
         "Save export preset",
         theme::DialogSize::Standard,
-        Footer::confirm("Save", !name.trim().is_empty(), "Cancel"),
+        Footer::confirm(
+            "Save",
+            "Saves these export settings as a preset under this name",
+            !name.trim().is_empty(),
+            "Cancel",
+        ),
         |ui| {
             ui.horizontal(|ui| {
                 ui.label("Name");
@@ -656,7 +672,7 @@ pub fn upload_unconfirmed(app: &mut RustroomApp, ctx: &egui::Context) {
         // ⚠ `Standard`, not `Compact`: this carries a full path and two hints, which `Compact` —
         // sized for "a sentence and two buttons" — wrapped too tightly to read (user's call, on use).
         theme::DialogSize::Standard,
-        Footer::confirm("OK", true, ""),
+        Footer::confirm("OK", "Closes this notice", true, ""),
         |ui| {
             ui.label("An upload did not confirm, so the file was kept rather than removed.");
             ui.add_space(4.0);
@@ -698,7 +714,7 @@ pub fn confirm_delete(app: &mut RustroomApp, ctx: &egui::Context) {
         "confirm_delete_export",
         "Delete export preset?",
         theme::DialogSize::Compact,
-        Footer::confirm("Delete", true, "Cancel"),
+        Footer::confirm("Delete", "Deletes this export preset", true, "Cancel"),
         |ui| {
             ui.label(format!("Delete the export preset \u{201c}{name}\u{201d}?"));
             theme::hint(ui, "This cannot be undone — export presets have no trash.");
@@ -758,7 +774,17 @@ pub fn collision(app: &mut RustroomApp, ctx: &egui::Context) {
         "export_collision",
         "File already exists",
         theme::DialogSize::Standard,
-        Footer::confirm("Keep both", true, "Cancel export").extra(&["Skip", "Overwrite"]),
+        Footer::confirm(
+            "Keep both",
+            "Exports this photo under a new name beside the existing file",
+            true,
+            "Cancel export",
+        )
+        .dismiss_says("Stops the export, keeping the files already written")
+        .extra(&[
+            ("Skip", "Leaves this photo out and goes on with the rest"),
+            ("Overwrite", "Replaces the existing file with this export"),
+        ]),
         |ui| {
             ui.label(format!("“{name}” is already in the destination folder."));
             ui.checkbox(&mut apply_all, "Apply to all remaining");

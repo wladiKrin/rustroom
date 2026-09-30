@@ -17,6 +17,7 @@
 
 use crate::develop::panel::section::{header, Header};
 use crate::list_row::{self, RowAction, RowSpec};
+use crate::theme::Hover as _;
 use crate::{theme, RustroomApp};
 use eframe::egui;
 use rustroom_app::icons;
@@ -237,7 +238,7 @@ fn now_row(ui: &mut egui::Ui, drift: &str, action: &mut Action) {
                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
             |ui| {
                 ui.add(egui::Button::new("+ Save").min_size(egui::vec2(0.0, 22.0)))
-                    .on_hover_text("Saves the current settings as a snapshot")
+                    .hover("Saves the current settings as a snapshot")
             },
         )
         .inner;

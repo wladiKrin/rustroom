@@ -13,6 +13,7 @@
 //! `Resize::State::desired_size` is `pub(crate)` and could not be read directly.
 
 use crate::theme;
+use crate::theme::Hover as _;
 use eframe::egui;
 use rustroom_app::settings::Settings;
 
@@ -25,23 +26,33 @@ const FOOTER: f32 = 52.0;
 const TABS: f32 = crate::theme::tokens::CONTROL_ROW;
 
 /// What the footer offers.
+///
+/// ⚠ **Every button carries its hover sentence (M10.6b), and the primary's is a required argument**,
+/// so a dialog cannot ship a mute primary whether or not `hover_coverage` can draw it. The dismiss
+/// button's sentence is the footer kind's own unless [`Footer::dismiss_says`] overrides it; the title
+/// bar's × says the same, since it does the same.
 pub struct Footer<'a> {
-    /// The accent-filled verb, and whether it is enabled. `None` for an informational dialog.
-    pub primary: Option<(&'a str, bool)>,
-    /// "Cancel", "Close" or "Done" — what the plain button says.
+    /// The accent-filled verb, whether it is enabled, and what it does. `None` for an informational
+    /// dialog.
+    pub primary: Option<(&'a str, bool, &'a str)>,
+    /// "Cancel", "Close" or "Done" — what the plain button says. Empty draws no button.
     pub dismiss: &'a str,
-    /// Plain buttons left of dismiss, in this order. Empty for every dialog but one.
-    pub extra: &'a [&'a str],
+    /// What the dismiss button — and the ×, which does the same — does.
+    pub dismiss_says: &'a str,
+    /// Plain buttons left of dismiss, in this order, each with its sentence. Empty for every dialog
+    /// but one.
+    pub extra: &'a [(&'a str, &'a str)],
     /// Weak text at the footer's left. Empty for none.
     pub note: &'a str,
 }
 
 impl<'a> Footer<'a> {
-    /// A confirm-or-cancel footer.
-    pub fn confirm(primary: &'a str, enabled: bool, dismiss: &'a str) -> Self {
+    /// A confirm-or-cancel footer: the primary `says` what it does; dismissing changes nothing.
+    pub fn confirm(primary: &'a str, says: &'a str, enabled: bool, dismiss: &'a str) -> Self {
         Self {
-            primary: Some((primary, enabled)),
+            primary: Some((primary, enabled, says)),
             dismiss,
+            dismiss_says: "Closes this dialog and changes nothing",
             extra: &[],
             note: "",
         }
@@ -51,6 +62,7 @@ impl<'a> Footer<'a> {
         Self {
             primary: None,
             dismiss,
+            dismiss_says: "Closes this dialog",
             extra: &[],
             note: "",
         }
@@ -59,8 +71,13 @@ impl<'a> Footer<'a> {
         self.note = note;
         self
     }
-    pub fn extra(mut self, extra: &'a [&'a str]) -> Self {
+    pub fn extra(mut self, extra: &'a [(&'a str, &'a str)]) -> Self {
         self.extra = extra;
+        self
+    }
+    /// For a dismiss that does more than close — "Cancel export" stops the export.
+    pub fn dismiss_says(mut self, says: &'a str) -> Self {
+        self.dismiss_says = says;
         self
     }
 }
@@ -109,7 +126,7 @@ pub fn dialog(
                 .resizable(true)
                 .show(ui, |ui| {
                     measured = (ui.available_width(), ui.available_height());
-                    if title_bar(ui, egui::Id::new(id), title) {
+                    if title_bar(ui, egui::Id::new(id), title, footer.dismiss_says) {
                         out.dismissed = true;
                     }
                     // The body takes what the footer leaves, so the footer never scrolls.
@@ -143,7 +160,7 @@ pub fn dialog(
 
 /// The title in the strong body face at the left, a × at the right, a hairline under.
 /// Returns whether the × was clicked.
-fn title_bar(ui: &mut egui::Ui, id: egui::Id, title: &str) -> bool {
+fn title_bar(ui: &mut egui::Ui, id: egui::Id, title: &str, close_says: &str) -> bool {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), TITLE_BAR),
         egui::Sense::hover(),
@@ -156,6 +173,7 @@ fn title_bar(ui: &mut egui::Ui, id: egui::Id, title: &str) -> bool {
     let close = ui.interact(cell, id.with("close"), egui::Sense::click());
     let enabled = ui.is_enabled();
     close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, "Close"));
+    let close = close.hover(close_says);
     let painter = ui.painter_at(rect);
     painter.text(
         egui::pos2(rect.left(), rect.center().y - 3.0),
@@ -208,18 +226,28 @@ fn footer_row(ui: &mut egui::Ui, id: egui::Id, footer: &Footer<'_>, out: &mut Di
                 .layout(egui::Layout::right_to_left(egui::Align::Center))
                 .id_salt(id.with("footer")),
             |ui| {
-                if let Some((label, enabled)) = footer.primary {
-                    if theme::primary_button(ui, label, enabled).clicked() {
+                if let Some((label, enabled, says)) = footer.primary {
+                    if theme::primary_button(ui, label, enabled)
+                        .hover(says)
+                        .clicked()
+                    {
                         out.primary = true;
                     }
                 }
-                if ui.button(footer.dismiss).clicked() {
+                // ⚠ An empty dismiss draws nothing — the one notice with a single OK used to show a
+                // blank button beside it.
+                if !footer.dismiss.is_empty()
+                    && ui
+                        .button(footer.dismiss)
+                        .hover(footer.dismiss_says)
+                        .clicked()
+                {
                     out.dismissed = true;
                 }
                 // Right to left, so the last extra is added first and the on-screen order is
                 // the given one.
-                for (i, label) in footer.extra.iter().enumerate().rev() {
-                    if ui.button(*label).clicked() {
+                for (i, (label, says)) in footer.extra.iter().enumerate().rev() {
+                    if ui.button(*label).hover(*says).clicked() {
                         out.extra = Some(i);
                     }
                 }
@@ -251,19 +279,16 @@ fn footer_row(ui: &mut egui::Ui, id: egui::Id, footer: &Footer<'_>, out: &mut Di
     }
 }
 
-/// The tab control at the top of a long dialog's body. Returns the current tab.
+/// The tab control at the top of a long dialog's body: each tab's name and its one hover sentence.
+/// Returns the current tab.
+///
+/// ⚠ The sentence is required (M10.6b) — a tab is a control. The Export dialog's also say whether a
+/// tab's section is doing anything ("Metadata is on") without opening it.
 ///
 /// ⚠ The index lives in egui's temporary memory under `id` — per dialog, per process: opening
 /// the dialog again in the same session lands on the last tab, a restart on the first. Not in
 /// `Settings`: a remembered tab is a convenience, and the settings file is for decisions.
-pub fn tabs(ui: &mut egui::Ui, id: egui::Id, names: &[&str]) -> usize {
-    let plain: Vec<(&str, &str)> = names.iter().map(|n| (*n, "")).collect();
-    tabs_with_hover(ui, id, &plain)
-}
-
-/// [`tabs`] with a hover text per tab — the Export dialog says whether a tab's section is
-/// doing anything ("Metadata is on") without opening it.
-pub fn tabs_with_hover(ui: &mut egui::Ui, id: egui::Id, names: &[(&str, &str)]) -> usize {
+pub fn tabs(ui: &mut egui::Ui, id: egui::Id, names: &[(&str, &str)]) -> usize {
     let n = names.len().max(1);
     let mut current = ui
         .data_mut(|d| d.get_temp::<usize>(id))
@@ -366,6 +391,7 @@ mod tests {
         let Footer {
             primary,
             dismiss,
+            dismiss_says,
             extra,
             note,
         } = footer;
@@ -379,6 +405,7 @@ mod tests {
                 Footer {
                     primary,
                     dismiss,
+                    dismiss_says,
                     extra,
                     note,
                 },
@@ -402,14 +429,9 @@ mod tests {
 
     #[test]
     fn the_footers_buttons_and_the_close_are_named_and_reported() {
-        let footer = Footer::confirm("Forget", true, "Cancel").extra(&["Skip", "Overwrite"]);
         let (labels, _) = chrome(
-            Footer {
-                primary: footer.primary,
-                dismiss: footer.dismiss,
-                extra: footer.extra,
-                note: footer.note,
-            },
+            Footer::confirm("Forget", "Forgets it", true, "Cancel")
+                .extra(&[("Skip", "Skips it"), ("Overwrite", "Overwrites it")]),
             None,
         );
         for want in ["Forget", "Cancel", "Skip", "Overwrite", "Close"] {
@@ -418,14 +440,24 @@ mod tests {
                 "{want:?} missing in {labels:?}"
             );
         }
-        let (_, out) = chrome(Footer::confirm("Forget", true, "Cancel"), Some("Forget"));
+        let (_, out) = chrome(
+            Footer::confirm("Forget", "Forgets it", true, "Cancel"),
+            Some("Forget"),
+        );
         assert!(out.primary && !out.dismissed);
-        let (_, out) = chrome(Footer::confirm("Forget", true, "Cancel"), Some("Cancel"));
+        let (_, out) = chrome(
+            Footer::confirm("Forget", "Forgets it", true, "Cancel"),
+            Some("Cancel"),
+        );
         assert!(out.dismissed && !out.primary);
-        let (_, out) = chrome(Footer::confirm("Forget", true, "Cancel"), Some("Close"));
+        let (_, out) = chrome(
+            Footer::confirm("Forget", "Forgets it", true, "Cancel"),
+            Some("Close"),
+        );
         assert!(out.dismissed, "the × must dismiss");
         let (_, out) = chrome(
-            Footer::confirm("Keep both", true, "Cancel export").extra(&["Skip", "Overwrite"]),
+            Footer::confirm("Keep both", "Keeps both", true, "Cancel export")
+                .extra(&[("Skip", "Skips it"), ("Overwrite", "Overwrites it")]),
             Some("Overwrite"),
         );
         assert_eq!(out.extra, Some(1));
@@ -434,7 +466,10 @@ mod tests {
     #[test]
     fn a_disabled_primary_is_shown_and_does_nothing() {
         // ⚠ Shown, greyed, never hidden: the Save button with an empty name must still be seen.
-        let (labels, out) = chrome(Footer::confirm("Save", false, "Cancel"), Some("Save"));
+        let (labels, out) = chrome(
+            Footer::confirm("Save", "Saves it", false, "Cancel"),
+            Some("Save"),
+        );
         assert!(labels.iter().any(|l| l == "Save"));
         assert!(!out.primary, "a disabled primary reported a click");
     }
@@ -443,14 +478,15 @@ mod tests {
     fn the_tabs_switch_the_content_and_remember_within_a_context() {
         let ctx = test_ui::ctx();
         let id = egui::Id::new("tabs_test");
-        let mut draw = |ui: &mut egui::Ui| match tabs(ui, id, &["One", "Two"]) {
-            0 => {
-                ui.checkbox(&mut true, "first content");
-            }
-            _ => {
-                ui.checkbox(&mut true, "second content");
-            }
-        };
+        let mut draw =
+            |ui: &mut egui::Ui| match tabs(ui, id, &[("One", "Shows one"), ("Two", "Shows two")]) {
+                0 => {
+                    ui.checkbox(&mut true, "first content");
+                }
+                _ => {
+                    ui.checkbox(&mut true, "second content");
+                }
+            };
         let labels = |ctx: &egui::Context, draw: &mut dyn FnMut(&mut egui::Ui)| -> Vec<String> {
             test_ui::labelled_centres(ctx, Vec::new(), |ui| draw(ui))
                 .into_iter()

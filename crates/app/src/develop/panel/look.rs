@@ -5,6 +5,7 @@
 //! one reasonable-seeming addition at a time.
 
 use crate::develop::panel::Edited;
+use crate::theme::Hover as _;
 use eframe::egui;
 use rustroom_app::looks::LooksState;
 
@@ -80,7 +81,7 @@ pub fn section(
             }
         })
         .response
-        .on_hover_text(
+        .hover(
             "Sets the colour space the .cube file was made for, which the file itself does not record",
         );
 

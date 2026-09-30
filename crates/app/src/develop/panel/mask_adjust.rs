@@ -99,7 +99,7 @@ pub fn show(
                 theme::segmented(
                     ui,
                     grade,
-                    &color_wheel::GradeRange::ALL.map(|r| (r, r.label())),
+                    &color_wheel::GradeRange::ALL.map(|r| (r, r.label(), r.hover())),
                 );
                 let diameter = ui.available_width().min(188.0);
                 {

@@ -18,6 +18,7 @@ use rustroom_app::icons;
 /// because a toolbar icon sits in a row of its own height while a rail entry has a label under
 /// it and a whole 88 pt column to fill.
 const ICON_SIZE: f32 = crate::theme::tokens::ICON;
+use crate::theme::Hover as _;
 use rustroom_app::menu::Command;
 
 /// The Develop editor body: preset panel, adjustments panel, filmstrip, canvas.
@@ -211,7 +212,7 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 egui::Button::selectable(before_after, label)
                     .min_size(egui::vec2(0.0, TOOL_HEIGHT)),
             )
-            .on_hover_text("Shows the photo without your adjustments (\\)")
+            .hover("Shows the photo without your adjustments (\\)")
             .clicked()
         {
             commands::execute(app, ctx, Command::ToggleBeforeAfter);
@@ -287,7 +288,7 @@ fn icon(ui: &mut egui::Ui, glyph: char, hint: &str, enabled: bool) -> bool {
         enabled,
         egui::Button::new(icon_text(glyph)).min_size(egui::vec2(TOOL_WIDTH, TOOL_HEIGHT)),
     )
-    .on_hover_text(hint)
+    .hover(hint)
     .clicked()
 }
 

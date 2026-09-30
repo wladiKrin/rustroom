@@ -10,6 +10,7 @@
 
 use crate::develop::panel::Edited;
 use crate::theme;
+use crate::theme::Hover as _;
 use edit_model::ToneCurve;
 use eframe::egui;
 use rustroom_app::tone_curve_tool as tool;
@@ -86,6 +87,16 @@ impl CurveChannel {
         }
     }
 
+    /// The selector's hover sentence (M10.6b), beside the label so the two cannot part.
+    pub fn hover(self) -> &'static str {
+        match self {
+            Self::Rgb => "Shows the curve that shapes all three colours together",
+            Self::Red => "Shows the red channel's own curve",
+            Self::Green => "Shows the green channel's own curve",
+            Self::Blue => "Shows the blue channel's own curve",
+        }
+    }
+
     /// The channel's index into a per-channel histogram, or `None` for the composite.
     fn index(self) -> Option<usize> {
         match self {
@@ -135,7 +146,7 @@ pub fn reset_button(ui: &mut egui::Ui, curve: &mut ToneCurve, ed: &mut Edited) {
     // disappears is harder to learn than one that greys out.
     let r = ui
         .add_enabled(!curve.points.is_empty(), egui::Button::new("Reset"))
-        .on_hover_text("Resets the curve to a straight line");
+        .hover("Resets the curve to a straight line");
     if r.clicked() {
         // ⚠ Cleared to *empty*, not to the two identity endpoints: empty is what keeps
         // `ToneCurveStage` out of the pipeline entirely.
@@ -173,7 +184,7 @@ pub fn selectors(ui: &mut egui::Ui, mode: &mut CurveMode, channel: &mut CurveCha
     let channels = CurveChannel::ALL.map(|c| Segment {
         value: c,
         label: c.label(),
-        hover: "",
+        hover: c.hover(),
         mark: c.mark(&v),
     });
     ui.add_enabled_ui(*mode == CurveMode::Point, |ui| {
@@ -226,7 +237,7 @@ pub fn show(
         allocated.expect("the horizontal closure always runs")
     };
     // ⚠ How to work it is the hover, never a standing line (`docs/DESIGN.md` §8).
-    let resp = resp.on_hover_text(GESTURE_HELP);
+    let resp = resp.hover(GESTURE_HELP);
 
     // ⚠ Which point a drag grabbed has to survive between frames, or re-hit-testing each frame
     // would let a fast drag jump to whichever point the pointer happened to pass over. egui's

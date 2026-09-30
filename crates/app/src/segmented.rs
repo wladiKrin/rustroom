@@ -14,6 +14,7 @@
 //!   integration. A checkbox reads as one setting among many; this reads as a decision.
 
 use crate::theme;
+use crate::theme::Hover as _;
 use eframe::egui;
 
 /// A segmented control: one full-width well, `items.len()` equal columns, exactly one lit.
@@ -22,17 +23,11 @@ use eframe::egui;
 /// for a list of options with its own reasons to be `selectable_label`s (aspect presets, looks,
 /// composition guides). Each column carries `WidgetInfo::selected` with its label, so
 /// `test_ui::click(ctx, "Saturation", ..)` reaches it exactly as it reached the chips.
+///
+/// ⚠ Each item is `(value, label, hover sentence)` — the sentence is part of the signature (M10.6b),
+/// so a segment cannot be added mute without writing `""` on purpose, which `hover_coverage` then
+/// reports wherever it can draw the control.
 pub fn segmented<T: PartialEq + Copy>(
-    ui: &mut egui::Ui,
-    current: &mut T,
-    items: &[(T, &str)],
-) -> egui::Response {
-    let with: Vec<(T, &str, &str)> = items.iter().map(|(t, l)| (*t, *l, "")).collect();
-    segmented_with_hover(ui, current, &with)
-}
-
-/// [`segmented`] with a hover text per item (an empty one shows nothing).
-pub fn segmented_with_hover<T: PartialEq + Copy>(
     ui: &mut egui::Ui,
     current: &mut T,
     items: &[(T, &str, &str)],
@@ -224,11 +219,7 @@ pub fn segmented_marked<T: PartialEq + Copy>(
             egui::vec2(w, row_h),
         );
         let r = ui.interact(cell, resp.id.with(i), egui::Sense::click());
-        let r = if hover.is_empty() {
-            r
-        } else {
-            r.on_hover_text(*hover)
-        };
+        let r = if hover.is_empty() { r } else { r.hover(*hover) };
         let enabled = ui.is_enabled();
         let selected = *current == *item;
         r.widget_info(|| {
@@ -382,7 +373,7 @@ pub fn pill<T: PartialEq + Copy>(
         let r = if it.hover.is_empty() {
             r
         } else {
-            r.on_hover_text(it.hover)
+            r.hover(it.hover)
         };
         let enabled = ui.is_enabled();
         let selected = *current == it.value;
@@ -458,14 +449,17 @@ pub fn chip_width(ui: &egui::Ui, label: &str, font: &egui::FontId) -> f32 {
 ///
 /// ⚠ Reports as a checkbox: it *is* one, drawn as a chip — the format filter's semantics did
 /// not change with its clothes.
-pub fn chip(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
+///
+/// ⚠ `hover` is required (M10.6b): a chip is a control.
+pub fn chip(ui: &mut egui::Ui, on: &mut bool, label: &str, hover: &str) -> egui::Response {
     const H: f32 = 20.0;
     let font = egui::FontId::proportional(crate::theme::tokens::CAPTION);
     let width = chip_width(ui, label, &font);
-    let (rect, mut r) = ui.allocate_exact_size(egui::vec2(width, H), egui::Sense::click());
+    let (rect, r) = ui.allocate_exact_size(egui::vec2(width, H), egui::Sense::click());
     let enabled = ui.is_enabled();
     let was = *on;
     r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, was, label));
+    let mut r = r.hover(hover);
     // ⚠ `mark_changed`, or a caller reading `changed()` — as the format filter does, exactly
     // as it read the checkbox it replaced — sees nothing and the chips are "not clickable"
     // (seen in use 2026-09-20). A hand-drawn widget has to say so itself.
@@ -552,9 +546,9 @@ pub fn swatches<T: PartialEq + Copy>(
             r.mark_changed();
         }
         let r = if it.hover.is_empty() {
-            r.on_hover_text(it.label)
+            r.hover(it.label)
         } else {
-            r.on_hover_text(it.hover)
+            r.hover(it.hover)
         };
         let p = ui.painter();
         if *current == it.value {
@@ -846,7 +840,7 @@ mod tests {
         let mut on = true;
         let mut changed = false;
         test_ui::click(&ctx, "RAF 12", |ui| {
-            changed |= chip(ui, &mut on, "RAF 12").changed();
+            changed |= chip(ui, &mut on, "RAF 12", "Shows or hides the RAF files").changed();
         });
         assert!(!on, "a click did not toggle the chip");
         // ⚠ The format filter reads `changed()`, not the flag — a chip that flips the flag

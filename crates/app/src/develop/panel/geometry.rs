@@ -12,6 +12,7 @@
 
 use crate::develop::panel::{section, Edited};
 use crate::theme;
+use crate::theme::Hover as _;
 use crate::Session;
 use eframe::egui;
 use rustroom_app::composition_guides::CompositionGuide;
@@ -190,7 +191,7 @@ fn crop(
             egui::Button::new(egui::RichText::new(glyph).size(crate::theme::tokens::ICON))
                 .min_size(egui::vec2(CROP_ROW, CROP_ROW)),
         )
-        .on_hover_text(hover)
+        .hover(hover)
         .clicked()
     };
     let mut swap = false;
@@ -233,7 +234,7 @@ fn crop(
             |ui| {
                 swap = ui
                     .add(egui::Button::new("Swap").min_size(egui::vec2(0.0, CROP_ROW)))
-                    .on_hover_text("Switches the crop between landscape and portrait")
+                    .hover("Switches the crop between landscape and portrait")
                     .clicked();
             },
         );
@@ -252,9 +253,18 @@ fn crop(
     // ⚠ One segmented control, never a row of chips: seven chips clipped at the panel's width.
     // The lit segment is *derived* from the lock each frame, as the chips were; a lock that
     // matches nothing lights nothing.
-    let mut items: Vec<(Option<Chip>, &str, &str)> = vec![(Some(Chip::Free), "Free", "")];
-    for (label, ratio) in PRESETS {
-        items.push((Some(Chip::Preset(ratio)), label, ""));
+    // The sentences first, so the items can borrow them.
+    let says: Vec<String> = PRESETS
+        .iter()
+        .map(|(label, _)| format!("Keeps the crop at {label}"))
+        .collect();
+    let mut items: Vec<(Option<Chip>, &str, &str)> = vec![(
+        Some(Chip::Free),
+        "Free",
+        "Lets the crop take any proportion",
+    )];
+    for ((label, ratio), s) in PRESETS.iter().zip(&says) {
+        items.push((Some(Chip::Preset(*ratio)), label, s.as_str()));
     }
     items.push((
         Some(Chip::Custom),
@@ -328,9 +338,7 @@ fn crop(
                         }
                     })
                     .response
-                    .on_hover_text(
-                        "Chooses the guide drawn inside the crop (O cycles through them)",
-                    );
+                    .hover("Chooses the guide drawn inside the crop (O cycles through them)");
             },
         );
     });
@@ -369,9 +377,8 @@ fn level_button(ui: &mut egui::Ui, armed: bool) -> egui::Response {
             "Straighten by drawing a line",
         )
     });
-    let resp = resp.on_hover_text(
-        "Straightens the photo along a line you drag over something that should be level",
-    );
+    let resp = resp
+        .hover("Straightens the photo along a line you drag over something that should be level");
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
         let accent = v.selection.bg_fill;
@@ -445,7 +452,7 @@ fn perspective(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited, auto: &mut b
     ui.horizontal(|ui| {
         if ui
             .toggle_value(&mut s.show_guides, "Guide mode")
-            .on_hover_text(
+            .hover(
                 "Corrects perspective from lines you draw along edges that should be vertical or horizontal",
             )
             .changed()
@@ -455,18 +462,16 @@ fn perspective(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited, auto: &mut b
         let refining = !s.guides.is_empty();
         let label = if refining { "Refine guides" } else { "Auto" };
         let hint = if refining {
-            "Move each guide you drew onto the nearest strong edge. A guide with no edge near it \
-             is left exactly where you put it."
+            "Moves each guide you drew onto the nearest strong edge, leaving one with none near it"
         } else {
-            "Find two vertical edges in the photograph and solve the tilt from them. The guides \
-             it infers are left on screen so you can nudge, refine or delete them."
+            "Finds two vertical edges and straightens the tilt from them, leaving its guides to adjust"
         };
-        if ui.button(label).on_hover_text(hint).clicked() {
+        if ui.button(label).hover(hint).clicked() {
             *auto = true;
         }
         if ui
             .add_enabled(refining, egui::Button::new("Clear"))
-            .on_hover_text("Removes the guide lines, keeping the corrections they made")
+            .hover("Removes the guide lines, keeping the corrections they made")
             .clicked()
         {
             clear_guides(s);

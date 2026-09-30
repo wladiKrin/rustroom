@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.6b: every clickable control says what it does (2026-09-30)](#2026-09-30--m106b-every-clickable-control-says-what-it-does-branch-m106b-hover-table-merged-2026-09-30)
 - [M10.6a: the Immich Timeline at the top (2026-09-29)](#2026-09-29--m106a-the-immich-timeline-at-the-top-branch-m106a-immich-timeline-merged-2026-09-29)
 - [The re-plan: every open item becomes Phase 10, release becomes Phase 11 (2026-09-29)](#2026-09-29--the-re-plan-every-open-item-becomes-phase-10-release-becomes-phase-11-branch-replan)
 - [Reordering masks and a mask's components (2026-09-29)](#2026-09-29--reordering-masks-and-a-masks-components-branch-mask-reorder-merged-2026-09-29)
@@ -162,6 +163,66 @@ goldens unmoved.
 - ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
+
+### 2026-09-30 — M10.6b: every clickable control says what it does (branch `m10.6b-hover-table`, merged 2026-09-30)
+
+**Input:** Phase 10's M10.6b, *"a table for the non-slider hover sentences"*. Spec
+`2026-09-29-m10.6b-hover-coverage-design.md`, plan `2026-09-29-m10.6b-hover-coverage.md`. **The author's
+two calls:** scope — *every clickable control* (buttons, checkboxes, toggles, combos, segmented controls,
+rows, sliders; exempt menu items, text fields and section headers); approach — **one helper and a walk
+over the drawn app**, not a central table (the sentences stay at their call sites).
+
+**Built.** `theme::Hover` — `.hover(sentence)` shows the tooltip **and** sets the control's AccessKit
+**description** (`ctx.accesskit_node_builder`), so a screen reader reads every sentence; 123 calls
+routed through it and a guard keeps `on_hover_text` inside `theme.rs`. `test_ui::nodes` reads the tree;
+`hover_coverage.rs` draws the rail, both top bars, the status row, the menu bar, the Develop panel under
+every tool (Masks once per kind), Settings on each tab, Export and Info — all sections opened — and fails
+on any control with no description or one `slider_help::sentence_fault` (now the one shared rule)
+rejects: **537 controls**. The shared widgets take the sentence as a **required** argument —
+`Footer::confirm(primary, says, …)` (plus the dismiss's own sentence and the ×, which does the same),
+dialog `tabs`, `segmented`, `chip`, and the mask/patch/preset row (`reorder` split into `hover` and
+`draggable`) — so the dialogs no harness can draw are covered by the compiler. Section headers carry
+their AccessKit *expanded* state (correct for a screen reader, and what exempts them); the in-window
+menu bar's buttons `Role::MenuItem`, walked directly so the exemption runs on macOS too. About 45
+sentences written; the mask's Disable, a patch's Hold out, Auto, Refine guides, Find dust, the
+Threshold slider and the Orange accent cut to one sentence each. **3277 → 3282 tests**, goldens unmoved.
+
+**Worth keeping:**
+
+- ⚠⚠ **THREE SWEEPS READ "UP TO THE FIRST `#[cfg(test)]`" AND WERE BLIND PAST ANY TEST ITEM PLACED
+  MID-FILE.** `retouch.rs` has a test-only `show` at line 81, so everything after it was unswept: three
+  bare `on_hover_text` calls (which my own new guard, built the same way, also passed), two
+  multi-sentence hovers, and — in `develop/canvas/mod.rs` — a **literal 12-pt font** the font-size sweep
+  had missed (now Caption). The walk is what noticed: *"Find dust" has no sentence*. All three sweeps now
+  read `theme::tests::production_code`, which blanks only the `#[cfg(test)]` items (a small lexer skips
+  strings, chars and comments so a `"}"` cannot end an item early) and keeps line numbers.
+- ⚠ **egui's own `Slider` does not report a click** (it only drags), so the first walk counted no egui
+  slider at all; sliders now count by role. Its number is a separate `DragValue` with an automatic id that
+  no caller can describe — covered by the described slider directly left of it on its row, which is how
+  egui lays them out. The app's own slider describes its rail and its number itself.
+- ⚠ **Labels are exempt, deliberately:** egui labels are selectable text here (`theme::empty_state`
+  says why the switch stays on), so every one reports a click — 50-odd "controls" on the first run.
+- ⚠ **A comment claimed a hover that did not exist:** the status row's compact sort combo — "the glyph
+  alone, its order named on hover" — had none; it now says *"Sorts the photos by …"*. Lesson (d)'s shape.
+- ⚠ **Sabotage S1 first looked green because the filter matched nothing:** two test names passed as ONE
+  filter string select no test and exit 0. Re-run with a filter each, both went red. Lesson (b), again.
+- Also fixed: the upload notice's empty dismiss drew a blank button; an empty dismiss now draws none.
+- Sabotage-checked: the helper without the description; one sentence removed; the Disable hover back to
+  two sentences; a bare `on_hover_text`; a section header without its expanded state.
+- ⚠ Files past ~600 code lines that this touched: `segmented.rs` 661, `status_bar.rs` 649,
+  `modals/settings.rs` 810, `modals/export.rs` 819 — M10.7d's list.
+
+✅ **Confirmed by use 2026-09-30** (*"works"*), with one addition asked in the same breath: **resting on
+a photo shows its name, in the filmstrip and the Library grid.** The filmstrip already had it — a probe
+showed its tooltip up after a rest — but the grid did not ("needs no hover: it draws the caption", which
+a small cell cuts short); its cell now carries the name as tooltip, accessible name and description,
+and both views joined the walk. `test_ui::tooltip_after_rest` checks a tooltip as **shown** (a rest past
+the delay, a tooltip layer up), with a rest on nothing as its control. 3282 → 3284 tests, both
+sabotage-checked. ⚠ **Then taken back out of the grid**, the author's call after trying it: *"remove
+it from the library view since it already says the name there, but keep it in the filmstrip."* The grid
+cell keeps the name as its accessible name and description (`theme::describe`, no tooltip), and its test
+now asserts **no** tooltip — the filmstrip's test, which asserts one, is its positive twin. ✅ Merged
+2026-09-30.
 
 ### 2026-09-29 — M10.6a: the Immich Timeline at the top (branch `m10.6a-immich-timeline`, merged 2026-09-29)
 

@@ -362,6 +362,40 @@ fn tune(style: &mut egui::Style) {
     // fill already carries the signal.
 }
 
+/// Every hover sentence goes through here (M10.6b): it is shown as the tooltip **and** becomes the
+/// control's AccessKit description — which a screen reader reads, and which `hover_coverage` checks on
+/// every clickable control the harnesses can draw. ⚠ `on_hover_text` itself is called nowhere else;
+/// `no_bare_on_hover_text_outside_theme` holds that.
+pub trait Hover {
+    /// Show `sentence` on hover and record it as this control's description.
+    fn hover(self, sentence: impl AsRef<str>) -> Self;
+    /// `title` on its own line above `sentence` in the tooltip — an elided name shown in full — with
+    /// `sentence` alone as the description.
+    fn hover_titled(self, title: &str, sentence: &str) -> Self;
+}
+
+impl Hover for egui::Response {
+    fn hover(self, sentence: impl AsRef<str>) -> Self {
+        let s = sentence.as_ref();
+        describe(&self, s);
+        self.on_hover_text(s)
+    }
+
+    fn hover_titled(self, title: &str, sentence: &str) -> Self {
+        describe(&self, sentence);
+        self.on_hover_text(format!("{title}\n{sentence}"))
+    }
+}
+
+/// Record `sentence` as a control's description without a tooltip of its own — for a node whose
+/// sentence is shown by its neighbour: a slider's rail, whose sentence sits on its name.
+///
+/// ⚠ A no-op while AccessKit is off, which is every frame without a screen reader or a test.
+pub fn describe(r: &egui::Response, sentence: &str) {
+    r.ctx
+        .accesskit_node_builder(r.id, |n| n.set_description(sentence.to_owned()));
+}
+
 /// A line of secondary text under a control: a value, a state, an empty list's note.
 ///
 /// ⚠⚠ **Not an explanation.** Since 2026-09-29 explanations live on hover (`docs/DESIGN.md` §8);
@@ -920,13 +954,17 @@ mod tests {
             B,
             D,
         }
-        let items = [(C::A, "Hue"), (C::B, "Saturation"), (C::D, "Luminance")];
+        let items = [
+            (C::A, "Hue", ""),
+            (C::B, "Saturation", ""),
+            (C::D, "Luminance", ""),
+        ];
         let ctx = crate::test_ui::ctx();
         let mut cur = C::A;
         let found = crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             segmented(ui, &mut cur, &items);
         });
-        for (_, l) in items {
+        for (_, l, _) in items {
             assert!(
                 found.iter().any(|(f, _)| f == l),
                 "{l} not reachable: {found:?}"
@@ -1123,10 +1161,173 @@ mod tests {
         }
     }
 
+    /// Which characters of `b` are code — not inside a string, a char literal or a comment.
+    fn code_mask(b: &[char]) -> Vec<bool> {
+        let mut mask = vec![true; b.len()];
+        let mut i = 0;
+        let ident = |c: char| c.is_alphanumeric() || c == '_';
+        while i < b.len() {
+            let c = b[i];
+            let next = b.get(i + 1).copied();
+            let start = i;
+            if c == '/' && next == Some('/') {
+                while i < b.len() && b[i] != '\n' {
+                    i += 1;
+                }
+            } else if c == '/' && next == Some('*') {
+                let mut depth = 0;
+                while i < b.len() {
+                    if b[i] == '/' && b.get(i + 1) == Some(&'*') {
+                        depth += 1;
+                        i += 2;
+                    } else if b[i] == '*' && b.get(i + 1) == Some(&'/') {
+                        depth -= 1;
+                        i += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            } else if c == 'r'
+                && (next == Some('"') || next == Some('#'))
+                && (i == 0 || !ident(b[i - 1]))
+            {
+                // A raw string: r"…" or r#"…"#.
+                let mut j = i + 1;
+                let mut hashes = 0;
+                while b.get(j) == Some(&'#') {
+                    hashes += 1;
+                    j += 1;
+                }
+                if b.get(j) != Some(&'"') {
+                    i += 1;
+                    continue;
+                }
+                j += 1;
+                'raw: while j < b.len() {
+                    if b[j] == '"' && (0..hashes).all(|k| b.get(j + 1 + k) == Some(&'#')) {
+                        j += 1 + hashes;
+                        break 'raw;
+                    }
+                    j += 1;
+                }
+                i = j;
+            } else if c == '"' {
+                i += 1;
+                while i < b.len() && b[i] != '"' {
+                    i += if b[i] == '\\' { 2 } else { 1 };
+                }
+                i += 1;
+            } else if c == '\'' && (next == Some('\\') || b.get(i + 2) == Some(&'\'')) {
+                // A char literal — '{', '\'' — and not a lifetime, which has no closing quote.
+                i += 1;
+                while i < b.len() && b[i] != '\'' {
+                    i += if b[i] == '\\' { 2 } else { 1 };
+                }
+                i += 1;
+            } else {
+                i += 1;
+                continue;
+            }
+            for m in mask.iter_mut().take(i.min(b.len())).skip(start) {
+                *m = false;
+            }
+        }
+        mask
+    }
+
+    /// `src` with every `#[cfg(test)]` item blanked — its characters spaces, its newlines kept, so
+    /// line numbers still match — and nothing else.
+    ///
+    /// ⚠⚠ **Not "up to the first `#[cfg(test)]`"**, which is what three sweeps here did until M10.6b:
+    /// a test-only item placed mid-file — `retouch.rs` has one at line 81 — hid every production line
+    /// after it, and three `on_hover_text` calls there slipped past both the hover sweep and its
+    /// guard. The coverage walk is what noticed.
+    pub(crate) fn production_code(src: &str) -> String {
+        let b: Vec<char> = src.chars().collect();
+        let mask = code_mask(&b);
+        let marker: Vec<char> = "#[cfg(test)]".chars().collect();
+        let mut out = b.clone();
+        let mut i = 0;
+        while i + marker.len() <= b.len() {
+            if !(mask[i] && b[i..i + marker.len()] == marker[..]) {
+                i += 1;
+                continue;
+            }
+            // The item ends at its body's closing brace, or at a `;` or `,` outside any bracket.
+            let mut j = i + marker.len();
+            let (mut paren, mut end) = (0i32, None);
+            while j < b.len() {
+                if mask[j] {
+                    match b[j] {
+                        '(' | '[' => paren += 1,
+                        ')' | ']' => paren -= 1,
+                        ';' | ',' if paren == 0 => {
+                            end = Some(j);
+                            break;
+                        }
+                        '{' if paren == 0 => {
+                            let mut depth = 0;
+                            while j < b.len() {
+                                if mask[j] {
+                                    if b[j] == '{' {
+                                        depth += 1;
+                                    } else if b[j] == '}' {
+                                        depth -= 1;
+                                        if depth == 0 {
+                                            break;
+                                        }
+                                    }
+                                }
+                                j += 1;
+                            }
+                            end = Some(j);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                j += 1;
+            }
+            let end = end.unwrap_or(b.len() - 1).min(b.len() - 1);
+            for c in out.iter_mut().take(end + 1).skip(i) {
+                if *c != '\n' {
+                    *c = ' ';
+                }
+            }
+            i = end + 1;
+        }
+        out.into_iter().collect()
+    }
+
+    #[test]
+    fn production_code_keeps_what_follows_a_test_item_and_blanks_only_the_item() {
+        let src = "fn a() {}\n#[cfg(test)]\nfn helper() { let s = \"}\"; }\nfn b() { x.on_hover_text(\"hi\"); }\n#[cfg(test)]\nmod tests {\n    fn t() { let c = '}'; let s = \"#[cfg(test)]\"; }\n}\nstruct S {\n    #[cfg(test)]\n    pub(crate) n: usize,\n    kept: u8,\n}\n";
+        let out = production_code(src);
+        assert_eq!(
+            out.lines().count(),
+            src.lines().count(),
+            "line numbers must survive"
+        );
+        // ⚠ The positive control: production code after a test item is still there.
+        assert!(out.contains("fn b() { x.on_hover_text"), "{out}");
+        assert!(
+            out.contains("fn a() {}") && out.contains("kept: u8"),
+            "{out}"
+        );
+        // …and every test item is gone, braces inside its strings and chars notwithstanding.
+        for gone in ["helper", "mod tests", "fn t()", "pub(crate) n"] {
+            assert!(!out.contains(gone), "{gone} survived:\n{out}");
+        }
+    }
+
     /// The literal font sizes in `source`, up to its test module: `FontId::proportional(<digit>`,
     /// `FontId::new(<digit>`, `FontId::monospace(<digit>` and `.size(<digit>`.
     fn literal_sizes(source: &str) -> Vec<String> {
-        let code = source.split("#[cfg(test)]").next().unwrap_or("");
+        let code = production_code(source);
+        let code = code.as_str();
         let mut found = Vec::new();
         for (n, line) in code.lines().enumerate() {
             for pat in [
@@ -1237,7 +1438,8 @@ mod tests {
                     continue;
                 }
                 let src = std::fs::read_to_string(&p).unwrap();
-                let code = src.split("#[cfg(test)]").next().unwrap_or("");
+                let code = production_code(&src);
+                let code = code.as_str();
                 let rel = p.strip_prefix(&root).unwrap().display().to_string();
                 // ⚠ The named hover constants too — the retouch modes, the profile note, the DNG note —
                 // which read exactly like call-site hovers once drawn.
@@ -1247,6 +1449,7 @@ mod tests {
                 // An empty state's prose is `*_TEXT`, not a hover (DESIGN.md §7.14).
                 for pat in [
                     "on_hover_text(",
+                    ".hover(",
                     "hover: ",
                     "HINT: &str =",
                     "HELP: &str =",
@@ -1277,6 +1480,52 @@ mod tests {
     /// the sources so a paragraph cannot creep back in one reasonable-looking call at a time — the
     /// way the 177 of them had become essays, warnings and measurements. `slider_help` checks its
     /// own table the same way. ⚠ Sample and a positive control first.
+    /// ⚠ The helper's whole point: the sentence becomes the control's description.
+    #[test]
+    fn a_hover_is_the_controls_description() {
+        let ctx = crate::test_ui::ctx();
+        let nodes = crate::test_ui::nodes(&ctx, |ui| {
+            let _ = ui.button("Go").hover("Goes somewhere");
+        });
+        let go = nodes.iter().find(|n| n.label == "Go").expect("drawn");
+        assert!(go.clickable, "a button offers a click");
+        assert_eq!(go.description.as_deref(), Some("Goes somewhere"));
+    }
+
+    /// ⚠⚠ Every hover goes through `Hover`, or the description — and the coverage walk — is
+    /// bypassed. Swept over the non-test code of every source; a positive control first: this file's
+    /// own call must be found, or the sweep is reading nothing.
+    #[test]
+    fn no_bare_on_hover_text_outside_theme() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![root.clone()];
+        let (mut own, mut bare) = (0, Vec::new());
+        while let Some(dir) = stack.pop() {
+            for e in std::fs::read_dir(&dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                if p.extension().is_none_or(|x| x != "rs") {
+                    continue;
+                }
+                let src = std::fs::read_to_string(&p).unwrap();
+                let code = production_code(&src);
+                let code = code.as_str();
+                let n = code.matches(".on_hover_text(").count();
+                let rel = p.strip_prefix(&root).unwrap().display().to_string();
+                if rel == "theme.rs" {
+                    own += n;
+                } else if n > 0 {
+                    bare.push(format!("{rel}: {n}"));
+                }
+            }
+        }
+        assert!(own > 0, "the sweep did not find theme.rs's own call");
+        assert!(bare.is_empty(), "on_hover_text outside theme.rs: {bare:?}");
+    }
+
     #[test]
     fn every_hover_is_one_short_sentence() {
         assert_eq!(
@@ -1292,12 +1541,8 @@ mod tests {
             if t.is_empty() {
                 continue;
             }
-            let long = t.chars().count() > 110;
-            let sentences = t.contains(". ") || t.contains('\n') || t.contains("; ");
-            let stop = t.ends_with('.') && !t.ends_with("…");
-            let noise = t.contains('⚠') || t.to_lowercase().contains("double-click to reset");
-            if long || sentences || stop || noise {
-                bad.push(format!("{at}: {t:?}"));
+            if let Some(fault) = rustroom_app::slider_help::sentence_fault(t) {
+                bad.push(format!("{at}: {fault}: {t:?}"));
             }
         }
         assert!(

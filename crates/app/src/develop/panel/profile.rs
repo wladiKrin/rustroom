@@ -12,6 +12,7 @@
 //! header is drawn by `panel/mod.rs` with `resettable: false`.
 
 use crate::develop::panel::Edited;
+use crate::theme::Hover as _;
 use eframe::egui;
 use rustroom_app::looks::LooksState;
 
@@ -25,7 +26,7 @@ pub fn rendering(
     let mut rendered = edits.applied_rendering() == edit_model::Rendering::Camera;
     if ui
         .checkbox(&mut rendered, "Camera rendering")
-        .on_hover_text(
+        .hover(
             "Renders the photo with the camera's own tone and colour, instead of a flat colorimetric look",
         )
         .changed()

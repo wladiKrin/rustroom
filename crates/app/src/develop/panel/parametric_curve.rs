@@ -9,6 +9,7 @@
 use super::tone_curve::{backdrop, CurveChannel};
 use crate::develop::panel::Edited;
 use crate::theme;
+use crate::theme::Hover as _;
 use eframe::egui;
 use rustroom_app::settings::ParametricDrag;
 use rustroom_app::tone_curve_tool::{self as tool, Region};
@@ -37,7 +38,7 @@ pub fn reset_button(ui: &mut egui::Ui, param: &mut edit_model::ParametricCurve, 
             *param != edit_model::ParametricCurve::default(),
             egui::Button::new("Reset"),
         )
-        .on_hover_text("Resets the four regions and their boundaries");
+        .hover("Resets the four regions and their boundaries");
     if r.clicked() {
         *param = edit_model::ParametricCurve::default();
         ed.mark_changed();
@@ -67,7 +68,7 @@ pub fn show(
         allocated.expect("the horizontal closure always runs")
     };
     // ⚠ How to work it is the hover (`docs/DESIGN.md` §8); the line under it carries only a value.
-    let resp = resp.on_hover_text(match binding {
+    let resp = resp.hover(match binding {
         ParametricDrag::Left => {
             "Drag the handles below to move the region boundaries, or drag on the curve to adjust a region"
         }

@@ -12,6 +12,7 @@
 //! exactly what is left and truncates into it. Nothing is placed where it merely hopes to fit.
 
 use crate::segmented;
+use crate::theme::Hover as _;
 use crate::theme::{self, tokens};
 use crate::{AppView, LibrarySource, RustroomApp};
 use eframe::egui;
@@ -267,7 +268,7 @@ fn job_or_status(app: &mut RustroomApp, ui: &mut egui::Ui) {
             .truncate()
             .selectable(false),
         )
-        .on_hover_text(&text);
+        .hover(&text);
     }
     if cancel_clicked {
         if let Some(f) = cancel {
@@ -325,7 +326,7 @@ fn readout(app: &RustroomApp, ui: &mut egui::Ui) {
                 .color(theme::tokens::of(ui).text2),
         ),
     )
-    .on_hover_text("The colour under the pointer, as red, green and blue from 0 to 255");
+    .hover("The colour under the pointer, as red, green and blue from 0 to 255");
 }
 
 /// The colour swatch beside the numeric readout, in points.
@@ -369,12 +370,12 @@ fn more_menu(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context, show
         }
         stack_buttons(app, ui);
         let hover = reindex_hover(app);
-        if ui.button("Reindex").on_hover_text(hover).clicked() {
+        if ui.button("Reindex").hover(hover).clicked() {
             app.reindex(ctx);
             ui.close();
         }
     });
-    r.0.on_hover_text("Shows more actions, such as Reindex and the stack controls");
+    r.0.hover("Shows more actions, such as Reindex and the stack controls");
 }
 
 /// Download and Remove downloads, for the current selection.
@@ -413,14 +414,14 @@ fn immich_cache_buttons(app: &mut RustroomApp, ui: &mut egui::Ui) {
 
     if ui
         .add_enabled(any, egui::Button::new("Download"))
-        .on_hover_text("Downloads the selected photos for offline use")
+        .hover("Downloads the selected photos for offline use")
         .clicked()
     {
         app.download_assets(&picked);
     }
     if ui
         .add_enabled(any, egui::Button::new("Remove downloads"))
-        .on_hover_text(
+        .hover(
             "Deletes the local copies of the selected photos, keeping them on your Immich server",
         )
         .clicked()
@@ -462,7 +463,14 @@ fn sort_combo(app: &mut RustroomApp, ui: &mut egui::Ui, compact: bool) {
             for o in catalog::SortOrder::ALL {
                 ui.selectable_value(&mut order, o, o.label());
             }
-        });
+        })
+        .response
+        // ⚠ The compact form is the glyph alone, and the promise above that it names its order on
+        // hover had no hover behind it until M10.6b's walk found the combo mute.
+        .hover(format!(
+            "Sorts the photos by {}",
+            order.label().to_lowercase()
+        ));
     // ⚠ `apply_sort` guards on an actual change itself, since this body runs every frame and
     // re-sorting a folder of hundreds per frame is not free.
     app.apply_sort(order);
@@ -482,7 +490,7 @@ fn grid_size_slider(app: &mut RustroomApp, ui: &mut egui::Ui) {
     ui.spacing_mut().slider_width = 80.0;
     let r = ui
         .add(egui::Slider::new(&mut cell, lo..=hi).show_value(false))
-        .on_hover_text("Sets the thumbnail size");
+        .hover("Sets the thumbnail size");
     if r.changed() {
         app.settings.library_cell = cell;
         app.cell_zoom_pending = true;
@@ -492,7 +500,7 @@ fn grid_size_slider(app: &mut RustroomApp, ui: &mut egui::Ui) {
         app.save_settings();
     }
     ui.label(egui::RichText::new(icons::THUMB_SIZE.to_string()).size(crate::theme::tokens::ICON))
-        .on_hover_text("Sets the thumbnail size");
+        .hover("Sets the thumbnail size");
 }
 
 /// Collapse or expand every stack in the current folder.
@@ -537,14 +545,14 @@ fn stack_buttons(app: &mut RustroomApp, ui: &mut egui::Ui) {
     let mut expand = false;
     if ui
         .add_enabled(any_collapsed, egui::Button::new("Expand all"))
-        .on_hover_text("Shows every file in every stack")
+        .hover("Shows every file in every stack")
         .clicked()
     {
         expand = true;
     }
     if ui
         .add_enabled(any_expanded, egui::Button::new("Stack all"))
-        .on_hover_text("Collapses every stack to a single photo")
+        .hover("Collapses every stack to a single photo")
         .clicked()
     {
         collapse = true;
@@ -613,12 +621,15 @@ fn format_chips(app: &mut RustroomApp, ui: &mut egui::Ui, rtl: bool) {
         let label = format!("{} {count}", ext.to_uppercase());
         // ⚠ A chip with a dot rather than a checkbox: the dot carries the state in colour, the
         // semantics are the checkbox's exactly (`segmented::chip` reports as one).
+        let says = if single {
+            "The only format in this folder".to_string()
+        } else {
+            format!("Shows or hides the {} files", ext.to_uppercase())
+        };
         let r = ui
-            .add_enabled_ui(!single, |ui| segmented::chip(ui, &mut shown, &label))
+            .add_enabled_ui(!single, |ui| segmented::chip(ui, &mut shown, &label, &says))
             .inner;
-        if single {
-            r.on_hover_text("The only format in this folder");
-        } else if r.changed() {
+        if !single && r.changed() {
             toggled = Some(ext.clone());
         }
     }

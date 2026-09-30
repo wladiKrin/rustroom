@@ -5,6 +5,7 @@ use crate::develop::panel::hsl_bands;
 use crate::develop::panel::tone_curve;
 use crate::develop::panel::Edited;
 use crate::theme;
+use crate::theme::Hover as _;
 use edit_model::HslBand;
 use eframe::egui;
 use rustroom_app::wb_tool::{self, WbPreset};
@@ -29,6 +30,15 @@ impl HslChannel {
             Self::Hue => "Hue",
             Self::Saturation => "Saturation",
             Self::Luminance => "Luminance",
+        }
+    }
+
+    /// The selector's hover sentence (M10.6b), beside the label so the two cannot part.
+    pub fn hover(self) -> &'static str {
+        match self {
+            Self::Hue => "Shows the sliders that shift each colour's hue",
+            Self::Saturation => "Shows the sliders that change each colour's saturation",
+            Self::Luminance => "Shows the sliders that brighten or darken each colour",
         }
     }
 
@@ -234,9 +244,7 @@ pub(crate) fn white_balance(
             // saying so.
             if ui
                 .selectable_label(*picking, "Pick a neutral")
-                .on_hover_text(
-                    "Sets white balance from a spot you click that should be neutral grey",
-                )
+                .hover("Sets white balance from a spot you click that should be neutral grey")
                 .clicked()
             {
                 *picking = !*picking;
@@ -264,9 +272,7 @@ pub(crate) fn white_balance(
             }
         })
         .response
-        .on_hover_text(
-            "Sets the temperature for a common light source such as daylight or tungsten",
-        );
+        .hover("Sets the temperature for a common light source such as daylight or tungsten");
     });
 }
 
@@ -339,7 +345,7 @@ pub(crate) fn tone(
     // its Auto on its own row in the Tone panel for the same reason.
     if ui
         .button("Auto")
-        .on_hover_text("Sets Exposure, Whites and Blacks automatically from the histogram")
+        .hover("Sets Exposure, Whites and Blacks automatically from the histogram")
         .clicked()
     {
         rustroom_app::auto_tone_tool::apply(edits, buffer, baseline_ev);
@@ -596,14 +602,14 @@ pub fn show(
             // has no hover parameter and the trailing closure owns the right of the row, so "color
             // grading" is carried by the checkbox's hover rather than half-added here.
             theme::sub_label_with(ui, "Tint by tone", |ui| {
-                ui.checkbox(show_grade_range, "Show range").on_hover_text(
+                ui.checkbox(show_grade_range, "Show range").hover(
                     "Tints the preview where the selected range applies, without changing the photo",
                 );
             });
             theme::segmented(
                 ui,
                 grade_range,
-                &color_wheel::GradeRange::ALL.map(|r| (r, r.label())),
+                &color_wheel::GradeRange::ALL.map(|r| (r, r.label(), r.hover())),
             );
             let diameter = ui.available_width().min(188.0);
             {
@@ -722,11 +728,20 @@ pub fn show(
             // first, which would turn merely *looking* at the panel into a decision.
             let mut l = edits.applied_lens_correction();
             let mut touched = false;
-            touched |= ui.checkbox(&mut l.distortion, "Distortion").changed();
-            touched |= ui.checkbox(&mut l.tca, "Chromatic aberration").changed();
+            touched |= ui
+                .checkbox(&mut l.distortion, "Distortion")
+                .hover("Straightens the lens's barrel or pincushion bending")
+                .changed();
+            touched |= ui
+                .checkbox(&mut l.tca, "Chromatic aberration")
+                .hover("Removes the colour fringes the lens adds toward the edges")
+                .changed();
             // ⚠ Not the creative Vignette, which stays in Effects. This one is corrective and
             // pre-crop; that one is creative and post-crop. The section heading keeps them apart.
-            touched |= ui.checkbox(&mut l.vignetting, "Vignetting").changed();
+            touched |= ui
+                .checkbox(&mut l.vignetting, "Vignetting")
+                .hover("Brightens the corners the lens darkens")
+                .changed();
             // ⚠ Also surfaced in the **Crop** tool, and that is not duplication for its own sake:
             // Scale is only *judgeable* against the uncropped frame, which is what crop mode
             // shows. Here it is often invisible — if you have cropped at all, the empty corners

@@ -5,6 +5,7 @@
 
 use crate::segmented::{self, PillItem, PillStyle};
 use crate::theme;
+use crate::theme::Hover as _;
 use crate::{
     commands, develop, library, menu_bar, modals, multi, name_edit, AppView, LibraryMode,
     RustroomApp,
@@ -711,7 +712,7 @@ fn export_button(ui: &mut egui::Ui) -> egui::Response {
         theme::primary_button(ui, &format!("{} Export…", icons::EXPORT), true)
     })
     .inner
-    .on_hover_text("Exports the selected photos (⌘E)")
+    .hover("Exports the selected photos (⌘E)")
 }
 
 /// Rating, flag and colour-label filtering, in one popup.
@@ -826,7 +827,7 @@ fn mark_filter(app: &mut RustroomApp, ui: &mut egui::Ui, compact: bool) {
                     }
                 });
         });
-    button.on_hover_text(if compact {
+    button.hover(if compact {
         label.as_str()
     } else {
         "Shows only the photos with the ratings, flags, labels, cameras or lenses you choose"

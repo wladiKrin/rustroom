@@ -13,6 +13,7 @@
 //! a fourth `RowGlyph` variant: the two rows share a look, not a contract, and every action
 //! here is a momentary button while the mask row's are toggles.
 
+use crate::theme::Hover as _;
 use eframe::egui;
 
 /// Row height in points — the Masks list's, `docs/DESIGN.md` §5.
@@ -151,7 +152,7 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
     let resp = if spec.hover.is_empty() {
         resp
     } else {
-        resp.on_hover_text(spec.hover)
+        resp.hover(spec.hover)
     };
     let enabled = ui.is_enabled();
     resp.widget_info(|| {
@@ -234,7 +235,7 @@ fn row_with(ui: &mut egui::Ui, spec: RowSpec<'_>, sense: egui::Sense) -> RowOut 
         let r = if a.hover.is_empty() {
             r
         } else {
-            r.on_hover_text(a.hover)
+            r.hover(a.hover)
         };
         if a.enabled && r.clicked() {
             action = Some(i);

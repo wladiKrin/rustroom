@@ -104,7 +104,7 @@ pub(crate) fn branch(
             count: Some(count),
             depth,
             default_open: false,
-            hover: "",
+            hover: "Opens or closes the dates inside it",
         },
     )
 }
@@ -145,7 +145,7 @@ fn leaf(ui: &mut egui::Ui, name: &str, count: Option<i64>, selected: bool, depth
             meta: "",
             selected,
             indent: list_row::tree_indent(depth),
-            hover: "",
+            hover: "Shows the photos from this date",
             actions: &[],
         },
     )

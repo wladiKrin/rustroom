@@ -17,6 +17,7 @@
 //! colorimetric render, see `edit_model::RENDERING_GROUP`), and the Masks panel's MASKS, SHAPE
 //! (trailing = the shape's kind) and adjustment sections.
 
+use crate::theme::Hover as _;
 use crate::theme::{self, tokens};
 use eframe::egui;
 
@@ -207,6 +208,10 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
     resp.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, enabled, h.name)
     });
+    // ⚠ Open or closed, for a screen reader — and what marks a header, which only opens and closes,
+    // as exempt from a hover sentence (`hover_coverage`, M10.6b).
+    ui.ctx()
+        .accesskit_node_builder(resp.id, |n| n.set_expanded(state.is_open()));
 
     let caption = theme::section_font(ui.style());
     // ⚠ A panel section's name in the medium face at body size (`docs/DESIGN.md` §7.5); the rail's
@@ -230,7 +235,7 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
         );
         let r = ui
             .interact(cell, id.with("reset"), egui::Sense::click())
-            .on_hover_text(format!("Resets {} to its defaults", h.name.to_lowercase()));
+            .hover(format!("Resets {} to its defaults", h.name.to_lowercase()));
         r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, "reset"));
         reset = r.clicked();
         let colour = if r.hovered() {
@@ -359,6 +364,9 @@ pub fn sub_header(
     resp.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, enabled, name)
     });
+    // ⚠ Open or closed — see `header`.
+    ui.ctx()
+        .accesskit_node_builder(resp.id, |n| n.set_expanded(*open));
     if resp.clicked() {
         *open = !*open;
     }

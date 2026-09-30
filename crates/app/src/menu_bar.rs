@@ -13,7 +13,12 @@ pub fn show(ui: &mut egui::Ui, recent: &[std::path::PathBuf]) -> Option<Command>
     let mut picked = None;
     egui::containers::menu::MenuBar::new().ui(ui, |ui| {
         for section in menu::model_with(recent) {
-            ui.menu_button(section.title, |ui| items(ui, &section.items, &mut picked));
+            let r = ui.menu_button(section.title, |ui| items(ui, &section.items, &mut picked));
+            // ⚠ A menu, not a button: its label and its items say what it does, so it carries no
+            // hover sentence, and `hover_coverage` exempts it by this role (M10.6b).
+            ui.ctx().accesskit_node_builder(r.response.id, |n| {
+                n.set_role(egui::accesskit::Role::MenuItem)
+            });
         }
     });
     picked

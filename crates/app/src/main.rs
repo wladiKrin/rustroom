@@ -60,6 +60,8 @@ mod display_colorspace;
 mod export_flow;
 mod filmstrip;
 mod folder_rows;
+#[cfg(test)]
+mod hover_coverage;
 mod immich_flow;
 mod immich_panel;
 mod import_flow;

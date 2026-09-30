@@ -13,6 +13,7 @@
 //! still adds a shape you did not mean, which the user accepted for the shorter panel.
 
 use crate::develop::panel::{mask_components, section, Edited};
+use crate::theme::Hover as _;
 use crate::Session;
 use eframe::egui;
 use rustroom_app::mask_kind::MaskKind;
@@ -256,7 +257,7 @@ fn show_all_row(ui: &mut egui::Ui, s: &mut Session) {
         |ui| {
             clicked = ui
                 .small_button(label)
-                .on_hover_text("Shows or hides every mask's overlay at once")
+                .hover("Shows or hides every mask's overlay at once")
                 .clicked();
         },
     );
@@ -297,10 +298,11 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
                 hold: Some((
                     s.edits.masks[i].disabled,
                     "Disable",
-                    "Switches the mask off: its adjustments are not applied — in the view, \
-                     the export, anywhere — until it is switched back on. Undo brings it back.",
+                    "Switches this mask off everywhere, the export included, until you switch it \
+                     back on",
                 )),
-                reorder: Some(mask_components::MASK_ROW_HOVER),
+                hover: mask_components::MASK_ROW_HOVER,
+                draggable: true,
             },
         );
         rects.push(out.rect);
@@ -444,9 +446,9 @@ fn shape_controls(
         );
         invert_box(ui, shape, ed);
         ui.checkbox(&mut *brush.erase, "Erase")
-            .on_hover_text("Paints away from the mask instead of adding to it");
+            .hover("Paints away from the mask instead of adding to it");
         ui.checkbox(&mut *brush.auto_mask, "Auto mask")
-            .on_hover_text("Paints only where the colour matches the one under the brush's centre");
+            .hover("Paints only where the colour matches the one under the brush's centre");
         ui.add_enabled_ui(*brush.auto_mask, |ui| {
             ed.slider(
                 ui,
@@ -535,7 +537,7 @@ fn shape_controls(
 fn invert_box(ui: &mut egui::Ui, shape: &mut edit_model::Mask, ed: &mut Edited) {
     if ui
         .checkbox(shape.invert_mut(), "Invert")
-        .on_hover_text("Inverts the mask so it covers everything it did not")
+        .hover("Inverts the mask so it covers everything it did not")
         .changed()
     {
         ed.discrete();

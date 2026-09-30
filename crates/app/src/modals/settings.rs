@@ -14,6 +14,7 @@
 use super::shell::tabs;
 use super::{dialog, Footer};
 use crate::decode::view_quality_hint;
+use crate::theme::Hover as _;
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
 use rustroom_app::settings::{
@@ -78,7 +79,11 @@ fn stack_format_chips(ui: &mut egui::Ui, s: &mut rustroom_app::stack::Stacking) 
     ui.horizontal_wrapped(|ui| {
         for ext in seen {
             let mut on = !s.formats.is_hidden(ext);
-            if crate::segmented::chip(ui, &mut on, &ext.to_uppercase()).changed() {
+            let says = format!(
+                "Includes {} files when grouping photos that share a name",
+                ext.to_uppercase()
+            );
+            if crate::segmented::chip(ui, &mut on, &ext.to_uppercase(), &says).changed() {
                 s.formats.toggle(ext);
             }
         }
@@ -290,38 +295,43 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         "settings",
         "Settings",
         theme::DialogSize::Standard,
-        Footer::confirm("Apply", true, "Cancel"),
+        Footer::confirm(
+            "Apply",
+            "Keeps these settings and closes the dialog",
+            true,
+            "Cancel",
+        ),
         |ui| {
             let tab = tabs(
                 ui,
                 egui::Id::new("settings_tab"),
                 &[
-                    "Behaviour",
-                    "Appearance",
-                    "Display",
-                    "Performance",
-                    "Input",
-                    "Immich",
+                    ("Behaviour", "Shows what happens when you delete, open and save"),
+                    ("Appearance", "Shows the theme, accent, text size and stacking"),
+                    ("Display", "Shows the colour space the photo is shown in"),
+                    ("Performance", "Shows preview quality, the caches, the GPU and how many photos export at once"),
+                    ("Input", "Shows which mouse buttons pan, erase and draw"),
+                    ("Immich", "Shows the connection to your Immich server"),
                 ],
             );
             ui.spacing_mut().item_spacing.y = GAP;
             match tab {
                 0 => {
                     ui.checkbox(&mut d.confirm, "Confirm before deleting a preset")
-                        .on_hover_text("Asks before a preset is deleted");
+                        .hover("Asks before a preset is deleted");
                     ui.checkbox(
                         &mut d.camera_rendering,
                         "Open new photos with the camera rendering",
                     )
-                    .on_hover_text("Opens unedited RAWs with the camera's own tone and colour");
+                    .hover("Opens unedited RAWs with the camera's own tone and colour");
                     ui.checkbox(&mut d.auto_lens, "Apply lens corrections to new photos")
-                        .on_hover_text("Applies the lens profile's corrections to unedited RAWs");
+                        .hover("Applies the lens profile's corrections to unedited RAWs");
                     ui.checkbox(&mut d.write_xmp, "Write XMP sidecars beside RAW files")
-                        .on_hover_text(
+                        .hover(
                             "Writes ratings, labels and keywords to an .xmp file beside each RAW for other apps to read",
                         );
                     ui.checkbox(&mut d.auto_advance, "Move to the next photo after rating")
-                        .on_hover_text("Moves to the next photo after you rate, flag or label one");
+                        .hover("Moves to the next photo after you rate, flag or label one");
                 }
                 1 => {
                     egui::Grid::new("settings_appearance")
@@ -337,21 +347,20 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                     }
                                 })
                                 .response
-                                .on_hover_text(
+                                .hover(
                                     "Chooses a dark or light interface, or follows the system",
                                 );
                             ui.end_row();
 
-                            ui.label("Accent").on_hover_text(
+                            ui.label("Accent").hover(
                                 "Sets the colour that marks selected and active controls",
                             );
                             // ⚠ Swatches, not a list of names: the choice is a colour, so it is
                             // made by looking. Shown in the theme's own half of each pair.
                             let dark = ui.visuals().dark_mode;
-                            let orange_hover = "Orange — ⚠ a warm accent sits on the colour \
-                                                temperature axis, so it can colour how you judge \
-                                                white balance. Steel blue is the default for that \
-                                                reason.";
+                            let orange_hover =
+                                "Uses orange, which sits on the white-balance axis and can colour \
+                                 that judgement";
                             let items: Vec<crate::segmented::Swatch<'_, Accent>> = Accent::ALL
                                 .iter()
                                 .map(|&a| crate::segmented::Swatch {
@@ -372,7 +381,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                     }
                                 })
                                 .response
-                                .on_hover_text(
+                                .hover(
                                     "Makes all text and controls larger or smaller",
                                 );
                             ui.end_row();
@@ -391,7 +400,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                     &mut d.stacking.enabled,
                                     "Group files that share a name",
                                 )
-                                .on_hover_text(
+                                .hover(
                                     "Shows a RAW and its JPEG as one photo in the Library",
                                 );
                                 ui.add_enabled_ui(d.stacking.enabled, |ui| {
@@ -409,7 +418,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                                 }
                                             })
                                             .response
-                                            .on_hover_text(
+                                            .hover(
                                                 "Chooses which file of a stack the Library shows and opens",
                                             );
                                     });
@@ -426,7 +435,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                     if os_manages_colour {
                         ui.horizontal(|ui| {
                             ui.label("Display");
-                            ui.label("handled by macOS").on_hover_text(
+                            ui.label("handled by macOS").hover(
                                 "macOS applies your display's colour profile, including any calibration",
                             );
                         });
@@ -441,7 +450,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                     }
                                 })
                                 .response
-                                .on_hover_text(
+                                .hover(
                                     "Sets your monitor's colour primaries so the preview shows colours correctly",
                                 );
                         });
@@ -460,7 +469,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             .response
                             // ⚠ The chosen tier's cost leads the hover; it used to be a line of
                             // 9-pt text beside the combo (`docs/DESIGN.md` §8).
-                            .on_hover_text(format!(
+                            .hover(format!(
                                 "Sets the demosaic quality of the zoomed 1:1 view ({}: {})",
                                 d.tier.label(),
                                 view_quality_hint(d.tier)
@@ -486,9 +495,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 }
                             })
                             .response
-                            .on_hover_text(
-                                "Sets the quality of the previews built for edited photos",
-                            );
+                            .hover("Sets the quality of the previews built for edited photos");
                     });
 
                     theme::sub_label(ui, "Preview cache");
@@ -502,9 +509,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         ui.label(format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0));
                         if ui
                             .button("Clear")
-                            .on_hover_text(
-                                "Deletes the rendered previews, which are rebuilt when needed",
-                            )
+                            .hover("Deletes the rendered previews, which are rebuilt when needed")
                             .clicked()
                         {
                             store.clear();
@@ -516,12 +521,11 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             .step_by(1024.0)
                             .text("MB budget"),
                     )
-                    .on_hover_text("Sets how much disk space rendered previews may use");
+                    .hover("Sets how much disk space rendered previews may use");
 
                     theme::sub_label(ui, "Rendering");
-                    ui.checkbox(&mut d.gpu_tail, "Use the GPU").on_hover_text(
-                        "Runs editing and export on the graphics card where that is faster",
-                    );
+                    ui.checkbox(&mut d.gpu_tail, "Use the GPU")
+                        .hover("Runs editing and export on the graphics card where that is faster");
 
                     theme::sub_label(ui, "Thumbnail cache");
                     ui.horizontal(|ui| {
@@ -534,9 +538,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         ui.label(format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0));
                         if ui
                             .button("Clear")
-                            .on_hover_text(
-                                "Deletes the cached thumbnails, which are rebuilt when needed",
-                            )
+                            .hover("Deletes the cached thumbnails, which are rebuilt when needed")
                             .clicked()
                         {
                             store.clear();
@@ -548,14 +550,14 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             .step_by(512.0)
                             .text("MB budget"),
                     )
-                    .on_hover_text("Sets how much disk space thumbnails may use");
+                    .hover("Sets how much disk space thumbnails may use");
 
                     theme::sub_label(ui, "Export at once");
                     let cores = std::thread::available_parallelism()
                         .map(|n| n.get() as u32)
                         .unwrap_or(1);
                     ui.add(egui::Slider::new(&mut d.export_width, 1..=cores.max(1)).text("photos"))
-                        .on_hover_text(
+                        .hover(
                             "Sets how many photos an export works on at once, trading memory for speed",
                         );
 
@@ -569,7 +571,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 }
                             })
                             .response
-                            .on_hover_text(
+                            .hover(
                                 "Sets how pixels are resampled when the photo is straightened, \
                                  corrected or scaled",
                             );
@@ -584,7 +586,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             }
                         })
                         .response
-                        .on_hover_text(
+                        .hover(
                             "Chooses the network that finds Subject masks, BiRefNet lite being slower with crisper edges",
                         );
                 }
@@ -601,7 +603,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             }
                         })
                         .response
-                        .on_hover_text("Chooses the mouse drag that pans a zoomed photo");
+                        .hover("Chooses the mouse drag that pans a zoomed photo");
 
                     theme::sub_label(ui, "Erase with");
                     let clash =
@@ -614,9 +616,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             }
                         })
                         .response
-                        .on_hover_text(
-                            "Chooses the button to hold to erase while painting a brush mask",
-                        );
+                        .hover("Chooses the button to hold to erase while painting a brush mask");
                     // ⚠ A clash is a problem, not a description: it stays on the page.
                     if clash {
                         theme::error_hint(
@@ -638,9 +638,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             }
                         })
                         .response
-                        .on_hover_text(
-                            "Lets you drag on the curve to adjust a region in Parametric mode",
-                        );
+                        .hover("Lets you drag on the curve to adjust a region in Parametric mode");
 
                     theme::sub_label(ui, "Preview while dragging");
                     egui::ComboBox::from_id_salt("drag_quality_pick")
@@ -651,7 +649,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             }
                         })
                         .response
-                        .on_hover_text(
+                        .hover(
                             "Renders at a lower resolution while you drag, for a smoother response",
                         );
                 }
@@ -665,7 +663,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                     // ⚠ What Immich is, and what switching it off does, are the switch's hover
                     // (`docs/DESIGN.md` §8) — they were a paragraph above it.
                     crate::segmented::switch(ui, &mut d.immich_enabled, "Enable Immich")
-                        .on_hover_text(
+                        .hover(
                             "Shows your Immich server's albums in the Library and lets exports upload to it",
                         );
                     // ⚠ An `if` rather than an early `return`: the match happens to be the last
@@ -688,7 +686,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                     .hint_text("https://photos.example.com")
                                     .desired_width(260.0),
                             )
-                            .on_hover_text(
+                            .hover(
                                 "The address of your Immich server",
                             );
                             ui.end_row();
@@ -699,7 +697,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                     .password(true)
                                     .desired_width(260.0),
                             )
-                            .on_hover_text(
+                            .hover(
                                 "A read-only Immich API key, stored in plain text in settings.json",
                             );
                             ui.end_row();
@@ -714,7 +712,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                     .password(true)
                                     .desired_width(260.0),
                             )
-                            .on_hover_text(
+                            .hover(
                                 "An optional Immich API key allowed to upload, used only when an export uploads",
                             );
                             ui.end_row();
@@ -730,7 +728,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 // carries its own connection rather than reading `app.settings`.
                                 if ui
                                     .button("Test")
-                                    .on_hover_text("Checks the connection by asking the server for its version")
+                                    .hover("Checks the connection by asking the server for its version")
                                     .clicked()
                                 {
                                     // ⚠ Cleared first, so the previous answer does not sit there
@@ -758,7 +756,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                     }
                                     Some(Err(e)) => {
                                         ui.colored_label(ui.visuals().error_fg_color, e.as_str())
-                                            .on_hover_text(e.as_str());
+                                            .hover(e.as_str());
                                     }
                                     None => {}
                                 }
@@ -779,7 +777,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             ui.label(format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0));
                             if ui
                             .button("Clear")
-                            .on_hover_text(
+                            .hover(
                                 "Deletes the cached Immich thumbnails, which are fetched again when needed",
                             )
                             .clicked()
@@ -793,7 +791,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 .step_by(512.0)
                                 .text("MB budget"),
                         )
-                        .on_hover_text("Sets how much disk space Immich thumbnails may use");
+                        .hover("Sets how much disk space Immich thumbnails may use");
                     }
                 }
             }

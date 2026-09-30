@@ -6,6 +6,7 @@
 use super::{dialog, Footer};
 use crate::import_flow::Tick;
 use crate::theme;
+use crate::theme::Hover as _;
 use crate::RustroomApp;
 use eframe::egui;
 use rustroom_app::filename_template::Template;
@@ -55,7 +56,18 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         "import",
         &title,
         theme::DialogSize::Wide,
-        Footer::confirm(&primary, !importing && blocker.is_none(), dismiss).note(&note),
+        Footer::confirm(
+            &primary,
+            "Copies the ticked photos into the destination",
+            !importing && blocker.is_none(),
+            dismiss,
+        )
+        .dismiss_says(if importing {
+            "Stops the import, keeping the photos already copied"
+        } else {
+            "Closes this dialog and copies nothing"
+        })
+        .note(&note),
         |ui| {
             ui.add_enabled_ui(!importing, |ui| {
                 ui.horizontal_top(|ui| {
@@ -70,7 +82,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                     let on = st.source.as_ref() == Some(&c.root);
                                     if ui
                                         .selectable_label(on, &c.name)
-                                        .on_hover_text(c.root.display().to_string())
+                                        .hover(c.root.display().to_string())
                                         .clicked()
                                         && !on
                                     {
@@ -79,7 +91,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 }
                                 if ui
                                     .button("Choose folder…")
-                                    .on_hover_text(
+                                    .hover(
                                         "Chooses a folder to import from, such as a memory card's DCIM folder",
                                     )
                                     .clicked()
@@ -102,7 +114,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 }
                                 if ui
                                     .small_button("New only")
-                                    .on_hover_text("Unticks the photos already in the catalog")
+                                    .hover("Unticks the photos already in the catalog")
                                     .clicked()
                                 {
                                     st.tick(Tick::New);
@@ -159,7 +171,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             egui::TextEdit::singleline(&mut d.template)
                                 .desired_width(f32::INFINITY),
                         )
-                        .on_hover_text(rustroom_app::filename_template::token_hover());
+                        .hover(rustroom_app::filename_template::token_hover());
                         if let Err(e) = Template::parse(&d.template) {
                             theme::error_hint(ui, &e.to_string());
                         }
@@ -181,14 +193,14 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             .show(ui, |ui| {
                                 ui.label("Copyright");
                                 ui.text_edit_singleline(&mut d.copyright)
-                                    .on_hover_text(EMPTY_CHANGES_NOTHING);
+                                    .hover(EMPTY_CHANGES_NOTHING);
                                 ui.end_row();
                                 ui.label("Creator");
                                 ui.text_edit_singleline(&mut d.creator)
-                                    .on_hover_text(EMPTY_CHANGES_NOTHING);
+                                    .hover(EMPTY_CHANGES_NOTHING);
                                 ui.end_row();
                                 ui.label("Keywords");
-                                ui.text_edit_singleline(&mut d.keywords).on_hover_text(
+                                ui.text_edit_singleline(&mut d.keywords).hover(
                                     "Adds these comma-separated keywords to every imported photo",
                                 );
                                 ui.end_row();
@@ -289,7 +301,7 @@ fn grid(ui: &mut egui::Ui, st: &mut crate::import_flow::ImportState) {
                     } else {
                         name
                     };
-                    if resp.on_hover_text(hover).clicked() {
+                    if resp.hover(hover).clicked() {
                         it.ticked = !it.ticked;
                     }
                 }

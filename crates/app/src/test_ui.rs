@@ -126,6 +126,100 @@ pub fn labelled_rects_on(
         .collect()
 }
 
+/// Whether a tooltip is showing after the pointer has rested at `at` past egui's tooltip delay —
+/// what a user sees, where a description only says what was asked for.
+pub fn tooltip_after_rest(
+    ctx: &egui::Context,
+    screen_rect: egui::Rect,
+    at: egui::Pos2,
+    mut body: impl FnMut(&mut egui::Ui),
+) -> bool {
+    for (i, t) in [0.0, 0.2, 0.6, 1.2, 1.3].into_iter().enumerate() {
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen_rect),
+                time: Some(t),
+                events: if i == 0 {
+                    vec![egui::Event::PointerMoved(at)]
+                } else {
+                    Vec::new()
+                },
+                ..Default::default()
+            },
+            &mut body,
+        );
+    }
+    ctx.memory(|m| {
+        m.areas()
+            .visible_layer_ids()
+            .iter()
+            .any(|l| l.order == egui::Order::Tooltip)
+    })
+}
+
+/// One AccessKit node, as the hover-coverage walk reads it (M10.6b).
+#[derive(Debug, Clone)]
+pub struct Node {
+    /// The label, or the value for a node without one (a combo box).
+    pub label: String,
+    pub role: egui::accesskit::Role,
+    /// What `theme::Hover` recorded — the control's hover sentence.
+    pub description: Option<String>,
+    /// Offers a click: a control, not a label.
+    pub clickable: bool,
+    /// Carries an open/closed state — a section header.
+    pub expandable: bool,
+    /// That state: `Some(false)` is a closed section.
+    pub expanded: Option<bool>,
+    /// Where it was drawn — nothing when AccessKit reported no bounds.
+    pub rect: egui::Rect,
+}
+
+/// Every node one frame of `body` produces, on [`screen`].
+pub fn nodes(ctx: &egui::Context, body: impl FnMut(&mut egui::Ui)) -> Vec<Node> {
+    nodes_on(ctx, screen(), body)
+}
+
+/// [`nodes`] on a screen of the caller's size — the top bar wants a wide one.
+pub fn nodes_on(
+    ctx: &egui::Context,
+    screen_rect: egui::Rect,
+    body: impl FnMut(&mut egui::Ui),
+) -> Vec<Node> {
+    let out = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(screen_rect),
+            ..Default::default()
+        },
+        body,
+    );
+    let Some(update) = out.platform_output.accesskit_update else {
+        return Vec::new();
+    };
+    update
+        .nodes
+        .iter()
+        .map(|(_, node)| Node {
+            label: node
+                .label()
+                .or_else(|| node.value())
+                .unwrap_or_default()
+                .to_owned(),
+            role: node.role(),
+            description: node.description().map(str::to_owned),
+            clickable: node.supports_action(egui::accesskit::Action::Click),
+            expandable: node.is_expanded().is_some(),
+            expanded: node.is_expanded(),
+            rect: node.bounds().map_or(egui::Rect::NOTHING, |b| {
+                egui::Rect::from_min_max(
+                    egui::pos2(b.x0 as f32, b.y0 as f32),
+                    egui::pos2(b.x1 as f32, b.y1 as f32),
+                )
+            }),
+        })
+        .collect()
+}
+
 /// The numeric value of every widget that reports one — a `Slider` or a `DragValue` — after
 /// laying `body` out once.
 ///

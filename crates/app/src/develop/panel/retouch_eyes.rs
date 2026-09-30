@@ -5,6 +5,7 @@
 
 use super::Edited;
 use crate::develop::panel::{mask_components, section};
+use crate::theme::Hover as _;
 use crate::Session;
 use edit_model::{EyeKind, SpotMode};
 use eframe::egui;
@@ -132,7 +133,8 @@ pub(super) fn list(ui: &mut egui::Ui, s: &mut Session, eyes: &mut EyeTool, ed: &
                     indent: 0.0,
                     eye: None,
                     hold: None,
-                    reorder: None,
+                    hover: "Selects this correction, so its sliders edit it",
+                    draggable: false,
                 },
             );
             if row.delete {
@@ -191,7 +193,7 @@ pub(super) fn settings(ui: &mut egui::Ui, s: &mut Session, tool: &mut EyeTool, e
         let mut on = sel.map_or(tool.catchlight, |i| s.edits.eyes[i].catchlight.is_some());
         if ui
             .checkbox(&mut on, "Catchlight")
-            .on_hover_text("Adds a small highlight to the pupil so it looks alive")
+            .hover("Adds a small highlight to the pupil so it looks alive")
             .changed()
         {
             tool.catchlight = on;

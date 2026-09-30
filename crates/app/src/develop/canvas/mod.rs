@@ -507,7 +507,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                     }
                                 };
                                 let at = frame_rect.min + egui::vec2(10.0, 8.0);
-                                let font = egui::FontId::proportional(12.0);
+                                // ⚠ Caption, not a literal 12 — found once the font-size sweep
+                                // stopped at test items rather than at the file's first one.
+                                let font =
+                                    egui::FontId::proportional(crate::theme::tokens::CAPTION);
                                 let galley = ui.painter().layout_no_wrap(
                                     label.to_string(),
                                     font.clone(),

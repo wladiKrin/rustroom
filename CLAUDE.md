@@ -173,7 +173,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-29)
 
-**3277 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
+**3284 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -230,7 +230,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 
 | Milestone | Sub-items |
 |---|---|
-| **M10.6** your to-do + a design leftover | a ✅ Immich Timeline at the top, plus the row buttons always faintly drawn and 20 pt wide — merged 2026-09-29 (`grep -n 'M10.6a' docs/JOURNAL.md`) · b a table for the non-slider hovers |
+| **M10.6** your to-do + a design leftover | a ✅ Immich Timeline at the top, plus the row buttons always faintly drawn and 20 pt wide — merged 2026-09-29 (`grep -n 'M10.6a' docs/JOURNAL.md`) · b ✅ every clickable control's hover sentence, checked on the drawn app; a photo's name on hover in the filmstrip (the grid's caption says it) — merged 2026-09-30 (`grep -n 'M10.6b' docs/JOURNAL.md`) |
 | **M10.7** code health | a pin lcms2's ICC creation date (reproducible exports) · b `ProfileRendering` → `TailRendering` (~270 mentions) · c temp-dir test isolation, 7 + 2 sites · d split the large files · e `PrefixCache`'s tests into `prefix_cache.rs` |
 | **M10.8** Library & workflow | a keyword suggestions · b vertical filmstrip · c stack by hand, group by capture time · d batch rename |
 | **M10.9** presets & shortcuts | a presets import/export, folders, rename · b user-defined shortcuts |
@@ -288,6 +288,9 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
 
 ### Standing lessons (the expensive ones — full stories in `docs/JOURNAL.md`)
 
+- **⚠⚠ A SOURCE SWEEP THAT READS "UP TO THE FIRST `#[cfg(test)]`" IS BLIND PAST ANY TEST ITEM PLACED
+  MID-FILE** — three were, until M10.6b found a literal font size and three bare hovers behind one.
+  Use `theme::tests::production_code`, which blanks only the test items.
 - **⚠⚠ A guard that enumerates a list stops guarding the moment the list grows.** The
   double-application test named three of five fields and was therefore blind to a whole milestone —
   the real sabotage left it at `1 passed` while six goldens failed. Read this before adding anything

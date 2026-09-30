@@ -6,6 +6,7 @@
 //! not fill the resize axis.
 
 use crate::interaction::apply_click;
+use crate::theme::Hover as _;
 use crate::{thumb, RustroomApp};
 use eframe::egui;
 use rustroom_app::thumb_loader::ThumbRequest;
@@ -120,8 +121,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                         .unwrap_or_default(),
                                 )
                                 .interact(egui::Sense::click())
-                                // The grid needs no hover: it draws the caption already.
-                                .on_hover_text(&caption);
+                                // The name on hover: the strip draws no caption. (The grid's cells
+                                // carry it only as their description — their caption says it.)
+                                .hover(&caption);
                                 // The caption as the cell's accessible name too — a screen reader
                                 // and a test find the photo by it.
                                 let active_here = lib.selection.active() == Some(i);
@@ -257,6 +259,38 @@ mod tests {
             (back.center().x - small.center().x).abs() < 1.0,
             "and when it shrank again: {}",
             back.center().x
+        );
+    }
+
+    /// ⚠ The author's ask (2026-09-30): resting on a photo shows its name. Checked as SHOWN — a
+    /// tooltip up after the pointer rests — and as the cell's description; the control, a rest on
+    /// nothing, shows none, so the helper cannot pass by always saying yes.
+    #[test]
+    fn resting_on_a_photo_shows_its_name() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        let lib = crate::test_app::library_of(5);
+        let name = lib.entries[2].caption();
+        app.library = Some(lib);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+        let mut body = |ui: &mut egui::Ui| {
+            let c = ui.ctx().clone();
+            super::show(&mut app, ui, &c);
+        };
+        let nodes = crate::test_ui::nodes_on(&ctx, screen, &mut body);
+        let cell = nodes
+            .iter()
+            .find(|n| n.label == name)
+            .expect("the photo is drawn and named");
+        assert_eq!(cell.description.as_deref(), Some(name.as_str()));
+        assert!(
+            crate::test_ui::tooltip_after_rest(&ctx, screen, cell.rect.center(), &mut body),
+            "no tooltip over the photo"
+        );
+        let ctx = crate::test_ui::ctx();
+        assert!(
+            !crate::test_ui::tooltip_after_rest(&ctx, screen, egui::pos2(5.0, 5.0), &mut body),
+            "a tooltip over nothing"
         );
     }
 }

@@ -9,6 +9,7 @@
 
 use crate::develop::panel::section::{header, Header};
 use crate::list_row::{self, RowAction, RowSpec};
+use crate::theme::Hover as _;
 use crate::{theme, RustroomApp};
 use eframe::egui;
 use rustroom_app::icons;
@@ -77,7 +78,7 @@ fn new_item_row(
         |ui| {
             let plus = ui
                 .add_enabled(named && extra, egui::Button::new("+"))
-                .on_hover_text(plus_hover)
+                .hover(plus_hover)
                 .clicked();
             let field = ui.add_sized(
                 egui::vec2(ui.available_width(), size.y),
@@ -264,7 +265,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                     meta: "",
                                                     selected: selected == Some(c.id),
                                                     indent: 0.0,
-                                                    hover: "",
+                                                    hover: "Shows the photos in this collection",
                                                     actions: &[
                                                         RowAction {
                                                             glyph: '×',
@@ -342,7 +343,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                     meta: "",
                                                     selected,
                                                     indent: 0.0,
-                                                    hover: "",
+                                                    hover: "Shows the photos these rules find",
                                                     actions: &[
                                                         RowAction {
                                                             glyph: '×',
