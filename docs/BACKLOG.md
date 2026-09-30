@@ -27,7 +27,7 @@ and a pointer, not deleted.
 | Milestone | Entries in this file |
 | --- | --- |
 | **M10.6** your to-do + a design leftover | (from the vault's `to dos.md` and `DESIGN.md`; the welcome screen and the empty Library's text went to **M11.4**) |
-| **M10.7** code health | *Exports are not bit-reproducible* (a, ✅ 2026-09-30); the `ProfileRendering` → `TailRendering` rename (b, 2026-09-30 — the entries below keep the old name, as history); the temp-dir test isolation (c, ✅ 2026-09-30 — the `test-dir` crate); plus `CLAUDE.md`'s file-size and `PrefixCache` items |
+| **M10.7** code health | *Exports are not bit-reproducible* (a, ✅ 2026-09-30); the `ProfileRendering` → `TailRendering` rename (b, 2026-09-30 — the entries below keep the old name, as history); the temp-dir test isolation (c, ✅ 2026-09-30 — the `test-dir` crate); the large files split, with M10.7e's `PrefixCache` tests (d, 2026-09-30); the follow-ups d left on purpose are below the table |
 | **M10.8** Library & workflow | P-26's batch rename (d); *Library: … vertical filmstrip* (b) |
 | **M10.9** presets & shortcuts | *Presets: no import/export…* (a); *No user-defined keyboard shortcuts* (b) |
 | **M10.10** export | P-26's image watermark (a) and export sizing (b) |
@@ -41,6 +41,26 @@ and a pointer, not deleted.
 | **M10.18** new modules | P-25 (brought in by the author) |
 | **M11.2** Windows & Linux | *The in-window menu bar has never been run*; *Multi-monitor on Linux and Windows*; P-28 |
 | **M11.3** / **M11.5** | *Contributor-facing documentation* / *A plugin system* |
+
+### Left by M10.7d on purpose (2026-09-30) — unscheduled code-health candidates
+
+M10.7d split the nine files over 1,000 lines as a **pure** refactor, so these were recorded rather than
+done (`grep -n 'M10.7d' docs/JOURNAL.md`):
+
+- **Window-free logic still in bin modules** — the placement rule says it belongs in the lib:
+  `develop/canvas/view.rs`'s `rungs_to_drop` and the `covered`/request predicate; `shell/filter.rs`'s
+  `mark_filter_label`; `library/grid.rs`'s `grid_columns` and `cells_in_row` (⚠ `multi/survey.rs` has a
+  near-duplicate `grid_columns` that also guards a non-finite width — merging them is not
+  behaviour-preserving for an infinite `avail`); the rubber band's union/replace in `library/band.rs`;
+  the canvas's click→pixel maths; `library::cell_menu::menu_targets` (takes the bin-only `Library`).
+- **Twice-written code:** zoom and pan in `navigation::zoom_and_pan` and again in
+  `paint::draw_pending_canvas`; the eyedroppers' click→source-pixel mapping in both picks
+  (`eyedropper.rs`); three shape counters across the canvas tests.
+- **A test that cannot fail:** `shell/landing.rs`'s `a_region_frame_refreshes_the_fit_image_size`
+  asserts the fields of a `Region` literal it built itself. `landing::apply_frame` now runs without a
+  window, so a real version — land a region frame, read `fit_image_size` — is a few lines.
+- **A stale doc:** `catalog/src/db/test_support.rs`'s `TempDb` still says uniqueness comes from "process
+  id plus a counter"; since M10.7c it comes from `test_dir`.
 
 ---
 
