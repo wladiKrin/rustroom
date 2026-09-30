@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M10.7b: `ProfileRendering` → `TailRendering` (2026-09-30)](#2026-09-30--m107b-profilerendering--tailrendering-branch-m107b-tail-rendering-rename)
+- [M10.7b: `ProfileRendering` → `TailRendering` (2026-09-30)](#2026-09-30--m107b-profilerendering--tailrendering-branch-m107b-tail-rendering-rename-merged-2026-09-30)
 - [M10.7a: bit-reproducible exports (2026-09-30)](#2026-09-30--m107a-bit-reproducible-exports-branch-m107a-reproducible-exports-merged-2026-09-30)
 - [M10.6b: every clickable control says what it does (2026-09-30)](#2026-09-30--m106b-every-clickable-control-says-what-it-does-branch-m106b-hover-table-merged-2026-09-30)
 - [M10.6a: the Immich Timeline at the top (2026-09-29)](#2026-09-29--m106a-the-immich-timeline-at-the-top-branch-m106a-immich-timeline-merged-2026-09-29)
@@ -166,7 +166,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-09-30 — M10.7b: `ProfileRendering` → `TailRendering` (branch `m10.7b-tail-rendering-rename`)
+### 2026-09-30 — M10.7b: `ProfileRendering` → `TailRendering` (branch `m10.7b-tail-rendering-rename`, merged 2026-09-30)
 
 **Input:** the leftover recorded on 2026-09-18 in the struct's own doc — *"the name is narrower than the
 contents — `look` is not a camera-profile field — and `TailRendering` would be the better one"*, kept
