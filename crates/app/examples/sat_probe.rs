@@ -50,7 +50,7 @@ fn main() {
                 ..Default::default()
             },
             pipeline::RenderScale::new(1.0),
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         )
         .run(small);
 

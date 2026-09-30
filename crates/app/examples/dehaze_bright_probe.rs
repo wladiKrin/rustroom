@@ -45,7 +45,7 @@ fn render(small: &core_image::ImageBuf, amount: f32) -> core_image::ImageBuf {
     pipeline::build_pipeline(
         &edits,
         pipeline::RenderScale::new(1.0),
-        pipeline::ProfileRendering::colorimetric(),
+        pipeline::TailRendering::colorimetric(),
     )
     .run(small.clone())
 }

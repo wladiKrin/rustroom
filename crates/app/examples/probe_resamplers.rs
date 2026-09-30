@@ -290,7 +290,7 @@ fn main() {
             &drag,
             sc,
             Some(region),
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         );
         println!("\n  a drag resumes at its own step; everything upstream stays cached:");
         for start in 0..=dsteps.len() {

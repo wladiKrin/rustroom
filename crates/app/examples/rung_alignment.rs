@@ -145,7 +145,7 @@ fn main() {
             None,
             pipeline::RenderSpec::default(),
             lens.clone(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
         );
         let src = ImageBuf::clone(&buf).downscale_to(max_dim);
         tail.run(prefix.run(src))

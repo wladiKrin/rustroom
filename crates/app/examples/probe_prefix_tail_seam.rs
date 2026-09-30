@@ -21,7 +21,7 @@
 //! RUSTROOM_DEBUG_XFER=1 cargo run --release -p app --example probe_prefix_tail_seam <raw>
 //! ```
 use edit_model::Edits;
-use pipeline::{PipelineStage, ProfileRendering, RenderScale, RenderSpec, Resampler};
+use pipeline::{PipelineStage, RenderScale, RenderSpec, Resampler, TailRendering};
 
 fn main() {
     let path = std::env::args()
@@ -136,7 +136,7 @@ fn main() {
             );
         }
         let tail =
-            pipeline::build_pipeline_split(&e, scale, pipeline::ProfileRendering::colorimetric()).1;
+            pipeline::build_pipeline_split(&e, scale, pipeline::TailRendering::colorimetric()).1;
         // ⚠⚠ **A fixture check, because the first run of this probe reported a 0.0 ms tail and
         // that is not a measurement, it is an empty pipeline.** A seam has two sides; a probe that
         // silently prices only one is the thin-fixture error this session has already made twice.
@@ -160,7 +160,7 @@ fn main() {
             scale,
             gpu_pipeline::TailFacts {
                 region: None,
-                profile: ProfileRendering::default(),
+                profile: TailRendering::default(),
                 spec,
                 // ⚠⚠ **False on purpose, so run A below genuinely uploads.** This probe measures
                 // the seam by running the SAME chain both ways; letting `accelerate` wire the take

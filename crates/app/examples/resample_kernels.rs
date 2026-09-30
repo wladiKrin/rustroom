@@ -347,7 +347,7 @@ fn encoded(img: ImageBuf) -> ImageBuf {
     pipeline::build_pipeline(
         &Edits::default(),
         RenderScale::FULL,
-        pipeline::ProfileRendering::colorimetric(),
+        pipeline::TailRendering::colorimetric(),
     )
     .run(img)
 }

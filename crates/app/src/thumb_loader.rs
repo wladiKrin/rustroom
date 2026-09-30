@@ -228,7 +228,7 @@ fn render_edits(
 ) -> Thumbnail {
     let buf = linear_prophoto_from_srgb8(&thumb);
     // ⚠⚠ **The look, and its absence was reported by use**: *"the look is not reflected or shown in
-    // any way in the thumbnail picture"*. `build_pipeline_with` takes no `ProfileRendering` at all,
+    // any way in the thumbnail picture"*. `build_pipeline_with` takes no `TailRendering` at all,
     // so every thumbnail rendered every edit **except** the user's `.cube` — the third path to lose
     // it this way, after the preview kept it and the export lost it.
     //
@@ -244,7 +244,7 @@ fn render_edits(
             resampler,
             ..pipeline::RenderSpec::default()
         },
-        pipeline::ProfileRendering {
+        pipeline::TailRendering {
             curve: None,
             baseline_ev: None,
             look,
@@ -562,7 +562,7 @@ mod tests {
 
     /// ⚠⚠ **THE test of this fix, reported by use:** *"the look is not reflected or shown in any
     /// way in the thumbnail picture"*. `render_edits` built its pipeline with
-    /// `build_pipeline_with`, which takes no `ProfileRendering`, so every thumbnail rendered every
+    /// `build_pipeline_with`, which takes no `TailRendering`, so every thumbnail rendered every
     /// edit except the user's `.cube`.
     ///
     /// ⚠ Sabotage: pass `None` for the look in `render_edits`.

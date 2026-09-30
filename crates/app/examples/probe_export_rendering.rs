@@ -13,7 +13,7 @@
 //! cargo run --release -p app --example probe_export_rendering <raw> <profile.dcp>
 //! ```
 use edit_model::Edits;
-use pipeline::{ProfileRendering, RenderScale, RenderSpec, Resampler};
+use pipeline::{RenderScale, RenderSpec, Resampler, TailRendering};
 
 fn main() {
     let mut a = std::env::args().skip(1);
@@ -80,14 +80,14 @@ fn main() {
         baseline: d.metadata.as_shot.unwrap_or_default(),
         airlight: None,
     };
-    let render = |r: ProfileRendering<'_>| {
+    let render = |r: TailRendering<'_>| {
         let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
             &e, scale, None, None, spec, None, r,
         );
         tail.run(d.image.clone())
     };
 
-    let plain = render(ProfileRendering::default());
+    let plain = render(TailRendering::default());
 
     // ⚠⚠ **THE FIXTURE CHECK, and without it a 0.00 below is unreadable.** A zero can mean "the
     // camera rendering changes nothing" or "this probe measures nothing", and those are opposite
@@ -99,7 +99,7 @@ fn main() {
             [x, x.powf(0.72)]
         })
         .collect();
-    let probe = render(ProfileRendering {
+    let probe = render(TailRendering {
         curve: Some(&synthetic),
         baseline_ev: Some(0.5),
         look: None,
@@ -117,7 +117,7 @@ fn main() {
     for (label, r) in [
         (
             "curve only",
-            ProfileRendering {
+            TailRendering {
                 curve: curve.as_deref(),
                 baseline_ev: None,
                 look: None,
@@ -125,7 +125,7 @@ fn main() {
         ),
         (
             "baseline only",
-            ProfileRendering {
+            TailRendering {
                 curve: None,
                 baseline_ev: baseline,
                 look: None,
@@ -133,7 +133,7 @@ fn main() {
         ),
         (
             "BOTH (what the preview shows)",
-            ProfileRendering {
+            TailRendering {
                 curve: curve.as_deref(),
                 baseline_ev: baseline,
                 look: None,

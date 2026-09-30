@@ -91,7 +91,7 @@ fn render(
         None,
         pipeline::RenderSpec::default(),
         None,
-        pipeline::ProfileRendering {
+        pipeline::TailRendering {
             look: cube,
             ..Default::default()
         },
@@ -107,7 +107,7 @@ fn stage_names(edits: &Edits, cube: Option<&Arc<Cube>>) -> String {
         None,
         pipeline::RenderSpec::default(),
         None,
-        pipeline::ProfileRendering {
+        pipeline::TailRendering {
             look: cube,
             ..Default::default()
         },

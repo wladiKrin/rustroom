@@ -164,7 +164,7 @@ pub fn export_one(
         render.resampler,
         Some(airlight),
     );
-    // ⚠⚠ **This was `ProfileRendering::default()` until 2026-09-18, and that was the bug**: an
+    // ⚠⚠ **This was `TailRendering::default()` until 2026-09-18, and that was the bug**: an
     // export rendered with the *built-in* curve and `BASELINE_EV` while the preview consulted the
     // camera profile, and the creative look never ran at all. Measured before the fix — on the
     // catalogue's own X-T4 the difference is **0.00 levels**, because that profile's
@@ -263,7 +263,7 @@ pub fn export_one(
         coverage.as_ref(),
         spec,
         source.lens.clone(),
-        pipeline::ProfileRendering {
+        pipeline::TailRendering {
             curve: source.curve.as_deref(),
             baseline_ev: source.baseline_ev,
             look,
@@ -354,7 +354,7 @@ pub struct ExportSource {
     pub lens: Option<lens_profile::LensShot>,
     /// The camera profile's `ProfileToneCurve`, when it has one.
     ///
-    /// ⚠⚠ **Owned, because [`pipeline::ProfileRendering`] BORROWS** — the borrow has to outlive the
+    /// ⚠⚠ **Owned, because [`pipeline::TailRendering`] BORROWS** — the borrow has to outlive the
     /// whole render, and this struct is what lives that long. The same shape `lens` above already
     /// takes.
     ///
@@ -365,7 +365,7 @@ pub struct ExportSource {
     /// The camera profile's `BaselineExposure` in stops.
     ///
     /// ⚠ `None` is not `Some(0.0)`: a profile that declares no shift has made a statement and one
-    /// that says nothing has not — `ProfileRendering::baseline_ev`'s own rule.
+    /// that says nothing has not — `TailRendering::baseline_ev`'s own rule.
     pub baseline_ev: Option<f32>,
     /// Whether this buffer holds **scene-referred** light — true for a RAW, false for a JPEG, PNG
     /// or TIFF that has already been rendered by whatever produced it.
@@ -529,10 +529,10 @@ mod tests {
     }
 
     /// ⚠⚠ **The test of this fix: the camera profile's tone curve reaches an exported file.**
-    /// Until 2026-09-18 `export_one` passed `ProfileRendering::default()`, so an export rendered
+    /// Until 2026-09-18 `export_one` passed `TailRendering::default()`, so an export rendered
     /// with the built-in curve while the preview consulted the profile.
     ///
-    /// ⚠ Sabotage: put `curve: None` back into `export_one`'s `ProfileRendering`.
+    /// ⚠ Sabotage: put `curve: None` back into `export_one`'s `TailRendering`.
     #[test]
     fn the_profiles_tone_curve_reaches_an_exported_file() {
         let without = rendered("render_curve_off", None, None);
@@ -663,10 +663,10 @@ mod tests {
     }
 
     /// ⚠⚠ **The creative look reaches an exported file — and this half was NOT in the backlog
-    /// entry.** It was found while scoping the tone-curve fix: `ProfileRendering` carries three
+    /// entry.** It was found while scoping the tone-curve fix: `TailRendering` carries three
     /// things and `export_one` was defaulting all three, so a look never ran at export either.
     ///
-    /// ⚠ Sabotage: pass `look: None` in `export_one`'s `ProfileRendering`.
+    /// ⚠ Sabotage: pass `look: None` in `export_one`'s `TailRendering`.
     #[test]
     fn the_creative_look_reaches_an_exported_file() {
         let d = TempDir::new("render_look");

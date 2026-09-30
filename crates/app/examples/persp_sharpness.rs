@@ -44,7 +44,7 @@ fn main() {
         let out = pipeline::build_pipeline(
             e,
             pipeline::RenderScale::FULL,
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         )
         .run(src.clone());
         let ms = t.elapsed().as_millis();

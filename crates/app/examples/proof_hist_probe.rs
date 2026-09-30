@@ -122,7 +122,7 @@ fn run(paths: &[String], rendering: Rendering, label: &str) {
                 intent: color::RenderingIntent::default(),
                 ..RenderSpec::default()
             },
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         )
         .run(preview.clone());
         let pp_out = pipeline::build_pipeline_spec(
@@ -133,7 +133,7 @@ fn run(paths: &[String], rendering: Rendering, label: &str) {
                 intent: color::RenderingIntent::default(),
                 ..RenderSpec::default()
             },
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         )
         .run(preview.clone());
 

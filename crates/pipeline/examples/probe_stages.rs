@@ -9,7 +9,7 @@
 //! per-pixel tail of an ordinary photograph is contiguous and can be one chain.
 use core_image::ImageBuf;
 use edit_model::Edits;
-use pipeline::ProfileRendering;
+use pipeline::TailRendering;
 use pipeline::{build_pipeline_split_in_region, RenderScale};
 use std::time::Instant;
 
@@ -31,7 +31,7 @@ fn time(img: &ImageBuf, e: &Edits) -> (f64, Vec<&'static str>) {
         e,
         RenderScale::new(1.0),
         None,
-        ProfileRendering::colorimetric(),
+        TailRendering::colorimetric(),
     )
     .1
     .into_stages()
@@ -45,7 +45,7 @@ fn time(img: &ImageBuf, e: &Edits) -> (f64, Vec<&'static str>) {
             e,
             RenderScale::new(1.0),
             None,
-            ProfileRendering::colorimetric(),
+            TailRendering::colorimetric(),
         );
         let t = Instant::now();
         let out = tail.run(c);

@@ -435,7 +435,7 @@ fn main() {
             &Edits::default(),
             sc,
             None,
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         );
         let mid = prefix.run(buf.downscale_to(buffer_long));
         let (rw, rh) = (1400.min(mid.width()), 900.min(mid.height()));
@@ -453,7 +453,7 @@ fn main() {
                 edits,
                 sc,
                 Some(region),
-                pipeline::ProfileRendering::colorimetric(),
+                pipeline::TailRendering::colorimetric(),
             );
             let ms = best_of(|| tail.run(sub.clone()));
             if *label == "neutral" {
@@ -482,7 +482,7 @@ fn main() {
                     &Edits::default(),
                     sc,
                     Some(region),
-                    pipeline::ProfileRendering::colorimetric(),
+                    pipeline::TailRendering::colorimetric(),
                 );
                 best_of(|| t.run(sub.clone()))
             };
@@ -492,7 +492,7 @@ fn main() {
                     &e,
                     sc,
                     Some(region),
-                    pipeline::ProfileRendering::colorimetric(),
+                    pipeline::TailRendering::colorimetric(),
                 );
                 best_of(|| t.run(sub.clone())) - base
             };
@@ -502,7 +502,7 @@ fn main() {
                     &e,
                     sc,
                     Some(region),
-                    pipeline::ProfileRendering::colorimetric(),
+                    pipeline::TailRendering::colorimetric(),
                 );
                 best_of(|| t.run(sub.clone())) - base
             };
@@ -575,7 +575,7 @@ fn main() {
                 &Edits::default(),
                 sc,
                 None,
-                pipeline::ProfileRendering::colorimetric(),
+                pipeline::TailRendering::colorimetric(),
             );
             let mid = prefix.run(src);
             // At a native rung the app renders a *region*; with the whole photo visible that
@@ -605,7 +605,7 @@ fn main() {
                     &edits,
                     sc,
                     region,
-                    pipeline::ProfileRendering::colorimetric(),
+                    pipeline::TailRendering::colorimetric(),
                 );
                 let tail_ms = best_of(|| tail.run(mid.clone())) - best_of(|| mid.clone());
                 let out = tail.run(mid.clone());

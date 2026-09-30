@@ -127,12 +127,7 @@ fn main() {
 
     for (label, edits) in cases {
         let tail = || {
-            pipeline::build_pipeline_split(
-                &edits,
-                scale,
-                pipeline::ProfileRendering::colorimetric(),
-            )
-            .1
+            pipeline::build_pipeline_split(&edits, scale, pipeline::TailRendering::colorimetric()).1
         };
         let chains = accel(tail(), &edits, scale, ctx)
             .stage_names()
@@ -183,12 +178,8 @@ fn main() {
     let edits = sharpened(hsl_edits());
     let one = || {
         accel(
-            pipeline::build_pipeline_split(
-                &edits,
-                scale,
-                pipeline::ProfileRendering::colorimetric(),
-            )
-            .1,
+            pipeline::build_pipeline_split(&edits, scale, pipeline::TailRendering::colorimetric())
+                .1,
             &edits,
             scale,
             ctx,
@@ -196,13 +187,10 @@ fn main() {
     };
     let two = || {
         // One chain per replaceable stage, everything else untouched — M8.3b's behaviour.
-        let stages = pipeline::build_pipeline_split(
-            &edits,
-            scale,
-            pipeline::ProfileRendering::colorimetric(),
-        )
-        .1
-        .into_stages();
+        let stages =
+            pipeline::build_pipeline_split(&edits, scale, pipeline::TailRendering::colorimetric())
+                .1
+                .into_stages();
         let mut out: Vec<Box<dyn PipelineStage>> = Vec::new();
         for s in stages {
             match s.name() {
