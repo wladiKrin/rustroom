@@ -330,6 +330,8 @@ impl PrefixCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render_engine::fixtures::full_prefix;
+    use pipeline::RenderScale;
 
     /// ⚠⚠ The memo's contract, both halves: a Straighten drag reuses the airlight (the 12 ms it
     /// exists to save) and an upstream edit replays it, and what it returns is exactly what a
@@ -486,5 +488,148 @@ mod tests {
             "a region crop is not a final and must never be cached as one"
         );
         assert_eq!(cache.final_len(), 1);
+    }
+
+    /// A distinct dummy image of `n` x `n`, for cache tests that never render.
+    fn dummy(n: usize, v: f32) -> Arc<ImageBuf> {
+        let mut img = ImageBuf::new(n, n);
+        for y in 0..n {
+            for x in 0..n {
+                img.set_pixel(x, y, [v, v, v]);
+            }
+        }
+        Arc::new(img)
+    }
+
+    #[test]
+    fn the_mid_budget_evicts_the_least_recently_used() {
+        // Each dummy is 4*4*3*4 = 192 bytes; a budget of 400 holds two.
+        let mut cache = PrefixCache::with_mid_budget(400);
+        cache.insert(fake_key(0), dummy(4, 0.1), Tier::Mid);
+        cache.insert(fake_key(1), dummy(4, 0.2), Tier::Mid);
+        cache.insert(fake_key(2), dummy(4, 0.3), Tier::Mid);
+
+        assert_eq!(cache.mid_len(), 2, "the budget must bound the mids tier");
+        // ⚠⚠ This tests the **tie-break**, not depth, and its comment used to claim otherwise:
+        // *"insertion order within one render is shallow -> deep, so the most recent insert is the
+        // deepest checkpoint; evicting the LRU is therefore evicting the shallowest."* `fake_key`
+        // varies only the `max_dim` tag, so all three keys have the SAME depth — the fixture could
+        // never exercise the story the comment told. Eviction is deepest-first now, and equal
+        // depths still resolve to least-recently-used, which is what these three are.
+        assert!(cache.get(&fake_key(2)).is_some(), "the newest survives");
+        assert!(cache.get(&fake_key(1)).is_some());
+        assert!(
+            cache.get(&fake_key(0)).is_none(),
+            "at equal depth the least recently used goes first"
+        );
+    }
+
+    /// ⚠⚠ **The bug, as a unit test.** A drag resumes at the checkpoint *before* the stage it
+    /// moves, and plain LRU evicted exactly that one: the render reads it, which promotes it to
+    /// the front, and then its own later inserts push it to the back and out. At full resolution
+    /// the budget holds a single 298 MiB checkpoint, so this happened on every frame.
+    #[test]
+    fn a_full_mid_tier_evicts_the_deepest_checkpoint_not_the_shallowest() {
+        let e = full_prefix();
+        let steps = pipeline::build_prefix_steps(
+            &e,
+            RenderScale::FULL,
+            None,
+            pipeline::Resampler::Bilinear,
+            None,
+        );
+        assert!(
+            steps.len() >= 3,
+            "fixture check: a multi-step prefix is the whole point, got {}",
+            steps.len()
+        );
+        let key = |n| (PrefixKey::upto(&steps, n, RenderScale::FULL), 0usize);
+        // Each dummy is 4*4*3*4 = 192 bytes; a budget of 200 holds exactly one, which is the
+        // full-resolution situation in miniature.
+        let mut cache = PrefixCache::with_mid_budget(200);
+        cache.insert(key(1), dummy(4, 0.1), Tier::Mid);
+        cache.insert(key(2), dummy(4, 0.2), Tier::Mid);
+        cache.insert(key(3), dummy(4, 0.3), Tier::Mid);
+
+        assert_eq!(
+            cache.mid_len(),
+            1,
+            "fixture check: the budget must hold exactly one"
+        );
+        assert!(
+            cache.get(&key(1)).is_some(),
+            "the shallowest must survive — it is the one a drag can still resume from"
+        );
+        assert!(cache.get(&key(2)).is_none());
+        assert!(cache.get(&key(3)).is_none());
+    }
+
+    #[test]
+    fn the_finals_tier_is_untouched_by_mid_pressure() {
+        // The two tiers cannot evict each other: that is what preserves the zoom guarantee.
+        // With a zero budget no mid survives, and both finals must still be there.
+        let mut cache = PrefixCache::with_mid_budget(0);
+        cache.insert(fake_key(10), dummy(4, 0.4), Tier::Final);
+        cache.insert(fake_key(11), dummy(4, 0.5), Tier::Final);
+        for tag in 0..5 {
+            cache.insert(fake_key(tag), dummy(4, 0.1), Tier::Mid);
+        }
+        assert_eq!(cache.mid_len(), 0);
+        assert_eq!(cache.final_len(), 2);
+        assert!(cache.get(&fake_key(10)).is_some());
+        assert!(cache.get(&fake_key(11)).is_some());
+    }
+
+    #[test]
+    fn the_finals_tier_holds_one_per_render_mode() {
+        let mut cache = PrefixCache::default();
+        for tag in 0..4 {
+            cache.insert(fake_key(tag), dummy(4, 0.1), Tier::Final);
+        }
+        assert_eq!(cache.final_len(), PrefixCache::FINALS_CAP);
+        assert!(cache.get(&fake_key(3)).is_some());
+        assert!(cache.get(&fake_key(2)).is_some());
+        assert!(cache.get(&fake_key(0)).is_none());
+    }
+
+    #[test]
+    fn the_mids_cap_bounds_stale_checkpoints() {
+        // ⚠ Dragging Straighten mints a *new* post-geometry key every frame, so the mids tier
+        // fills with checkpoints nobody will ever return to — bounded only by the byte budget,
+        // which means a bigger budget retains more garbage. A render's useful chain is at most
+        // 3 mids, so 6 keeps the current chain plus one previous state.
+        let mut cache = PrefixCache::default();
+        for tag in 0..20 {
+            cache.insert(fake_key(tag), dummy(4, 0.1), Tier::Mid);
+        }
+        assert_eq!(cache.mid_len(), PrefixCache::MIDS_CAP);
+        assert!(
+            cache.get(&fake_key(19)).is_some(),
+            "the newest must survive"
+        );
+        assert!(cache.get(&fake_key(0)).is_none(), "the oldest must not");
+    }
+
+    #[test]
+    fn the_budget_still_evicts_before_the_cap() {
+        // Bytes bind first when the entries are large — which is the full-resolution case,
+        // where one checkpoint is 313 MB and the cap is nowhere near reached.
+        let mut cache = PrefixCache::with_mid_budget(400); // holds two 192-byte dummies
+        for tag in 0..5 {
+            cache.insert(fake_key(tag), dummy(4, 0.1), Tier::Mid);
+        }
+        assert_eq!(cache.mid_len(), 2);
+        assert!(cache.mid_len() < PrefixCache::MIDS_CAP);
+    }
+
+    #[test]
+    fn the_default_budget_is_the_real_one() {
+        // `#[derive(Default)]` would silently give a budget of 0 and disable every mid, which
+        // would leave the whole feature inert with all correctness tests still passing.
+        // (That the const itself is non-zero is a compile-time assertion on `PrefixCache`.)
+        assert_eq!(
+            PrefixCache::default().mid_budget,
+            PrefixCache::MID_BUDGET_BYTES
+        );
     }
 }
