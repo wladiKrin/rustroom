@@ -918,12 +918,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 // ⚠ `click_and_drag`, so a drag starting on a thumbnail can
                                 // begin a rubber band. A plain click still reports
                                 // `clicked()`; egui distinguishes the two.
-                                .interact(egui::Sense::click_and_drag())
-                                // ⚠ The photo's name on hover, as in the filmstrip — the caption
-                                // under a small cell is cut short (the author, 2026-09-30) — and
-                                // as the cell's accessible name, so a screen reader and a test
-                                // find the photo by it.
-                                .hover(&caption);
+                                .interact(egui::Sense::click_and_drag());
+                            // ⚠ The name as the cell's accessible name and description, but **no
+                            // tooltip**: the caption under the cell already says it (the author,
+                            // 2026-09-30, after trying one). The filmstrip, which draws no
+                            // caption, keeps its tooltip.
+                            crate::theme::describe(&resp, &caption);
                             let lit = lib.selection.contains(i);
                             resp.widget_info(|| {
                                 egui::WidgetInfo::selected(
@@ -1522,10 +1522,12 @@ mod tests {
         );
     }
 
-    /// ⚠ The author's ask (2026-09-30): resting on a photo in the grid shows its name, as in the
-    /// filmstrip — the caption under a small cell is cut short. Shown, described, and a control.
+    /// ⚠ The author's call (2026-09-30, after trying it): the grid shows a photo's name in its
+    /// caption, so resting on the photo shows **no** tooltip — while the name stays the cell's
+    /// accessible name and description. The filmstrip's own test is the positive twin: the same
+    /// rest there does show a tooltip, so this absence is not a helper that never fires.
     #[test]
-    fn resting_on_a_photo_in_the_grid_shows_its_name() {
+    fn the_grid_names_a_photo_without_a_tooltip() {
         let ctx = crate::test_ui::ctx();
         let mut app = crate::test_app::for_test();
         let lib = crate::test_app::library_of(5);
@@ -1546,13 +1548,8 @@ mod tests {
         // Near the top of the cell: the picture, not the caption row under it.
         let on_picture = egui::pos2(cell.rect.center().x, cell.rect.top() + 20.0);
         assert!(
-            crate::test_ui::tooltip_after_rest(&ctx, screen, on_picture, &mut body),
-            "no tooltip over the photo"
-        );
-        let ctx = crate::test_ui::ctx();
-        assert!(
-            !crate::test_ui::tooltip_after_rest(&ctx, screen, egui::pos2(1190.0, 790.0), &mut body),
-            "a tooltip over nothing"
+            !crate::test_ui::tooltip_after_rest(&ctx, screen, on_picture, &mut body),
+            "a tooltip over a photo whose caption already names it"
         );
     }
 }

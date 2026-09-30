@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M10.6b: every clickable control says what it does (2026-09-30)](#2026-09-30--m106b-every-clickable-control-says-what-it-does-branch-m106b-hover-table)
+- [M10.6b: every clickable control says what it does (2026-09-30)](#2026-09-30--m106b-every-clickable-control-says-what-it-does-branch-m106b-hover-table-merged-2026-09-30)
 - [M10.6a: the Immich Timeline at the top (2026-09-29)](#2026-09-29--m106a-the-immich-timeline-at-the-top-branch-m106a-immich-timeline-merged-2026-09-29)
 - [The re-plan: every open item becomes Phase 10, release becomes Phase 11 (2026-09-29)](#2026-09-29--the-re-plan-every-open-item-becomes-phase-10-release-becomes-phase-11-branch-replan)
 - [Reordering masks and a mask's components (2026-09-29)](#2026-09-29--reordering-masks-and-a-masks-components-branch-mask-reorder-merged-2026-09-29)
@@ -164,7 +164,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-09-30 — M10.6b: every clickable control says what it does (branch `m10.6b-hover-table`)
+### 2026-09-30 — M10.6b: every clickable control says what it does (branch `m10.6b-hover-table`, merged 2026-09-30)
 
 **Input:** Phase 10's M10.6b, *"a table for the non-slider hover sentences"*. Spec
 `2026-09-29-m10.6b-hover-coverage-design.md`, plan `2026-09-29-m10.6b-hover-coverage.md`. **The author's
@@ -218,7 +218,11 @@ showed its tooltip up after a rest — but the grid did not ("needs no hover: it
 a small cell cuts short); its cell now carries the name as tooltip, accessible name and description,
 and both views joined the walk. `test_ui::tooltip_after_rest` checks a tooltip as **shown** (a rest past
 the delay, a tooltip layer up), with a rest on nothing as its control. 3282 → 3284 tests, both
-sabotage-checked. The addition waits for the author's look before the merge.
+sabotage-checked. ⚠ **Then taken back out of the grid**, the author's call after trying it: *"remove
+it from the library view since it already says the name there, but keep it in the filmstrip."* The grid
+cell keeps the name as its accessible name and description (`theme::describe`, no tooltip), and its test
+now asserts **no** tooltip — the filmstrip's test, which asserts one, is its positive twin. ✅ Merged
+2026-09-30.
 
 ### 2026-09-29 — M10.6a: the Immich Timeline at the top (branch `m10.6a-immich-timeline`, merged 2026-09-29)
 

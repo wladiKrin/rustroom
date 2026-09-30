@@ -328,9 +328,9 @@ the star row at the bottom left (existing). Badges are Caption white on 55 % bla
 at the picture's top left, the stack count at the **picture's** top right (`thumb::image_rect`) —
 never the cell's corner, where a portrait's badge floated beside it.
 Caption under the cell in Caption `text3`, elided at the cell width. In the filmstrip the same
-cell at 70 tall without a caption. **Resting on a photo shows its name**, in the grid and the
-filmstrip alike, and the name is the cell's accessible name and description (the author,
-2026-09-30).
+cell at 70 tall without a caption. **Resting on a photo in the filmstrip shows its name**, which it
+draws no caption for; in the grid the caption says it, so there is no tooltip (the author,
+2026-09-30, after trying one). In both, the name is the cell's accessible name and description.
 
 ### 7.11 Tool rail
 48 wide, 32 px buttons, 24 glyph in `text2`; the active tool is the accent glyph on an 18 %

@@ -121,7 +121,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                         .unwrap_or_default(),
                                 )
                                 .interact(egui::Sense::click())
-                                // The name on hover — the grid's cells do the same (2026-09-30).
+                                // The name on hover: the strip draws no caption. (The grid's cells
+                                // carry it only as their description — their caption says it.)
                                 .hover(&caption);
                                 // The caption as the cell's accessible name too — a screen reader
                                 // and a test find the photo by it.
