@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.7b: `ProfileRendering` → `TailRendering` (2026-09-30)](#2026-09-30--m107b-profilerendering--tailrendering-branch-m107b-tail-rendering-rename)
 - [M10.7a: bit-reproducible exports (2026-09-30)](#2026-09-30--m107a-bit-reproducible-exports-branch-m107a-reproducible-exports-merged-2026-09-30)
 - [M10.6b: every clickable control says what it does (2026-09-30)](#2026-09-30--m106b-every-clickable-control-says-what-it-does-branch-m106b-hover-table-merged-2026-09-30)
 - [M10.6a: the Immich Timeline at the top (2026-09-29)](#2026-09-29--m106a-the-immich-timeline-at-the-top-branch-m106a-immich-timeline-merged-2026-09-29)
@@ -164,6 +165,30 @@ goldens unmoved.
 - ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
+
+### 2026-09-30 — M10.7b: `ProfileRendering` → `TailRendering` (branch `m10.7b-tail-rendering-rename`)
+
+**Input:** the leftover recorded on 2026-09-18 in the struct's own doc — *"the name is narrower than the
+contents — `look` is not a camera-profile field — and `TailRendering` would be the better one"*, kept
+for a change of its own. Spec and plan `2026-09-30-m10.7b-tail-rendering`. **The author's scope: the
+type and its bindings.**
+
+**Done.** The type at **270 mentions in 40 files** (pipeline, gpu-pipeline, app, the CLI, examples) by a
+whole-word `sed`, run twice so adjacent mentions cannot shadow each other. The **25 bindings named
+`profile`** → `rendering`, compiler-driven: only each declaration was renamed, and every use was fixed at
+the line and column the compiler reported, in five rounds — so no comment saying "camera profile" was
+rewritten by the mechanics. `decode::profile_rendering` keeps its name: it does read the camera profile.
+A pure rename, and shown to be one: **3286 tests, the same count, all green; no golden reference
+changed; the 40 files carry 3,319 doc-comment lines before and after.**
+
+**Worth keeping:**
+
+- ⚠ **The compiler cannot flag a binding whose type is inferred.** The GPU stage table's closures took the
+  struct as `|_, _, _, profile, _, ctx|`; neither the `profile: TailRendering` pattern nor an unresolved
+  name pointed at them, and they compiled either way. Found by grepping closure parameters after the
+  build went green — a check worth running after any binding rename.
+- `render_engine`'s `profile: ProfileParts` is a different type (the decode worker's camera-profile
+  parts) and was left alone, by the scope.
 
 ### 2026-09-30 — M10.7a: bit-reproducible exports (branch `m10.7a-reproducible-exports`, merged 2026-09-30)
 
