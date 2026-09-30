@@ -101,7 +101,7 @@ fn render(decoded: raw_decode::DecodedRaw) -> ImageBuf {
             ..pipeline::RenderSpec::default()
         },
         None,
-        pipeline::ProfileRendering::default(),
+        pipeline::TailRendering::default(),
     );
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());

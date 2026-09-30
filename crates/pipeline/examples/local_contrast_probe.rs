@@ -118,7 +118,7 @@ fn render(lc: LocalContrast) -> ImageBuf {
     build_pipeline(
         &edits,
         RenderScale::FULL,
-        pipeline::ProfileRendering::colorimetric(),
+        pipeline::TailRendering::colorimetric(),
     )
     .run(chart())
 }

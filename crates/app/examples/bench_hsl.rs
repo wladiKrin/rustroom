@@ -237,12 +237,12 @@ fn main() {
                 ..Default::default()
             },
             sc,
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         );
         let (_, tail_neutral) = build_pipeline_split(
             &edit_model::Edits::default(),
             sc,
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         );
         let real = tail_hsl.run(img.clone());
         let mine = tail_neutral.run(lut_kernel(&img, &HueTable::build(&bands, 1024)));

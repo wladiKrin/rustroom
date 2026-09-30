@@ -213,7 +213,7 @@ fn main() {
             ..Edits::default()
         };
         let (prefix, tail) =
-            build_pipeline_split(&heavy, sc, pipeline::ProfileRendering::colorimetric());
+            build_pipeline_split(&heavy, sc, pipeline::TailRendering::colorimetric());
         let mid = prefix.run(buf.downscale_to(PREVIEW_MAX_DIM));
 
         let mut best = f64::MAX;
@@ -254,7 +254,7 @@ fn main() {
             &heavy,
             sc,
             None,
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         );
         let mid = prefix.run(buf.downscale_to(buffer_long));
         println!(
@@ -276,7 +276,7 @@ fn main() {
             &heavy,
             sc,
             Some(region),
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         );
         let mut best = f64::MAX;
         for _ in 0..5 {
@@ -324,7 +324,7 @@ fn main() {
             &heavy,
             sc,
             None,
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         );
         println!("\n  prefix steps: {}", steps.len());
 
@@ -393,7 +393,7 @@ fn main() {
             &heavy,
             sc,
             None,
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         );
         let base = buf.downscale_to(buffer_long);
         println!(
@@ -516,14 +516,14 @@ fn main() {
                         &heavy,
                         sc,
                         None,
-                        pipeline::ProfileRendering::colorimetric(),
+                        pipeline::TailRendering::colorimetric(),
                     )
                     .1,
                     &heavy,
                     sc,
                     gpu_pipeline::TailFacts {
                         region: None,
-                        profile: pipeline::ProfileRendering::default(),
+                        rendering: pipeline::TailRendering::default(),
                         spec: pipeline::RenderSpec::default(),
                         // ⚠ The bench applies its prefix stage by hand, without offering.
                     },
@@ -558,14 +558,14 @@ fn main() {
                         &heavy,
                         sc,
                         None,
-                        pipeline::ProfileRendering::colorimetric(),
+                        pipeline::TailRendering::colorimetric(),
                     )
                     .1,
                     &heavy,
                     sc,
                     gpu_pipeline::TailFacts {
                         region: None,
-                        profile: pipeline::ProfileRendering::default(),
+                        rendering: pipeline::TailRendering::default(),
                         spec: pipeline::RenderSpec::default(),
                         // ⚠ The bench applies its prefix stage by hand, without offering.
                     },
@@ -796,7 +796,7 @@ fn main() {
                 &heavy,
                 sc,
                 Some(region),
-                pipeline::ProfileRendering::colorimetric(),
+                pipeline::TailRendering::colorimetric(),
             );
 
             let mut whole_ms = f64::MAX;

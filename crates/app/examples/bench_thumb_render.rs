@@ -51,8 +51,8 @@ fn main() {
         }
     }
     let scale = pipeline::RenderScale::new(1.0);
-    let out = pipeline::build_pipeline(&edits, scale, pipeline::ProfileRendering::colorimetric())
-        .run(buf);
+    let out =
+        pipeline::build_pipeline(&edits, scale, pipeline::TailRendering::colorimetric()).run(buf);
     let rgb_a = out.to_rgb8();
     let (aw, ah) = (out.width(), out.height());
     let render = t.elapsed();
@@ -72,8 +72,8 @@ fn main() {
     let long = buf.width().max(buf.height()) as f32;
     let small = buf.downscale_to(512);
     let scale = pipeline::RenderScale::new(0.5 * 512.0 / long);
-    let out = pipeline::build_pipeline(&edits, scale, pipeline::ProfileRendering::colorimetric())
-        .run(small);
+    let out =
+        pipeline::build_pipeline(&edits, scale, pipeline::TailRendering::colorimetric()).run(small);
     let rgb_b = out.to_rgb8();
     let (bw, bh) = (out.width(), out.height());
     let b = t.elapsed();

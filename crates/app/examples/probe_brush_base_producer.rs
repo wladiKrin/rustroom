@@ -16,7 +16,7 @@
 //! ```
 
 use edit_model::{Brush, BrushStroke, Edits, LocalAdjustments, Mask, MaskedAdjustment};
-use pipeline::{ProfileRendering, RenderScale, RenderSpec, Resampler};
+use pipeline::{RenderScale, RenderSpec, Resampler, TailRendering};
 
 fn gating_mask() -> MaskedAdjustment {
     // ⚠ `auto_mask: true` is the whole point — that is what makes `GpuMaskStage::new` decline and
@@ -96,7 +96,7 @@ fn main() {
         }
 
         let tail =
-            pipeline::build_pipeline_split(&e, scale, pipeline::ProfileRendering::colorimetric()).1;
+            pipeline::build_pipeline_split(&e, scale, pipeline::TailRendering::colorimetric()).1;
         let before: Vec<&str> = tail.stage_names();
         let (after, trailing) = gpu_pipeline::accelerate(
             tail,
@@ -104,7 +104,7 @@ fn main() {
             scale,
             gpu_pipeline::TailFacts {
                 region: None,
-                profile: ProfileRendering::default(),
+                rendering: TailRendering::default(),
                 spec,
                 // ⚠ This probe builds no prefix at all — it asks about a MASK's producer.
             },
@@ -143,7 +143,7 @@ fn main() {
                 let tail = pipeline::build_pipeline_split(
                     &e,
                     scale,
-                    pipeline::ProfileRendering::colorimetric(),
+                    pipeline::TailRendering::colorimetric(),
                 )
                 .1;
                 let (p, _) = gpu_pipeline::accelerate(
@@ -152,7 +152,7 @@ fn main() {
                     scale,
                     gpu_pipeline::TailFacts {
                         region: None,
-                        profile: ProfileRendering::default(),
+                        rendering: TailRendering::default(),
                         spec,
                     },
                     ctx,

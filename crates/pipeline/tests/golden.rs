@@ -1,6 +1,6 @@
 //! Golden-image regression tests. Set `UPDATE_GOLDEN=1` to (re)write references.
 //!
-//! A fixed synthetic "chart" is rendered through `build_pipeline(&edits, ProfileRendering::colorimetric())`; the RGB8
+//! A fixed synthetic "chart" is rendered through `build_pipeline(&edits, TailRendering::colorimetric())`; the RGB8
 //! output must match the committed PNG within `TOL` per channel.
 
 use core_image::ImageBuf;
@@ -8,7 +8,7 @@ use edit_model::{
     ColorGrading, Dehaze, Edits, GradeWheel, LocalContrast, NoiseReduction, Sharpening, ToneCurve,
     Vignette, WhiteBalance,
 };
-use pipeline::ProfileRendering;
+use pipeline::TailRendering;
 use pipeline::{build_pipeline, RenderScale, Resampler};
 
 /// What every golden renders with — the shipping kernel.
@@ -320,7 +320,7 @@ fn check_golden_with(name: &str, edits: &Edits, input: ImageBuf) {
             edits,
             RenderScale::FULL,
             spec,
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         )
         .run(input),
     );
@@ -338,7 +338,7 @@ fn check_golden_in_space(name: &str, edits: &Edits, space: color::OutputSpace) {
             RenderScale::FULL,
             space,
             RESAMPLER,
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         )
         .run(chart()),
     );
@@ -576,7 +576,7 @@ fn golden_gamut_perceptual() {
                 intent,
                 ..Default::default()
             },
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         )
         .run(chart())
     };
@@ -633,7 +633,7 @@ fn golden_defringe() {
             e,
             RenderScale::FULL,
             pipeline::RenderSpec::default(),
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         )
         .run(img.clone())
     };
@@ -1025,9 +1025,7 @@ fn golden_mask_add() {
 #[test]
 fn the_three_composite_goldens_differ_from_one_another_and_from_the_base() {
     let render = |e: &Edits| {
-        to_rgb8(
-            &build_pipeline(e, RenderScale::FULL, ProfileRendering::colorimetric()).run(chart()),
-        )
+        to_rgb8(&build_pipeline(e, RenderScale::FULL, TailRendering::colorimetric()).run(chart()))
     };
     let sub = render(&composite_case(edit_model::MaskOp::Subtract));
     let int = render(&composite_case(edit_model::MaskOp::Intersect));
@@ -1059,7 +1057,7 @@ fn the_composite_goldens_discriminate() {
         &build_pipeline(
             &Edits::default(),
             RenderScale::FULL,
-            ProfileRendering::colorimetric(),
+            TailRendering::colorimetric(),
         )
         .run(chart()),
     );
@@ -1070,7 +1068,7 @@ fn the_composite_goldens_discriminate() {
             &build_pipeline(
                 &composite_case(op),
                 RenderScale::FULL,
-                ProfileRendering::colorimetric(),
+                TailRendering::colorimetric(),
             )
             .run(chart()),
         );
@@ -1224,13 +1222,13 @@ fn a_masked_clarity_leaves_uncovered_pixels_bit_identical() {
     let plain = build_pipeline(
         &Edits::default(),
         RenderScale::FULL,
-        ProfileRendering::colorimetric(),
+        TailRendering::colorimetric(),
     )
     .run(chart.clone());
     let masked = build_pipeline(
         &masked_clarity_edits(),
         RenderScale::FULL,
-        ProfileRendering::colorimetric(),
+        TailRendering::colorimetric(),
     )
     .run(chart);
 
@@ -1386,16 +1384,12 @@ fn the_auto_masked_lift_is_confined_to_a_band_around_the_centres_hue() {
     let gated = auto_mask_edits();
     let neutral = Edits::default();
     let a = to_rgb8(
-        &build_pipeline(&gated, RenderScale::FULL, ProfileRendering::colorimetric())
+        &build_pipeline(&gated, RenderScale::FULL, TailRendering::colorimetric())
             .run(hue_sweep_chart()),
     );
     let b = to_rgb8(
-        &build_pipeline(
-            &neutral,
-            RenderScale::FULL,
-            ProfileRendering::colorimetric(),
-        )
-        .run(hue_sweep_chart()),
+        &build_pipeline(&neutral, RenderScale::FULL, TailRendering::colorimetric())
+            .run(hue_sweep_chart()),
     );
 
     let row = 8usize;
@@ -1441,11 +1435,11 @@ fn an_auto_masked_dab_really_refuses_part_of_its_own_disc() {
         b.strokes[0].auto_mask = false;
     }
     let a = to_rgb8(
-        &build_pipeline(&gated, RenderScale::FULL, ProfileRendering::colorimetric())
+        &build_pipeline(&gated, RenderScale::FULL, TailRendering::colorimetric())
             .run(hue_sweep_chart()),
     );
     let b = to_rgb8(
-        &build_pipeline(&plain, RenderScale::FULL, ProfileRendering::colorimetric())
+        &build_pipeline(&plain, RenderScale::FULL, TailRendering::colorimetric())
             .run(hue_sweep_chart()),
     );
     let moved = a.iter().zip(b.iter()).filter(|(x, y)| x != y).count();
@@ -1637,13 +1631,13 @@ fn the_luminance_mask_goldens_discriminate() {
         &build_pipeline(
             &Edits::default(),
             RenderScale::FULL,
-            ProfileRendering::colorimetric(),
+            TailRendering::colorimetric(),
         )
         .run(luminance_chart()),
     );
     for (name, edits) in luminance_mask_cases() {
         let bytes = to_rgb8(
-            &build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+            &build_pipeline(&edits, RenderScale::FULL, TailRendering::colorimetric())
                 .run(luminance_chart()),
         );
         let hi = bytes.iter().filter(|&&c| c == 255).count();
@@ -1792,7 +1786,7 @@ fn grading_cases() -> Vec<(&'static str, Edits)> {
 fn the_grading_goldens_do_not_clip() {
     for (name, edits) in grading_cases() {
         let bytes = to_rgb8(
-            &build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+            &build_pipeline(&edits, RenderScale::FULL, TailRendering::colorimetric())
                 .run(grade_ramp_chart()),
         );
         let hi = bytes.iter().filter(|&&c| c == 255).count();
@@ -1816,7 +1810,7 @@ fn the_four_grading_goldens_differ_from_one_another() {
             (
                 n,
                 to_rgb8(
-                    &build_pipeline(&e, RenderScale::FULL, ProfileRendering::colorimetric())
+                    &build_pipeline(&e, RenderScale::FULL, TailRendering::colorimetric())
                         .run(grade_ramp_chart()),
                 ),
             )
@@ -1904,7 +1898,7 @@ fn check_lens_golden(name: &str, c: lens_profile::Corrections) {
             ..pipeline::RenderSpec::default()
         },
         Some(lens_shot()),
-        pipeline::ProfileRendering::default(),
+        pipeline::TailRendering::default(),
     );
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());
@@ -2110,7 +2104,7 @@ fn the_spot_goldens_do_not_clip_and_differ() {
     let mut rendered: Vec<(&str, Vec<u8>)> = Vec::new();
     for (name, edits) in spot_cases() {
         let bytes = to_rgb8(
-            &build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+            &build_pipeline(&edits, RenderScale::FULL, TailRendering::colorimetric())
                 .run(spot_chart()),
         );
         let hi = bytes.iter().filter(|&&c| c == 255).count();
@@ -2160,7 +2154,7 @@ fn the_spot_goldens_do_not_clip_and_differ() {
         &build_pipeline(
             &Edits::default(),
             RenderScale::FULL,
-            ProfileRendering::colorimetric(),
+            TailRendering::colorimetric(),
         )
         .run(spot_chart()),
     );
@@ -2236,7 +2230,7 @@ fn golden_red_eye() {
 fn the_red_eye_golden_corrects_both_pupils_and_not_the_skin() {
     let render = |e: &Edits| {
         to_rgb8(
-            &build_pipeline(e, RenderScale::FULL, ProfileRendering::colorimetric())
+            &build_pipeline(e, RenderScale::FULL, TailRendering::colorimetric())
                 .run(red_eye_chart()),
         )
     };
@@ -2350,13 +2344,13 @@ fn the_colour_mask_golden_discriminates() {
         &build_pipeline(
             &Edits::default(),
             RenderScale::FULL,
-            ProfileRendering::colorimetric(),
+            TailRendering::colorimetric(),
         )
         .run(hue_sweep_chart()),
     );
     for (name, edits) in colour_mask_cases() {
         let bytes = to_rgb8(
-            &build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+            &build_pipeline(&edits, RenderScale::FULL, TailRendering::colorimetric())
                 .run(hue_sweep_chart()),
         );
         let hi = bytes.iter().filter(|&&c| c == 255).count();
@@ -2605,12 +2599,12 @@ fn a_masked_capture_correction_really_changes_the_chart() {
     ];
 
     for (what, edits, chart) in cases {
-        let masked = build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+        let masked = build_pipeline(&edits, RenderScale::FULL, TailRendering::colorimetric())
             .run(chart.clone());
         let neutral = build_pipeline(
             &Edits::default(),
             RenderScale::FULL,
-            ProfileRendering::colorimetric(),
+            TailRendering::colorimetric(),
         )
         .run(chart);
         let a = to_rgb8(&masked);

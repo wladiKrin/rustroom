@@ -37,7 +37,7 @@ fn main() {
             let px = pipeline::build_pipeline(
                 &edits,
                 pipeline::RenderScale::new(1.0),
-                pipeline::ProfileRendering::colorimetric(),
+                pipeline::TailRendering::colorimetric(),
             )
             .run(small.clone());
             let rgb = export::to_rgb8(&px);

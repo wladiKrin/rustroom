@@ -95,7 +95,7 @@ fn main() {
             None,
             pipeline::RenderSpec::default(),
             lens.clone(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
         );
         let mid = prefix.run(src);
         // The region as the canvas derives it, in rendered pixels, taken from the frame's middle.
@@ -115,7 +115,7 @@ fn main() {
                 None,
                 pipeline::RenderSpec::default(),
                 lens.clone(),
-                pipeline::ProfileRendering::default(),
+                pipeline::TailRendering::default(),
             );
             tail.run(cropped.clone())
         });
@@ -141,7 +141,7 @@ fn main() {
         None,
         pipeline::RenderSpec::default(),
         lens.clone(),
-        pipeline::ProfileRendering::default(),
+        pipeline::TailRendering::default(),
     );
     let mid = prefix.run(src);
     let vw = ((AVAIL.0 / px_per_rendered).ceil() as usize).min(pw);
@@ -170,7 +170,7 @@ fn main() {
                 None,
                 pipeline::RenderSpec::default(),
                 lens.clone(),
-                pipeline::ProfileRendering::default(),
+                pipeline::TailRendering::default(),
             );
             tail.run(cropped.clone())
         });

@@ -20,7 +20,7 @@
 //! ```
 use color::{GamutMap, OutputSpace, RenderingIntent};
 use core_image::ImageBuf;
-use pipeline::{ProfileRendering, RenderScale, RenderSpec};
+use pipeline::{RenderScale, RenderSpec, TailRendering};
 use std::path::{Path, PathBuf};
 
 const LONG: usize = 1600;
@@ -96,7 +96,7 @@ fn main() {
             None,
             spec,
             None,
-            ProfileRendering {
+            TailRendering {
                 curve: prof.tone_curve.as_deref(),
                 baseline_ev: prof.baseline_exposure,
                 look: None,

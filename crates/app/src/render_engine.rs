@@ -355,9 +355,9 @@ impl RenderEngine {
                 // user is actually waiting for.
                 let debug_render = std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some();
                 let t0 = std::time::Instant::now();
-                // ⚠ Bound once and reused by the warm-behind render below. `ProfileRendering`
+                // ⚠ Bound once and reused by the warm-behind render below. `TailRendering`
                 // is `Copy` precisely so a second render cannot be handed a different one.
-                let rendering = pipeline::ProfileRendering {
+                let rendering = pipeline::TailRendering {
                     curve: profile.curve.as_deref(),
                     baseline_ev: profile.baseline_ev,
                     look,
@@ -1188,7 +1188,7 @@ fn render_cached(
     source_scale: f32,
     lens: Option<lens_profile::LensShot>,
     wb_baseline: color::wb::Illuminant,
-    profile: pipeline::ProfileRendering<'_>,
+    rendering: pipeline::TailRendering<'_>,
     cache: &mut PrefixCache,
     brush_cache: &mut BrushCache,
 ) -> (RenderedFrame, Ran) {
@@ -1199,7 +1199,7 @@ fn render_cached(
         source_scale,
         lens,
         wb_baseline,
-        profile,
+        rendering,
         cache,
         brush_cache,
         false,
@@ -1219,7 +1219,7 @@ fn render_cached_with(
     source_scale: f32,
     lens: Option<lens_profile::LensShot>,
     wb_baseline: color::wb::Illuminant,
-    profile: pipeline::ProfileRendering<'_>,
+    rendering: pipeline::TailRendering<'_>,
     cache: &mut PrefixCache,
     brush_cache: &mut BrushCache,
     handoff: bool,
@@ -1728,7 +1728,7 @@ fn render_cached_with(
             // ⚠ The display rendering, by contrast, lives in the **tail** — so this must be
             // carried, or every render would silently take the built-in curve and the built-in
             // baseline while a profile that declares its own sat unused.
-            profile,
+            rendering,
         );
         // ⚠⚠ The tail only. Every accelerated stage is a tail stage, and accelerating the prefix
         // would make `PrefixKey` describe two different computations under one key.
@@ -1749,7 +1749,7 @@ fn render_cached_with(
                     scale,
                     gpu_pipeline::TailFacts {
                         region,
-                        profile,
+                        rendering,
                         spec: render_spec,
                     },
                     ctx,
@@ -1884,7 +1884,7 @@ fn render_cached_with(
                         airlight: Some(airlight),
                     },
                     None,
-                    profile,
+                    rendering,
                 );
                 let mid = halves.before_grade.run(unshare(input));
                 // ⚠ Blending and Balance are read from the edits whether or not the grade is
@@ -2110,7 +2110,7 @@ pub fn render_once(
                 edits,
                 scale,
                 spec,
-                pipeline::ProfileRendering::colorimetric(),
+                pipeline::TailRendering::colorimetric(),
             )
             .run(preview),
         ),
@@ -2246,7 +2246,7 @@ mod tests {
                 color::wb::Illuminant::default(),
                 // ⚠ A fresh cache each time, or the second call would legitimately hit the
                 // first's checkpoint and the test would be asserting about caching instead.
-                pipeline::ProfileRendering::default(),
+                pipeline::TailRendering::default(),
                 &mut PrefixCache::default(),
                 &mut BrushCache::default(),
             )
@@ -2393,7 +2393,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             cache,
             bc,
         )
@@ -2877,7 +2877,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         )
@@ -2926,7 +2926,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             cache,
             &mut BrushCache::default(),
         )
@@ -2967,7 +2967,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             cache,
             &mut BrushCache::default(),
         )
@@ -3027,7 +3027,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             cache,
             &mut BrushCache::default(),
             handoff,
@@ -3093,7 +3093,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut cache,
             &mut BrushCache::default(),
             true,
@@ -3136,7 +3136,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             cache,
             &mut BrushCache::default(),
         )
@@ -3227,7 +3227,7 @@ mod tests {
                 1.0,
                 None,
                 color::wb::Illuminant::default(),
-                pipeline::ProfileRendering::default(),
+                pipeline::TailRendering::default(),
                 cache,
                 &mut BrushCache::default(),
             )
@@ -3314,7 +3314,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -3375,7 +3375,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             cache,
             &mut BrushCache::default(),
         )
@@ -3516,7 +3516,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut cache,
             &mut bc,
         );
@@ -3532,7 +3532,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut cache,
             &mut bc,
         );
@@ -3550,7 +3550,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut cache,
             &mut bc,
         );
@@ -3572,7 +3572,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut cache,
             &mut bc,
         );
@@ -3597,7 +3597,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut cache,
             &mut bc,
         );
@@ -3622,7 +3622,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut cache,
             &mut bc,
         );
@@ -3649,7 +3649,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut native,
             &mut bc,
         );
@@ -3667,7 +3667,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut fit,
             &mut bc,
         );
@@ -3695,7 +3695,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut cache,
             &mut bc,
         );
@@ -3711,7 +3711,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut cache,
             &mut bc,
         );
@@ -4140,7 +4140,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -4158,7 +4158,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -4193,7 +4193,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -4238,7 +4238,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut cache,
             &mut bc,
         ); // "fit"
@@ -4249,7 +4249,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut cache,
             &mut bc,
         ); // "native"
@@ -4283,7 +4283,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut cache,
             &mut bc,
         );
@@ -4316,7 +4316,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -5310,7 +5310,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         )
@@ -5690,7 +5690,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
-            pipeline::ProfileRendering::default(),
+            pipeline::TailRendering::default(),
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         )

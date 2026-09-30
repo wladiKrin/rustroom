@@ -74,7 +74,7 @@ fn main() {
         let a = pipeline::build_pipeline(
             &edits,
             pipeline::RenderScale::new(1.0),
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         )
         .run(a);
         stats(
@@ -105,7 +105,7 @@ fn main() {
     let b = pipeline::build_pipeline(
         &edits,
         pipeline::RenderScale::new(1.0),
-        pipeline::ProfileRendering::colorimetric(),
+        pipeline::TailRendering::colorimetric(),
     )
     .run(b);
     stats(&b, "JPEG -> pipeline");

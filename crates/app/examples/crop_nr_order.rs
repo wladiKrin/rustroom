@@ -62,7 +62,7 @@ fn main() {
         img = s.stage.apply(img);
     }
     let (_, tail) =
-        pipeline::build_pipeline_split(&edits, sc, pipeline::ProfileRendering::colorimetric());
+        pipeline::build_pipeline_split(&edits, sc, pipeline::TailRendering::colorimetric());
     let img = tail.run(img);
     let (w, h) = (img.width(), img.height());
     println!("rendered {w}x{h}");

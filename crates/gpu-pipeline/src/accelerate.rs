@@ -7,7 +7,7 @@ use crate::{
     GpuVignetteStage, GpuWhiteBalanceStage,
 };
 use edit_model::Edits;
-use pipeline::{Pipeline, PipelineStage, ProfileRendering, Region, RenderScale, RenderSpec};
+use pipeline::{Pipeline, PipelineStage, Region, RenderScale, RenderSpec, TailRendering};
 use std::sync::Arc;
 
 /// Builds one GPU stage from what the tail was built from.
@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// **full-resolution pixels** and only the scale says what that is at this rung. `GpuHslStage`
 /// ignores it; a signature that omitted it would make the sharpen entry unwritable.
 ///
-/// ⚠⚠ **And the [`ProfileRendering`], because `display_rendering` is NOT built from `Edits`.** Its
+/// ⚠⚠ **And the [`TailRendering`], because `display_rendering` is NOT built from `Edits`.** Its
 /// curve and baseline exposure come from the camera profile, which `pipeline` never loads — they
 /// are handed to `build_pipeline_split_in_region_with_brush` by the caller. A builder without it
 /// would silently give every photograph the built-in curve and the built-in baseline while a
@@ -43,7 +43,7 @@ type Builder = fn(
     // and giving it two homes in one call is the two-facts-that-can-disagree shape this project
     // has already paid for three times.
     Option<Region>,
-    ProfileRendering<'_>,
+    TailRendering<'_>,
     RenderSpec,
     &Arc<GpuContext>,
 ) -> Option<Box<dyn GpuStage>>;
@@ -129,10 +129,10 @@ const REPLACEABLE: &[(&str, Builder)] = &[
     // what the CPU tail applies before constructing this stage — skipping it would render every
     // camera whose profile declares an identity curve differently from the CPU, which is most of
     // them, the X-T4 included.
-    ("display_rendering", |_, _, _, profile, _, ctx| {
+    ("display_rendering", |_, _, _, rendering, _, ctx| {
         Some(Box::new(GpuDisplayRenderingStage::new(
-            pipeline::effective_profile_curve(profile.curve),
-            profile.baseline_ev,
+            pipeline::effective_profile_curve(rendering.curve),
+            rendering.baseline_ev,
             ctx,
         )))
     }),
@@ -141,10 +141,10 @@ const REPLACEABLE: &[(&str, Builder)] = &[
     // a lone `display_rendering` run possible at all, and that run is the one case
     // `TRANSFER_COST`'s doc records as sitting inside the float band and being refused.
     //
-    // ⚠ The only row that can DECLINE: the cube comes from the profile, and the tail placed this
-    // stage only because it had one. Declining leaves the CPU stage rather than panicking.
-    ("creative_look", |e, _, _, profile, _, ctx| {
-        profile.look.map(|cube| {
+    // ⚠ The only row that can DECLINE: the cube comes from the tail's rendering, and the tail placed
+    // this stage only because it had one. Declining leaves the CPU stage rather than panicking.
+    ("creative_look", |e, _, _, rendering, _, ctx| {
+        rendering.look.map(|cube| {
             Box::new(crate::GpuCreativeLookStage::new(
                 cube,
                 e.look.space,
@@ -430,7 +430,7 @@ pub struct TailFacts<'a> {
     /// The viewport region this render is scoped to, if any.
     pub region: Option<Region>,
     /// The camera rendering in force.
-    pub profile: ProfileRendering<'a>,
+    pub rendering: TailRendering<'a>,
     /// What the render is producing.
     pub spec: RenderSpec,
 }
@@ -444,7 +444,7 @@ pub fn accelerate(
 ) -> (Pipeline, Option<GpuChain>) {
     let TailFacts {
         region,
-        profile,
+        rendering,
         spec,
     } = facts;
     // ⚠⚠ **Depth one, and it is structural rather than a bolted-on limit.** The accelerator handed
@@ -467,7 +467,7 @@ pub fn accelerate(
             // ⚠ Carried for one rule rather than because anything reads it: `LocalAdjustments`
             // has no vignette, so no mask sub-stage can ask about the frame.
             region,
-            profile,
+            rendering,
             spec,
             ctx,
             None,
@@ -484,7 +484,7 @@ pub fn accelerate(
         edits,
         scale,
         region,
-        profile,
+        rendering,
         spec,
         ctx,
         Some(&inner as &pipeline::SubStageAccelerator<'_>),
@@ -507,7 +507,7 @@ fn walk(
     edits: &Edits,
     scale: RenderScale,
     region: Option<Region>,
-    profile: ProfileRendering<'_>,
+    rendering: TailRendering<'_>,
     spec: RenderSpec,
     ctx: &Arc<GpuContext>,
     inner: Option<&pipeline::SubStageAccelerator<'_>>,
@@ -548,7 +548,7 @@ fn walk(
         // `MaskedAdjustment`, and `the_replaceable_names_occur_at_most_once_in_a_tail` rests on
         // each name appearing once — while a tail legitimately holds several masks.
         if let Some(names) = mask_subs {
-            if let Some(g) = gpu_mask(s.as_ref(), &names, scale, region, profile, spec, ctx) {
+            if let Some(g) = gpu_mask(s.as_ref(), &names, scale, region, rendering, spec, ctx) {
                 run.push((g, s));
                 continue;
             }
@@ -556,7 +556,7 @@ fn walk(
         match REPLACEABLE
             .iter()
             .find(|(n, _)| *n == s.name())
-            .and_then(|(_, build)| build(edits, scale, region, profile, spec, ctx))
+            .and_then(|(_, build)| build(edits, scale, region, rendering, spec, ctx))
         {
             // ⚠ `and_then`, so a builder that declines falls through to the CPU arm below rather
             // than being treated as a replaceable stage with nothing behind it.
@@ -622,7 +622,7 @@ fn gpu_mask(
     names: &[&'static str],
     scale: RenderScale,
     region: Option<Region>,
-    profile: ProfileRendering<'_>,
+    rendering: TailRendering<'_>,
     spec: RenderSpec,
     ctx: &Arc<GpuContext>,
 ) -> Option<Box<dyn GpuStage>> {
@@ -633,7 +633,7 @@ fn gpu_mask(
     let mut subs: Vec<Box<dyn GpuStage>> = Vec::with_capacity(names.len());
     for n in names {
         let (_, build) = REPLACEABLE.iter().find(|(r, _)| r == n)?;
-        subs.push(build(&e, scale, region, profile, spec, ctx)?);
+        subs.push(build(&e, scale, region, rendering, spec, ctx)?);
     }
     // ⚠ The whole per-component slice, base first — `BrushCoverage`'s own `[mask][component]`
     // shape, handed over as it stands rather than indexed here. Picking out index 0 is what this
@@ -761,7 +761,7 @@ mod tests {
             &e,
             SCALE,
             None,
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         );
         // ⚠⚠ **`output_transform` is filtered out, and M8.3h is what forced that.** Until then
         // this test read the whole tail `["exposure", "output_transform"]` — one run of 29.9 ms
@@ -784,7 +784,7 @@ mod tests {
             Pipeline::new(stages),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         )
@@ -848,7 +848,7 @@ mod tests {
             &e,
             SCALE,
             None,
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         );
         assert_eq!(
             tail.stage_names(),
@@ -886,7 +886,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         )
@@ -927,14 +927,14 @@ mod tests {
                 None,
                 spec,
                 None,
-                ProfileRendering::colorimetric(),
+                TailRendering::colorimetric(),
             );
             (t, spec)
         };
         let run = |intent, gpu: bool| {
             let (t, spec) = tail(intent);
             if gpu {
-                accel(t, &e, SCALE, ProfileRendering::colorimetric(), spec, &ctx).run(img.clone())
+                accel(t, &e, SCALE, TailRendering::colorimetric(), spec, &ctx).run(img.clone())
             } else {
                 t.run(img.clone())
             }
@@ -1004,7 +1004,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         )
@@ -1119,7 +1119,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         )
@@ -1703,7 +1703,7 @@ mod tests {
         tail: Pipeline,
         e: &Edits,
         scale: RenderScale,
-        profile: ProfileRendering<'_>,
+        rendering: TailRendering<'_>,
         spec: RenderSpec,
         ctx: &Arc<GpuContext>,
     ) -> Pipeline {
@@ -1713,7 +1713,7 @@ mod tests {
             scale,
             TailFacts {
                 region: None,
-                profile,
+                rendering,
                 spec,
             },
             ctx,
@@ -1728,7 +1728,7 @@ mod tests {
             SCALE,
             TailFacts {
                 region: None,
-                profile: ProfileRendering::default(),
+                rendering: TailRendering::default(),
                 spec: RenderSpec::default(),
             },
             ctx,
@@ -1751,7 +1751,7 @@ mod tests {
             SCALE,
             TailFacts {
                 region: None,
-                profile: ProfileRendering::default(),
+                rendering: TailRendering::default(),
                 spec: RenderSpec::default(),
             },
             &ctx,
@@ -1962,7 +1962,7 @@ mod tests {
     }
 
     fn tail_of(e: &Edits) -> Pipeline {
-        pipeline::build_pipeline_split(e, SCALE, pipeline::ProfileRendering::colorimetric()).1
+        pipeline::build_pipeline_split(e, SCALE, pipeline::TailRendering::colorimetric()).1
     }
 
     fn tail_in_region(e: &Edits, region: Option<Region>) -> Pipeline {
@@ -1970,7 +1970,7 @@ mod tests {
             e,
             SCALE,
             region,
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         )
         .1
     }
@@ -2020,7 +2020,7 @@ mod tests {
             SCALE,
             TailFacts {
                 region,
-                profile: ProfileRendering::colorimetric(),
+                rendering: TailRendering::colorimetric(),
                 spec: RenderSpec::default(),
             },
             &ctx,
@@ -2077,7 +2077,7 @@ mod tests {
             SCALE,
             TailFacts {
                 region: None,
-                profile: ProfileRendering::colorimetric(),
+                rendering: TailRendering::colorimetric(),
                 spec: RenderSpec::default(),
             },
             &ctx,
@@ -2141,7 +2141,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         );
@@ -2235,7 +2235,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         );
@@ -2276,7 +2276,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         );
@@ -2386,7 +2386,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         );
@@ -2455,7 +2455,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         )
@@ -2526,7 +2526,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         )
@@ -2633,7 +2633,7 @@ mod tests {
                 tail_of(e),
                 e,
                 SCALE,
-                ProfileRendering::default(),
+                TailRendering::default(),
                 RenderSpec::default(),
                 &ctx,
             )
@@ -2717,7 +2717,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         )
@@ -2800,7 +2800,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         ));
@@ -2831,7 +2831,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         ));
@@ -2860,7 +2860,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         ));
@@ -2891,7 +2891,7 @@ mod tests {
             ..Edits::default()
         };
         let (prefix, tail) =
-            pipeline::build_pipeline_split(&e, SCALE, pipeline::ProfileRendering::colorimetric());
+            pipeline::build_pipeline_split(&e, SCALE, pipeline::TailRendering::colorimetric());
         assert!(
             prefix.sub_stage_names_of("mask").is_some(),
             "fixture check: the prefix must carry a capture mask"
@@ -2900,7 +2900,7 @@ mod tests {
             tail,
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         );
@@ -2993,9 +2993,9 @@ mod tests {
             None,
             RenderSpec::default(),
             None,
-            ProfileRendering {
+            TailRendering {
                 look: cube,
-                ..ProfileRendering::default()
+                ..TailRendering::default()
             },
         )
         .1
@@ -3065,7 +3065,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         )
@@ -3102,7 +3102,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         );
@@ -3131,9 +3131,9 @@ mod tests {
             full_tail(&e, Some(&cube)),
             &e,
             SCALE,
-            ProfileRendering {
+            TailRendering {
                 look: Some(&cube),
-                ..ProfileRendering::default()
+                ..TailRendering::default()
             },
             RenderSpec::default(),
             &ctx,
@@ -3183,7 +3183,7 @@ mod tests {
                 &e,
                 SCALE,
                 r,
-                pipeline::ProfileRendering::colorimetric(),
+                pipeline::TailRendering::colorimetric(),
             )
             .1;
             let (p, c) = accelerate(
@@ -3192,7 +3192,7 @@ mod tests {
                 SCALE,
                 TailFacts {
                     region: r,
-                    profile: ProfileRendering::default(),
+                    rendering: TailRendering::default(),
                     spec: RenderSpec::default(),
                 },
                 &ctx,
@@ -3203,7 +3203,7 @@ mod tests {
             &e,
             SCALE,
             Some(region),
-            pipeline::ProfileRendering::colorimetric(),
+            pipeline::TailRendering::colorimetric(),
         )
         .1
         .run(img());
@@ -3283,7 +3283,7 @@ mod tests {
             tail,
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         )
@@ -3328,7 +3328,7 @@ mod tests {
             tail,
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         )
@@ -3358,7 +3358,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         )
@@ -3405,7 +3405,7 @@ mod tests {
             tail,
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         )
@@ -3454,7 +3454,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         )
@@ -3479,7 +3479,7 @@ mod tests {
             tail,
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         )
@@ -3545,7 +3545,7 @@ mod tests {
                 tail,
                 &e,
                 SCALE,
-                ProfileRendering::default(),
+                TailRendering::default(),
                 RenderSpec::default(),
                 &ctx
             )
@@ -3574,7 +3574,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         )
@@ -3601,7 +3601,7 @@ mod tests {
             tail_of(&e),
             &e,
             SCALE,
-            ProfileRendering::default(),
+            TailRendering::default(),
             RenderSpec::default(),
             &ctx,
         )

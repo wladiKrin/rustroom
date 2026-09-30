@@ -232,7 +232,7 @@ fn render(
             )),
         },
         lens,
-        pipeline::ProfileRendering::default(),
+        pipeline::TailRendering::default(),
     );
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());

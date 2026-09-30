@@ -29,7 +29,7 @@ fn render(buf: &core_image::ImageBuf, e: &edit_model::Edits) -> core_image::Imag
     pipeline::build_pipeline(
         e,
         pipeline::RenderScale::new(1.0),
-        pipeline::ProfileRendering::colorimetric(),
+        pipeline::TailRendering::colorimetric(),
     )
     .run(buf.clone())
 }

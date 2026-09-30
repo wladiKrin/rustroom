@@ -57,7 +57,7 @@ fn main() {
             baseline: as_shot,
             airlight: Some(air),
         };
-        pipeline::build_pipeline_spec(&e, scale, spec, pipeline::ProfileRendering::colorimetric())
+        pipeline::build_pipeline_spec(&e, scale, spec, pipeline::TailRendering::colorimetric())
             .run(buffer.clone())
     };
 

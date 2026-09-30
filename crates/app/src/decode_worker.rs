@@ -61,7 +61,7 @@ pub struct Decoded {
 ///
 /// ⚠ **The name is now narrower than the contents** — `looks_dir` is not a camera-profile field.
 /// A deliberate wave-scoping choice rather than a judgement: `ProfileParts` and
-/// `pipeline::ProfileRendering` are the owned and borrowed halves of one seam and want the same
+/// `pipeline::TailRendering` are the owned and borrowed halves of one seam and want the same
 /// rename to `TailRendering`, and renaming both would churn call sites in files another track is
 /// editing concurrently. Worth doing once the wave merges.
 #[derive(Debug, Clone, Default)]

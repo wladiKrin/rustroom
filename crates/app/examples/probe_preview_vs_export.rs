@@ -43,7 +43,7 @@ fn main() {
         airlight: Some(pipeline::prefix_airlight(&e, &pd.image, resampler, None)),
     };
     let pv =
-        pipeline::build_pipeline_spec(&e, scale, spec, pipeline::ProfileRendering::colorimetric())
+        pipeline::build_pipeline_spec(&e, scale, spec, pipeline::TailRendering::colorimetric())
             .run(preview);
     export::save(
         &pv,

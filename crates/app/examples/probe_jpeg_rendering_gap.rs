@@ -25,7 +25,7 @@ fn main() {
         airlight: None,
     };
     let run = |e: &Edits| {
-        pipeline::build_pipeline_spec(e, scale, spec, pipeline::ProfileRendering::colorimetric())
+        pipeline::build_pipeline_spec(e, scale, spec, pipeline::TailRendering::colorimetric())
             .run(img.clone())
     };
 
