@@ -173,6 +173,25 @@ fn top_bar(w: &mut Walk, surface: &str, view: crate::AppView) {
     w.check(surface, &nodes);
 }
 
+/// The Library grid and the filmstrip: every photo is a control, named and described by its name
+/// (the author, 2026-09-30).
+fn photos(w: &mut Walk) {
+    let ctx = themed_ctx();
+    let mut app = crate::test_app::for_test();
+    app.library = Some(crate::test_app::library_of(5));
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+    let nodes = test_ui::nodes_on(&ctx, screen, |ui| {
+        let c = ui.ctx().clone();
+        crate::library::show(&mut app, ui, &c);
+    });
+    w.check("Library grid", &nodes);
+    let nodes = test_ui::nodes_on(&ctx, screen, |ui| {
+        let c = ui.ctx().clone();
+        crate::filmstrip::show(&mut app, ui, &c);
+    });
+    w.check("Filmstrip", &nodes);
+}
+
 fn status_row(w: &mut Walk) {
     let ctx = themed_ctx();
     let mut app = crate::test_app::for_test();
@@ -268,6 +287,7 @@ fn every_clickable_control_says_what_it_does() {
     top_bar(&mut w, "Top bar (Library)", crate::AppView::Library);
     top_bar(&mut w, "Top bar (Develop)", crate::AppView::Develop);
     status_row(&mut w);
+    photos(&mut w);
     menu_bar(&mut w);
     develop(&mut w, "Develop (Edit)", Tool::Edit, |_| {});
     develop(&mut w, "Develop (Crop)", Tool::Crop, |_| {});

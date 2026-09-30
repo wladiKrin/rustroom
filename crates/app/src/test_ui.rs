@@ -126,6 +126,37 @@ pub fn labelled_rects_on(
         .collect()
 }
 
+/// Whether a tooltip is showing after the pointer has rested at `at` past egui's tooltip delay —
+/// what a user sees, where a description only says what was asked for.
+pub fn tooltip_after_rest(
+    ctx: &egui::Context,
+    screen_rect: egui::Rect,
+    at: egui::Pos2,
+    mut body: impl FnMut(&mut egui::Ui),
+) -> bool {
+    for (i, t) in [0.0, 0.2, 0.6, 1.2, 1.3].into_iter().enumerate() {
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen_rect),
+                time: Some(t),
+                events: if i == 0 {
+                    vec![egui::Event::PointerMoved(at)]
+                } else {
+                    Vec::new()
+                },
+                ..Default::default()
+            },
+            &mut body,
+        );
+    }
+    ctx.memory(|m| {
+        m.areas()
+            .visible_layer_ids()
+            .iter()
+            .any(|l| l.order == egui::Order::Tooltip)
+    })
+}
+
 /// One AccessKit node, as the hover-coverage walk reads it (M10.6b).
 #[derive(Debug, Clone)]
 pub struct Node {

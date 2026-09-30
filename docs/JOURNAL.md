@@ -212,6 +212,14 @@ Threshold slider and the Orange accent cut to one sentence each. **3277 → 3282
 - ⚠ Files past ~600 code lines that this touched: `segmented.rs` 661, `status_bar.rs` 649,
   `modals/settings.rs` 810, `modals/export.rs` 819 — M10.7d's list.
 
+✅ **Confirmed by use 2026-09-30** (*"works"*), with one addition asked in the same breath: **resting on
+a photo shows its name, in the filmstrip and the Library grid.** The filmstrip already had it — a probe
+showed its tooltip up after a rest — but the grid did not ("needs no hover: it draws the caption", which
+a small cell cuts short); its cell now carries the name as tooltip, accessible name and description,
+and both views joined the walk. `test_ui::tooltip_after_rest` checks a tooltip as **shown** (a rest past
+the delay, a tooltip layer up), with a rest on nothing as its control. 3282 → 3284 tests, both
+sabotage-checked. The addition waits for the author's look before the merge.
+
 ### 2026-09-29 — M10.6a: the Immich Timeline at the top (branch `m10.6a-immich-timeline`, merged 2026-09-29)
 
 **Input:** the author's to-do, *"For immich folder, move timeline to the top."* Spec

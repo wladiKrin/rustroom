@@ -665,6 +665,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         // context menu needs the selection *and* the entries), so a live
                         // borrow of `lib.entries` in the argument would conflict with it.
                         let cell_id = lib.entries[i].id.clone();
+                        // ⚠ `caption()`, never `file_name` — the filmstrip's rule.
+                        let caption = lib.entries[i].caption();
                         ui.push_id(&cell_id, |ui| {
                             // The picture gets the cell's height minus the caption and the
                             // marks row — `cell_layout::thumb_box`'s rule.
@@ -916,7 +918,21 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 // ⚠ `click_and_drag`, so a drag starting on a thumbnail can
                                 // begin a rubber band. A plain click still reports
                                 // `clicked()`; egui distinguishes the two.
-                                .interact(egui::Sense::click_and_drag());
+                                .interact(egui::Sense::click_and_drag())
+                                // ⚠ The photo's name on hover, as in the filmstrip — the caption
+                                // under a small cell is cut short (the author, 2026-09-30) — and
+                                // as the cell's accessible name, so a screen reader and a test
+                                // find the photo by it.
+                                .hover(&caption);
+                            let lit = lib.selection.contains(i);
+                            resp.widget_info(|| {
+                                egui::WidgetInfo::selected(
+                                    egui::WidgetType::SelectableLabel,
+                                    true,
+                                    lit,
+                                    &caption,
+                                )
+                            });
                             cell_rects.push((i, resp.rect));
 
                             thumb::selection_border(
@@ -1503,6 +1519,40 @@ mod tests {
             app.library.as_ref().unwrap().selection.active(),
             Some(4),
             "it wrapped to the top of the folder"
+        );
+    }
+
+    /// ⚠ The author's ask (2026-09-30): resting on a photo in the grid shows its name, as in the
+    /// filmstrip — the caption under a small cell is cut short. Shown, described, and a control.
+    #[test]
+    fn resting_on_a_photo_in_the_grid_shows_its_name() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        let lib = crate::test_app::library_of(5);
+        let name = lib.entries[1].caption();
+        app.library = Some(lib);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+        let mut body = |ui: &mut egui::Ui| {
+            let c = ui.ctx().clone();
+            super::show(&mut app, ui, &c);
+        };
+        let nodes = crate::test_ui::nodes_on(&ctx, screen, &mut body);
+        // ⚠ The cell, not its caption text, which carries the same words as a Label.
+        let cell = nodes
+            .iter()
+            .find(|n| n.label == name && n.role == egui::accesskit::Role::Button)
+            .expect("the photo's cell is drawn and named");
+        assert_eq!(cell.description.as_deref(), Some(name.as_str()));
+        // Near the top of the cell: the picture, not the caption row under it.
+        let on_picture = egui::pos2(cell.rect.center().x, cell.rect.top() + 20.0);
+        assert!(
+            crate::test_ui::tooltip_after_rest(&ctx, screen, on_picture, &mut body),
+            "no tooltip over the photo"
+        );
+        let ctx = crate::test_ui::ctx();
+        assert!(
+            !crate::test_ui::tooltip_after_rest(&ctx, screen, egui::pos2(1190.0, 790.0), &mut body),
+            "a tooltip over nothing"
         );
     }
 }
