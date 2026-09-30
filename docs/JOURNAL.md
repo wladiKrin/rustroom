@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.7a: bit-reproducible exports (2026-09-30)](#2026-09-30--m107a-bit-reproducible-exports-branch-m107a-reproducible-exports)
 - [M10.6b: every clickable control says what it does (2026-09-30)](#2026-09-30--m106b-every-clickable-control-says-what-it-does-branch-m106b-hover-table-merged-2026-09-30)
 - [M10.6a: the Immich Timeline at the top (2026-09-29)](#2026-09-29--m106a-the-immich-timeline-at-the-top-branch-m106a-immich-timeline-merged-2026-09-29)
 - [The re-plan: every open item becomes Phase 10, release becomes Phase 11 (2026-09-29)](#2026-09-29--the-re-plan-every-open-item-becomes-phase-10-release-becomes-phase-11-branch-replan)
@@ -163,6 +164,32 @@ goldens unmoved.
 - ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
+
+### 2026-09-30 — M10.7a: bit-reproducible exports (branch `m10.7a-reproducible-exports`)
+
+**Input:** the backlog's *"Exports are not bit-reproducible across runs"* (found 2026-09-01): two
+exports of one photo with the same settings differed, so `cmp` could not say whether a change moved a
+pixel. Spec and plan `2026-09-30-m10.7a-reproducible-exports`.
+
+**Measured first.** Every exported ICC profile comes from `export::icc_for`, cached per colour space per
+process, and lcms2 stamps the header's creation date (bytes 24–35) with the time it builds the profile —
+a probe read `2026-09-30 08:05:16`. The profile ID (84–99) is zero, since lcms2 computes none, so nothing
+else depends on the date. DNG export embeds no profile and writes no time; XMP dates are capture dates;
+the encoders write no time of their own. **One field was the whole cause.**
+
+**Built.** `export::ICC_CREATED = 2026-08-24 00:00:00` — the day these profiles first went into exports —
+written into every profile by `pin_created`, which touches only those 12 bytes and leaves anything shorter
+than a header alone. A **valid** date, not zeros: the backlog's own caution was whether a zeroed date
+upsets a consumer, and month 0 / day 0 is not a legal ICC date. Checked by an independent reader:
+`exiftool` reports *Profile Date Time 2026:08:24 00:00:00*, *Display P3*, v4.4.0; lcms2 parses it back
+in `the_profile_agrees_with_our_own_maths`. **3284 → 3286 tests**, both sabotage-checked (a space without
+the pin; the wrong byte range).
+
+**Worth keeping:**
+
+- ⚠ **A `git checkout -- <file>` to drop a probe also dropped the uncommitted work in the same file.** The
+  pin and its tests were re-applied from the same scripts, and nothing committed was touched — but remove
+  a probe by editing it out, never by checking the file out.
 
 ### 2026-09-30 — M10.6b: every clickable control says what it does (branch `m10.6b-hover-table`, merged 2026-09-30)
 

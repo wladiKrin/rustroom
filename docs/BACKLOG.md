@@ -27,7 +27,7 @@ and a pointer, not deleted.
 | Milestone | Entries in this file |
 | --- | --- |
 | **M10.6** your to-do + a design leftover | (from the vault's `to dos.md` and `DESIGN.md`; the welcome screen and the empty Library's text went to **M11.4**) |
-| **M10.7** code health | *Exports are not bit-reproducible* (a); plus `CLAUDE.md`'s rename, temp-dir, file-size and `PrefixCache` items |
+| **M10.7** code health | *Exports are not bit-reproducible* (a, ✅ 2026-09-30); plus `CLAUDE.md`'s rename, temp-dir, file-size and `PrefixCache` items |
 | **M10.8** Library & workflow | P-26's batch rename (d); *Library: … vertical filmstrip* (b) |
 | **M10.9** presets & shortcuts | *Presets: no import/export…* (a); *No user-defined keyboard shortcuts* (b) |
 | **M10.10** export | P-26's image watermark (a) and export sizing (b) |
@@ -1315,7 +1315,8 @@ is the only thing to trust here.
 - **Demosaic is ~93% of a full-resolution decode**, and the Phase 8 (formerly 5) `wgpu` port would **not** fix it
   — that time is inside libraw's `dcraw_process`, entirely upstream of the stages wgpu would touch.
 
-- **⚠ Exports are not bit-reproducible across runs** → **M10.7a** (found 2026-09-01 while validating M7.3).
+- ✅ **BUILT 2026-09-30 as M10.7a** (`grep -n 'M10.7a' docs/JOURNAL.md`) — every exported profile's creation
+  date is pinned. As recorded: **⚠ Exports are not bit-reproducible across runs** → **M10.7a** (found 2026-09-01 while validating M7.3).
   lcms2 stamps a **creation date** into every ICC profile it builds, so two renders of the same
   photo with the same settings differ by **one byte** in the profile header — offset 74 in a JPEG.
   Harmless in itself, and worth recording because of what it costs: **"did this change move any

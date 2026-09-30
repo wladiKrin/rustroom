@@ -144,9 +144,9 @@ pub fn icc_for(space: color::OutputSpace) -> &'static [u8] {
     static PROPHOTO: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
 
     match space {
-        S::Srgb => SRGB.get_or_init(|| {
-            pin_created(lcms2::Profile::new_srgb().icc().unwrap_or_default())
-        }),
+        S::Srgb => {
+            SRGB.get_or_init(|| pin_created(lcms2::Profile::new_srgb().icc().unwrap_or_default()))
+        }
         S::DisplayP3 => P3.get_or_init(|| {
             build_icc(
                 D65,
@@ -489,8 +489,13 @@ mod tests {
         let fresh = lcms2::Profile::new_srgb().icc().expect("lcms2 builds sRGB");
         let pinned = pin_created(fresh.clone());
         assert_eq!(pinned.len(), fresh.len());
-        let moved: Vec<usize> = (0..fresh.len()).filter(|&i| fresh[i] != pinned[i]).collect();
-        assert!(!moved.is_empty(), "fixture: the fresh date was already the pinned one");
+        let moved: Vec<usize> = (0..fresh.len())
+            .filter(|&i| fresh[i] != pinned[i])
+            .collect();
+        assert!(
+            !moved.is_empty(),
+            "fixture: the fresh date was already the pinned one"
+        );
         assert!(moved.iter().all(|i| (24..36).contains(i)), "{moved:?}");
         assert_eq!(pin_created(vec![1, 2, 3]), vec![1, 2, 3]);
     }
