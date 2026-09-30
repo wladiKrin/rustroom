@@ -104,7 +104,7 @@ rustroom/
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
 │   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is **1,147 total but only 78 of code** (2026-09-24; it said 681, then 1,116 — **measure by code, do not quote either number**); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. ⚠⚠ **THE MODULE LIST THAT USED TO SIT HERE IS GONE ON PURPOSE.** It enumerated ~50 of the **152 `.rs` files** under `crates/app/src` and had silently gone half-stale — it was missing `multi/{compare,survey,pane}`, `menu`, `menu_bar`, `native_menu`, `commands`, `tone_curve_tool`, `brush_tool`, `mask_tool`, `looks`, `marks` and ~40 more, which is worse than no list because this one is the *placement guide*. **`ls crates/app/src/` is the inventory; what belongs here is the RULE:** `lib.rs` declares **97** modules and **not one of them uses egui** (2026-09-29: six mention `egui::`, all in comments) while `main.rs` declares **41** bin modules and egui lives only there. ⚠ Re-measure, never requote — it said 73 and 33 for weeks: count with `grep -c '^pub mod [a-z_0-9]*;' crates/app/src/lib.rs` (BSD `grep -E` has no `\s`, and zsh does not word-split a `$files` list — pipe it through `xargs`). Logic goes in the lib, widgets in the bin.
 │   └── catalog/              # ✅ scan_folder → RAW+JPEG/PNG/TIFF entries (+ mtime); SortOrder/sort (name/modified/edited, case-insensitive, name tie-break); is_raw/is_supported (in-memory; SQLite DAM later) + Description per file (v7, M6.2)
-│   ⚠⚠ THE TREE ABOVE LISTS 12 OF 15 CRATES — it omits `gpu-pipeline`, `lens-profile` and `camera-profile`, and did so while also claiming to omit `immich`, which it lists. **`ls crates/` is the answer; this tree is a sketch.**
+│   ⚠⚠ THE TREE ABOVE LISTS 12 OF 17 CRATES — it omits `gpu-pipeline`, `lens-profile`, `camera-profile`, `ai-mask` and `test-dir` (dev-only: every test's temp directory, M10.7c). **`ls crates/` is the answer; this tree is a sketch.**
 ├── docs/
 └── tests/                    # integration + golden reference images
 ```
@@ -173,7 +173,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-29)
 
-**3286 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
+**3291 tests**, **82 goldens**, gate green on `m10.7c-temp-dir-isolation` (3286 on `main`). ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -231,7 +231,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | Milestone | Sub-items |
 |---|---|
 | **M10.6** your to-do + a design leftover | a ✅ Immich Timeline at the top, plus the row buttons always faintly drawn and 20 pt wide — merged 2026-09-29 (`grep -n 'M10.6a' docs/JOURNAL.md`) · b ✅ every clickable control's hover sentence, checked on the drawn app; a photo's name on hover in the filmstrip (the grid's caption says it) — merged 2026-09-30 (`grep -n 'M10.6b' docs/JOURNAL.md`) |
-| **M10.7** code health | a ✅ pin lcms2's ICC creation date (reproducible exports, merged 2026-09-30) · b ✅ `ProfileRendering` → `TailRendering`, the type and its bindings (merged 2026-09-30) · c temp-dir test isolation, 7 + 2 sites · d split the large files · e `PrefixCache`'s tests into `prefix_cache.rs` |
+| **M10.7** code health | a ✅ pin lcms2's ICC creation date (reproducible exports, merged 2026-09-30) · b ✅ `ProfileRendering` → `TailRendering`, the type and its bindings (merged 2026-09-30) · c 🟡 every test's temp directory from the `test-dir` crate, 54 sites, two gates at once proven safe — built on `m10.7c-temp-dir-isolation` · d split the large files · e `PrefixCache`'s tests into `prefix_cache.rs` |
 | **M10.8** Library & workflow | a keyword suggestions · b vertical filmstrip · c stack by hand, group by capture time · d batch rename |
 | **M10.9** presets & shortcuts | a presets import/export, folders, rename · b user-defined shortcuts |
 | **M10.10** export | a image watermark · b sizing in cm/in with PPI, a file-size target |
@@ -279,8 +279,10 @@ by one (it did, 2026-09-26).
 ⚠⚠ **All open work is Phase 10 above.** A finished item is deleted from there, not struck through — its
 record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes belongs here.
 
-- ⚠⚠ **Never run two gates concurrently** — the temp-dir test-isolation sites (M10.7c) collide.
-  `immich_list_cache`'s and `thumb_store`'s counter-based temp dirs are the pattern to copy.
+- ⚠⚠ **A test's directory comes from `test_dir::TempDir` (deleted on drop) or `test_dir::path` (kept,
+  swept by the next run)** — unique per test and per run under `rustroom-tests/<pid>/`. A sweep in
+  `test-dir` fails on `env::temp_dir()` anywhere else; the export staging directory is the one allowed
+  site. Two gates at once are safe since M10.7c (on the old code they failed *and* hung).
 - ⚠⚠ **MEASURE A FILE BY ITS CODE, NOT ITS TOTAL** — this repo's files carry enormous test tails. Use
   `awk '/#\[cfg\(test\)\]/{exit} {n++}'` (code **plus** doc comments). The large ones on 2026-09-24:
   `edit-model/src/lib.rs` 1,883, `pipeline/src/lib.rs` 1,810, `catalog/src/db.rs` 1,730,

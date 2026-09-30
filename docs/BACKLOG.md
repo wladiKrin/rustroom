@@ -27,7 +27,7 @@ and a pointer, not deleted.
 | Milestone | Entries in this file |
 | --- | --- |
 | **M10.6** your to-do + a design leftover | (from the vault's `to dos.md` and `DESIGN.md`; the welcome screen and the empty Library's text went to **M11.4**) |
-| **M10.7** code health | *Exports are not bit-reproducible* (a, ✅ 2026-09-30); the `ProfileRendering` → `TailRendering` rename (b, 2026-09-30 — the entries below keep the old name, as history); plus `CLAUDE.md`'s rename, temp-dir, file-size and `PrefixCache` items |
+| **M10.7** code health | *Exports are not bit-reproducible* (a, ✅ 2026-09-30); the `ProfileRendering` → `TailRendering` rename (b, 2026-09-30 — the entries below keep the old name, as history); the temp-dir test isolation (c, 2026-09-30 — the `test-dir` crate); plus `CLAUDE.md`'s file-size and `PrefixCache` items |
 | **M10.8** Library & workflow | P-26's batch rename (d); *Library: … vertical filmstrip* (b) |
 | **M10.9** presets & shortcuts | *Presets: no import/export…* (a); *No user-defined keyboard shortcuts* (b) |
 | **M10.10** export | P-26's image watermark (a) and export sizing (b) |
