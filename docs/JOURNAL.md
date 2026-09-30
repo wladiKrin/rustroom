@@ -166,6 +166,22 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-30 — An empty grid says what emptied it (branch `library-empty-search-message`)
+
+**Reported in use, trying M10.7d:** gibberish in the search bar emptied the grid, and the grid said
+*"Every format is hidden — re-enable one above."* It knew two reasons for being empty — an empty folder
+and the format chips — from before the search and the mark filters existed, so every other cause
+fell into the second. Older than M10.7d, which moved the line verbatim.
+
+**Fixed.** `LibraryFilter::why_empty` (lib) names the reason in the order it would be undone: no
+photos · every format hidden · **a match that exists only in a hidden format** (the chips again, not a
+failed search) · the search alone — *"No photo's name contains “qwxz”."* · the filter · both.
+`Library::why_empty` reads it under the same effective filter `refilter` applies; the per-folder
+format override now lives once, in `Library::effective`, so the grid cannot explain a filter it did
+not apply. Tests: the reasons (sabotaged: without the hidden-format check, a search whose only match
+is a hidden JPEG read as "no name contains" — red) and the drawn grid (red before the fix); the six
+sentences joined the glyph sweep. **3295 tests.**
+
 ### 2026-09-30 — M10.7d: the large files split, and the giant functions inside them (branch `m10.7d-split-large-files`)
 
 **Input:** *"split the large files — measured by code, not total … Re-measure first"*, plus M10.7e

@@ -173,7 +173,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-29)
 
-**3293 tests**, **82 goldens**, gate green on `m10.7d-split-large-files` (3291 on `main`). ⚠⚠ **Run the git command above rather than
+**3295 tests**, **82 goldens**, gate green on `library-empty-search-message` (built on `m10.7d-split-large-files`; 3291 on `main`). ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
