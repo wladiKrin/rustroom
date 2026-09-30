@@ -496,22 +496,22 @@ impl RenderEngine {
         let _ = self.req_tx.send(Request { edits, spec });
     }
 
-    /// How many renders have been asked for. See the field's doc comment for why this is not
-    /// `#[cfg(test)]`.
-    /// Where this engine loads `.cube` files from, so the full-resolution handover can carry it.
-    ///
-    /// ⚠ Unconditional rather than `#[cfg(test)]`, for `requests_issued`'s reason: `session_flow`
-    /// is in the **bin** and this is the **lib**, which the bin's test target compiles without
-    /// `cfg(test)`, so a gated accessor would not exist where it is needed.
     /// The AI mask maps this engine's renders read (M9.13). Write a map, then request a render.
     pub fn ai_maps(&self) -> crate::ai_coverage::SharedAiMaps {
         Arc::clone(&self.ai_maps)
     }
 
+    /// Where this engine loads `.cube` files from, so the full-resolution handover can carry it.
+    ///
+    /// ⚠ Unconditional rather than `#[cfg(test)]`, for `requests_issued`'s reason: `session_flow`
+    /// is in the **bin** and this is the **lib**, which the bin's test target compiles without
+    /// `cfg(test)`, so a gated accessor would not exist where it is needed.
     pub fn looks_dir(&self) -> Option<&std::path::Path> {
         self.looks_dir.as_deref()
     }
 
+    /// How many renders have been asked for. See the field's doc comment for why this is not
+    /// `#[cfg(test)]`.
     pub fn requests_issued(&self) -> usize {
         self.requests.load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -584,20 +584,6 @@ pub fn scale_from_full(full_long: usize, buffer_long: usize, max_dim: usize) -> 
     RenderScale::new(rendered_long_edge(buffer_long, max_dim) as f32 / full_long as f32)
 }
 
-/// Pack a rendered sRGB image into an RGBA8 frame.
-///
-/// The quantization lives on `ImageBuf`, where the buffer and rayon already are — which is also
-/// why `app` needs no `rayon` dependency of its own.
-/// Quantize a rendered frame for the GPU, converting into the display's primaries on the way.
-///
-/// ⚠ The conversion happens **here, in float, before quantizing** — not on the packed bytes. An
-/// 8-bit → 8-bit conversion compresses the range and costs roughly 0.8 bits, which shows as
-/// banding on a smooth sky. It also happens *after* the pipeline rather than inside it, so the
-/// histogram stays image-referred; see the spec for why that is the whole design.
-///
-/// ⚠ `proofed` is the **second** tail run — the same frame rendered into ProPhoto — paired with the
-/// proof it was rendered for. It is `None` on the ordinary path, which is then bit-exactly what it
-/// was before soft proofing existed.
 /// What a finished render hands to [`pack`].
 ///
 /// ⚠⚠ **The `Rgba8` arm carries no `ImageBuf` at all**, and that is what keeps it small: the
@@ -629,6 +615,20 @@ fn float(out: &Option<ImageBuf>) -> &ImageBuf {
         .expect("this path needs the float image, and the gate keeps it for exactly these")
 }
 
+/// Pack a rendered sRGB image into an RGBA8 frame.
+///
+/// The quantization lives on `ImageBuf`, where the buffer and rayon already are — which is also
+/// why `app` needs no `rayon` dependency of its own.
+/// Quantize a rendered frame for the GPU, converting into the display's primaries on the way.
+///
+/// ⚠ The conversion happens **here, in float, before quantizing** — not on the packed bytes. An
+/// 8-bit → 8-bit conversion compresses the range and costs roughly 0.8 bits, which shows as
+/// banding on a smooth sky. It also happens *after* the pipeline rather than inside it, so the
+/// histogram stays image-referred; see the spec for why that is the whole design.
+///
+/// ⚠ `proofed` is the **second** tail run — the same frame rendered into ProPhoto — paired with the
+/// proof it was rendered for. It is `None` on the ordinary path, which is then bit-exactly what it
+/// was before soft proofing existed.
 fn pack(
     packed: Packed,
     proofed: Option<(ImageBuf, Proof)>,
@@ -783,17 +783,6 @@ fn proof_texture(out: &ImageBuf, proof: Proof) -> Vec<u8> {
     .to_rgba8()
 }
 
-/// Render one request, resuming from the deepest cached prefix checkpoint.
-///
-/// The prefix — geometry, noise reduction, dehaze — is by far the expensive half, and a slider
-/// move usually changes only one of its stages, or none. So each stage's output is cached
-/// separately and the walk restarts at the deepest checkpoint still valid, running only what is
-/// downstream of the change. See
-/// `docs/superpowers/specs/2026-08-12-second-prefix-checkpoint-design.md`.
-///
-/// Returns the frame and **how many prefix stages actually ran**. The worker ignores the count;
-/// it exists because the correctness tests would all still pass with the cache deleted, so
-/// something has to assert that work is genuinely being skipped.
 /// Where a coverage map is being built: the frame it spans, the slice of it wanted, and the rung.
 ///
 /// ⚠ A params struct because `key`, `remember` and `get_or_build` all pass the same four values,
@@ -1206,7 +1195,17 @@ fn render_cached(
     )
 }
 
-/// Render one frame through the prefix cache.
+/// Render one request, resuming from the deepest cached prefix checkpoint.
+///
+/// The prefix — geometry, noise reduction, dehaze — is by far the expensive half, and a slider
+/// move usually changes only one of its stages, or none. So each stage's output is cached
+/// separately and the walk restarts at the deepest checkpoint still valid, running only what is
+/// downstream of the change. See
+/// `docs/superpowers/specs/2026-08-12-second-prefix-checkpoint-design.md`.
+///
+/// Returns the frame and **how many prefix stages actually ran**. The worker ignores the count;
+/// it exists because the correctness tests would all still pass with the cache deleted, so
+/// something has to assert that work is genuinely being skipped.
 ///
 /// ⚠⚠ `handoff` lets the LAST prefix step hand its output to the tail on the GPU with no download
 /// (2026-09-26). The frame then leaves no final checkpoint, so only the live render asks for it;
@@ -5123,10 +5122,6 @@ mod tests {
         );
     }
 
-    /// ⚠⚠ `srgb` is taken **before** Visualize Spots replaces the image, so the readout reports
-    /// the photograph and not the grey edge view — the ordering `hist` already depends on, and
-    /// the reason `pack` wraps the `Arc` above that block rather than below it. Nothing in the
-    /// canvas can see this: an edge-view readout is a plausible-looking number.
     /// ⚠⚠ The two arms of [`Packed`] must produce the **same frame**, because the GPU's
     /// quantization and `to_rgba8` are the same rounding of the same number — M8.3g's whole
     /// premise. If this ever fails, the shader and `ImageBuf::quantize` have diverged.
@@ -5166,6 +5161,10 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ `srgb` is taken **before** Visualize Spots replaces the image, so the readout reports
+    /// the photograph and not the grey edge view — the ordering `hist` already depends on, and
+    /// the reason `pack` wraps the `Arc` above that block rather than below it. Nothing in the
+    /// canvas can see this: an edge-view readout is a plausible-looking number.
     #[test]
     fn the_srgb_channel_is_unaffected_by_visualize_spots() {
         // A hard edge, so the edge view is far from the photograph and the textures must differ.

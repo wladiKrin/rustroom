@@ -8,7 +8,6 @@ use rustroom_app::photo_id::PhotoId;
 use rustroom_app::thumb_loader::ThumbRequest;
 use std::path::PathBuf;
 
-/// The Library grid: thumbnails, selection, double-click / Enter to open in Develop.
 /// The entry indices whose cells the rubber band touches.
 ///
 /// ⚠ Pure, so the geometry is testable without a window — the `thumb_window` precedent. The rects
@@ -55,18 +54,18 @@ pub enum CellAction {
     SetKeyword { id: i64, on: bool },
 }
 
-/// The photos a right-click acts on.
-///
-/// ⚠⚠ **The clicked photo alone when it is not selected**, because `menu_select` is applied
-/// *after* the frame — so while the menu is drawn `lib.selection` still holds the set that is
-/// about to be replaced. Reading the selection unconditionally would build the menu for photos
-/// the click has already discarded.
 /// The stack count badge's size.
 ///
 /// ⚠ Small enough not to crowd a 10 pt thumbnail and large enough to hit — the grid marks settled at
 /// 10–20 pt for the same reason.
 const STACK_BADGE: egui::Vec2 = egui::vec2(20.0, 16.0);
 
+/// The photos a right-click acts on.
+///
+/// ⚠⚠ **The clicked photo alone when it is not selected**, because `menu_select` is applied
+/// *after* the frame — so while the menu is drawn `lib.selection` still holds the set that is
+/// about to be replaced. Reading the selection unconditionally would build the menu for photos
+/// the click has already discarded.
 pub fn menu_targets(lib: &crate::Library, clicked: usize) -> Vec<PhotoId> {
     if lib.selection.contains(clicked) {
         lib.selection
@@ -107,16 +106,6 @@ const MARK_ALL: &str = "■ ";
 const MARK_SOME: &str = "– ";
 const MARK_NONE: &str = "☐ ";
 
-/// The photo context menu, shared by the grid and the filmstrip so the two cannot drift.
-///
-/// ⚠ **The catalog queries live in here**, which egui runs only while the menu is open — reading
-/// them beside the grid would run three queries at 60 Hz, the `apply_view_demosaic` mistake in
-/// another costume.
-/// How much larger the grid's marks are drawn than its filename caption.
-///
-/// ⚠ 1.6 (user's call, 2026-09-23): the stars, the reject cross and the colour chip were legible but
-/// small. They are what a culling pass actually reads, so they are not tied to the caption's size.
-/// ⚠ `thumb::marks_row` clamps the result, so this cannot make them absurd on a huge cell.
 /// What an empty Library says. Also swept by `theme::every_menu_string_is_renderable`.
 pub(crate) const EMPTY_LIBRARY_TEXT: &str =
     "You can also drop a folder or some photos onto this window. Nothing is copied or changed: \
@@ -156,8 +145,18 @@ fn empty_library(ui: &mut egui::Ui) -> Option<rustroom_app::menu::Command> {
     picked
 }
 
+/// How much larger the grid's marks are drawn than its filename caption.
+///
+/// ⚠ 1.6 (user's call, 2026-09-23): the stars, the reject cross and the colour chip were legible but
+/// small. They are what a culling pass actually reads, so they are not tied to the caption's size.
+/// ⚠ `thumb::marks_row` clamps the result, so this cannot make them absurd on a huge cell.
 const MARK_SCALE: f32 = 1.6;
 
+/// The photo context menu, shared by the grid and the filmstrip so the two cannot drift.
+///
+/// ⚠ **The catalog queries live in here**, which egui runs only while the menu is open — reading
+/// them beside the grid would run three queries at 60 Hz, the `apply_view_demosaic` mistake in
+/// another costume.
 pub fn cell_menu(
     ui: &mut egui::Ui,
     catalog: Option<&catalog::db::Catalog>,
@@ -370,6 +369,7 @@ pub fn apply_cell_action(
     }
 }
 
+/// The Library grid: thumbnails, selection, double-click / Enter to open in Develop.
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let mut open_index: Option<usize> = None;
     // ⚠ Declared out here like `open_index`: the empty state's buttons run a command that needs
@@ -1108,15 +1108,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     }
 }
 
-/// Outline a selected cell: bright for the active photo, dim for the rest of the selection.
-/// Being able to tell the source from the targets is what makes a sync predictable.
-/// How many `cell`-wide columns fit in `avail`, given egui's inter-column `spacing`.
-///
-/// ⚠ `n` cells need `n*cell + (n-1)*spacing`, **not** `n*cell`. Ignoring the gaps overflows
-/// whenever the leftover width is smaller than the gaps the columns need — and that gets *more*
-/// likely as the window widens, because the gap total grows with the column count while the
-/// leftover stays uniform in `[0, cell)`. Which is exactly why it showed on a large monitor and
-/// not a small one: at 14 columns the gaps want 104 px of slack, at 7 only 48.
 /// The positions in `visible` that belong to grid row `row`.
 ///
 /// ⚠ Positions, never entry indices. Once a format or star filter is on, `visible` is *sparse*;
@@ -1128,6 +1119,13 @@ fn cells_in_row(row: usize, cols: usize, n_visible: usize) -> std::ops::Range<us
     start..end
 }
 
+/// How many `cell`-wide columns fit in `avail`, given egui's inter-column `spacing`.
+///
+/// ⚠ `n` cells need `n*cell + (n-1)*spacing`, **not** `n*cell`. Ignoring the gaps overflows
+/// whenever the leftover width is smaller than the gaps the columns need — and that gets *more*
+/// likely as the window widens, because the gap total grows with the column count while the
+/// leftover stays uniform in `[0, cell)`. Which is exactly why it showed on a large monitor and
+/// not a small one: at 14 columns the gaps want 104 px of slack, at 7 only 48.
 fn grid_columns(avail: f32, cell: f32, spacing: f32) -> usize {
     if cell <= 0.0 {
         return 1;

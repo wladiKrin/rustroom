@@ -172,7 +172,6 @@ enum LibraryMode {
     Survey,
 }
 
-/// Browsing state for an opened folder.
 /// What the Library is currently showing.
 ///
 /// ⚠ A collection is a *source*, not a filter, so the format filter and the six sort orders
@@ -221,6 +220,7 @@ enum LibrarySource {
     },
 }
 
+/// Browsing state for an opened folder.
 struct Library {
     /// Where these photos came from.
     ///
@@ -469,13 +469,14 @@ struct RustroomApp {
     /// ⚠ Its own field rather than sharing `grade_range`: switching to a mask would otherwise
     /// silently change which wheel the global panel shows when you switch back.
     mask_grade_range: develop::panel::color_wheel::GradeRange,
-    /// `None` = New mask; `Some(op)` = the next kind button refines the selected mask.
-    mask_add_mode: Option<edit_model::MaskOp>,
     /// Whether the next mask-kind button creates a mask or refines the selected one.
     ///
     /// ⚠ Tool state on the app rather than on the mask, the rule the brush settings already
     /// follow: it applies to the **next** thing added, exactly as a brush size applies to the
     /// next stroke.
+    ///
+    /// `None` = New mask; `Some(op)` = the next kind button refines the selected mask.
+    mask_add_mode: Option<edit_model::MaskOp>,
     /// Which colour-grading range the wheel is showing. View state, like `hsl_channel`.
     grade_range: develop::panel::color_wheel::GradeRange,
     /// Scratch text for the new-collection field.
@@ -553,7 +554,6 @@ struct RustroomApp {
     /// Group selection last used for a sync, kept separate from `paste_groups` so the two
     /// dialogs do not silently reconfigure each other.
     sync_groups: EditGroups,
-    /// Last-used export options, so a second export does not re-ask for everything.
     /// The export dialog's **working copy**, reset from `settings.export` each time the
     /// dialog opens.
     ///
@@ -838,8 +838,6 @@ impl RustroomApp {
             brush_erase: false,
             brush_auto_mask: false,
             brush_tolerance: rustroom_app::brush_tool::DEFAULTS.tolerance,
-            // On by default: a freshly added brush mask with no adjustment yet is otherwise
-            // completely invisible, which is a poor first five minutes.
             hsl_channel: Default::default(),
             curve_mode: Default::default(),
             curve_channel: Default::default(),
@@ -1145,10 +1143,6 @@ pub struct Session {
     requested_region: Option<RegionRect>,
     /// Post-geometry image size at fit resolution, for the fit/zoom maths.
     fit_image_size: egui::Vec2,
-    /// Long edge of the *full* post-geometry image at the resolution the current texture was
-    /// rendered at. Placement must use this rather than the current mode's: while a frame
-    /// from the other mode is still in flight the two differ, and using the current one drew
-    /// the old texture far off-screen — a white flash when zooming out quickly.
     /// The full post-geometry frame's size in **rendered** pixels — what a region was cut from,
     /// or the frame's own dimensions when it arrived whole.
     ///
@@ -1156,6 +1150,10 @@ pub struct Session {
     /// read from the frame separately: two spellings of one fact that are computed independently
     /// is the shape `render_max_dim` and `fit_image_size` were each fixed for.
     rendered_full: (usize, usize),
+    /// Long edge of the *full* post-geometry image at the resolution the current texture was
+    /// rendered at. Placement must use this rather than the current mode's: while a frame
+    /// from the other mode is still in flight the two differ, and using the current one drew
+    /// the old texture far off-screen — a white flash when zooming out quickly.
     rendered_long: f32,
     /// The editing buffer's long edge — the top rung of the render ladder.
     buffer_long: usize,

@@ -90,15 +90,6 @@ impl Accent {
     }
 }
 
-/// How a *drag* pans the canvas.
-///
-/// ⚠ Scroll and two-finger swipe always pan and are deliberately **not** configurable — they are
-/// the universal route that works on every device, and making them optional would let a user
-/// lock themselves out of panning entirely. Only the extra *drag* gesture is a setting.
-///
-/// ⚠ A closed three-value enum, not a keybinding system. The risk in this area is ballooning
-/// into general rebinding; three values already cover every device. A mouse button is not a
-/// modifier, which is why the set spans both kinds.
 /// How large the interface is drawn, as egui's zoom factor.
 ///
 /// ⚠ An enum, not an `f32`: `Settings` derives `Eq`, and three steps are what a person can tell
@@ -131,6 +122,15 @@ impl UiScale {
     }
 }
 
+/// How a *drag* pans the canvas.
+///
+/// ⚠ Scroll and two-finger swipe always pan and are deliberately **not** configurable — they are
+/// the universal route that works on every device, and making them optional would let a user
+/// lock themselves out of panning entirely. Only the extra *drag* gesture is a setting.
+///
+/// ⚠ A closed three-value enum, not a keybinding system. The risk in this area is ballooning
+/// into general rebinding; three values already cover every device. A mouse button is not a
+/// modifier, which is why the set spans both kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PanDrag {
     /// Middle-button drag. ⚠ Unavailable on an Apple Magic Mouse, which has no middle button —
@@ -694,7 +694,6 @@ pub struct Settings {
     pub preview_budget_mb: u32,
 }
 
-/// The Library grid's default cell size, and the size its type scale is relative to.
 /// How many photos a batch export decodes at once, out of the box.
 ///
 /// ⚠ **4, measured rather than chosen**: 3.14x against sequential for ~1.2 GB of decode buffers on
@@ -714,6 +713,8 @@ impl Settings {
     }
 }
 
+/// The Library grid's default cell size, and the size its type scale is relative to.
+///
 /// ⚠ 224, up from 168 (2026-09-28): on a wide window the 168-pt cells read as postage stamps in
 /// a void, and the first-use review took the grid for "still loading" (A-09).
 pub const DEFAULT_CELL: u32 = 224;

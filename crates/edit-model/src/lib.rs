@@ -523,8 +523,6 @@ impl Dehaze {
     }
 }
 
-/// Group names in [`EditGroups`] field order — the one source of truth shared by the merge
-/// logic, the checkbox UI and the tests. Mirrors [`HSL_BAND_NAMES`].
 /// How a scene-referred photograph is mapped onto a display.
 ///
 /// ⚠⚠ **A rendering is not an adjustment.** Every slider in this pipeline moves a photograph that
@@ -630,6 +628,8 @@ impl Look {
     }
 }
 
+/// Group names in [`EditGroups`] field order — the one source of truth shared by the merge
+/// logic, the checkbox UI and the tests. Mirrors [`HSL_BAND_NAMES`].
 pub const EDIT_GROUP_NAMES: [&str; 10] = [
     "White Balance",
     "Tone",
@@ -910,7 +910,7 @@ impl RadialGradient {
     /// main reason this shape is axis-aligned. `radial_coverage_is_independent_of_aspect` is
     /// the guard against someone "fixing" the omission.
     ///
-    /// The parameter stays in the signature so [`Mask::coverage`] has one shape across
+    /// The parameter stays in the signature so [`Mask::analytic_coverage`] has one shape across
     /// variants.
     pub fn coverage(&self, u: f32, v: f32, _aspect: f32) -> f32 {
         let (rx, ry) = (self.radius[0], self.radius[1]);

@@ -91,11 +91,11 @@ impl BrushCoverage {
     }
 }
 pub mod auto_tone;
+pub mod lens_grid;
 /// ⚠ A **`.cube` parser and sampler, with no image and no stage** — deliberately separate from
 /// `stages::creative_look`, which owns the colour-space shaping. Keeping the table pure means the
 /// index-order and interpolation guards can be written against a string literal, with no fixture
 /// on disk and no working-space assumptions to get wrong.
-pub mod lens_grid;
 pub mod lut;
 pub mod parametric;
 pub mod perspective;
@@ -370,13 +370,6 @@ pub trait PipelineStage: Send + Sync {
 /// ⚠ `Send + Sync` because [`PipelineStage`] is, and a mask's coverage is built inside a stage
 /// that then blends through `map_pixels_xy`'s rayon rows.
 pub trait CoverageRasterizer: Send + Sync {
-    /// `None` declines, and the caller falls back to the CPU rasteriser.
-    ///
-    /// ⚠⚠ **Declining must always be safe, and every implementation should prefer it when
-    /// unsure.** An adapter that cannot allocate, a box too small to repay a round trip, or a plan
-    /// this implementation does not handle all return `None` and cost only the attempt. **Fail
-    /// toward the CPU** — `GpuStage::cpu_cost`'s rule and `PrefixKey`'s, because a wrong answer
-    /// here is wrong pixels rather than lost milliseconds.
     /// Called once as every mask's `apply` finishes, on **every** exit path and on a panic.
     ///
     /// ⚠⚠ **This exists so an implementation can drop state scoped to ONE apply, and without it a
@@ -402,6 +395,13 @@ pub trait CoverageRasterizer: Send + Sync {
     /// ⚠ Defaulted to nothing, so an implementation holding no per-apply state ignores it.
     fn end_mask(&self) {}
 
+    /// `None` declines, and the caller falls back to the CPU rasteriser.
+    ///
+    /// ⚠⚠ **Declining must always be safe, and every implementation should prefer it when
+    /// unsure.** An adapter that cannot allocate, a box too small to repay a round trip, or a plan
+    /// this implementation does not handle all return `None` and cost only the attempt. **Fail
+    /// toward the CPU** — `GpuStage::cpu_cost`'s rule and `PrefixKey`'s, because a wrong answer
+    /// here is wrong pixels rather than lost milliseconds.
     fn rasterize(
         &self,
         plan: &brush::DabPlan,
@@ -446,12 +446,6 @@ impl Pipeline {
         self.stages.iter().map(|s| s.name()).collect()
     }
 
-    /// The sub-stage names of the first stage with this name, if there is one.
-    ///
-    /// ⚠ [`Pipeline::stage_names`] reports the top level only, and a `Box<dyn PipelineStage>`
-    /// cannot be downcast — so without this a test can see *that* a pipeline contains a mask and
-    /// nothing at all about what the mask contains, which is exactly where M8.3j's work happens.
-    /// `None` means no stage of that name; an empty `Vec` means one carrying no sub-stages.
     /// Whether the first `mask` stage holds a coverage rasteriser.
     ///
     /// ⚠ The observable for M8.3k's wiring — see [`PipelineStage::has_coverage_rasterizer`] for
@@ -462,6 +456,12 @@ impl Pipeline {
             .any(|s| s.name() == "mask" && s.has_coverage_rasterizer())
     }
 
+    /// The sub-stage names of the first stage with this name, if there is one.
+    ///
+    /// ⚠ [`Pipeline::stage_names`] reports the top level only, and a `Box<dyn PipelineStage>`
+    /// cannot be downcast — so without this a test can see *that* a pipeline contains a mask and
+    /// nothing at all about what the mask contains, which is exactly where M8.3j's work happens.
+    /// `None` means no stage of that name; an empty `Vec` means one carrying no sub-stages.
     pub fn sub_stage_names_of(&self, name: &str) -> Option<Vec<&'static str>> {
         self.stages
             .iter()
@@ -1147,8 +1147,6 @@ impl PrefixKey {
         // never to key it. Consequence, stated rather than discovered: with no corrector the step
         // is skipped, so this key can be one entry longer than the real prefix — harmless,
         // because whether a corrector exists is constant for a photo and the engine is per photo.
-        // ⚠ `None` for `brush` for the same reason as `lens`: a coverage map is needed to RUN
-        // the stage, never to KEY it — the key is derived from the edits, and
         // ⚠ `None` for the airlight: it is derived from `edits`, which this key already covers,
         // so carrying it here would be a second copy of a fact the key already holds.
         let steps = build_prefix_steps(edits, scale, None, resampler, None);
@@ -1226,23 +1224,6 @@ impl Default for RenderSpec {
     }
 }
 
-/// Build the stages for one set of adjustments.
-///
-/// ⚠ **One list, two consumers**: the global tail calls it with the values from `Edits`, and
-/// every mask calls it with its own `LocalAdjustments`. A stage added here reaches both — the
-/// same guard [`build_prefix_steps`] provides for the prefix, and the reason `LocalAdjustments`
-/// repeating field *names* from `Edits` is harmless: the duplication that would actually hurt
-/// is this logic, and it exists once.
-///
-/// ⚠⚠ **FIVE of these are passed NEUTRAL by the global caller** — `tone_curve`,
-/// `local_contrast`, `hsl`, `color_grading` and `sharpening` — because the global chain places
-/// each itself, at a position each has earned. Passing the real values would apply them twice
-/// and move every golden. This is the same rule `saturation` has followed here since masking
-/// landed; see the caller for all of them.
-///
-/// ⚠ `scale` reaches the spatial stages only. The per-pixel ones ignore it, which
-/// `per_pixel_stages_ignore_the_render_scale` still asserts bit for bit — and that test now
-/// doubles as the guard that the **global** path did not accidentally gain a spatial stage.
 /// The gains [`WhiteBalanceStage`] is built from, for a white balance and a source baseline.
 ///
 /// ⚠⚠ **One expression, two consumers** — [`adjustment_stages`] and `gpu-pipeline`'s builder. The
@@ -1261,6 +1242,23 @@ pub fn white_balance_gains(
     color::wb::adaptation_gains(declared, baseline, &color::spaces::PROPHOTO_TO_XYZ)
 }
 
+/// Build the stages for one set of adjustments.
+///
+/// ⚠ **One list, two consumers**: the global tail calls it with the values from `Edits`, and
+/// every mask calls it with its own `LocalAdjustments`. A stage added here reaches both — the
+/// same guard [`build_prefix_steps`] provides for the prefix, and the reason `LocalAdjustments`
+/// repeating field *names* from `Edits` is harmless: the duplication that would actually hurt
+/// is this logic, and it exists once.
+///
+/// ⚠⚠ **FIVE of these are passed NEUTRAL by the global caller** — `tone_curve`,
+/// `local_contrast`, `hsl`, `color_grading` and `sharpening` — because the global chain places
+/// each itself, at a position each has earned. Passing the real values would apply them twice
+/// and move every golden. This is the same rule `saturation` has followed here since masking
+/// landed; see the caller for all of them.
+///
+/// ⚠ `scale` reaches the spatial stages only. The per-pixel ones ignore it, which
+/// `per_pixel_stages_ignore_the_render_scale` still asserts bit for bit — and that test now
+/// doubles as the guard that the **global** path did not accidentally gain a spatial stage.
 fn adjustment_stages(
     a: &edit_model::LocalAdjustments,
     baseline: color::wb::Illuminant,
@@ -1384,14 +1382,6 @@ fn capture_stages(
     out
 }
 
-/// A mask reduced to just its capture corrections — what the prefix stage is built from **and**
-/// what its cache key holds, so the two cannot drift.
-///
-/// ⚠⚠ **The projection is what stops the prefix cache thrashing.** Keyed on the whole
-/// [`edit_model::MaskedAdjustment`], every masked-*exposure* drag would invalidate the checkpoint
-/// and re-run a whole-buffer noise reduction — 117 ms at native, for a slider that has nothing to
-/// do with it. `the_prefix_key_follows_a_masks_capture_corrections_and_ignores_the_rest` pins
-/// both directions.
 /// A mask as the defringe step reads it: its shape, its refinements and its local defringe.
 fn defringe_projection(m: &edit_model::MaskedAdjustment) -> edit_model::MaskedAdjustment {
     edit_model::MaskedAdjustment {
@@ -1405,6 +1395,14 @@ fn defringe_projection(m: &edit_model::MaskedAdjustment) -> edit_model::MaskedAd
     }
 }
 
+/// A mask reduced to just its capture corrections — what the prefix stage is built from **and**
+/// what its cache key holds, so the two cannot drift.
+///
+/// ⚠⚠ **The projection is what stops the prefix cache thrashing.** Keyed on the whole
+/// [`edit_model::MaskedAdjustment`], every masked-*exposure* drag would invalidate the checkpoint
+/// and re-run a whole-buffer noise reduction — 117 ms at native, for a slider that has nothing to
+/// do with it. `the_prefix_key_follows_a_masks_capture_corrections_and_ignores_the_rest` pins
+/// both directions.
 fn capture_projection(m: &edit_model::MaskedAdjustment) -> edit_model::MaskedAdjustment {
     edit_model::MaskedAdjustment {
         mask: m.mask.clone(),
@@ -3243,12 +3241,6 @@ mod tests {
     use core_image::ImageBuf;
     use edit_model::Edits;
 
-    /// An `Edits` with every field non-neutral — so a stage that has drifted into the wrong
-    /// half of the split shows up.
-    ///
-    /// Every field is listed explicitly rather than using `..Default::default()`, on purpose:
-    /// adding a field to `Edits` then breaks this function's compilation, forcing whoever
-    /// adds it to decide which half of the split it belongs to.
     /// ⚠⚠ Total over the **whole prefix** rather than over `GeometryStage` alone, because the
     /// identity default is what every other stage inherits — and a default that is silently wrong
     /// for a future dim-changing stage is exactly the trap this guards. A region-scoped render
@@ -3365,6 +3357,12 @@ mod tests {
         );
     }
 
+    /// An `Edits` with every field non-neutral — so a stage that has drifted into the wrong
+    /// half of the split shows up.
+    ///
+    /// Every field is listed explicitly rather than using `..Default::default()`, on purpose:
+    /// adding a field to `Edits` then breaks this function's compilation, forcing whoever
+    /// adds it to decide which half of the split it belongs to.
     fn all_edits() -> Edits {
         let mut hsl = edit_model::Hsl::default();
         hsl.bands[0].saturation = 20.0;

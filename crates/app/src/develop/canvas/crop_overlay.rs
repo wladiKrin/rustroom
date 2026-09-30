@@ -73,10 +73,6 @@ pub(super) fn draw_guides(painter: &egui::Painter, rect: egui::Rect, guide: Comp
     }
 }
 
-/// Draw the crop rectangle overlay and handle dragging (reads/writes `s.edits.geometry.crop`).
-///
-/// Returns whether a drag settled into a new history entry, so the caller can treat that as
-/// a photo edit — it is one of the two places a photo edit is committed.
 /// The crop rectangle's position on screen.
 ///
 /// ⚠ Extracted so `canvas::show` places the guides against the **same** rect the overlay draws,
@@ -215,6 +211,10 @@ pub(super) fn draw_crop_marks(
     }
 }
 
+/// Draw the crop rectangle overlay and handle dragging (reads/writes `s.edits.geometry.crop`).
+///
+/// Returns whether a drag settled into a new history entry, so the caller can treat that as
+/// a photo edit — it is one of the two places a photo edit is committed.
 pub(super) fn draw_crop_overlay(
     ui: &egui::Ui,
     s: &mut Session,

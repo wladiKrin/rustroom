@@ -41,11 +41,6 @@ pub(crate) const EMPTY_DEVELOP_TEXT: &str =
 static DEBUG_PLACE: std::sync::LazyLock<bool> =
     std::sync::LazyLock::new(|| std::env::var_os("RUSTROOM_DEBUG_PLACE").is_some());
 
-/// Draw the image canvas.
-///
-/// Returns whether a photo edit settled into a new history entry — the crop overlay is the one
-/// thing here that changes `Edits`. The caller ORs this with the panel's answer and records a
-/// single action-log entry, so one gesture stays one Ctrl+Z.
 /// How many rungs a live gesture should drop.
 ///
 /// ⚠⚠ **The interactive drop engages for a drag that changes the PICTURE, not one that only
@@ -85,6 +80,11 @@ fn rungs_to_drop(dragging: bool, quality_drop: u32, view_only_gesture: bool) -> 
     }
 }
 
+/// Draw the image canvas.
+///
+/// Returns whether a photo edit settled into a new history entry — the crop overlay is the one
+/// thing here that changes `Edits`. The caller ORs this with the panel's answer and records a
+/// single action-log entry, so one gesture stays one Ctrl+Z.
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> bool {
     // ⚠ Hoisted before `app.session` is borrowed mutably: `app.tool` is a disjoint field, but
     // reading it *through* `app` after the borrow is E0502. `Tool` is `Copy`, so this is free.
@@ -108,8 +108,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     let app_pan_drag = app.settings.pan_drag;
     // ⚠ Same reason as `app_pan_drag`: copied out before `app.session` is borrowed mutably.
     let app_erase_drag = app.settings.erase_drag;
-    // ⚠ Same reason as `app_pan_drag`: copied out before `match &mut app.session` takes its
-    // mutable borrow.
     // ⚠ Same reason as `app_pan_drag`: copied out before `match &mut app.session` takes its
     // mutable borrow. `CompositionGuide` is `Copy`, so this is a copy rather than a borrow.
     let app_guide = app.settings.composition_guide;
@@ -250,14 +248,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                         // ⚠ Through `Session::fit_cap`, not derived again here — its doc carries
                         // the rule, and a second derivation is how the two come to disagree.
                         let fit_cap = s.fit_cap();
-                        // Geometry mode pins the fit rung: the crop overlay is drawn against the
-                        // whole image and placed by the fit-mode maths.
-                        //
-                        // ⚠⚠ **Guide Mode is the exception and unpins it**, because placing an
-                        // endpoint exactly on a building edge needs real pixels — at fit resolution
-                        // you are aiming at a blur. It can afford to: the guide overlay is anchored
-                        // to `frame_rect`, so it survives a region render, which is precisely what
-                        // the crop overlay cannot do.
                         // ⚠⚠ **The fit rung is no longer pinned in Geometry mode.** It was, because
                         // "the crop overlay is drawn against the whole image and placed by the
                         // fit-mode maths", so a region render would misplace it. The crop overlay is
@@ -726,13 +716,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                             let p = ui.painter_at(canvas_geom::overlay_clip(img_rect));
                             crop_overlay::draw_guides(&p, r, app_guide);
                         }
-                        // ⚠ Not in geometry mode. The crop overlay is drawn against the whole
-                        // image and placed by the fit-mode maths (see the rung pin above), so
-                        // zooming or panning underneath it would misplace it. This gate was
-                        // previously the `else` of the geometry branch; it must survive the
-                        // change to a per-tool match.
-                        // ⚠ Guide Mode zooms and pans like the ordinary tools; only the crop
-                        // rectangle needs the view held still.
                         // ⚠ Every tool zooms and pans now. This was gated off for Geometry because
                         // the crop overlay was placed by fit-mode maths; see the rung above.
                         {

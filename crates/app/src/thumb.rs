@@ -17,6 +17,7 @@ use eframe::egui;
 
 /// The selected cell's border: the accent for the active one, a dimmed accent for the rest of
 /// a multi-selection.
+/// Being able to tell the source from the targets is what makes a sync predictable.
 ///
 /// ⚠ Through the theme's accent rather than the fixed blue it used to be — the one hand-painted
 /// colour the theme's own module comment listed as not yet routed through it.
