@@ -4,51 +4,11 @@ use super::brush_cache::{BrushCache, CoverageSpec};
 use super::frame::{FrameSpec, Ran, RenderedFrame};
 use super::pack::{pack, Packed};
 use super::scale::{render_scale, rendered_long_edge};
-use super::RegionRect;
-use crate::prefix_cache::{PrefixCache, Tier};
+use crate::prefix_cache::PrefixCache;
 use core_image::ImageBuf;
 use edit_model::Edits;
-use pipeline::{build_prefix_steps, PipelineStage, PrefixKey, Region};
+use pipeline::Region;
 use std::sync::Arc;
-
-/// An owned copy of a shared checkpoint: the buffer itself when nothing else holds it, a clone
-/// otherwise. The tail's input travels as an `Arc` so the one-chain paths never clone it.
-fn unshare(a: Arc<ImageBuf>) -> ImageBuf {
-    Arc::try_unwrap(a).unwrap_or_else(|a| (*a).clone())
-}
-
-/// The largest share of the frame a **margined** region may occupy and still be worth scoping, in
-/// percent.
-///
-/// ⚠⚠ **Swept, not chosen** — `bench_preview`'s SCOPED DRAG SWEEP, on `DSCF6296.RAF` at a native
-/// rung (3123x2085, 6.5 Mpx), chain `perspective -> geometry -> noise_reduction -> dehaze`,
-/// dragging `geometry`, best of 3. ⚠ Load average 3.6, so **not a quiet machine**.
-///
-/// | region (each axis) | margined share | scoped | whole-buffer | |
-/// |---|---|---|---|---|
-/// | 10% | 2.9% | 8.7 ms | 200.4 ms | 22.9x |
-/// | 30% | 13.8% | 34.5 | 204.8 | 5.94x |
-/// | 50% | 32.7% | 78.6 | 222.4 | 2.83x |
-/// | **60%** | **45.1%** | **109.4** | **213.1** | **1.95x** |
-/// | 70% | 59.6% | 146.2 | 218.3 | 1.49x |
-/// | 85% | 85.0% | 203.3 | 226.7 | 1.12x |
-/// | 100% | 100.0% | 236.6 | 229.9 | **0.97x** |
-///
-/// ⚠⚠ **Parity on the frame alone is at ~100%, and that is the wrong number to set this from**,
-/// because the scoped output is deliberately never cached: a drag of `n` frames costs
-/// `n * scoped + whole` against the whole-buffer path's `n * whole + tail`, so the break-even
-/// tightens as the gesture shortens. At 45.1% a two-frame gesture already wins (432 ms against
-/// 441); at 59.6% it **loses** (511 against 452) and only pays off past about five frames.
-///
-/// 50 sits between those two rows, so the gate refuses exactly the band where a short gesture would
-/// be worse off — the rule that it must fail toward the whole-buffer path, where a wrong answer
-/// costs milliseconds and never pixels. The placeholder value turned out to be the right one; what
-/// changed is that it is now defensible.
-///
-/// ⚠ It is the **margined** share, not the visible one. A local's reach is in full-resolution
-/// pixels, so at a native rung a modest viewport margins out a long way — 50% of each axis becomes
-/// a third of the frame — which is why this is a share rather than an absolute size.
-const SCOPE_MAX_AREA_PCT: u64 = 50;
 
 #[cfg(test)]
 thread_local! {
@@ -135,49 +95,8 @@ pub(super) fn render_cached_with(
         source_scale,
     );
 
-    // The prefix never depends on the region, so the whole chain is built and cached without
-    // one — which is why panning re-runs only the tail and never invalidates a checkpoint.
-    // A missing profile — an unlisted lens, or a JPEG — skips the stage silently, which is the
-    // ordinary case and needs no special-casing anywhere else.
-    // ⚠⚠ The frame-global airlight, replayed from the SOURCE buffer at a fixed 256 px. It is a
-    // deterministic function of the edits, so it is identical on the whole-buffer path and on a
-    // region-scoped one — which is what lets the two agree by construction rather than
-    // approximately, and what removes any pop when a gesture settles.
-    //
-    // ⚠ Computed unconditionally rather than only when dehaze is active: `prefix_airlight` runs
-    // the prefix on a 65k-pixel copy, and a branch here would be a second place that has to agree
-    // with `Dehaze::is_active`.
-    // ⚠ The `TIMING` lines below split a frame into its parts under `RUSTROOM_DEBUG_RENDER`. They
-    // were added 2026-09-26 when a Straighten drag's non-geometry half was ~54 ms on a photo with
-    // an empty tail, and found 12.1 ms of airlight replay and 12.4 ms of single-threaded
-    // histogram inside it. The total per-render line above cannot show that.
-    let t_air = std::time::Instant::now();
-    let airlight = cache.airlight(edits, buffer, resampler, lens.clone());
-    if std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some() {
-        eprintln!(
-            "  TIMING airlight {:6.1} ms",
-            t_air.elapsed().as_secs_f64() * 1000.0
-        );
-    }
-    // ⚠ Cloned rather than moved: the GPU seam below needs the same profile per step, and a
-    // `LensShot` is a handful of bytes plus a shared profile handle.
-    let steps = build_prefix_steps(edits, scale, lens.clone(), resampler, Some(airlight));
-    // ⚠ Per-step decomposition, env-gated and kept: `RUSTROOM_DEBUG_MASK`'s precedent. A whole-
-    // render figure says a drag is slow; only this says WHICH stage is slow, and reasoning about
-    // that from a sidecar has already been wrong once here.
-    let debug_steps = std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some();
-    let key_at = |n: usize| (PrefixKey::upto(&steps, n, scale), max_dim);
-    let tier_at = |n: usize| {
-        if n == steps.len() {
-            Tier::Final
-        } else {
-            Tier::Mid
-        }
-    };
-
-    // Resume from the deepest checkpoint still held. `n == 0` is the bare downscale.
-    let mut gpu_prefix_steps = 0usize;
-    let mut gpu_prefix_uploads = 0usize;
+    let walk = super::prefix::plan(edits, buffer, lens, scale, &spec, cache);
+    let debug_steps = walk.debug_steps;
     // ⚠⚠ **When the last step may run WITHOUT a download.** A whole-frame render, sRGB display,
     // and none of the views that need float pixels (proof, visualize, grade range). Its output
     // then lives only as the resident final; the tail runs from it, and the settle downloads it.
@@ -188,347 +107,21 @@ pub(super) fn render_cached_with(
         && visualize.is_none()
         && soft_proof.is_none()
         && display_space == color::OutputSpace::Srgb;
-    // The output size of a prefix whose last step handed off — there is no CPU image to ask.
-    let mut handed: Option<(usize, usize)> = None;
-    // ⚠ Resolved ONCE, and only when the setting is on. `shared()` acquires an adapter on first
-    // call — ~42 s in a debug build — and the `None` arm of the loop below would otherwise ask for
-    // it on every CPU step of every render, including renders with the GPU switched off.
-    let prefix_ctx = if gpu_tail {
-        gpu_pipeline::shared().cloned()
-    } else {
-        None
-    };
-    let mut resumed = None;
-    for n in (0..=steps.len()).rev() {
-        if let Some(img) = cache.get(&key_at(n)) {
-            resumed = Some((n, img));
-            break;
-        }
-    }
-
-    let (start, mut img) = match resumed {
-        Some(hit) => hit,
-        None => {
-            // ⚠ When nothing needs shrinking, `downscale_to` is a clone of a buffer the engine
-            // already owns behind an `Arc`. Sharing it makes checkpoint 0 free in both time and
-            // memory; caching it would cost a whole buffer (78 MB on an X-T4) to save 2.2 ms.
-            let seed_is_free = max_dim == 0 || buffer_long <= max_dim;
-            let seed = if seed_is_free {
-                Arc::clone(buffer)
-            } else {
-                let s = Arc::new(buffer.downscale_to(max_dim));
-                cache.insert(key_at(0), s.clone(), tier_at(0));
-                s
-            };
-            (0, seed)
-        }
-    };
-
-    // ⚠⚠ **THE REGION-SCOPED PREFIX, and the gate is DERIVED rather than a flag.** Engage when a
-    // region is wanted and *every* step from the resume point onward accepts one. There is no drag
-    // signal to plumb and therefore nothing that can disagree with anything else — the rule
-    // `Session::geometry_mode` was deleted for. It follows that this speeds a cold entry into 1:1
-    // as well as a drag: the gate asks about the work, not about the gesture.
-    //
-    // ⚠⚠ M8.6's version engaged only when *exactly the last* step needed re-running, on the
-    // argument that step n-1's scoped output cannot feed step n because step n is a gather. That
-    // is true of two gathers in a row and this prefix is never that — its gathers (lens
-    // correction, perspective, geometry) all precede its locals (noise reduction, dehaze), so a
-    // local needs only a margin and the first scoped step is a gather reading a whole cached
-    // buffer. `region_plan` is what establishes that per chain rather than by assertion.
-    //
-    // ⚠ At the fitted rung `region` is `None`, so this never engages there — it engages exactly
-    // at the native rungs, which is where the cost is.
-    let mut scoped = None;
-    // ⚠ A plain flag rather than something derived from the output's size afterwards: a derived
-    // fact that can be wrong is what `Session::geometry_mode` was deleted for.
-    let mut was_scoped = false;
-    if let Some(want) = region {
-        let visible = pipeline::Rect {
-            x: want.x,
-            y: want.y,
-            w: want.w,
-            h: want.h,
-        };
-        // ⚠ `region_plan` clamps `visible` against the frame itself, so no clamping is done here —
-        // two clamps would be two rules about the same rect.
-        if let Some(plan) = pipeline::region_plan(&steps, start, visible, img.width(), img.height())
-        {
-            // ⚠⚠ **The area gate.** A margined region close to the whole frame costs roughly what
-            // the whole-buffer path costs *and is not cached*, so the settle render repeats the
-            // work — strictly worse than not scoping. `out_rects[0]` is the earliest scoped output
-            // and therefore the largest of them, which is what makes it the right proxy.
-            let margined: u64 = plan
-                .out_rects
-                .first()
-                .map_or(0, |r| r.w as u64 * r.h as u64);
-            let whole = plan.frame.0 as u64 * plan.frame.1 as u64;
-            if whole > 0 && margined * 100 < whole * SCOPE_MAX_AREA_PCT {
-                if let Some(out) = pipeline::run_region_plan(&steps, start, &img, &plan) {
-                    let last = *plan.out_rects.last().expect("a plan has at least one rect");
-                    if debug_steps {
-                        eprintln!(
-                            "  prefix: {:?}  resuming at {start} of {}  SCOPED {}x{} -> {}x{} of {}x{}",
-                            steps.iter().map(|s| s.stage.name()).collect::<Vec<_>>(),
-                            steps.len(),
-                            plan.out_rects[0].w,
-                            plan.out_rects[0].h,
-                            last.w,
-                            last.h,
-                            plan.frame.0,
-                            plan.frame.1,
-                        );
-                    }
-                    // The step count rides in the tuple rather than in a separate local: a count
-                    // stored beside the thing it counts is a second fact that can go stale.
-                    scoped = Some((out, last, plan.frame, plan.out_rects.len()));
-                    was_scoped = true;
-                }
-            }
-        }
-    }
-
-    let (input, rect, pw, ph, prefix_stages) = if let Some((out, last, frame, ran)) = scoped {
-        // ⚠⚠ **DELIBERATELY NOT CACHED.** A region-scoped checkpoint served for a *different*
-        // region is the one failure here that shows as a plausible photograph rather than an
-        // error, and leaving the insert out is what makes it unrepresentable rather than guarded.
-        // The cost is that a later whole-buffer render rebuilds the final checkpoint — against
-        // re-running every step whole-buffer on every frame of the drag, which is what this
-        // replaces.
-        //
-        // ⚠⚠ `frame` comes from the **plan**, composed through `output_dims` and read before any
-        // step ran. Taking it from `out` would be the region's own size, which rasterises every
-        // brush mask at the wrong size and thrashes the coverage cache on every pan — M8.6's
-        // sharpest hazard, and it is sharper here because the chain is longer.
-        //
-        // ⚠ `gpu_prefix_steps` stays 0 here. Nothing is lost that the seam could have supplied:
-        // `accelerate_prefix_stage`'s twins run whole-buffer, so a scoped chain is the CPU's.
-        (
-            Some(Arc::new(out)),
-            Some(RegionRect {
-                x: last.x,
-                y: last.y,
-                w: last.w,
-                h: last.h,
-            }),
-            frame.0,
-            frame.1,
-            ran,
-        )
-    } else {
-        // `PipelineStage::apply` consumes its input — the ownership that keeps the future GPU seam
-        // clean — so each step that runs clones the checkpoint it starts from. Measured at 0.5 ms
-        // (fit) and 2.1 ms (native) against the 13–117 ms each avoided stage costs.
-        if debug_steps {
-            eprintln!(
-                "  prefix: {:?}  resuming at {start} of {}",
-                steps.iter().map(|s| s.stage.name()).collect::<Vec<_>>(),
-                steps.len()
-            );
-        }
-        // ⚠⚠ **A deposit must not outlive its render.** The tail may decline to take — it runs on
-        // the CPU whenever the setting is off, and an export's tail always does — leaving the plane
-        // parked. The next render is the same photograph at the same rung on the same worker
-        // thread, so every check `SharedPlane::take` makes would pass and the *previous frame's*
-        // pixels would be handed to the first prefix step. Clearing at the top bounds a deposit to
-        // one render, which is `CoverageRasterizer::end_mask`'s rule one level up.
-        if let Some(ctx) = &prefix_ctx {
-            ctx.prefix_plane().clear();
-        }
-        for (i, step) in steps.iter().enumerate().skip(start) {
-            let t_step = std::time::Instant::now();
-            // ⚠⚠ **The prefix's GPU seam, and it must be here rather than where `steps` is built.**
-            // `dehaze::airlight` is estimated from the image the stage is HANDED — the checkpoint
-            // after lens correction and noise reduction since M7.3b — so substituting up front would
-            // estimate it from the raw buffer. A slightly different airlight is a different
-            // photograph, not an error.
-            //
-            // ⚠ The step's `key` is never touched: `PrefixStepKey` is derived from the edits, so a
-            // checkpoint written by either path is a legitimate hit for the other and `PrefixCache`
-            // needs no change at all.
-            let mut accelerated = if gpu_tail {
-                gpu_pipeline::shared().and_then(|ctx| {
-                    gpu_pipeline::accelerate_prefix_stage(
-                        step.stage.name(),
-                        edits,
-                        scale,
-                        &img,
-                        // ⚠ The facts `Edits` cannot carry — the matched profile, the kernel, and
-                        // ⚠⚠ since 2026-09-17 the airlight. `GpuDehazeStage` used to estimate that
-                        // from `img`, which under a Straighten drag is the ROTATED frame, so the
-                        // dehazed tone breathed as the angle moved. Found by use.
-                        gpu_pipeline::SeamFacts {
-                            lens: lens.as_ref(),
-                            resampler,
-                            airlight,
-                        },
-                        ctx,
-                    )
-                })
-            } else {
-                None
-            };
-            let is_last = i + 1 == steps.len();
-            if let Some(g) = accelerated.as_mut() {
-                g.allow_shared_input(gpu_pipeline::Slot::Prefix);
-                // ⚠ The last step keeps its output for the tail instead of offering it to a next
-                // step there is not: one buffer, one owner.
-                if !is_last {
-                    g.offer_output(gpu_pipeline::Slot::Prefix);
-                }
-            }
-            // ⚠⚠ **THE LAST STEP KEEPS ITS OUTPUT ON THE GPU — the resident final (2026-09-26).**
-            // With a download it is also the CPU checkpoint, as always; without one (`handoff_ok`)
-            // it is the tail's only input, and `img` is left as the checkpoint before this step.
-            // Any `None` falls through to the ordinary path below.
-            let kept_last = match (is_last, accelerated.as_ref()) {
-                (true, Some(g)) => {
-                    let ctx = gpu_pipeline::shared();
-                    let from_resident = if i == start {
-                        ctx.and_then(|ctx| cache.resident(&key_at(i), &img, ctx))
-                    } else {
-                        None
-                    };
-                    let run = match from_resident {
-                        Some((r, uploaded)) => {
-                            gpu_prefix_uploads += usize::from(uploaded);
-                            g.run_keeping_output(gpu_pipeline::Input::Resident(r), !handoff_ok)
-                        }
-                        None => g.run_keeping_output(gpu_pipeline::Input::Cpu(&img), !handoff_ok),
-                    };
-                    gpu_prefix_uploads += g.transfer_counts().0;
-                    run
-                }
-                _ => None,
-            };
-            if let Some((out, kept)) = kept_last {
-                gpu_prefix_steps += 1;
-                let dims = (kept.width(), kept.height());
-                cache.keep_resident_final((key_at(i + 1), None), kept);
-                match out {
-                    Some(out) => {
-                        img = Arc::new(out);
-                        if debug_steps {
-                            eprintln!(
-                                "    [{i}] {:>16} {:8.1} ms   -> {}x{} ({:.1} Mpx) KEPT",
-                                step.stage.name(),
-                                t_step.elapsed().as_secs_f64() * 1000.0,
-                                img.width(),
-                                img.height(),
-                                (img.width() * img.height()) as f64 / 1e6,
-                            );
-                        }
-                        cache.insert(key_at(i + 1), img.clone(), tier_at(i + 1));
-                    }
-                    None => {
-                        handed = Some(dims);
-                        if debug_steps {
-                            eprintln!(
-                                "    [{i}] {:>16} {:8.1} ms   -> {}x{} HANDED OFF (no download)",
-                                step.stage.name(),
-                                t_step.elapsed().as_secs_f64() * 1000.0,
-                                dims.0,
-                                dims.1,
-                            );
-                        }
-                    }
-                }
-                break;
-            }
-            img = Arc::new(match accelerated {
-                Some(g) => {
-                    // ⚠⚠ **Take from the previous step and offer to the next — the whole of the
-                    // resident prefix seam.** Consecutive accelerated steps are safe by
-                    // construction: step *i+1*'s input **is** step *i*'s output, so the plane the
-                    // previous step parked is exactly the one this step would otherwise upload.
-                    // Measured at rung 6246: 17.9-23.5 ms a seam, all of it host memcpy and
-                    // allocation, because `SharedPlane::take` refuses anything that is not this
-                    // thread's deposit at these exact dimensions.
-                    //
-                    // ⚠ `Slot::Prefix`, never `Slot::Mask` — see `GpuContext::prefix_plane` for
-                    // the guard that separation preserves.
-                    gpu_prefix_steps += 1;
-                    // ⚠⚠ **The resident input, for the FIRST step this render runs** — the one a
-                    // drag resumes at on every frame. Later steps take the previous step's plane
-                    // instead. Any `None` falls back to the ordinary upload.
-                    let from_resident = if i == start {
-                        let ctx = gpu_pipeline::shared();
-                        ctx.and_then(|ctx| cache.resident(&key_at(i), &img, ctx))
-                            .and_then(|(r, uploaded)| {
-                                gpu_prefix_uploads += usize::from(uploaded);
-                                g.apply_from(r)
-                            })
-                    } else {
-                        None
-                    };
-                    let out = match from_resident {
-                        Some(out) => out,
-                        None => g.apply((*img).clone()),
-                    };
-                    gpu_prefix_uploads += g.transfer_counts().0;
-                    out
-                }
-                None => {
-                    // ⚠⚠ **THE CLEAR, AND WITHOUT IT THIS RENDERS A PLAUSIBLE PHOTOGRAPH.** A CPU
-                    // step between two accelerated ones breaks the "its input is the previous
-                    // output" invariant the take rests on: the parked plane is now two stages
-                    // stale, at the *same* dimensions on the *same* thread, so `take` would
-                    // happily hand it over. Nothing downstream can tell — it is a picture, not an
-                    // error, which is the failure mode this project has recorded more than any
-                    // other.
-                    if let Some(ctx) = &prefix_ctx {
-                        ctx.prefix_plane().clear();
-                    }
-                    step.stage.apply((*img).clone())
-                }
-            });
-            if debug_steps {
-                eprintln!(
-                    "    [{i}] {:>16} {:8.1} ms   -> {}x{} ({:.1} Mpx)",
-                    step.stage.name(),
-                    t_step.elapsed().as_secs_f64() * 1000.0,
-                    img.width(),
-                    img.height(),
-                    (img.width() * img.height()) as f64 / 1e6,
-                );
-            }
-            cache.insert(key_at(i + 1), img.clone(), tier_at(i + 1));
-        }
-        let ran = steps.len() - start;
-
-        // ⚠ The complete prefix output must always live in the protected tier, even when we
-        // resumed at it without running anything. A prefix that *shrinks* — its last stage going
-        // neutral — turns a former intermediate into the final, and leaving it in the budgeted
-        // tier would let a large render evict the very thing the zoom guarantee rests on.
-        // `steps.is_empty()` is excluded because there the final *is* checkpoint 0, which is
-        // either free (and must not be stored) or was already inserted as a final above.
-        if ran == 0 && !steps.is_empty() {
-            cache.insert(key_at(steps.len()), img.clone(), Tier::Final);
-        }
-
-        // The region can only be resolved once the prefix output's dimensions are known, which is
-        // why the tail is built here rather than alongside the steps. Building is a few Box
-        // allocations.
-        let (pw, ph) = handed.unwrap_or((img.width(), img.height()));
-        let rect = region.and_then(|r| r.clamped(pw, ph));
-        let t_clone = std::time::Instant::now();
-        // ⚠ No CPU input after a handoff: the tail's input is the resident final.
-        // ⚠⚠ **Shared, not cloned (2026-09-26).** The whole-frame input IS the cached final, and
-        // cloning it cost 2.5 ms at rung 3200 on every tail-slider frame — paid before the tail
-        // could know it would run from the resident and never touch the CPU image. The Arc is
-        // handed down; `unshare` clones only on the paths that must own a buffer.
-        let input = match (handed, rect) {
-            (Some(_), _) => None,
-            (None, Some(r)) => Some(Arc::new(img.crop(r.x, r.y, r.w, r.h))),
-            (None, None) => Some(Arc::clone(&img)),
-        };
-        if debug_steps {
-            eprintln!(
-                "  TIMING input clone {:6.1} ms",
-                t_clone.elapsed().as_secs_f64() * 1000.0
-            );
-        }
-        (input, rect, pw, ph, ran)
+    let (start, img) = super::prefix::resume(&walk, buffer, buffer_long, cache);
+    let (scoped, was_scoped) = super::scoped::scope(&walk, region, start, &img);
+    let super::prefix::PrefixOut {
+        input,
+        rect,
+        pw,
+        ph,
+        prefix_stages,
+        img,
+        gpu_prefix_steps,
+        gpu_prefix_uploads,
+        handed,
+    } = match scoped {
+        Some(s) => super::scoped::output(s, img),
+        None => super::prefix::walk_whole(&walk, handoff_ok, region, start, img, cache),
     };
     let region_scoped = was_scoped;
 
@@ -590,65 +183,17 @@ pub(super) fn render_cached_with(
     // `output_transform`" — is answered by construction inside `accelerate` rather than here.
     let float_needed =
         display_space != color::OutputSpace::Srgb || visualize.is_some() || soft_proof.is_some();
-    let build_tail = |space| {
-        // ⚠ Hoisted into a local because `accelerate` needs it too: `output_transform` is built
-        // from the render's output space rather than from `Edits`, and two constructions of one
-        // spec is how the pipeline and its accelerated twin would come to disagree about which
-        // space they are rendering into.
-        let render_spec = pipeline::RenderSpec {
-            space,
-            intent,
-            // ⚠ The tail resamples nothing — every resampling stage is in the prefix — so this
-            // is carried for consistency rather than because it changes a pixel here.
-            resampler,
-            // ⚠ Likewise: dehaze is a PREFIX stage, so the tail never builds one. Carried so the
-            // two specs cannot drift if a stage ever moves.
-            airlight: Some(airlight),
-            baseline: wb_baseline,
-        };
-        let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
-            edits,
-            scale,
-            region,
-            Some(&coverage),
-            render_spec,
-            // Lens correction lives in the *prefix*, which this call discards — only the tail is
-            // wanted here. `None` is therefore correct rather than provisional.
-            None,
-            // ⚠ The display rendering, by contrast, lives in the **tail** — so this must be
-            // carried, or every render would silently take the built-in curve and the built-in
-            // baseline while a profile that declares its own sat unused.
-            rendering,
-        );
-        // ⚠⚠ The tail only. Every accelerated stage is a tail stage, and accelerating the prefix
-        // would make `PrefixKey` describe two different computations under one key.
-        //
-        // ⚠ `shared()` returning `None` silently keeps the CPU path: a machine with no adapter
-        // must not fail to render.
-        //
-        // ⚠⚠ **`if` rather than `match (gpu_tail, shared())`, and this was a real bug rather than
-        // style.** A tuple scrutinee evaluates **both** elements before matching, so `shared()`
-        // ran even with the setting OFF — acquiring an adapter on the render worker, which costs
-        // ~42 s in a debug build. Three render tests began reporting "no frame produced" after a
-        // one-second wait. With the setting off nothing GPU-related may be touched at all.
-        if gpu_tail {
-            match gpu_pipeline::shared() {
-                Some(ctx) => gpu_pipeline::accelerate(
-                    tail,
-                    edits,
-                    scale,
-                    gpu_pipeline::TailFacts {
-                        region,
-                        rendering,
-                        spec: render_spec,
-                    },
-                    ctx,
-                ),
-                None => (tail, None),
-            }
-        } else {
-            (tail, None)
-        }
+    let tail = super::tail::TailSpec {
+        edits,
+        scale,
+        region,
+        coverage: &coverage,
+        intent,
+        resampler,
+        airlight: walk.airlight,
+        wb_baseline,
+        rendering,
+        gpu_tail,
     };
 
     // ⚠⚠ **While proofing the tail runs TWICE, and that was MEASURED into existence rather than
@@ -674,9 +219,7 @@ pub(super) fn render_cached_with(
     // gets a CPU image — and on a handoff frame that means downloading the resident, which is
     // the settle's own path and caches the final as a side effect. Nothing else in this function
     // needs to know which happened.
-    let tail_key = (key_at(steps.len()), rect);
-    let mut tail_uploads = 0usize;
-    let mut resident_final_hit = false;
+    let tail_key = (walk.key_at(walk.steps.len()), rect);
     let refused = {
         #[cfg(test)]
         {
@@ -687,65 +230,20 @@ pub(super) fn render_cached_with(
             false
         }
     };
-    let mut from_resident: Option<Packed> = None;
-    let input: Arc<ImageBuf> = match input {
-        Some(i) => i,
-        None => {
-            // ⚠ A handoff frame: no CPU image exists. The resident final must serve the tail
-            // directly; if it cannot, it is downloaded and cached as the final.
-            let t_res = std::time::Instant::now();
-            let ctx = gpu_pipeline::shared();
-            let from_gpu = if refused {
-                None
-            } else {
-                ctx.and_then(|_| {
-                    let (pipe, chain) = build_tail(color::OutputSpace::Srgb);
-                    let chain = chain.filter(|_| pipe.stage_names().is_empty())?;
-                    let r = cache.resident_final(&tail_key)?;
-                    let bytes = chain.run_rgba8_from(r)?;
-                    tail_uploads += chain.transfer_counts().0;
-                    Some(Packed::Rgba8 {
-                        bytes,
-                        w: pw,
-                        h: ph,
-                    })
-                })
-            };
-            match from_gpu {
-                Some(p) => {
-                    resident_final_hit = true;
-                    if debug_steps {
-                        eprintln!(
-                            "  TIMING tail from resident {:6.1} ms",
-                            t_res.elapsed().as_secs_f64() * 1000.0
-                        );
-                    }
-                    from_resident = Some(p);
-                    Arc::new(ImageBuf::new(0, 0))
-                }
-                None => match ctx {
-                    Some(ctx) if cache.settle_from_resident(ctx) => cache
-                        .get(&key_at(steps.len()))
-                        .expect("settle_from_resident inserted the final"),
-                    // ⚠ The last resort — the GPU refused even a download. The step re-runs on
-                    // the CPU from the checkpoint before it, which `img` still is.
-                    _ => {
-                        let last = steps.last().expect("a handoff implies a prefix step");
-                        let out = Arc::new(last.stage.apply((*img).clone()));
-                        cache.insert(key_at(steps.len()), out.clone(), Tier::Final);
-                        out
-                    }
-                },
-            }
-        }
+    let run = super::tail::TailRun {
+        tail,
+        walk: &walk,
+        tail_key: &tail_key,
+        refused,
     };
+    let (input, from_resident, k) = super::tail::resolve_input(run, input, pw, ph, &img, cache);
     let proof = soft_proof.filter(|_| visualize.is_none());
     // ⚠ `input` is cloned **only** when proofing. With the proof off there is one tail, one run,
     // and no clone — bit-exactly the path that existed before this feature.
     let proofed = proof.map(|p| {
         // ⚠ Rejoined at once: the proof is one of the three things that needs the float, so its
         // tail is never a candidate for the byte path.
-        let (pipe, chain) = build_tail(color::OutputSpace::ProPhoto);
+        let (pipe, chain) = tail.build(color::OutputSpace::ProPhoto);
         (gpu_pipeline::rejoin(pipe, chain).run((*input).clone()), p)
     });
     // ⚠ The **pipeline** is always sRGB here, whatever the proof does. The display transform is a
@@ -757,147 +255,10 @@ pub(super) fn render_cached_with(
     // existed before this — one tail, one run, no clone. `Some` runs the same stages in the same
     // order with one read between two halves, so the frame's pixels are identical too
     // (`the_grade_view_does_not_touch_the_photograph`).
-    let (out, plane) = match (from_resident, grade_view) {
-        (Some(p), _) => (p, None),
-        (None, grade_view) => match grade_view {
-            Some(range) => {
-                let (_, halves) = pipeline::build_pipeline_split_tapped(
-                    edits,
-                    scale,
-                    region,
-                    Some(&coverage),
-                    pipeline::RenderSpec {
-                        space: color::OutputSpace::Srgb,
-                        intent,
-                        resampler,
-                        baseline: wb_baseline,
-                        airlight: Some(airlight),
-                    },
-                    None,
-                    rendering,
-                );
-                let mid = halves.before_grade.run(unshare(input));
-                // ⚠ Blending and Balance are read from the edits whether or not the grade is
-                // active: the ranges exist before a wheel is turned.
-                let g = &edits.color_grading;
-                let plane = crate::grade_view::coverage(&mid, range, g.blending, g.balance);
-                (
-                    Packed::Float(halves.from_grade.run(mid)),
-                    Some(Arc::new(plane)),
-                )
-            }
-            None => {
-                let t_build = std::time::Instant::now();
-                let (pipe, chain) = build_tail(color::OutputSpace::Srgb);
-                if debug_steps {
-                    eprintln!(
-                        "  TIMING build_tail {:6.1} ms  cpu stages {:?}  gpu chain {}",
-                        t_build.elapsed().as_secs_f64() * 1000.0,
-                        pipe.stage_names(),
-                        chain.is_some(),
-                    );
-                }
-                // ⚠⚠ **M8.3g: the tail's last chain quantizes on the GPU and downloads 27 MB instead
-                // of 82.** Measured at rung 3200: 6.33 ms of copy+map plus a 6.87 ms `to_vec` become
-                // 2.59 + 2.19, and `pack`'s own `to_rgba8` disappears rather than moving.
-                match chain {
-                    Some(c) if !float_needed => {
-                        let t_cpu = std::time::Instant::now();
-                        // ⚠⚠ **One chain, no clone.** When the tail is one GPU chain its input IS
-                        // the checkpoint: a resident hit borrows nothing, and a miss borrows the
-                        // Arc for its upload. Only a CPU stage before the chain needs an owned
-                        // buffer, and `unshare` clones it there — which is what every frame paid.
-                        let whole = pipe.stage_names().is_empty();
-                        let (src, mid) = if whole {
-                            (Some(input), None)
-                        } else {
-                            (None, Some(pipe.run(unshare(input))))
-                        };
-                        let (w, h) = match (&src, &mid) {
-                            (Some(s), _) => (s.width(), s.height()),
-                            (None, Some(m)) => (m.width(), m.height()),
-                            (None, None) => unreachable!("one of the two is the chain's input"),
-                        };
-                        let t_gpu = std::time::Instant::now();
-                        // ⚠⚠ **From the resident final when the tail is one chain**, else a
-                        // miss that keeps its upload for the next frame. A tail with a CPU stage
-                        // first has an input that is not the checkpoint, and keeps nothing.
-                        let got = match (&src, &mid) {
-                            (Some(s), _) => {
-                                match cache.resident_final(&tail_key).filter(|_| !refused) {
-                                    Some(r) => {
-                                        resident_final_hit = true;
-                                        c.run_rgba8_from(r)
-                                    }
-                                    None => c.run_rgba8_keeping_input(s).map(|(b, kept)| {
-                                        cache.keep_resident_final(tail_key.clone(), kept);
-                                        b
-                                    }),
-                                }
-                            }
-                            (None, Some(m)) => c.run_rgba8(m),
-                            (None, None) => None,
-                        };
-                        tail_uploads += c.transfer_counts().0;
-                        if debug_steps {
-                            eprintln!(
-                                "  TIMING cpu tail {:6.1} ms  gpu run_rgba8 {:6.1} ms",
-                                (t_gpu - t_cpu).as_secs_f64() * 1000.0,
-                                t_gpu.elapsed().as_secs_f64() * 1000.0
-                            );
-                        }
-                        match got {
-                            Some(b) => (Packed::Rgba8 { bytes: b, w, h }, None),
-                            // ⚠ A GPU failure falls back through `apply`, which retries once and then
-                            // takes the CPU path. One wasted attempt on a rare path beats a second
-                            // fallback implementation here that could drift from the first.
-                            // ⚠ Fully qualified rather than importing `PipelineStage` into this
-                            // module: this is the only place that needs it, and the import would sit
-                            // in scope for a whole file that deliberately talks in pipelines.
-                            None => {
-                                let owned = match (src, mid) {
-                                    (Some(s), _) => unshare(s),
-                                    (None, Some(m)) => m,
-                                    (None, None) => unreachable!("checked above"),
-                                };
-                                (
-                                    Packed::Float(pipeline::PipelineStage::apply(&c, owned)),
-                                    None,
-                                )
-                            }
-                        }
-                    }
-                    // ⚠ The float path keeps the tail's input too, when the tail is one chain: a
-                    // non-sRGB display, Visualize Spots, or the proof's sRGB run.
-                    Some(c) if pipe.stage_names().is_empty() => {
-                        let hit = match cache.resident_final(&tail_key).filter(|_| !refused) {
-                            Some(r) => {
-                                resident_final_hit = true;
-                                c.apply_from(r)
-                            }
-                            None => None,
-                        };
-                        let out = match hit {
-                            Some(o) => o,
-                            None => {
-                                let (o, kept) = c.apply_keeping_input(unshare(input));
-                                if let Some(k) = kept {
-                                    cache.keep_resident_final(tail_key.clone(), k);
-                                }
-                                o
-                            }
-                        };
-                        tail_uploads += c.transfer_counts().0;
-                        (Packed::Float(out), None)
-                    }
-                    other => (
-                        Packed::Float(gpu_pipeline::rejoin(pipe, other).run(unshare(input))),
-                        None,
-                    ),
-                }
-            }
-        },
-    };
+    let (out, plane, m) =
+        super::tail::run(run, from_resident, input, grade_view, float_needed, cache);
+    let tail_uploads = k.tail_uploads + m.tail_uploads;
+    let resident_final_hit = k.resident_final_hit || m.resident_final_hit;
     // ⚠⚠ **Harvest what the stages built, after every tail has run.** A gating brush's coverage
     // can only be rasterized where the image is, inside `MaskStage::apply`, so this is the only
     // moment the cache can see it. One point covers all three paths — the proofed tail above, the
@@ -1034,6 +395,8 @@ mod tests {
         varied, varied_rect, varied_sized,
     };
     use crate::render_engine::frame::Proof;
+    use crate::render_engine::RegionRect;
+    use pipeline::PrefixKey;
     use pipeline::RenderScale;
 
     /// ⚠⚠ **That `FrameSpec.resampler` actually reaches `build_prefix_steps`.** Every other

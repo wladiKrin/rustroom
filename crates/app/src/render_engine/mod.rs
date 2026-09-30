@@ -7,9 +7,12 @@ mod engine;
 pub(crate) mod fixtures;
 mod frame;
 mod pack;
+mod prefix;
 mod proof;
 mod render;
 mod scale;
+mod scoped;
+mod tail;
 
 pub use engine::RenderEngine;
 pub use frame::{FrameSpec, Proof, Ran, RenderedFrame};
