@@ -480,7 +480,7 @@ mod tests {
         let s = app.session.as_mut().unwrap();
         s.zoom = 2.0;
         s.rendered_long = rendered_long;
-        s.rendered_region = Some(crate::RegionRect {
+        s.rendered_region = Some(rustroom_app::render_engine::RegionRect {
             x: 3,
             y: 2,
             w: 40,

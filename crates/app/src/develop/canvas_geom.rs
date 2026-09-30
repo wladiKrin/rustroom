@@ -425,3 +425,22 @@ mod guide_near_tests {
         assert_eq!(guide_near(&s, [0.5, 0.535], 0.05), Some(1));
     }
 }
+
+/// The four rectangles of `outer` that lie outside `inner` (for dimming).
+pub fn rects_around(outer: egui::Rect, inner: egui::Rect) -> [egui::Rect; 4] {
+    [
+        egui::Rect::from_min_max(outer.left_top(), egui::pos2(outer.right(), inner.top())),
+        egui::Rect::from_min_max(
+            egui::pos2(outer.left(), inner.bottom()),
+            outer.right_bottom(),
+        ),
+        egui::Rect::from_min_max(
+            egui::pos2(outer.left(), inner.top()),
+            egui::pos2(inner.left(), inner.bottom()),
+        ),
+        egui::Rect::from_min_max(
+            egui::pos2(inner.right(), inner.top()),
+            egui::pos2(outer.right(), inner.bottom()),
+        ),
+    ]
+}

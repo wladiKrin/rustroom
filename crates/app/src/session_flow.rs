@@ -4,9 +4,7 @@
 //! Split out of `main.rs` unchanged. ⚠ `Session` still means "fully decoded" — the
 //! half-open state lives in [`PendingOpen`], and nothing downstream knows about it.
 
-use crate::{
-    preview_edits, AppView, PendingOpen, RustroomApp, Session, DECODE_DEBOUNCE, PREVIEW_MAX_DIM,
-};
+use crate::{AppView, PendingOpen, RustroomApp, Session, DECODE_DEBOUNCE, PREVIEW_MAX_DIM};
 use edit_model::EditGroups;
 use edit_model::Edits;
 use eframe::egui;
@@ -21,6 +19,20 @@ use rustroom_app::view_region;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
+
+/// Edits to render for the preview. In Geometry mode the crop is reset to the full frame so
+/// the whole straightened image shows under the crop overlay.
+///
+/// ⚠ **Only the crop.** The orientation must survive, or the preview would show a
+/// differently-oriented image from the one being edited — and the crop overlay would then be
+/// drawn against a frame that does not match it.
+pub(crate) fn preview_edits(edits: &Edits, tool: Tool) -> Edits {
+    let mut e = edits.clone();
+    if tool.is_geometry() {
+        e.geometry.crop = edit_model::CropRect::default();
+    }
+    e
+}
 
 /// The photo as it was before any adjustment, at the **current framing**.
 ///

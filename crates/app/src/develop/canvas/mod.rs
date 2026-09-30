@@ -1105,7 +1105,7 @@ mod tests {
             let s = app.session.as_mut().expect("session");
             s.zoom = 2.0;
             s.rendered_long = 80.0;
-            s.rendered_region = Some(crate::RegionRect {
+            s.rendered_region = Some(rustroom_app::render_engine::RegionRect {
                 x: 3,
                 y: 2,
                 w: 40,
@@ -1317,7 +1317,7 @@ mod tests {
             let s = app.session.as_mut().expect("session");
             s.zoom = 2.0;
             s.rendered_long = 80.0;
-            s.rendered_region = Some(crate::RegionRect {
+            s.rendered_region = Some(rustroom_app::render_engine::RegionRect {
                 x: 3,
                 y: 2,
                 w: 40,
@@ -1389,7 +1389,7 @@ mod tests {
         // At rung 3200 the post-geometry image is 160x80 rendered pixels, so this covers it.
         {
             let s = app.session.as_mut().expect("session");
-            s.rendered_region = Some(crate::RegionRect {
+            s.rendered_region = Some(rustroom_app::render_engine::RegionRect {
                 x: 0,
                 y: 0,
                 w: 160,
