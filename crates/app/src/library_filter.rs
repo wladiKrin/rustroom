@@ -228,6 +228,45 @@ impl LibraryFilter {
         out
     }
 
+    /// Why this filter leaves none of `entries` — for a filter that does; otherwise meaningless.
+    ///
+    /// ⚠ Asked in the order the user would undo things: an empty folder has nothing to undo, a
+    /// format filter hiding everything outranks the rest, and a match that exists only in a hidden
+    /// format is the format filter again rather than a search that found nothing.
+    pub fn why_empty(
+        &self,
+        entries: &[PhotoEntry],
+        marks: impl Fn(&PhotoEntry) -> Marks,
+        capture: impl Fn(&PhotoEntry) -> Capture,
+    ) -> EmptyGrid {
+        if entries.is_empty() {
+            return EmptyGrid::NoPhotos;
+        }
+        if !entries.iter().any(|e| self.format.is_visible(&e.id.path)) {
+            return EmptyGrid::EveryFormatHidden;
+        }
+        let any_format = LibraryFilter {
+            format: FormatFilter::default(),
+            ..self.clone()
+        };
+        if entries
+            .iter()
+            .any(|e| any_format.matches(e, marks(e), &capture(e)))
+        {
+            return EmptyGrid::OnlyHiddenFormatsMatch;
+        }
+        let filtered = !self.stars.is_empty()
+            || !self.flags.is_empty()
+            || !self.labels.is_empty()
+            || !self.cameras.is_empty()
+            || !self.lenses.is_empty();
+        match (self.text.is_empty(), filtered) {
+            (false, false) => EmptyGrid::NoNameMatches,
+            (false, true) => EmptyGrid::NothingMatchesTheSearchAndFilter,
+            (true, _) => EmptyGrid::NothingMatchesTheFilter,
+        }
+    }
+
     /// Clear the marks and the text, leaving the format filter alone.
     ///
     /// ⚠ The format filter answers a different question and is reset by *loading a source*. A
@@ -239,6 +278,54 @@ impl LibraryFilter {
         self.labels = LabelSet::default();
         self.cameras.clear();
         self.lenses.clear();
+    }
+}
+
+/// Why the grid shows nothing. Each is a different thing to undo, so the empty grid names the one
+/// that applies rather than guessing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmptyGrid {
+    /// The folder holds no supported image.
+    NoPhotos,
+    /// The format chips hide every photo there is.
+    EveryFormatHidden,
+    /// Something matches the search and the filter, but only in a hidden format.
+    OnlyHiddenFormatsMatch,
+    /// The search matches no name, and nothing else is filtering.
+    NoNameMatches,
+    /// The rating, flag, label, camera or lens filter leaves nothing.
+    NothingMatchesTheFilter,
+    /// The search and the filter together leave nothing.
+    NothingMatchesTheSearchAndFilter,
+}
+
+impl EmptyGrid {
+    /// Every reason, for sweeps over the sentences.
+    pub const ALL: [EmptyGrid; 6] = [
+        EmptyGrid::NoPhotos,
+        EmptyGrid::EveryFormatHidden,
+        EmptyGrid::OnlyHiddenFormatsMatch,
+        EmptyGrid::NoNameMatches,
+        EmptyGrid::NothingMatchesTheFilter,
+        EmptyGrid::NothingMatchesTheSearchAndFilter,
+    ];
+
+    /// The empty grid's one sentence (`docs/DESIGN.md` §7.14); `text` is the search as typed.
+    pub fn sentence(self, text: &str) -> String {
+        match self {
+            EmptyGrid::NoPhotos => "No supported images in this folder.".to_owned(),
+            EmptyGrid::EveryFormatHidden => {
+                "Every format is hidden — re-enable one above.".to_owned()
+            }
+            EmptyGrid::OnlyHiddenFormatsMatch => {
+                "Only hidden formats match — re-enable one above.".to_owned()
+            }
+            EmptyGrid::NoNameMatches => format!("No photo's name contains “{text}”."),
+            EmptyGrid::NothingMatchesTheFilter => "No photo matches the filter.".to_owned(),
+            EmptyGrid::NothingMatchesTheSearchAndFilter => {
+                format!("No photo matches “{text}” and the filter.")
+            }
+        }
     }
 }
 
@@ -805,5 +892,59 @@ mod tests {
         };
         f.clear_marks_and_text();
         assert!(f.cameras.is_empty() && f.lenses.is_empty());
+    }
+
+    /// ⚠⚠ **Reported in use (2026-09-30): gibberish in the search bar said "Every format is hidden".**
+    /// The grid knew two reasons for being empty, from before the search and the mark filters
+    /// existed. Each reason here is a different thing to undo, so the grid must name the right one.
+    #[test]
+    fn an_empty_grid_names_what_emptied_it() {
+        let photos = [entry("a.raf", 0, None), entry("b.jpg", 0, None)];
+        let why = |f: &LibraryFilter, es: &[PhotoEntry]| {
+            f.why_empty(es, |_| Marks::default(), |_| Capture::default())
+        };
+        assert_eq!(why(&LibraryFilter::default(), &[]), EmptyGrid::NoPhotos);
+
+        let mut all_hidden = LibraryFilter::default();
+        all_hidden.format.toggle("raf");
+        all_hidden.format.toggle("jpg");
+        assert_eq!(why(&all_hidden, &photos), EmptyGrid::EveryFormatHidden);
+
+        let gibberish = LibraryFilter {
+            text: "qwxz".into(),
+            ..Default::default()
+        };
+        assert_eq!(why(&gibberish, &photos), EmptyGrid::NoNameMatches);
+        assert_eq!(
+            EmptyGrid::NoNameMatches.sentence("qwxz"),
+            "No photo's name contains “qwxz”."
+        );
+
+        // The name is there — in a format the chips hide.
+        let mut only_hidden = LibraryFilter {
+            text: "b".into(),
+            ..Default::default()
+        };
+        only_hidden.format.toggle("jpg");
+        assert_eq!(
+            why(&only_hidden, &photos),
+            EmptyGrid::OnlyHiddenFormatsMatch
+        );
+
+        let mut five_stars = LibraryFilter::default();
+        five_stars.stars.toggle(5);
+        assert_eq!(
+            why(&five_stars, &photos),
+            EmptyGrid::NothingMatchesTheFilter
+        );
+        let both = LibraryFilter {
+            text: "qwxz".into(),
+            stars: five_stars.stars,
+            ..Default::default()
+        };
+        assert_eq!(
+            why(&both, &photos),
+            EmptyGrid::NothingMatchesTheSearchAndFilter
+        );
     }
 }

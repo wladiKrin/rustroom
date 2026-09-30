@@ -713,6 +713,11 @@ mod tests {
             crate::develop::canvas::EMPTY_DEVELOP_TEXT.to_owned(),
         ];
         strings.extend(
+            rustroom_app::library_filter::EmptyGrid::ALL
+                .iter()
+                .map(|r| r.sentence("Bilder — Katzen")),
+        );
+        strings.extend(
             rustroom_app::tool::Tool::ALL
                 .iter()
                 .map(|t| t.label().to_owned()),

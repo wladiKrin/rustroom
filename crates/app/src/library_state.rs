@@ -144,12 +144,12 @@ pub(crate) struct Library {
 }
 
 impl Library {
-    /// Recompute `visible` and prune the selection to it.
-    ///
-    /// ⚠ Both halves, always. Recomputing the visible list without pruning leaves the
-    /// selection holding photos that are not on screen, which a sync or a paste would then
-    /// write to.
-    pub(crate) fn refilter(&mut self, filter: &rustroom_app::library_filter::LibraryFilter) {
+    /// `filter` as it applies to this folder — the per-folder format override included. `refilter`
+    /// and `why_empty` both read it here, so the grid can never explain a filter it did not apply.
+    fn effective(
+        &self,
+        filter: &rustroom_app::library_filter::LibraryFilter,
+    ) -> rustroom_app::library_filter::LibraryFilter {
         // ⚠⚠ Applied HERE rather than at the callers: `refilter` has 12 call sites across `shell`,
         // `library`, `library_state`, `sources`, `multi::compare` and `test_app`, and the override
         // has to hold at every one. One choke point cannot be bypassed; twelve are twelve chances
@@ -160,7 +160,28 @@ impl Library {
         // question "what does this folder hold" is about the folder, and stacking is about the view.
         let formats =
             rustroom_app::format_filter::formats_of(self.scan.iter().map(|e| e.path.as_path()));
-        let filter = filter.effective_for(&formats);
+        filter.effective_for(&formats)
+    }
+
+    /// Why nothing is visible under `filter` — for the empty grid to say.
+    pub(crate) fn why_empty(
+        &self,
+        filter: &rustroom_app::library_filter::LibraryFilter,
+    ) -> rustroom_app::library_filter::EmptyGrid {
+        self.effective(filter).why_empty(
+            &self.entries,
+            |e| self.marks.get(&e.id).copied().unwrap_or_default(),
+            |e| self.captures.get(&e.id.path).cloned().unwrap_or_default(),
+        )
+    }
+
+    /// Recompute `visible` and prune the selection to it.
+    ///
+    /// ⚠ Both halves, always. Recomputing the visible list without pruning leaves the
+    /// selection holding photos that are not on screen, which a sync or a paste would then
+    /// write to.
+    pub(crate) fn refilter(&mut self, filter: &rustroom_app::library_filter::LibraryFilter) {
+        let filter = self.effective(filter);
         // ⚠ One derived `visible` list, composed from one filter — **not** a second filtering
         // mechanism. Sparse-versus-dense index confusion is this project's third-most-repeated
         // bug, and `visible` staying the single derived list is the mitigation that has held.
