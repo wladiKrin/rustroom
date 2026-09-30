@@ -5,6 +5,7 @@
 
 use eframe::egui;
 use rustroom_app::settings::{DragButton, EraseDrag, PanDrag};
+use rustroom_app::view_region;
 
 /// Whether a drag belongs to the active tool — the crop rectangle, a mask handle, and later
 /// the brush.
@@ -132,6 +133,50 @@ pub(crate) fn pan_delta(
         delta += resp.drag_delta();
     }
     delta
+}
+
+/// Zoom about the pointer, then pan — every tool, every frame.
+pub(crate) fn zoom_and_pan(
+    ui: &egui::Ui,
+    s: &mut crate::Session,
+    resp: &egui::Response,
+    app_pan_drag: rustroom_app::settings::PanDrag,
+) {
+    // Zoom first, then pan: the anchor correction below depends on the
+    // new zoom, and the other order would anchor against a stale factor.
+    //
+    // ⚠ `zoom_delta()` is a multiplicative factor that is 1.0 when idle,
+    // and it folds trackpad pinch together with ctrl+scroll — so mouse
+    // users keep a zoom gesture without plain scroll being consumed by it.
+    let zoom_factor = ui.input(|i| i.zoom_delta());
+    if zoom_factor != 1.0 && resp.hovered() {
+        let old = s.zoom;
+        s.zoom = view_region::zoom_step(old, zoom_factor);
+        // Zoom about the cursor, not the centre: keep whatever the
+        // pointer is over fixed on screen.
+        if let Some(p) = ui.input(|i| i.pointer.hover_pos()) {
+            let anchor = ui.max_rect().center() + s.pan;
+            let (dx, dy) =
+                view_region::zoom_anchor_shift((p.x, p.y), (anchor.x, anchor.y), old, s.zoom);
+            s.pan += egui::vec2(dx, dy);
+        }
+    }
+
+    // ⚠ Read and release the input lock *before* `pan_delta`, which calls
+    // `Response::dragged_by` — that takes the same lock internally, and a
+    // nested borrow panics in epaint's mutex the moment a drag is live.
+    let scroll = ui.input(|i| i.smooth_scroll_delta);
+    let space_down = ui.input(|i| i.key_down(egui::Key::Space));
+    let text_focused = ui.ctx().memory(|m| m.focused().is_some());
+    s.pan += pan_delta(resp, scroll, space_down, app_pan_drag, text_focused);
+
+    // ⚠ Unconditional, where the old code reset only inside the scroll
+    // branch — so a left-drag at fit really could push a fitting image
+    // off-centre into grey and nothing put it back until the next scroll.
+    // At fit the whole image is on screen and there is nothing to reveal.
+    if s.zoom <= view_region::MIN_ZOOM {
+        s.pan = egui::Vec2::ZERO;
+    }
 }
 
 #[cfg(test)]

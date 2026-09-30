@@ -942,7 +942,7 @@ mod tests {
         assert!((aspect.unwrap() - 1.0 / 1.5).abs() < 1e-6, "{aspect:?}");
         assert_crop_close(
             s.edits.geometry.crop,
-            crate::crop_tool::swap_orientation(asymmetric(), IMG_ASPECT),
+            rustroom_app::crop_tool::swap_orientation(asymmetric(), IMG_ASPECT),
         );
         assert_eq!(
             custom,
@@ -962,7 +962,7 @@ mod tests {
         assert_eq!(aspect, None, "a free crop stays free");
         assert_crop_close(
             s.edits.geometry.crop,
-            crate::crop_tool::swap_orientation(asymmetric(), IMG_ASPECT),
+            rustroom_app::crop_tool::swap_orientation(asymmetric(), IMG_ASPECT),
         );
     }
 
@@ -977,7 +977,7 @@ mod tests {
         assert!((aspect.unwrap() - 21.0 / 9.0).abs() < 1e-6, "{aspect:?}");
         assert_crop_close(
             s.edits.geometry.crop,
-            crate::crop_tool::snap_to_aspect((21.0 / 9.0) / IMG_ASPECT),
+            rustroom_app::crop_tool::snap_to_aspect((21.0 / 9.0) / IMG_ASPECT),
         );
     }
 
@@ -1376,7 +1376,7 @@ mod tests {
         e.geometry.angle = 3.0;
         e.geometry.crop = asymmetric();
 
-        let p = crate::preview_edits(&e, rustroom_app::tool::Tool::Crop);
+        let p = crate::session_flow::preview_edits(&e, rustroom_app::tool::Tool::Crop);
         assert_eq!(
             p.perspective.vertical, 40.0,
             "the correction must stay visible"

@@ -492,3 +492,431 @@ fn read(buf: &core_image::ImageBuf, x: f32, y: f32) -> [f32; 3] {
     let yi = (y.round() as i64).clamp(0, buf.height() as i64 - 1) as usize;
     buf.pixel(xi, yi)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::develop::canvas::test_support::{retouch_app, spots};
+
+    /// ⚠ A click places exactly one spot, and the auto-source must put the source somewhere else:
+    /// a source equal to the destination copies the blemish onto itself.
+    #[test]
+    fn a_retouch_click_places_one_spot_with_a_source_elsewhere() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        let placed = spots(&app);
+        assert_eq!(placed.len(), 1, "the click did not place exactly one spot");
+        assert_ne!(
+            placed[0].source, placed[0].centre,
+            "the source sits on the destination"
+        );
+    }
+
+    /// ⚠ A second click on a placed spot **selects** it rather than stacking another on top —
+    /// the hit-test-before-placement rule, and what makes a crowded frame editable.
+    #[test]
+    fn clicking_a_placed_spot_selects_it_rather_than_stacking() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        assert_eq!(spots(&app).len(), 1, "the second click stacked a spot");
+        assert_eq!(
+            app.session.as_ref().unwrap().selected_spot,
+            Some(0),
+            "the second click did not select the spot it landed on"
+        );
+    }
+
+    /// ⚠⚠ A placed spot must be ONE history step. Before M9.11 the overlay changed the edits and
+    /// reported the change, but never pushed — so the action log recorded a step the history did
+    /// not have, and Ctrl+Z popped the step *before* the spot too.
+    #[test]
+    fn placing_a_spot_is_one_history_step() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let depth = app.session.as_ref().unwrap().history.undo_depth();
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        let s = app.session.as_ref().unwrap();
+        assert_eq!(
+            s.edits.spots.len(),
+            1,
+            "fixture check: the click placed a spot"
+        );
+        assert_eq!(
+            s.history.undo_depth(),
+            depth + 1,
+            "the placement was not recorded"
+        );
+        assert_eq!(
+            s.history.get(),
+            &s.edits,
+            "history's present is not the edits"
+        );
+    }
+
+    /// And a move is one step for the whole gesture, not one per drag frame.
+    #[test]
+    fn moving_a_spot_is_one_history_step() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        let depth = app.session.as_ref().unwrap().history.undo_depth();
+        let before = spots(&app)[0].centre;
+        crate::develop::canvas::test_support::drag_through(
+            &mut app,
+            &ctx,
+            centre,
+            centre + egui::vec2(30.0, 0.0),
+        );
+        let s = app.session.as_ref().unwrap();
+        assert_ne!(
+            s.edits.spots[0].centre, before,
+            "fixture check: the drag moved the spot"
+        );
+        assert_eq!(
+            s.history.undo_depth(),
+            depth + 1,
+            "a move was not exactly one step"
+        );
+        assert_eq!(s.history.get(), &s.edits);
+    }
+
+    /// ⚠⚠ The render is sampled **on the drag frame itself** (`DRAG_PASS`), not after the
+    /// gesture. A later frame issues one anyway, and in the real app that frame never comes
+    /// because egui idles after a drag — which is exactly how the M3.1a mask bug hid.
+    #[test]
+    fn a_retouch_drag_sizes_the_spot_and_asks_for_a_render() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        let before = app.spot_tool.radius;
+        let counts = crate::develop::canvas::test_support::drag_through(
+            &mut app,
+            &ctx,
+            centre,
+            centre + egui::vec2(60.0, 0.0),
+        );
+        let placed = spots(&app);
+        assert_eq!(placed.len(), 1, "the drag did not place exactly one spot");
+        assert!(
+            placed[0].radius > before,
+            "the drag did not size the spot: {} vs {before}",
+            placed[0].radius
+        );
+        // ⚠ And the tool keeps it, so the panel's Size slider follows the gesture.
+        assert!(
+            (app.spot_tool.radius - placed[0].radius).abs() < 1e-6,
+            "the drag did not write the radius back into the tool"
+        );
+        // ⚠ A *placement* happens on release, so its render belongs on the release frame — not
+        // the drag frame, which is where a **move** must request (see the test below). Asserting
+        // "somewhere in the gesture" would be the weak form this project warns about, so the
+        // frame is named: nothing before it, a request on it.
+        assert_eq!(
+            counts[crate::develop::canvas::test_support::DRAG_PASS],
+            counts[0],
+            "a placement rendered before the gesture finished: {counts:?}"
+        );
+        assert!(
+            *counts.last().unwrap() > counts[crate::develop::canvas::test_support::DRAG_PASS],
+            "the placement never asked for a render: {counts:?}"
+        );
+    }
+
+    /// ⚠⚠ **Spots live BEFORE the perspective since M7.3b**, so a click on a keystoned photo must
+    /// store the homography's *source* of the clicked point — `SpotMap::inverse_point` — and not
+    /// `FrameMap`'s answer, which is the post-perspective point the brush would use.
+    ///
+    /// ⚠ The crop moves the clicked point off the frame centre, where a keystone might leave it
+    /// in place, and the fixture check below proves the two answers differ before comparing.
+    #[test]
+    fn a_click_on_a_keystoned_photo_lands_in_pre_perspective_space() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let crop = edit_model::CropRect {
+            left: 0.5,
+            top: 0.3,
+            right: 1.0,
+            bottom: 1.0,
+        };
+        let persp = edit_model::Perspective {
+            vertical: 50.0,
+            horizontal: 50.0,
+            scale: 0.0,
+            ..Default::default()
+        };
+        {
+            let s = app.session.as_mut().expect("a session");
+            s.edits.geometry.crop = crop;
+            s.edits.perspective = persp;
+            // ⚠⚠ A frame that has already LANDED at the cropped size. No render runs in this
+            // harness, so `fit_image_size` would otherwise still be the uncropped 80x60 and the
+            // canvas frame would carry the wrong aspect. A crop alone cannot see that (the
+            // cropped-photo test above passes either way); a keystone can, because the homography
+            // is defined in half-height units. The straighten test's `shown_geo` does the same.
+            s.fit_image_size = egui::vec2(40.0, 42.0);
+        }
+        // The 80x60 test photo cropped to its right half and lower 70%: a 40x42 frame. Only the
+        // aspect matters to the normalised answer, so native pixels are as good as screen ones.
+        let geometry = edit_model::Geometry {
+            crop,
+            ..Default::default()
+        };
+        let (fw, fh) = (40usize, 42usize);
+        let want = pipeline::brush::SpotMap::new(&geometry, persp, fw, fh)
+            .inverse_point(fw as f32 / 2.0, fh as f32 / 2.0);
+        let brush = pipeline::brush::FrameMap::new(&geometry, fw, fh)
+            .inverse_point(fw as f32 / 2.0, fh as f32 / 2.0);
+        assert!(
+            (want[0] - brush[0]).abs() + (want[1] - brush[1]).abs() > 0.02,
+            "fixture check: the keystone must move the point ({want:?} vs {brush:?})"
+        );
+
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        let placed = spots(&app);
+        assert_eq!(placed.len(), 1, "the click placed nothing");
+        let got = placed[0].centre;
+        assert!(
+            (got[0] - want[0]).abs() < 0.02 && (got[1] - want[1]).abs() < 0.02,
+            "stored {got:?}, pre-perspective {want:?}, post-perspective (the old answer) {brush:?}"
+        );
+    }
+
+    /// ⚠⚠ **A spot must land where you clicked on a CROPPED photo**, which is what
+    /// `FrameMap::inverse_point` buys and what nothing else here can see. Spots are stored in
+    /// pre-geometry source coordinates while the canvas shows the cropped frame, so treating a
+    /// canvas position as if it were already a source position is invisible on an uncropped photo
+    /// and wrong on every cropped one.
+    ///
+    /// With the right half of the frame cropped, the centre of what is shown is source x = 0.75.
+    /// Skipping the map would store 0.5.
+    #[test]
+    fn a_click_on_a_cropped_photo_lands_where_it_was_clicked() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        {
+            let s = app.session.as_mut().expect("a session");
+            s.edits.geometry.crop = edit_model::CropRect {
+                left: 0.5,
+                top: 0.0,
+                right: 1.0,
+                bottom: 1.0,
+            };
+        }
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        let placed = spots(&app);
+        assert_eq!(placed.len(), 1, "the click placed nothing");
+        assert!(
+            (placed[0].centre[0] - 0.75).abs() < 0.02,
+            "the crop was not undone: stored x = {} (0.5 means the map was skipped)",
+            placed[0].centre[0]
+        );
+    }
+
+    /// How many shapes one frame of the canvas paints.
+    ///
+    /// ⚠ The overlay is *appearance*, which this harness cannot assert on directly — but egui's
+    /// `FullOutput` carries the shapes it painted, and a count is enough to see that a whole
+    /// group of outlines stopped being drawn.
+    fn painted(app: &mut crate::RustroomApp, ctx: &egui::Context) -> usize {
+        let c = ctx.clone();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(crate::develop::canvas::test_support::screen()),
+                ..Default::default()
+            },
+            |ui| {
+                crate::develop::canvas::show(app, ui, &c);
+            },
+        );
+        out.shapes.len()
+    }
+
+    /// ⚠⚠ **Turning the outlines off must actually stop drawing them.** Reported as wanting a way
+    /// to "remove the skeletons... such that one can better see the picture": with thirty patches
+    /// the circles become the picture. A test on the flag alone would pass against a canvas that
+    /// ignored it entirely, which is exactly what a sabotage found.
+    #[test]
+    fn hiding_the_patches_paints_fewer_shapes() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        assert_eq!(spots(&app).len(), 1, "setup: nothing was placed");
+
+        // ⚠ Per patch since 2026-09-20: the row's eye, `Session::spot_shown`.
+        app.session.as_mut().unwrap().spot_shown = vec![true];
+        let shown = painted(&mut app, &ctx);
+        app.session.as_mut().unwrap().spot_shown = vec![false];
+        let hidden = painted(&mut app, &ctx);
+        assert!(
+            hidden < shown,
+            "hiding the patches painted just as much: {hidden} vs {shown}"
+        );
+        // ⚠ And the patch itself survives — this is a *view* toggle, not a delete.
+        assert_eq!(spots(&app).len(), 1, "hiding the outlines removed a patch");
+    }
+
+    /// ⚠⚠ **A non-primary drag must place nothing.** egui reports `dragged()` for *every* button,
+    /// so a tool reading a bare `dragged()` would place a spot as the middle-drag pan gesture
+    /// passed over the canvas. `tool_drag` is the guard, and no test using Primary alone can see
+    /// it removed — this one was added because that sabotage went uncaught.
+    #[test]
+    fn a_middle_drag_places_no_spot_and_pans_instead() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::drag_through_with(
+            &mut app,
+            &ctx,
+            centre,
+            centre + egui::vec2(60.0, 0.0),
+            egui::PointerButton::Middle,
+        );
+        assert!(
+            spots(&app).is_empty(),
+            "the pan gesture placed a retouch spot"
+        );
+    }
+
+    /// ⚠⚠ **The patch must leave the VIEW while it is being moved**, so the blemish underneath is
+    /// visible and the new position can be lined up against it. Reported as "it shows the previous
+    /// retouching there, I think it should just disappear, so I can once again better align the
+    /// positions".
+    ///
+    /// ⚠ Both halves are asserted. That it disappears is half the property; that it comes back on
+    /// release is the other, and without that a moved patch would stay invisible for good — the
+    /// worse bug of the two.
+    #[test]
+    fn a_moving_patch_leaves_the_view_and_returns_on_release() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        assert_eq!(spots(&app).len(), 1, "setup: nothing was placed");
+
+        // ⚠ Sampled *during* the drag rather than after it: the suppression exists only for the
+        // gesture's duration, so a check afterwards could only ever see it cleared.
+        let mut during = None;
+        for pass in 0..4 {
+            let pos = if pass <= 1 {
+                centre
+            } else {
+                centre + egui::vec2(30.0, 0.0)
+            };
+            let mut events = vec![egui::Event::PointerMoved(pos)];
+            if pass == 1 {
+                events.push(egui::Event::PointerButton {
+                    pos: centre,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                });
+            }
+            if pass == 3 {
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                });
+            }
+            let c = ctx.clone();
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(crate::develop::canvas::test_support::screen()),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    crate::develop::canvas::show(&mut app, ui, &c);
+                },
+            );
+            if pass == crate::develop::canvas::test_support::DRAG_PASS {
+                during = app.session.as_ref().unwrap().suppressed_spot;
+            }
+        }
+        assert_eq!(
+            during,
+            Some(0),
+            "the patch stayed in the view while it was being moved"
+        );
+        assert_eq!(
+            app.session.as_ref().unwrap().suppressed_spot,
+            None,
+            "the patch never came back after the move"
+        );
+    }
+
+    /// ⚠ The suppression is *view* state: it must never reach the stored edits, or a moved patch
+    /// would be deleted rather than hidden.
+    #[test]
+    fn suppressing_a_patch_leaves_the_stored_edits_alone() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        let stored = spots(&app);
+        app.session.as_mut().unwrap().suppressed_spot = Some(0);
+        let _ = painted(&mut app, &ctx);
+        assert_eq!(spots(&app), stored, "suppression edited the stored spots");
+        // ⚠ And the *view* really does leave it out, or the mechanism is inert.
+        let s = app.session.as_ref().unwrap();
+        assert!(
+            s.view_edits(rustroom_app::tool::Tool::Retouch)
+                .spots
+                .is_empty(),
+            "the suppressed patch is still in the rendered edits"
+        );
+    }
+
+    /// ⚠⚠ **Moving a spot must NOT render while the drag runs — the moving circle is the
+    /// feedback.** This reverses an earlier version of this very test, and the reversal was forced
+    /// by using the tool: "moving around the retouch patch is very laggy, as it adapts the
+    /// retouching on the go".
+    ///
+    /// The reason is structural rather than a matter of taste. `SpotRemovalStage` lives in the
+    /// **prefix**, so moving a spot drops the prefix cache and re-runs noise reduction and dehaze
+    /// over the whole buffer — ~117 ms each at native resolution, every frame of the drag. A mask
+    /// handle can render live because `MaskStage` is in the cheap tail; the M3.1a rule was right
+    /// for masks and wrong here.
+    ///
+    /// ⚠ Both halves are asserted. "No render during the drag" alone would pass against a version
+    /// that never rendered at all and left the patch permanently stale.
+    #[test]
+    fn dragging_a_placed_spot_renders_only_on_release() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        assert_eq!(spots(&app).len(), 1, "setup: the click placed nothing");
+        let before = spots(&app)[0].centre;
+
+        let counts = crate::develop::canvas::test_support::drag_through(
+            &mut app,
+            &ctx,
+            centre,
+            centre + egui::vec2(25.0, 15.0),
+        );
+        let after = spots(&app);
+        assert_eq!(after.len(), 1, "the drag stacked a second spot");
+        assert_ne!(after[0].centre, before, "the drag did not move the spot");
+        assert_eq!(
+            counts[crate::develop::canvas::test_support::DRAG_PASS],
+            counts[crate::develop::canvas::test_support::DRAG_PASS - 1],
+            "the move re-rendered mid-drag, which is what made it laggy: {counts:?}"
+        );
+        assert!(
+            *counts.last().unwrap() > counts[crate::develop::canvas::test_support::DRAG_PASS],
+            "the move never rendered at all, so the patch is left stale: {counts:?}"
+        );
+    }
+}

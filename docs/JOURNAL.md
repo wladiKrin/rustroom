@@ -166,6 +166,81 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-30 — M10.7d: the large files split, and the giant functions inside them (branch `m10.7d-split-large-files`)
+
+**Input:** *"split the large files — measured by code, not total … Re-measure first"*, plus M10.7e
+(`PrefixCache`'s tests). Spec and plan `2026-09-30-m10.7d-split-large-files`. **The author's scope: every
+file over 1,000 lines of code + doc, and the giant functions broken into named steps.**
+
+**The re-measure changed the list.** Nine files, not five: `render_engine.rs` (2,064 — the largest,
+missing from the item), `edit-model/lib.rs` 1,938, `pipeline/lib.rs` 1,853, `catalog/db.rs` 1,694,
+`main.rs` 1,309, `settings.rs` 1,148, `shell.rs` 1,111, `library.rs` 1,109, `canvas/mod.rs` 1,053;
+`status_bar.rs` (468) dropped off. ⚠ `CLAUDE.md`'s `awk` to the first `#[cfg(test)]` had `main.rs` at
+**78** lines of code: a test module is declared at line 63, and the file held 555 lines of code and 754 of
+comments. Four functions were most of four files: `render_cached_with` ~850, `canvas::show` ~776,
+`library::show` ~737, `shell`'s `ui` ~317.
+
+**Done, in 17 commits, each gated.** About 25 misplaced docs re-homed first, in a commit of their own
+(`adjustment_stages`' warning had been fused onto `white_balance_gains`; two stale comment stacks
+described a Geometry-mode rung pin and zoom gate that no longer exist). Then every file:
+
+| File | Before | Largest module after |
+|---|---|---|
+| `catalog/src/db.rs` | 1,694 | `db/keywords.rs` 464 (`db.rs` 135) |
+| `edit-model/src/lib.rs` | 1,938 | `lib.rs` 330 |
+| `pipeline/src/lib.rs` | 1,853 | `build.rs` 486 (`lib.rs` 116) |
+| `app/src/settings.rs` | 1,148 | `settings/mod.rs` 476 |
+| `app/src/render_engine.rs` | 2,064 | `tail.rs` 431 |
+| `app/src/main.rs` | 1,309 | `app.rs` 429 (`main.rs` 119) |
+| `app/src/shell.rs` | 1,111 | `top_bar.rs` 259 |
+| `app/src/library.rs` | 1,109 | `cell.rs` 366 |
+| `app/src/develop/canvas/mod.rs` | 1,053 | `view.rs` 343 (`mod.rs` 296) |
+
+The giant functions are orchestrators now: `render_cached_with` 248 lines (most of them the comments
+that record measured decisions) over phases of 3–91, with `walk_whole` 255 because its step loop and
+`break` must stay whole; `canvas::show` 69 + `session_canvas` 29; `library::show` 97 (`grid::panel` 155);
+`ui` 38. Tests followed their code — M10.7e's eight `PrefixCache` tests among them, `render_engine`'s
+duplicate `fake_key` deleted (identical up to path qualification, checked).
+
+**How it was kept a refactor.** Code was never retyped: items moved as exact byte spans found **by
+name** by a parser that tiles each file byte for byte (self-checked: every item bracket-balanced,
+`#[test]` counts equal to `grep`'s, and item heads counted independently — which caught the parser's
+own bug, below); function phases moved as exact line ranges between asserted boundary lines, dedented.
+**Per commit:** the test-name multiset (3,297 listed, 24 names shared) identical, goldens untouched, and a
+conservation check — no comment line and no code token removed except what the commit message lists.
+The 16 GPU-gated tests ran (this Mac has an adapter). **Speed:** `probe_straighten_drag` on
+`DSCF6263.RAF` at rung 3200, baseline and new binaries **alternated** at load 11–15. After the render
+extraction: drag medians **29.3 / 29.2 / 28.4 ms before, 29.4 / 28.5 / 29.0 after**. On the tip, five
+pairs: **before 28.6 / 28.4 / 28.6 / 29.0 / 27.4, after 31.9 / 28.6 / 28.6 / 29.4 / 28.9** — a median of
+28.6 against 28.9, inside the baseline's own 27.4–29.0 spread; the 31.9 run opened with a 92 ms tail
+frame, a load spike. No clone crept into the render walk.
+**The guard:** `test-dir`'s `no_file_is_over_a_thousand_lines_of_code_and_doc` (a lexer-aware
+measure; `#[cfg(test)] mod x;` files skipped), sabotaged three ways, each red — its 500-line list matched
+the Python measure file for file. `CLAUDE.md`'s `awk` measure is retired in its favour.
+
+**Worth keeping:**
+
+- ⚠⚠ **A conservation check silently compared against nothing on a rename.** `git diff --name-only`
+  follows renames: when `library.rs` → `library/mod.rs` kept most of its content, only the new path was
+  listed, its old content was never read, and the check "passed" with 290 → 672 comment lines. The
+  implausible numbers were the only sign. Fixed with `--no-renames`, and **every earlier commit
+  re-checked** — all as reported. The standing lesson about queries that find nothing, in a new costume.
+- ⚠ **A name-matching import derivation needs the dots handled both ways.** It first imported
+  `airlight` and `perspective` because `.airlight` field accesses matched; excluding every preceded
+  dot then missed `..full_prefix()` — a struct update. One dot excludes, two do not.
+- ⚠ **Two helpers with one name compiled either way.** The moved composition tests could import
+  `test_ui::screen` or `canvas::test_support::screen`; both built, and their bodies differ — a
+  different rectangle, silently. Checked, and the original kept.
+- ⚠ **The parser's `mod x;` bug was caught by an independent count, not by tiling.** A declaration
+  swallowed the next four items; the spans still tiled and still balanced. Counting item heads at
+  column 0 separately found it — and was itself sabotaged (the old behaviour reinstated → mismatch).
+- ⚠ **Borrows the compiler accepts in one body can fail across a function boundary.** `canvas::show`
+  wrote four `Session` fields while holding `&s.texture`: legal inside one function (disjoint fields),
+  E0502 through a helper. The texture is now checked first and borrowed after the planning phases.
+- Left on purpose, in `docs/BACKLOG.md` ("Left by M10.7d"): window-free logic still in bin modules,
+  twice-written pan/zoom and pick code, a test that cannot fail (`a_region_frame_refreshes_the_fit_image_size`),
+  a stale doc.
+
 ### 2026-09-30 — M10.7c: every test's temp directory is its own (branch `m10.7c-temp-dir-isolation`, merged 2026-09-30)
 
 **Input:** *"the 7 temp-dir test-isolation sites"* (+2 in `immich_source`), recorded 2026-09-23, and

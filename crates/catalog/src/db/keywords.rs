@@ -9,8 +9,8 @@
 //! So [`KeywordMerge`] records rows with their original ids and `unmerge_keyword` re-inserts them.
 
 use super::{split, Catalog, CatalogError};
-use crate::snapshot::KeywordSnapshot;
-use std::path::PathBuf;
+use crate::snapshot::{CatalogSnapshot, KeywordSnapshot};
+use std::path::{Path, PathBuf};
 
 /// What a rename or a move did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,7 +37,216 @@ pub struct KeywordMerge {
     pub moved: Vec<(i64, i64)>,
 }
 
+/// A keyword in the tree, flattened for display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeywordRow {
+    pub id: i64,
+    pub name: String,
+    pub parent_id: Option<i64>,
+    /// How deep in the tree, for indenting. Roots are 0.
+    pub depth: usize,
+    /// How many *files* carry this keyword directly — **not** counting children.
+    pub count: i64,
+}
+
 impl Catalog {
+    /// Create a keyword under `parent`, or return the existing one of that name and parent.
+    ///
+    /// ⚠ A duplicate is not an error, for the reason `create_collection` gives: the name is the
+    /// identity a user thinks in.
+    pub fn create_keyword(&self, name: &str, parent: Option<i64>) -> Result<i64, CatalogError> {
+        self.conn.execute(
+            "INSERT INTO keywords (name, parent_id) VALUES (?1, ?2)
+             ON CONFLICT DO NOTHING",
+            rusqlite::params![name, parent],
+        )?;
+        Ok(self.conn.query_row(
+            "SELECT id FROM keywords WHERE name = ?1 AND COALESCE(parent_id, 0) = COALESCE(?2, 0)",
+            rusqlite::params![name, parent],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// The whole tree, depth-first and name-ordered within each level.
+    ///
+    /// ⚠ Ordered in SQL so the tree does not reshuffle between frames.
+    pub fn keywords(&self) -> Result<Vec<KeywordRow>, CatalogError> {
+        let mut stmt = self.conn.prepare(
+            "WITH RECURSIVE tree(id, name, parent_id, depth, path) AS (
+                 SELECT id, name, parent_id, 0, lower(name)
+                 FROM keywords WHERE parent_id IS NULL
+                 UNION ALL
+                 SELECT k.id, k.name, k.parent_id, t.depth + 1, t.path || '/' || lower(k.name)
+                 FROM keywords k JOIN tree t ON k.parent_id = t.id
+             )
+             SELECT t.id, t.name, t.parent_id, t.depth,
+                    (SELECT count(*) FROM photo_keywords pk WHERE pk.keyword_id = t.id)
+             FROM tree t ORDER BY t.path",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(KeywordRow {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                parent_id: r.get(2)?,
+                depth: r.get::<_, i64>(3)? as usize,
+                count: r.get(4)?,
+            })
+        })?;
+        Ok(rows.filter_map(Result::ok).collect())
+    }
+
+    /// How much a keyword deletion would take with it: `(descendants, assignments)`.
+    ///
+    /// ⚠ Descendants **excludes** the keyword itself, and assignments **includes** the whole
+    /// subtree's — the two numbers the confirmation says out loud.
+    ///
+    /// ⚠ The same recursive CTE `keyword_members` uses, so nothing new walks the subtree.
+    pub fn keyword_delete_scope(&self, id: i64) -> Result<(usize, usize), CatalogError> {
+        let mut stmt = self.conn.prepare(
+            "WITH RECURSIVE sub(id) AS (
+                 SELECT ?1
+                 UNION ALL
+                 SELECT k.id FROM keywords k JOIN sub ON k.parent_id = sub.id
+             )
+             SELECT
+               (SELECT count(*) FROM sub) - 1,
+               (SELECT count(*) FROM photo_keywords WHERE keyword_id IN (SELECT id FROM sub))",
+        )?;
+        let (d, a): (i64, i64) = stmt.query_row([id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok((d.max(0) as usize, a.max(0) as usize))
+    }
+
+    /// Remove a keyword. ⚠ Its **children go with it**, and every assignment of any of them.
+    pub fn delete_keyword(&self, id: i64) -> Result<CatalogSnapshot, CatalogError> {
+        let tx = self.conn.unchecked_transaction()?;
+        // ⚠ The same recursive CTE `keyword_members` uses, and for the same reason: the cascade
+        // takes the whole subtree, so the snapshot must hold the whole subtree. The `depth`
+        // ordering is what puts **parents before children**, which is what lets the restore remap
+        // `parent_id` to an id that already exists.
+        let mut st = tx.prepare(
+            "WITH RECURSIVE sub(id, name, parent_id, depth) AS (
+                 SELECT id, name, parent_id, 0 FROM keywords WHERE id = ?1
+                 UNION ALL
+                 SELECT k.id, k.name, k.parent_id, sub.depth + 1
+                 FROM keywords k JOIN sub ON k.parent_id = sub.id
+             )
+             SELECT id, name, parent_id FROM sub ORDER BY depth, id",
+        )?;
+        let tree: Vec<KeywordSnapshot> = st
+            .query_map([id], |r| {
+                Ok(KeywordSnapshot {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    parent_id: r.get(2)?,
+                })
+            })?
+            .filter_map(Result::ok)
+            .collect();
+        drop(st);
+
+        let mut assignments = Vec::new();
+        for k in &tree {
+            let mut st = tx.prepare(
+                "SELECT folder_id, file_name, keyword_id FROM photo_keywords WHERE keyword_id = ?1",
+            )?;
+            let rows = st.query_map([k.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            assignments.extend(rows.filter_map(Result::ok));
+        }
+
+        tx.execute("DELETE FROM keywords WHERE id = ?1", [id])?;
+        tx.commit()?;
+        Ok(CatalogSnapshot::Keyword { tree, assignments })
+    }
+
+    /// Tag a **file** — every copy of it, now and in future.
+    ///
+    /// ⚠ Keyed on `(folder, file_name)` rather than on a photo row, which is what makes that true
+    /// with no inheritance rule to maintain.
+    pub fn assign_keyword(&self, keyword: i64, photo: &Path) -> Result<(), CatalogError> {
+        let Some((folder, name)) = split(photo) else {
+            return Ok(());
+        };
+        self.conn.execute(
+            "INSERT INTO photo_keywords (folder_id, file_name, keyword_id)
+             SELECT f.id, ?2, ?3 FROM folders f WHERE f.path = ?1
+             ON CONFLICT DO NOTHING",
+            rusqlite::params![folder, name, keyword],
+        )?;
+        Ok(())
+    }
+
+    pub fn unassign_keyword(&self, keyword: i64, photo: &Path) -> Result<(), CatalogError> {
+        let Some((folder, name)) = split(photo) else {
+            return Ok(());
+        };
+        self.conn.execute(
+            "DELETE FROM photo_keywords
+             WHERE keyword_id = ?3 AND file_name = ?2
+               AND folder_id = (SELECT id FROM folders WHERE path = ?1)",
+            rusqlite::params![folder, name, keyword],
+        )?;
+        Ok(())
+    }
+
+    /// How many of `files` carry each keyword — the tri-state a photo menu needs.
+    ///
+    /// ⚠⚠ **Direct assignments only, never the subtree.** `keyword_members` expands descendants
+    /// because a *search* for `Europe` must find `Paris`; a menu toggle removes an
+    /// **assignment**, so a photo tagged only `Paris` must show `Europe` unchecked. Ticking it
+    /// from the subtree would make unticking it appear to do nothing.
+    pub fn keyword_counts(
+        &self,
+        files: &[PathBuf],
+    ) -> Result<std::collections::HashMap<i64, usize>, CatalogError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT pk.keyword_id FROM photo_keywords pk
+             JOIN folders f ON f.id = pk.folder_id
+             WHERE f.path = ?1 AND pk.file_name = ?2",
+        )?;
+        let mut counts = std::collections::HashMap::new();
+        for file in files {
+            let Some((folder, name)) = split(file) else {
+                continue;
+            };
+            let rows = stmt.query_map(rusqlite::params![folder, name], |r| r.get::<_, i64>(0))?;
+            for id in rows.filter_map(Result::ok) {
+                *counts.entry(id).or_insert(0) += 1;
+            }
+        }
+        Ok(counts)
+    }
+
+    /// Every photo carrying `keyword` **or any of its descendants**, as `(path, copy)`.
+    ///
+    /// ⚠⚠ The subtree is resolved by a recursive CTE at query time, never stored. Storing the
+    /// implication would mean rewriting every affected row whenever a keyword is re-parented —
+    /// two facts that can disagree, which this project has been bitten by twice.
+    ///
+    /// ⚠ Joins back to `photos` on `(folder, file_name)`, so **every copy of a tagged file**
+    /// comes back. That is the point of keying on the file.
+    pub fn keyword_members(&self, keyword: i64) -> Result<Vec<(PathBuf, u32)>, CatalogError> {
+        let mut stmt = self.conn.prepare(
+            "WITH RECURSIVE sub(id) AS (
+                 SELECT ?1
+                 UNION ALL
+                 SELECT k.id FROM keywords k JOIN sub ON k.parent_id = sub.id
+             )
+             SELECT DISTINCT f.path, p.file_name, p.copy
+             FROM photo_keywords pk
+             JOIN sub       ON sub.id = pk.keyword_id
+             JOIN folders f ON f.id = pk.folder_id
+             JOIN photos  p ON p.folder_id = pk.folder_id AND p.file_name = pk.file_name
+             ORDER BY lower(f.path), lower(p.file_name), p.copy",
+        )?;
+        let rows = stmt.query_map([keyword], |r| {
+            let folder: String = r.get(0)?;
+            let name: String = r.get(1)?;
+            let copy: u32 = r.get(2)?;
+            Ok((PathBuf::from(folder).join(name), copy))
+        })?;
+        Ok(rows.filter_map(Result::ok).collect())
+    }
+
     fn sibling_named(
         &self,
         name: &str,
@@ -283,10 +492,9 @@ impl Catalog {
 
 #[cfg(test)]
 mod tests {
-    use super::Change;
-    use crate::db::Catalog;
+    use super::*;
+    use crate::db::test_support::{entries_in, entry};
     use crate::CatalogEntry;
-    use std::path::{Path, PathBuf};
 
     fn cat() -> Catalog {
         let c = Catalog::open_in_memory().unwrap();
@@ -442,5 +650,247 @@ mod tests {
             c.keyword_files(paris).unwrap(),
             vec![p("a.raf"), p("b.raf")]
         );
+    }
+
+    #[test]
+    fn two_root_keywords_of_the_same_name_are_refused() {
+        // ⚠⚠ **The `COALESCE` index is the only thing preventing this.** A plain
+        // `UNIQUE(parent_id, name)` lets both through, because SQLite treats NULLs as *distinct*
+        // in a unique constraint — you would get two identical-looking roots in the tree with no
+        // way to tell them apart.
+        let cat = Catalog::open_in_memory().unwrap();
+        let a = cat.create_keyword("Paris", None).unwrap();
+        let b = cat.create_keyword("Paris", None).unwrap();
+        assert_eq!(a, b, "the second must return the existing one");
+        assert_eq!(cat.keywords().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_same_name_under_different_parents_is_allowed() {
+        // ⚠ The discriminating other half. "Paris" under both France and Texas is legitimate, and
+        // an over-broad unique constraint would refuse it.
+        let cat = Catalog::open_in_memory().unwrap();
+        let fr = cat.create_keyword("France", None).unwrap();
+        let tx = cat.create_keyword("Texas", None).unwrap();
+        let a = cat.create_keyword("Paris", Some(fr)).unwrap();
+        let b = cat.create_keyword("Paris", Some(tx)).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(cat.keywords().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn a_keyword_applies_to_every_copy_of_its_file() {
+        // ⚠⚠ The decision the schema shape exists for. A keyword describes what is *in* the
+        // picture, which is identical across copies — so it is keyed on the file, and no
+        // inheritance rule is needed because there is only one fact.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+        cat.add_copy(Path::new("/x/a.RAF"), 1).unwrap();
+        let k = cat.create_keyword("Paris", None).unwrap();
+
+        cat.assign_keyword(k, Path::new("/x/a.RAF")).unwrap();
+
+        let mut members = cat.keyword_members(k).unwrap();
+        members.sort();
+        assert_eq!(
+            members,
+            vec![
+                (PathBuf::from("/x/a.RAF"), 0),
+                (PathBuf::from("/x/a.RAF"), 1)
+            ],
+            "both copies must match a keyword assigned once"
+        );
+    }
+
+    #[test]
+    fn a_copy_created_after_tagging_still_matches() {
+        // ⚠ The exact case that would need an "inherit on create" rule under per-copy storage.
+        // Keyed on the file, it needs nothing at all.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+        let k = cat.create_keyword("Paris", None).unwrap();
+        cat.assign_keyword(k, Path::new("/x/a.RAF")).unwrap();
+
+        cat.add_copy(Path::new("/x/a.RAF"), 1).unwrap();
+
+        assert_eq!(cat.keyword_members(k).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_parent_keyword_finds_its_childrens_photos() {
+        // ⚠⚠ The payoff, and the reason hierarchy was chosen over flat: searching Europe finds
+        // photos tagged Paris. Derived by a recursive query, never stored.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF"), entry("b.RAF")])
+            .unwrap();
+        let europe = cat.create_keyword("Europe", None).unwrap();
+        let france = cat.create_keyword("France", Some(europe)).unwrap();
+        let paris = cat.create_keyword("Paris", Some(france)).unwrap();
+
+        cat.assign_keyword(paris, Path::new("/x/a.RAF")).unwrap();
+        cat.assign_keyword(europe, Path::new("/x/b.RAF")).unwrap();
+
+        let mut from_parent = cat.keyword_members(europe).unwrap();
+        from_parent.sort();
+        assert_eq!(
+            from_parent,
+            vec![
+                (PathBuf::from("/x/a.RAF"), 0),
+                (PathBuf::from("/x/b.RAF"), 0)
+            ],
+            "Europe must find the photo tagged only Paris"
+        );
+        assert_eq!(
+            cat.keyword_members(paris).unwrap().len(),
+            1,
+            "but Paris must not find Europe's"
+        );
+    }
+
+    #[test]
+    fn deleting_a_parent_removes_its_children_and_their_assignments() {
+        // ⚠ Destructive and deliberate. Re-parenting orphans to the root would silently flatten a
+        // taxonomy you built, which is worse than an obvious deletion.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+        let europe = cat.create_keyword("Europe", None).unwrap();
+        let paris = cat.create_keyword("Paris", Some(europe)).unwrap();
+        cat.assign_keyword(paris, Path::new("/x/a.RAF")).unwrap();
+
+        cat.delete_keyword(europe).unwrap();
+
+        assert!(cat.keywords().unwrap().is_empty(), "both are gone");
+        assert_eq!(cat.photo_count().unwrap(), 1, "the photo is untouched");
+    }
+
+    #[test]
+    fn a_renamed_file_keeps_its_keywords() {
+        // ⚠⚠ `photo_keywords` is keyed by **file name**, so `rename_photo` must update it in the
+        // same operation — the third instance of that integration.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+        let k = cat.create_keyword("Paris", None).unwrap();
+        cat.assign_keyword(k, Path::new("/x/a.RAF")).unwrap();
+
+        cat.rename_photo(Path::new("/x/a.RAF"), Path::new("/x/b.RAF"))
+            .unwrap();
+
+        assert_eq!(
+            cat.keyword_members(k).unwrap(),
+            vec![(PathBuf::from("/x/b.RAF"), 0)]
+        );
+    }
+
+    #[test]
+    fn unassigning_leaves_the_keyword_and_the_photo() {
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+        let k = cat.create_keyword("Paris", None).unwrap();
+        cat.assign_keyword(k, Path::new("/x/a.RAF")).unwrap();
+
+        cat.unassign_keyword(k, Path::new("/x/a.RAF")).unwrap();
+
+        assert!(cat.keyword_members(k).unwrap().is_empty());
+        assert_eq!(cat.keywords().unwrap().len(), 1, "the keyword survives");
+        assert_eq!(cat.photo_count().unwrap(), 1, "and so does the photo");
+    }
+
+    #[test]
+    fn keyword_counts_count_direct_assignments_and_not_the_subtree() {
+        // ⚠⚠ The trap this exists for: `keyword_members` deliberately expands descendants, so a
+        // search for Europe finds a photo tagged only Paris. A menu **toggle** must not — it
+        // removes an assignment, and a ticked Europe that unticking cannot clear reads as the
+        // control being broken.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF"), entry("b.RAF")])
+            .unwrap();
+        let europe = cat.create_keyword("Europe", None).unwrap();
+        let paris = cat.create_keyword("Paris", Some(europe)).unwrap();
+        cat.assign_keyword(paris, Path::new("/x/a.RAF")).unwrap();
+        cat.assign_keyword(europe, Path::new("/x/a.RAF")).unwrap();
+        cat.assign_keyword(paris, Path::new("/x/b.RAF")).unwrap();
+
+        let files = vec![PathBuf::from("/x/a.RAF"), PathBuf::from("/x/b.RAF")];
+        let counts = cat.keyword_counts(&files).unwrap();
+
+        assert_eq!(counts.get(&paris), Some(&2), "both carry Paris directly");
+        assert_eq!(
+            counts.get(&europe),
+            Some(&1),
+            "only one carries Europe itself — b.RAF is tagged Paris, which is not the same thing"
+        );
+    }
+
+    #[test]
+    fn an_untagged_file_contributes_no_counts() {
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+        cat.create_keyword("Paris", None).unwrap();
+
+        let counts = cat.keyword_counts(&[PathBuf::from("/x/a.RAF")]).unwrap();
+
+        assert!(counts.is_empty(), "an absent keyword is absent, not zero");
+    }
+
+    #[test]
+    fn keywords_come_back_depth_first_in_name_order() {
+        // ⚠ Ordered in SQL, so the tree does not reshuffle between frames — the sparse-index
+        // class of bug this project has hit three times in the Library.
+        let cat = Catalog::open_in_memory().unwrap();
+        let europe = cat.create_keyword("Europe", None).unwrap();
+        cat.create_keyword("Spain", Some(europe)).unwrap();
+        cat.create_keyword("France", Some(europe)).unwrap();
+        cat.create_keyword("Asia", None).unwrap();
+
+        let got: Vec<(String, usize)> = cat
+            .keywords()
+            .unwrap()
+            .into_iter()
+            .map(|k| (k.name, k.depth))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("Asia".to_string(), 0),
+                ("Europe".to_string(), 0),
+                ("France".to_string(), 1),
+                ("Spain".to_string(), 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_delete_scope_counts_the_subtree_but_not_the_keyword_itself() {
+        let c = Catalog::open_in_memory().unwrap();
+        let europe = c.create_keyword("Europe", None).unwrap();
+        let france = c.create_keyword("France", Some(europe)).unwrap();
+        c.create_keyword("Paris", Some(france)).unwrap();
+        assert_eq!(c.keyword_delete_scope(europe).unwrap(), (2, 0));
+        assert_eq!(c.keyword_delete_scope(france).unwrap().0, 1);
+    }
+
+    /// ⚠ Both halves. A dialog that never fires and one that always fires are equally wrong, and
+    /// only the pair of assertions tells them apart.
+    #[test]
+    fn a_bare_keyword_is_deleted_without_a_dialog_and_a_parent_is_not() {
+        let c = Catalog::open_in_memory().unwrap();
+        let leaf = c.create_keyword("Paris", None).unwrap();
+        assert_eq!(c.keyword_delete_scope(leaf).unwrap(), (0, 0), "no dialog");
+
+        let parent = c.create_keyword("Europe", None).unwrap();
+        c.create_keyword("France", Some(parent)).unwrap();
+        assert_ne!(c.keyword_delete_scope(parent).unwrap(), (0, 0), "dialog");
+    }
+
+    /// ⚠ An assignment alone is enough to confirm, with no descendants at all — the second half
+    /// of the rule, which the descendant tests cannot see.
+    #[test]
+    fn an_assignment_alone_is_enough_to_need_a_confirmation() {
+        let c = Catalog::open_in_memory().unwrap();
+        c.sync_folder(Path::new("/a"), &entries_in("/a", &["one.RAF"]))
+            .unwrap();
+        let k = c.create_keyword("Paris", None).unwrap();
+        c.assign_keyword(k, Path::new("/a/one.RAF")).unwrap();
+        assert_eq!(c.keyword_delete_scope(k).unwrap(), (0, 1));
     }
 }
