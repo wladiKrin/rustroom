@@ -1,5 +1,11 @@
 //! The grid's geometry: how many columns fit, and which positions each row holds.
 
+use super::cell::MARK_SCALE;
+use super::{empty_library, GridInputs, GridOutcome};
+use crate::thumb;
+use eframe::egui;
+use rustroom_app::thumb_loader::ThumbRequest;
+
 /// The positions in `visible` that belong to grid row `row`.
 ///
 /// ⚠ Positions, never entry indices. Once a format or star filter is on, `visible` is *sparse*;
@@ -23,6 +29,217 @@ pub(super) fn grid_columns(avail: f32, cell: f32, spacing: f32) -> usize {
         return 1;
     }
     (((avail + spacing) / (cell + spacing)).floor() as usize).max(1)
+}
+
+/// The grid panel: the empty states, the keyboard, the rows of cells, and the thumbnail window.
+pub(super) fn panel(
+    ui: &mut egui::Ui,
+    library: &mut Option<crate::Library>,
+    inp: GridInputs,
+    out: &mut GridOutcome,
+) {
+    let GridInputs {
+        immich_present,
+        rename_draft,
+        label_draft,
+        catalog,
+        live,
+        cell,
+        auto_advance,
+        scroll_was,
+    } = inp;
+    // ⚠ The grid's own gap, 12 each way (`docs/DESIGN.md` §5) — scoped to this panel, because
+    // `item_spacing` is also every control row's air and 12 there would double the panel.
+    ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
+    let Some(lib) = library else {
+        out.empty_pick = empty_library(ui);
+        return;
+    };
+    // A folder can be reloaded with fewer photos than the selection remembers. This
+    // guards a *different* failure from filtering, so it stays.
+    lib.selection.clamp(lib.entries.len());
+    if lib.visible.is_empty() {
+        ui.centered_and_justified(|ui| {
+            crate::theme::empty_state(
+                ui,
+                if lib.entries.is_empty() {
+                    "No supported images in this folder."
+                } else {
+                    "Every format is hidden — re-enable one above."
+                },
+            );
+        });
+        return;
+    }
+
+    // Keyboard: arrows move the selection, Enter opens it.
+    //
+    // ⚠⚠ **Suppressed while anything has keyboard focus.** With a name being edited, arrow
+    // keys must move the cursor inside the field and Enter must commit — not step to the next
+    // photo and open it. This is the same gate the filmstrip's arrow navigation already uses,
+    // and it was simply missing here.
+    let typing = ui.ctx().memory(|m| m.focused().is_some());
+    // ⚠ Hoisted above the keyboard block because a vertical arrow steps by a *row*, and a row
+    // is `cols` wide. It was computed further down, next to the layout that also needs it —
+    // one value, read twice, rather than two derivations that could disagree about the shape
+    // of the grid the arrows are moving through.
+    let cols = grid_columns(ui.available_width(), cell, ui.spacing().item_spacing.x);
+    let mut centre_on: Option<usize> = None;
+    ui.input(|i| {
+        if typing {
+            return;
+        }
+        centre_on = super::keys::grid_keys(i, lib, cols, auto_advance, out);
+    });
+
+    // ⚠ How many rows of prefetch to keep resident beyond the drawn ones. Latency, not
+    // correctness: at 0 the grid is still right, it just shows grey while you scroll. No test
+    // covers this number for that reason.
+    const MARGIN_ROWS: usize = 2;
+
+    // Cloned so the loop body can mutate `lib.selection`. A few hundred `usize`
+    // per frame is nothing against the thumbnails being drawn.
+    let visible = lib.visible.clone();
+    let rows = visible.len().div_ceil(cols);
+    // ⚠ The caption scales *relative to the theme's own* Small size rather than from a
+    // literal, so a later change to the type scale carries through here for free.
+    let name_size = ui.style().text_styles[&egui::TextStyle::Small].size * cell
+        / rustroom_app::settings::DEFAULT_CELL as f32;
+
+    background(ui, out);
+
+    // The cell's geometry: a fixed 3:2 picture box and a height that is exactly the box,
+    // the caption and the marks row — `cell_layout::grid_cell`'s rule.
+    let layout = {
+        let spacing_y = ui.spacing().item_spacing.y;
+        let caption_h = ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(name_size)));
+        rustroom_app::cell_layout::grid_cell(
+            cell,
+            caption_h,
+            thumb::marks_row_height(name_size * MARK_SCALE),
+            spacing_y,
+        )
+    };
+    // ⚠ `show_rows` adds `item_spacing.y` itself, so the height passed is the bare cell —
+    // and the *pitch* the centring works in is therefore the cell plus that gap.
+    let pitch = layout.height + ui.spacing().item_spacing.y;
+    let viewport_h = ui.available_height();
+    let mut area = egui::ScrollArea::vertical()
+        // ⚠ The scrollbar belongs at the window's right edge, not hugging the rightmost
+        // thumbnail. With `auto_shrink` egui puts the leftover width *outside* the scroll
+        // area, so the bar tracked the grid and moved whenever the column count or cell size
+        // changed. `false` puts that space inside instead, pinning the bar.
+        .auto_shrink([false, false]);
+    // ⚠⚠ **Arithmetic, not `scroll_to_me`.** egui computes a `scroll_to_me` target offset
+    // **once** and never recomputes it, which is the drift bug the filmstrip already paid
+    // for: the centred photo slid away as thumbnails ahead of it loaded and reflowed the
+    // content. A grid of fixed-height rows can be placed exactly instead.
+    if let Some(offset) = centre_on.and_then(|pos| {
+        rustroom_app::grid_nav::follow_offset(pos, cols, pitch, viewport_h, rows, scroll_was)
+    }) {
+        area = area.vertical_scroll_offset(offset);
+    }
+    let downloaded = downloaded_flags(lib, immich_present);
+    let drawn = area.show_rows(ui, layout.height, rows, |ui, row_range| {
+        for row in row_range.clone() {
+            ui.horizontal(|ui| {
+                for pos in cells_in_row(row, cols, visible.len()) {
+                    let i = visible[pos];
+                    super::cell::draw(
+                        ui,
+                        lib,
+                        i,
+                        super::cell::CellInputs {
+                            rename_draft: &mut *rename_draft,
+                            label_draft: &mut *label_draft,
+                            catalog,
+                            live,
+                            downloaded: &downloaded,
+                            layout,
+                            cell,
+                            name_size,
+                        },
+                        out,
+                    );
+                }
+            });
+        }
+        row_range
+    });
+    // ⚠ Remembered for the *next* frame's follow decision: `follow_offset` has to know where
+    // the view is before the scroll area is built, and by then this frame's output is gone.
+    out.scroll_now = Some(drawn.state.offset.y);
+    let drawn = drawn.inner;
+
+    // ⚠ The window is the drawn rows widened by the prefetch margin, mapped through
+    // positions to entry indices to paths. Built after drawing so it reflects what egui
+    // actually laid out this frame.
+    let first = drawn.start.saturating_sub(MARGIN_ROWS);
+    let last = drawn.end.saturating_add(MARGIN_ROWS).min(rows);
+    let mut window: Vec<ThumbRequest> = Vec::new();
+    for row in first..last {
+        for pos in cells_in_row(row, cols, visible.len()) {
+            // ⚠ **No longer de-duplicated by path.** A file's copies were separate rows
+            // sharing one cache entry while a thumbnail was the camera's JPEG; now each copy
+            // renders its own edits, so each is its own request.
+            window.push(lib.thumb_request(visible[pos], live.as_ref()));
+        }
+    }
+    lib.sync_thumb_window(&window);
+}
+
+/// The drag-sensing background, registered before the cells.
+fn background(ui: &mut egui::Ui, out: &mut GridOutcome) {
+    // ⚠⚠ **A drag-sensing background, registered BEFORE the cells so the cells win the
+    // hit-test.** egui breaks a tie by registration order — `hit_test.rs`: "In case of a tie,
+    // take the last one = the one on top" — so this must come first, or it would swallow every
+    // click meant for a thumbnail. It is what lets a rubber band start in the gaps between
+    // cells and in the empty area below the last row.
+    //
+    // ⚠ The scrollbar is drawn by the `ScrollArea` afterwards and is therefore on top, so
+    // dragging it still scrolls rather than banding.
+    let bg_rect = ui.available_rect_before_wrap();
+    let bg = ui.interact(
+        bg_rect,
+        ui.id().with("grid_background"),
+        egui::Sense::click_and_drag(),
+    );
+    if bg.drag_started_by(egui::PointerButton::Primary) {
+        out.band_started = bg.interact_pointer_pos();
+    }
+    // ⚠ A *click* on empty space clears the selection. egui fires `clicked()` only for a
+    // press-and-release that did **not** become a drag, so this and the rubber band above
+    // cannot both happen from one gesture.
+    out.bg_clicked = bg.clicked();
+}
+
+/// One bool per entry: whether its Immich original is already on disk.
+fn downloaded_flags(
+    lib: &crate::Library,
+    immich_present: &std::collections::HashSet<std::ffi::OsString>,
+) -> Vec<bool> {
+    // ⚠ Computed once for the whole grid, not per cell: `source` does not change mid-draw, and
+    // `present` is the pre-read set rather than a stat. See `immich_catalog::shows_download_badge`.
+    // ⚠⚠ **One bool per entry, decided before the closure — not a set cloned into it.** `lib` is a
+    // `&mut` borrow of `app`, so the closure cannot also read `app.immich_present`; cloning the set
+    // would work and would allocate a thousand short strings **every frame**, which is the
+    // per-frame-work mistake this file has paid for twice. A `Vec<bool>` is one pass and one
+    // kilobyte, and `shows_download_badge` stays the only place that decides.
+    let immich_grid = matches!(
+        lib.source,
+        crate::LibrarySource::ImmichAlbum { .. } | crate::LibrarySource::ImmichBucket { .. }
+    );
+    let downloaded: Vec<bool> = if immich_grid {
+        lib.entries
+            .iter()
+            .map(|e| {
+                rustroom_app::immich_catalog::shows_download_badge(true, &e.id.path, immich_present)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    downloaded
 }
 
 #[cfg(test)]

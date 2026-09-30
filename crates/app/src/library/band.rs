@@ -26,6 +26,76 @@ pub(super) fn banded(
         .collect()
 }
 
+/// The rubber band: start, grow, select and draw it — on the outer `ui`, over the cells.
+pub(super) fn rubber_band(
+    ui: &egui::Ui,
+    library: Option<&mut crate::Library>,
+    cell_rects: &[(usize, egui::Rect)],
+    band_started: Option<egui::Pos2>,
+    bg_clicked: bool,
+) {
+    let pointer = ui.input(|i| i.pointer.interact_pos());
+    let released = ui.input(|i| i.pointer.any_released());
+    let mods = ui.input(|i| i.modifiers);
+    if let Some(lib) = library {
+        // ⚠ **Only a plain click**, matching `apply_click`'s rule that only a plain click
+        // moves the active photo: a ⌘- or Shift-click on empty space is part of building a
+        // selection, not a request to throw it away.
+        if bg_clicked && !mods.any() {
+            lib.selection.clear();
+        }
+        if let Some(start) = band_started {
+            lib.band = Some((start, start));
+        }
+        if let Some((start, _)) = lib.band {
+            if let Some(now) = pointer {
+                lib.band = Some((start, now));
+                let rect = egui::Rect::from_two_pos(start, now);
+                // (the same normalisation `banded` performs, for the drawn outline)
+                // ⚠ Only once the drag is a real drag: a 1 px band on a plain click would
+                // replace the selection with the single cell under the cursor, which the click
+                // handler is already doing — and would fight it.
+                if rect.width() > 3.0 || rect.height() > 3.0 {
+                    let hit = banded(cell_rects, start, now);
+                    // ⚠ Plain drag replaces; ⌘/Shift adds — the rule `apply_click` follows.
+                    //
+                    // ⚠ The additive case unions and re-selects rather than toggling: a
+                    // toggle would *deselect* a photo the band passed over twice, so sweeping
+                    // back and forth would flicker the selection.
+                    if mods.command || mods.shift {
+                        let mut all: Vec<usize> = lib.selection.iter().collect();
+                        for i in hit {
+                            if !all.contains(&i) {
+                                all.push(i);
+                            }
+                        }
+                        all.sort_unstable();
+                        lib.selection.select_indices(&all);
+                    } else {
+                        lib.selection.select_indices(&hit);
+                    }
+                    // ⚠ The accent, not a fixed blue: a band is a selection in progress.
+                    let accent = ui.visuals().selection.bg_fill;
+                    ui.painter().rect_stroke(
+                        rect,
+                        egui::CornerRadius::same(2),
+                        egui::Stroke::new(1.0, accent),
+                        egui::StrokeKind::Inside,
+                    );
+                    ui.painter().rect_filled(
+                        rect,
+                        egui::CornerRadius::same(2),
+                        accent.gamma_multiply(0.1),
+                    );
+                }
+            }
+        }
+        if released {
+            lib.band = None;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
