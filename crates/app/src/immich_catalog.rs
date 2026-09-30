@@ -101,18 +101,9 @@ pub fn row_is_browsable(path: &Path, immich_root: Option<&Path>) -> bool {
 mod tests {
     use super::*;
 
-    /// ⚠ Its own directory per test, keyed by process id **and a counter** — the collision
-    /// `thumb_store::TempDir`'s doc says has already bitten this repo twice.
+    /// A fresh directory of its own — `test_dir` makes it unique per test and per run.
     fn temp_dir(tag: &str) -> std::path::PathBuf {
-        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let p = std::env::temp_dir().join(format!(
-            "rustroom_imcat_{tag}_{}_{}",
-            std::process::id(),
-            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        p
+        test_dir::path(&format!("imcat-{tag}"))
     }
 
     /// ⚠⚠ **The asset's id and its original file name must DIFFER, and this fixture once made them

@@ -334,11 +334,7 @@ mod tests {
     }
 
     fn tmp(name: &str) -> std::path::PathBuf {
-        // Structural uniqueness, not clock-based: `cargo test` runs these in parallel and
-        // this codebase has already had a flaky test from two of them sharing a temp path.
-        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let i = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        std::env::temp_dir().join(format!("rustroom_export_{}_{i}_{name}", std::process::id()))
+        test_dir::path("export").join(name)
     }
 
     #[test]

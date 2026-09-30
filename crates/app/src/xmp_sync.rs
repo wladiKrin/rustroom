@@ -336,16 +336,7 @@ mod tests {
 
     impl TempDir {
         fn new(tag: &str) -> Self {
-            use std::sync::atomic::{AtomicUsize, Ordering};
-            static N: AtomicUsize = AtomicUsize::new(0);
-            let dir = std::env::temp_dir().join(format!(
-                "rustroom_xmpsync_{tag}_{}_{}",
-                std::process::id(),
-                N.fetch_add(1, Ordering::Relaxed)
-            ));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            Self(dir)
+            Self(test_dir::path(&format!("xmpsync-{tag}")))
         }
     }
 

@@ -224,22 +224,9 @@ pub fn sort(entries: &mut [CatalogEntry], order: SortOrder) {
 mod tests {
     use super::*;
 
-    /// Make a unique empty temp dir for the test.
-    ///
-    /// ⚠ Uniqueness is **structural** — process id plus a counter — never the clock. Two tests
-    /// entering the same tick collide, and `cargo test` runs them in parallel; that cost this
-    /// project a one-in-five flake in `image-decode` and again in `app`.
+    /// A fresh directory of its own — `test_dir` makes it unique per test and per run.
     fn temp_dir(tag: &str) -> PathBuf {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static N: AtomicUsize = AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "rustroom_catalog_{tag}_{}_{}",
-            std::process::id(),
-            N.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+        test_dir::path(&format!("catalog-{tag}"))
     }
 
     fn touch(dir: &Path, name: &str) {
@@ -466,8 +453,7 @@ mod tests {
     /// symlink pointing BACK at the root, where following it would never end.
     #[test]
     fn scan_tree_recurses_and_skips_hidden_and_symlinked_folders() {
-        let root = std::env::temp_dir().join(format!("rustroom_scantree_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = test_dir::path("scantree");
         for d in ["a/b", ".hidden", "empty"] {
             std::fs::create_dir_all(root.join(d)).unwrap();
         }

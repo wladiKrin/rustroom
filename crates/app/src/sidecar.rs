@@ -549,22 +549,12 @@ mod tests {
 
     impl TempDir {
         /// ⚠ The tag is **not** relied on for uniqueness. Two tests that happened to pick the
-        /// same tag would destroy each other's directory here — `remove_dir_all` runs first, and
-        /// `cargo test` runs tests in parallel. That already happened once while writing the
-        /// virtual-copies tests, and it surfaced as an unrelated pre-existing test failing during
-        /// a sabotage run, which is the worst possible time to be chasing a phantom.
-        ///
-        /// Uniqueness is structural instead — process id plus a monotonic counter — the same
-        /// remedy `image-decode`'s `temp_path` needed after taking uniqueness from the clock.
+        /// same tag once destroyed each other's directory here — `cargo test` runs tests in
+        /// parallel — and it surfaced as an unrelated pre-existing test failing during a sabotage
+        /// run, which is the worst possible time to be chasing a phantom. `test_dir` makes the
+        /// directory unique per test and per run.
         fn new(tag: &str) -> Self {
-            use std::sync::atomic::{AtomicUsize, Ordering};
-            static N: AtomicUsize = AtomicUsize::new(0);
-            let n = N.fetch_add(1, Ordering::Relaxed);
-            let p = std::env::temp_dir()
-                .join(format!("rustroom_sidecar_{tag}_{}_{n}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&p);
-            std::fs::create_dir_all(&p).unwrap();
-            Self(p)
+            Self(test_dir::path(&format!("sidecar-{tag}")))
         }
         fn photo(&self, name: &str) -> PathBuf {
             self.0.join(name)
@@ -1274,14 +1264,7 @@ mod snapshot_tests {
 
     impl Dir {
         fn new(tag: &str) -> Self {
-            use std::sync::atomic::{AtomicUsize, Ordering};
-            static N: AtomicUsize = AtomicUsize::new(0);
-            let n = N.fetch_add(1, Ordering::Relaxed);
-            let p = std::env::temp_dir()
-                .join(format!("rustroom_snap_{tag}_{}_{n}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&p);
-            std::fs::create_dir_all(&p).unwrap();
-            Self(p)
+            Self(test_dir::path(&format!("snap-{tag}")))
         }
     }
 

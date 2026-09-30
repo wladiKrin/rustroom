@@ -8,3 +8,7 @@ license.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+# M10.7c: every test directory comes from here — unique per test and per run, and cleaned up.
+test-dir = { path = "../test-dir" }

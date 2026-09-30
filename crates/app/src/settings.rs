@@ -1915,15 +1915,13 @@ mod tests {
 
     impl TempFile {
         fn new(tag: &str) -> Self {
-            let p = std::env::temp_dir().join(format!("rustroom_settings_{tag}.json"));
-            let _ = std::fs::remove_file(&p);
-            Self(p)
+            Self(test_dir::path(&format!("settings-{tag}")).join("settings.json"))
         }
     }
 
     impl Drop for TempFile {
         fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
+            let _ = std::fs::remove_dir_all(self.0.parent().unwrap());
         }
     }
 

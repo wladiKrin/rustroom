@@ -124,19 +124,9 @@ pub fn store(dir: &Path, key: &Key, validator: &Validator, assets: &[immich::Ass
 mod tests {
     use super::*;
 
-    /// ⚠ Its own temp directory per test, with a counter. `immich_source`'s older fixtures use the
-    /// process id alone, which is exactly the collision `thumb_store::TempDir`'s doc says has already
-    /// bitten this repo — one test deleting a directory another was reading.
+    /// A fresh directory of its own — `test_dir` makes it unique per test and per run.
     fn temp_dir(tag: &str) -> PathBuf {
-        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let p = std::env::temp_dir().join(format!(
-            "rustroom_lists_{tag}_{}_{}",
-            std::process::id(),
-            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        p
+        test_dir::path(&format!("lists-{tag}"))
     }
 
     fn asset(id: &str) -> immich::Asset {

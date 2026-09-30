@@ -90,16 +90,7 @@ mod tests {
 
     impl TempDir {
         fn new(tag: &str) -> Self {
-            use std::sync::atomic::{AtomicU64, Ordering};
-            static N: AtomicU64 = AtomicU64::new(0);
-            let p = std::env::temp_dir().join(format!(
-                "rustroom_preview_build_{tag}_{}_{}",
-                std::process::id(),
-                N.fetch_add(1, Ordering::Relaxed)
-            ));
-            let _ = std::fs::remove_dir_all(&p);
-            std::fs::create_dir_all(&p).unwrap();
-            Self(p)
+            Self(test_dir::path(&format!("preview-build-{tag}")))
         }
     }
 

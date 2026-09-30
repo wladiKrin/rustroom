@@ -166,6 +166,7 @@ dependencies = [
  "image",
  "serde",
  "sha2",
+ "test-dir",
  "thiserror 2.0.19",
  "tract-onnx",
  "ureq",
@@ -309,6 +310,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "test-dir",
  "thiserror 2.0.19",
  "xmp",
 ]
@@ -824,6 +826,7 @@ dependencies = [
 name = "camera-profile"
 version = "0.1.0"
 dependencies = [
+ "test-dir",
  "thiserror 2.0.19",
 ]
 
@@ -835,6 +838,7 @@ dependencies = [
  "dirs",
  "rusqlite",
  "serde",
+ "test-dir",
 ]
 
 [[package]]
@@ -1307,6 +1311,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "test-dir",
  "thiserror 2.0.19",
 ]
 
@@ -1573,6 +1578,7 @@ dependencies = [
  "raw-decode",
  "serde",
  "serde_json",
+ "test-dir",
  "thiserror 2.0.19",
 ]
 
@@ -2482,6 +2488,7 @@ dependencies = [
  "core-image",
  "image",
  "kamadak-exif",
+ "test-dir",
  "thiserror 2.0.19",
 ]
 
@@ -4701,6 +4708,10 @@ checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
 dependencies = [
  "winapi-util",
 ]
+
+[[package]]
+name = "test-dir"
+version = "0.1.0"
 
 [[package]]
 name = "thiserror"

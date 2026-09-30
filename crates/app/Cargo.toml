@@ -86,6 +86,8 @@ objc2-core-graphics = { version = "0.3", default-features = false, features = [
 ] }
 
 [dev-dependencies]
+# M10.7c: every test directory comes from here — unique per test and per run, and cleaned up.
+test-dir = { path = "../test-dir" }
 # For examples that stand up their own wgpu device (probe_gpu_contention).
 pollster = { workspace = true }
 # For `theme::no_bundled_font_shadows_an_icon`: the fonts' real cmap tables, not egui's

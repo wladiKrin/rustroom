@@ -166,6 +166,49 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-30 — M10.7c: every test's temp directory is its own (branch `m10.7c-temp-dir-isolation`, merged 2026-09-30)
+
+**Input:** *"the 7 temp-dir test-isolation sites"* (+2 in `immich_source`), recorded 2026-09-23, and
+the warning CLAUDE.md carried because of them: *never run two gates concurrently*. Spec and plan
+`2026-09-30-m10.7c-test-dirs`. The sweep found **54 sites in 43 files across 7 crates**, not 9, in
+three kinds: fixed names (collide between two gates), process id only (collide between two tests of one
+run, which are threads of one process), and pid + counter (safe, but each a helper of its own). Plus
+**3,128 leftover directories, 72 MB** — cleared with the author's OK.
+
+**Done.** A dev-only crate **`test-dir`**: `TempDir::new(tag)` → `rustroom-tests/<pid>/<tag>-<n>`,
+deleted on drop; `test_dir::path(tag)` keeps it for fixtures that return a plain path. Ended runs are
+swept **by lock, not by age**: each run holds `File::try_lock` on `<pid>/.lock`, and its first
+directory removes every other root whose lock it can take — never one a live gate holds. Every site
+moved; their counters and their "process id plus a counter" notes went with them. A sweep,
+`no_crate_names_the_temp_directory_but_this_one`, fails on `env::temp_dir()` in any crate's `src/` or
+`tests/` outside `test-dir`; the export staging directory is the one allowed site and the positive
+control. Examples (manual tools) stay out. **3291 tests** (+5), all green.
+
+**The proof, both halves:**
+
+- **Branch:** two `cargo test --workspace` at once, three rounds, **both 3291 green every time**; a
+  fourth round sampled the processes — **two test binaries and two run roots live at once**, so the
+  runs really overlapped rather than queueing on cargo's lock. Afterwards one root remains (the last
+  binary's), swept by the next run; nothing else in the temp directory.
+- **Control, `main` in a worktree:** one round of the same. Gate B: **3 failures** in
+  `batch_export::render` (ENOENT — the other gate removed `rustroom_export_{tag}` under it). Gate A:
+  **hung for over 10 minutes** in `batch_export::worker`'s wide-export test, stopped by hand. And the
+  round left **112 directories** behind.
+- Sabotages, both red: a fixed-name site put back (`edit-model`'s roundtrip file); the allowed path
+  renamed (the positive control went blind and said so).
+
+**Worth keeping:**
+
+- ⚠⚠ **A test that waits on an unbounded `recv()` turns a failure into a hang.** The worker test's
+  `finished()` blocks until `ExportEvent::Finished`; when its directory vanished, that never came. The
+  collision is gone, but whether a real export can hang the same way when files vanish mid-run was
+  **not run** — flagged as a task of its own, not claimed here.
+- ⚠ **A cleanup keyed on one form of use mistakes every other use for none.** The script that removed
+  the now-orphaned counters looked for `.fetch_add`; it also removed `RELEASE` and `PEAK` in
+  `thumb_loader`, which are used only through `load`/`store`/`fetch_max`. The compiler caught it; a
+  static read only in a `cfg` it did not build would have gone silently. List what a script removed
+  (`git diff -U0 | grep '^-.*static'`) and account for each.
+
 ### 2026-09-30 — M10.7b: `ProfileRendering` → `TailRendering` (branch `m10.7b-tail-rendering-rename`, merged 2026-09-30)
 
 **Input:** the leftover recorded on 2026-09-18 in the struct's own doc — *"the name is narrower than the

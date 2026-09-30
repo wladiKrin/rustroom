@@ -866,9 +866,7 @@ mod tests {
     }
 
     fn tmp(name: &str) -> std::path::PathBuf {
-        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let i = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        std::env::temp_dir().join(format!("rustroom_meta_{}_{i}_{name}", std::process::id()))
+        test_dir::path("meta").join(name)
     }
 
     /// Encode `img`, embed `m`, and hand back the file's bytes and the pixels a decoder reads.

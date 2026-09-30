@@ -417,10 +417,7 @@ mod tests {
 
     impl TempDir {
         fn new(tag: &str) -> Self {
-            let p = std::env::temp_dir().join(format!("rustroom_presets_{tag}"));
-            let _ = std::fs::remove_dir_all(&p);
-            std::fs::create_dir_all(&p).unwrap();
-            Self(p)
+            Self(test_dir::path(&format!("presets-{tag}")))
         }
 
         /// A store rooted here, with the sibling layout `user_default` uses.
@@ -571,7 +568,7 @@ mod tests {
     #[test]
     fn listing_a_missing_directory_is_empty_not_an_error() {
         // Nothing has been saved yet on a fresh install, so the directory does not exist.
-        let base = std::env::temp_dir().join("rustroom_presets_absent_dir");
+        let base = test_dir::path("presets-absent-dir");
         let store = PresetStore::new(base.join("presets"), base.join("trash"));
         assert!(store.list().is_empty());
         assert_eq!(store.latest_trashed_name(), None);

@@ -142,8 +142,7 @@ mod tests {
 
     #[test]
     fn the_size_cache_reads_a_file_once_and_follows_a_change_of_photo() {
-        let dir = std::env::temp_dir().join(format!("rustroom-size-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = test_dir::path("size");
         let a = dir.join("a.raf");
         let b = dir.join("b.raf");
         std::fs::write(&a, [0u8; 100]).unwrap();

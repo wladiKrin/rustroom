@@ -144,7 +144,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(location(&o), "(none chosen)");
-        o.dest_dir = std::env::temp_dir();
+        o.dest_dir = test_dir::path("export-summary");
         assert!(!location(&o).ends_with("(missing)"), "{}", location(&o));
         o.dest_dir = std::path::PathBuf::from("/nonexistent/Export");
         assert_eq!(location(&o), "Export (missing)");

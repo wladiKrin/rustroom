@@ -11,17 +11,8 @@ pub mod plan;
 pub mod source;
 pub mod worker;
 
-/// A per-test temp directory: process id plus a counter, never the clock or the pid alone
-/// (`thumb_store::TempDir`'s lesson).
+/// A fresh directory of its own — `test_dir` makes it unique per test and per run.
 #[cfg(test)]
 pub(crate) fn temp_dir(tag: &str) -> std::path::PathBuf {
-    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let p = std::env::temp_dir().join(format!(
-        "rustroom_ingest_{tag}_{}_{}",
-        std::process::id(),
-        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    let _ = std::fs::remove_dir_all(&p);
-    std::fs::create_dir_all(&p).unwrap();
-    p
+    test_dir::path(&format!("ingest-{tag}"))
 }
