@@ -293,4 +293,20 @@ mod tests {
         assert_eq!(advance_past(&visible, &[1, 3]), None);
         assert_eq!(advance_past(&visible, &[]), None);
     }
+
+    /// ⚠⚠ **The grid stepped left-to-right only**, so reaching a photo four rows down meant
+    /// holding `→` through everything between. Vertical arrows move by a row, which is a step of
+    /// `cols` through the *visible* list — the same rule Survey follows, through the same
+    /// function.
+    #[test]
+    fn a_vertical_arrow_moves_by_a_row_not_by_one() {
+        // Four columns over a dense list: down from 0 lands on 4, not on 1.
+        let visible: Vec<usize> = (0..20).collect();
+        assert_eq!(
+            crate::grid_nav::step_by(&visible, 0, 4),
+            Some(4),
+            "down moved by one photo rather than by a row"
+        );
+        assert_eq!(crate::grid_nav::step_by(&visible, 9, -4), Some(5));
+    }
 }
