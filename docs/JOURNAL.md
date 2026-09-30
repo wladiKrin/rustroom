@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M10.7a: bit-reproducible exports (2026-09-30)](#2026-09-30--m107a-bit-reproducible-exports-branch-m107a-reproducible-exports)
+- [M10.7a: bit-reproducible exports (2026-09-30)](#2026-09-30--m107a-bit-reproducible-exports-branch-m107a-reproducible-exports-merged-2026-09-30)
 - [M10.6b: every clickable control says what it does (2026-09-30)](#2026-09-30--m106b-every-clickable-control-says-what-it-does-branch-m106b-hover-table-merged-2026-09-30)
 - [M10.6a: the Immich Timeline at the top (2026-09-29)](#2026-09-29--m106a-the-immich-timeline-at-the-top-branch-m106a-immich-timeline-merged-2026-09-29)
 - [The re-plan: every open item becomes Phase 10, release becomes Phase 11 (2026-09-29)](#2026-09-29--the-re-plan-every-open-item-becomes-phase-10-release-becomes-phase-11-branch-replan)
@@ -165,7 +165,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-09-30 — M10.7a: bit-reproducible exports (branch `m10.7a-reproducible-exports`)
+### 2026-09-30 — M10.7a: bit-reproducible exports (branch `m10.7a-reproducible-exports`, merged 2026-09-30)
 
 **Input:** the backlog's *"Exports are not bit-reproducible across runs"* (found 2026-09-01): two
 exports of one photo with the same settings differed, so `cmp` could not say whether a change moved a
