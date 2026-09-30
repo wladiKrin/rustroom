@@ -2525,31 +2525,6 @@ mod tests {
         );
     }
 
-    /// ⚠⚠ A **region** frame must refresh `fit_image_size`, not only a whole-image one. It carries
-    /// `full_w`/`full_h` — the same post-geometry dimensions — and Guide Mode unpinned the fit
-    /// rung, so a zoomed session can render nothing but regions. Left stale, `frame_rect` is the
-    /// wrong size and every frame-relative overlay sits slightly off, correcting itself only when
-    /// you zoom out far enough for a whole-image frame to land.
-    ///
-    /// ⚠ The concrete case: entering geometry mode **with a crop applied** resets the crop for the
-    /// preview, so the frame grows — and the stale value still described the cropped one.
-    #[test]
-    fn a_region_frame_refreshes_the_fit_image_size() {
-        // A frame cut from a 1600x1000 post-geometry frame.
-        let region = pipeline::Region {
-            full_w: 1600,
-            full_h: 1000,
-            x0: 100,
-            y0: 50,
-        };
-        // The quantity `shell` now reads: the *whole frame's* dimensions, which a region frame
-        // carries — the same source `rendered_long` beside it has always used.
-        assert_eq!((region.full_w, region.full_h), (1600, 1000));
-        // ⚠ And they are emphatically not the cut's own size, which is what made a stale
-        // `fit_image_size` look plausible for as long as it did.
-        assert_ne!(region.full_w, region.x0 + 400);
-    }
-
     /// ⚠⚠ **The defect this fixes, and the only test shape that can see it.** The guides were
     /// drawn from inside `draw_crop_overlay`, which the canvas calls only under `Tool::Crop` — so
     /// the View menu entry and the `O` key did nothing in three of the four tools. A test that
