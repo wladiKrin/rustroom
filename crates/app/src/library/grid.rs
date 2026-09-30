@@ -47,6 +47,7 @@ pub(super) fn panel(
         cell,
         auto_advance,
         scroll_was,
+        filter,
     } = inp;
     // ⚠ The grid's own gap, 12 each way (`docs/DESIGN.md` §5) — scoped to this panel, because
     // `item_spacing` is also every control row's air and 12 there would double the panel.
@@ -59,15 +60,11 @@ pub(super) fn panel(
     // guards a *different* failure from filtering, so it stays.
     lib.selection.clamp(lib.entries.len());
     if lib.visible.is_empty() {
+        // ⚠ The reason, not a guess: a search, a mark filter and the format chips each empty the
+        // grid differently, and each needs a different thing undone (reported 2026-09-30).
+        let sentence = lib.why_empty(filter).sentence(&filter.text);
         ui.centered_and_justified(|ui| {
-            crate::theme::empty_state(
-                ui,
-                if lib.entries.is_empty() {
-                    "No supported images in this folder."
-                } else {
-                    "Every format is hidden — re-enable one above."
-                },
-            );
+            crate::theme::empty_state(ui, &sentence);
         });
         return;
     }
@@ -339,6 +336,41 @@ mod tests {
         assert!(
             asked < 300,
             "asked for {asked} thumbnails — the grid is not windowed"
+        );
+    }
+
+    /// ⚠⚠ **Reported in use (2026-09-30):** gibberish in the search bar emptied the grid, and the grid
+    /// said "Every format is hidden" — the one reason it knew besides an empty folder.
+    #[test]
+    fn a_search_that_matches_nothing_says_so() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        app.library = Some(crate::test_app::library_of(4));
+        app.filter.text = "qwxz".into();
+        let filter = app.filter.clone();
+        app.library.as_mut().unwrap().refilter(&filter);
+        assert!(
+            app.library.as_ref().unwrap().visible.is_empty(),
+            "the search hid nothing"
+        );
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+        let mut body = |ui: &mut egui::Ui| {
+            let c = ui.ctx().clone();
+            show(&mut app, ui, &c);
+        };
+        let labels: Vec<String> = crate::test_ui::nodes_on(&ctx, screen, &mut body)
+            .into_iter()
+            .map(|n| n.label)
+            .collect();
+        assert!(
+            labels
+                .iter()
+                .any(|l| l == "No photo's name contains “qwxz”."),
+            "{labels:?}"
+        );
+        assert!(
+            !labels.iter().any(|l| l.contains("Every format is hidden")),
+            "{labels:?}"
         );
     }
 }

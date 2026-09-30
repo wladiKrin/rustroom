@@ -105,6 +105,8 @@ struct GridInputs<'a> {
     cell: f32,
     auto_advance: bool,
     scroll_was: f32,
+    /// The live filter, so an empty grid can say which part of it emptied it.
+    filter: &'a rustroom_app::library_filter::LibraryFilter,
 }
 
 /// Pinch, or ctrl/cmd+scroll, resizes the grid; the size is saved once the gesture settles.
@@ -166,6 +168,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         cell,
         auto_advance,
         scroll_was,
+        filter: &app.filter,
     };
     egui::CentralPanel::default().show(ui, |ui| grid::panel(ui, &mut app.library, inp, &mut out));
 
