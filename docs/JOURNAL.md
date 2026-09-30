@@ -166,7 +166,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-09-30 — M10.7c: every test's temp directory is its own (branch `m10.7c-temp-dir-isolation`)
+### 2026-09-30 — M10.7c: every test's temp directory is its own (branch `m10.7c-temp-dir-isolation`, merged 2026-09-30)
 
 **Input:** *"the 7 temp-dir test-isolation sites"* (+2 in `immich_source`), recorded 2026-09-23, and
 the warning CLAUDE.md carried because of them: *never run two gates concurrently*. Spec and plan
