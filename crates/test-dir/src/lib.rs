@@ -250,4 +250,245 @@ mod tests {
             "use test_dir::TempDir or test_dir::path instead: {offenders:?}"
         );
     }
+
+    /// The most lines of code and doc comments a source file may hold (M10.7d).
+    const CEILING: usize = 1_000;
+
+    /// If a comment, string or char literal starts at `i`, the index just past it.
+    fn skip_literal(c: &[char], i: usize) -> Option<usize> {
+        let at = |k: usize| c.get(k).copied();
+        let ident_before = i > 0 && (c[i - 1].is_alphanumeric() || c[i - 1] == '_');
+        if at(i) == Some('/') && at(i + 1) == Some('/') {
+            return Some((i..c.len()).find(|&k| c[k] == '\n').unwrap_or(c.len()));
+        }
+        if at(i) == Some('/') && at(i + 1) == Some('*') {
+            let (mut k, mut depth) = (i, 0);
+            while k < c.len() {
+                if at(k) == Some('/') && at(k + 1) == Some('*') {
+                    depth += 1;
+                    k += 2;
+                } else if at(k) == Some('*') && at(k + 1) == Some('/') {
+                    depth -= 1;
+                    k += 2;
+                    if depth == 0 {
+                        return Some(k);
+                    }
+                } else {
+                    k += 1;
+                }
+            }
+            return Some(c.len());
+        }
+        if ident_before {
+            return None;
+        }
+        // Raw strings: r"..", r#".."#, br"..".
+        let r = if at(i) == Some('b') && at(i + 1) == Some('r') {
+            Some(i + 2)
+        } else if at(i) == Some('r') {
+            Some(i + 1)
+        } else {
+            None
+        };
+        if let Some(mut k) = r {
+            let hashes = (k..c.len()).take_while(|&j| c[j] == '#').count();
+            k += hashes;
+            if at(k) == Some('"') {
+                let mut j = k + 1;
+                while j < c.len() {
+                    if c[j] == '"' && (j + 1..=j + hashes).all(|h| at(h) == Some('#')) {
+                        return Some(j + 1 + hashes);
+                    }
+                    j += 1;
+                }
+                return Some(c.len());
+            }
+        }
+        let quote = if at(i) == Some('b') { i + 1 } else { i };
+        match at(quote) {
+            Some('"') => {
+                let mut j = quote + 1;
+                while j < c.len() && c[j] != '"' {
+                    j += if c[j] == '\\' { 2 } else { 1 };
+                }
+                Some(j + 1)
+            }
+            // A char literal, not a lifetime: an escape, or one char and the closing quote.
+            Some('\'') if at(quote + 1) == Some('\\') => {
+                (quote + 2..c.len()).find(|&j| c[j] == '\'').map(|j| j + 1)
+            }
+            Some('\'') if at(quote + 2) == Some('\'') => Some(quote + 3),
+            _ => None,
+        }
+    }
+
+    /// The index just past the item whose tokens start at `from`: its `;` at depth zero, or the `}`
+    /// that closes its body (unless a `;` follows, as after a struct literal).
+    fn item_end(c: &[char], from: usize) -> usize {
+        let (mut i, mut depth) = (from, 0i32);
+        while i < c.len() {
+            if let Some(next) = skip_literal(c, i) {
+                i = next;
+                continue;
+            }
+            match c[i] {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' => depth -= 1,
+                '}' => {
+                    depth -= 1;
+                    let next = c[i + 1..].iter().find(|ch| !ch.is_whitespace());
+                    if depth == 0 && next != Some(&';') {
+                        return i + 1;
+                    }
+                }
+                ';' if depth == 0 => return i + 1,
+                _ => {}
+            }
+            i += 1;
+        }
+        c.len()
+    }
+
+    /// Non-blank lines outside every `#[cfg(test)]` item, wherever it sits — code and doc comments,
+    /// not tests. ⚠ Not "up to the first `#[cfg(test)]`": `main.rs` declares a test module at line
+    /// 63, and that measure read it as 78 lines of code where it held 555.
+    fn code_and_doc_lines(src: &str) -> usize {
+        let c: Vec<char> = src.chars().collect();
+        let mut keep = vec![true; c.len()];
+        let mut i = 0;
+        while i < c.len() {
+            let line_end = (i..c.len()).find(|&k| c[k] == '\n').unwrap_or(c.len());
+            let line: String = c[i..line_end].iter().collect();
+            if line.trim_start().starts_with("#[cfg(test)]") {
+                let attr = i + line.find("#[cfg(test)]").unwrap() + "#[cfg(test)]".len();
+                let end = item_end(&c, attr);
+                keep[i..end].fill(false);
+                i = end;
+            } else {
+                i = line_end + 1;
+            }
+        }
+        let kept: String = c
+            .iter()
+            .zip(&keep)
+            .filter(|(_, k)| **k)
+            .map(|(ch, _)| *ch)
+            .collect();
+        kept.lines().filter(|l| !l.trim().is_empty()).count()
+    }
+
+    /// Files that are wholly tests: the targets of a `#[cfg(test)] mod name;` declaration.
+    fn test_only_files(files: &[PathBuf]) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for f in files {
+            let src = std::fs::read_to_string(f).unwrap_or_default();
+            let lines: Vec<&str> = src.lines().collect();
+            for (i, l) in lines.iter().enumerate() {
+                if l.trim() != "#[cfg(test)]" {
+                    continue;
+                }
+                let next = lines.get(i + 1).map_or("", |n| n.trim());
+                let decl = ["pub(crate) ", "pub(super) ", "pub "]
+                    .iter()
+                    .find_map(|p| next.strip_prefix(p))
+                    .unwrap_or(next);
+                let Some(name) = decl.strip_prefix("mod ").and_then(|r| r.strip_suffix(';')) else {
+                    continue;
+                };
+                let stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let parent = f.parent().unwrap();
+                let dir = if matches!(stem, "mod" | "lib" | "main") {
+                    parent.to_path_buf()
+                } else {
+                    parent.join(stem)
+                };
+                out.push(dir.join(format!("{name}.rs")));
+                out.push(dir.join(name).join("mod.rs"));
+            }
+        }
+        out
+    }
+
+    /// ⚠ The measure on the shapes a naive scanner gets wrong: a test module in mid-file, a `mod x;`
+    /// declaration, a `'{'` char, a `;` inside `[u8; 2]`, a comment holding `}`, a raw string holding
+    /// `"}`, and a `'static` lifetime that is not a char. Eight lines are code or doc.
+    #[test]
+    fn the_measure_skips_test_items_wherever_they_sit() {
+        let src = r##"//! A module doc.
+
+/// A doc.
+fn a() {
+    let s = "{";
+    let c = '}';
+}
+
+#[cfg(test)]
+mod early;
+
+fn b() {}
+
+#[cfg(test)]
+mod tests {
+    fn helper() -> char { '{' }
+    const X: [u8; 2] = [1, 2];
+    // a comment with a } brace
+    fn raw() -> &'static str { r#"a"}"# }
+}
+
+#[cfg(test)]
+const Y: [u8; 1] = [0];
+
+fn c() {}
+"##;
+        assert_eq!(code_and_doc_lines(src), 8);
+    }
+
+    /// ⚠⚠ M10.7d's ceiling: no source file over a thousand lines of code and doc comments. Nine were
+    /// over on 2026-09-30, each grown there one reasonable addition at a time, and were split by
+    /// responsibility — this is what stops the tenth. Tests do not count: a file's test tail is
+    /// excluded wherever it sits, and a file declared `#[cfg(test)] mod x;` is skipped whole.
+    #[test]
+    fn no_file_is_over_a_thousand_lines_of_code_and_doc() {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let mut files = Vec::new();
+        for c in std::fs::read_dir(crates).unwrap().flatten() {
+            rust_files(&c.path().join("src"), &mut files);
+        }
+        let test_only = test_only_files(&files);
+        // Positive controls first: a walk that found nothing, a measure that reads nothing, or a
+        // test-file rule that recognises nothing would all pass the ceiling below.
+        assert!(files.len() > 300, "only {} source files found", files.len());
+        assert!(
+            test_only
+                .iter()
+                .any(|f| f.ends_with("settings/compat_tests.rs")),
+            "the test-only rule missed settings/compat_tests.rs"
+        );
+        let mut sizes: Vec<(usize, String)> = files
+            .iter()
+            .filter(|f| !test_only.contains(f))
+            .map(|f| {
+                let rel = f
+                    .strip_prefix(crates)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                (
+                    code_and_doc_lines(&std::fs::read_to_string(f).unwrap()),
+                    rel,
+                )
+            })
+            .collect();
+        sizes.sort_unstable_by(|a, b| b.cmp(a));
+        assert!(
+            sizes[0].0 > 500,
+            "the measure reads too little: largest {:?}",
+            sizes[0]
+        );
+        let over: Vec<_> = sizes.iter().filter(|(n, _)| *n > CEILING).collect();
+        assert!(
+            over.is_empty(),
+            "over {CEILING} lines of code and doc — split by responsibility (the M10.7d spec): {over:?}"
+        );
+    }
 }
