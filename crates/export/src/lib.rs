@@ -144,7 +144,9 @@ pub fn icc_for(space: color::OutputSpace) -> &'static [u8] {
     static PROPHOTO: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
 
     match space {
-        S::Srgb => SRGB.get_or_init(|| lcms2::Profile::new_srgb().icc().unwrap_or_default()),
+        S::Srgb => SRGB.get_or_init(|| {
+            pin_created(lcms2::Profile::new_srgb().icc().unwrap_or_default())
+        }),
         S::DisplayP3 => P3.get_or_init(|| {
             build_icc(
                 D65,
@@ -225,7 +227,28 @@ fn build_icc(
         lcms2::TagSignature::ProfileDescriptionTag,
         lcms2::Tag::MLU(&mlu),
     );
-    profile.icc().unwrap_or_default()
+    pin_created(profile.icc().unwrap_or_default())
+}
+
+/// When every exported profile says it was made: 2026-08-24 00:00:00 — the day these profiles were
+/// first written into exports (colour management piece B).
+///
+/// ⚠⚠ **Pinned, not lcms2's "now" (M10.7a).** A profile built at run time carries the time it was
+/// built, so two exports of one photo differed across runs and `cmp` could not say whether a change
+/// moved a pixel (found 2026-09-01). A **valid** date rather than zeros: month 0 and day 0 are not a
+/// legal ICC `dateTimeNumber`, and validators flag them.
+pub const ICC_CREATED: [u16; 6] = [2026, 8, 24, 0, 0, 0];
+
+/// `icc` with its header's creation date — bytes 24..36, six big-endian `u16`s — set to
+/// [`ICC_CREATED`]. Anything shorter than an ICC header (128 bytes) is returned untouched; the profile
+/// ID at 84..100 is left alone, and lcms2 leaves it zero, so nothing else depends on the date.
+fn pin_created(mut icc: Vec<u8>) -> Vec<u8> {
+    if icc.len() >= 128 {
+        for (i, v) in ICC_CREATED.iter().enumerate() {
+            icc[24 + 2 * i..26 + 2 * i].copy_from_slice(&v.to_be_bytes());
+        }
+    }
+    icc
 }
 
 /// Encode a display-referred image. `quality` is ignored unless the format is lossy.
@@ -430,6 +453,46 @@ mod tests {
                 .windows(icc_for(color::OutputSpace::Srgb).len())
                 .any(|w| w == icc_for(color::OutputSpace::Srgb)),
         }
+    }
+
+    /// An ICC header's creation date, bytes 24..36: year, month, day, hours, minutes, seconds.
+    fn created(icc: &[u8]) -> [u16; 6] {
+        std::array::from_fn(|i| u16::from_be_bytes([icc[24 + 2 * i], icc[25 + 2 * i]]))
+    }
+
+    /// ⚠⚠ M10.7a: every exported profile says it was made on `ICC_CREATED`, whatever the clock
+    /// says, so two exports of one photo are byte-identical across runs. ⚠ Proven different first
+    /// (standing lesson (c)): lcms2's own profile carries the time it was built, and a pin that did
+    /// nothing would pass the loop below on the one day it happened to match.
+    #[test]
+    fn every_exported_profile_carries_the_pinned_creation_date() {
+        let fresh = lcms2::Profile::new_srgb().icc().expect("lcms2 builds sRGB");
+        assert_ne!(
+            created(&fresh),
+            ICC_CREATED,
+            "fixture: lcms2 stamps the build time, not the pinned date"
+        );
+        for s in [
+            color::OutputSpace::Srgb,
+            color::OutputSpace::DisplayP3,
+            color::OutputSpace::AdobeRgb,
+            color::OutputSpace::ProPhoto,
+        ] {
+            assert_eq!(created(icc_for(s)), ICC_CREATED, "{s:?}");
+        }
+    }
+
+    /// The pin moves the date and nothing else — every changed byte is inside the header's date
+    /// field — and leaves something too short to be a profile alone.
+    #[test]
+    fn pinning_touches_only_the_creation_date() {
+        let fresh = lcms2::Profile::new_srgb().icc().expect("lcms2 builds sRGB");
+        let pinned = pin_created(fresh.clone());
+        assert_eq!(pinned.len(), fresh.len());
+        let moved: Vec<usize> = (0..fresh.len()).filter(|&i| fresh[i] != pinned[i]).collect();
+        assert!(!moved.is_empty(), "fixture: the fresh date was already the pinned one");
+        assert!(moved.iter().all(|i| (24..36).contains(i)), "{moved:?}");
+        assert_eq!(pin_created(vec![1, 2, 3]), vec![1, 2, 3]);
     }
 
     #[test]
