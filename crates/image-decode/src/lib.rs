@@ -95,8 +95,7 @@ mod tests {
 
     #[test]
     fn a_preview_is_the_whole_picture() {
-        let dir = std::env::temp_dir().join(format!("rustroom_preview_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = test_dir::path("preview");
         let path = dir.join("p.png");
         let img = image::RgbaImage::from_fn(30, 20, |x, _| {
             if x < 15 {
@@ -117,22 +116,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A path no other test will pick.
-    ///
-    /// ⚠ Uniqueness is **structural** — process id plus a monotonic counter — not taken from
-    /// the clock. `SystemTime::now()` was not enough: `cargo test` runs these in parallel and
-    /// four of them build fixtures through `tagged_jpeg`, one of them eight times in a loop,
-    /// so two calls landing in the same clock tick collided and one test deleted the file
-    /// another was still reading. That failed roughly one run in five.
+    /// A path no other test will pick: `name` in a fresh directory of its own.
     fn temp_path(name: &str) -> std::path::PathBuf {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "rustroom_imgdec_{}_{}_{}",
-            std::process::id(),
-            n,
-            name
-        ))
+        test_dir::path("imgdec").join(name)
     }
 
     #[test]

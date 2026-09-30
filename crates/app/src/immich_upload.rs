@@ -168,18 +168,9 @@ fn now_secs() -> i64 {
 mod tests {
     use super::*;
 
-    /// ⚠ Temp-dir isolation keyed on pid **and** a counter — `immich_list_cache`'s pattern. Two
-    /// sites in `immich_source` key on the pid alone and are the ones not to copy.
-    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
+    /// A fresh directory of its own — `test_dir` makes it unique per test and per run.
     fn temp_dir(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "rustroom_upload_{tag}_{}_{}",
-            std::process::id(),
-            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        d
+        test_dir::path(&format!("upload-{tag}"))
     }
 
     fn settings_with(url: &str, key: &str, upload: &str) -> Settings {

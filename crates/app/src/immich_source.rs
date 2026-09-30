@@ -433,9 +433,7 @@ mod tests {
     /// opened, so the rail's number and the grid's now agree by construction.
     #[test]
     fn present_names_ignores_the_sidecars_beside_the_photos() {
-        let d = std::env::temp_dir().join(format!("rr_sidecar_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
+        let d = test_dir::path("sidecar");
         std::fs::write(d.join("a.JPG"), b"x").unwrap();
         std::fs::write(d.join("a.json"), b"{}").unwrap();
         std::fs::write(d.join("b.jpg"), b"x").unwrap();
@@ -456,9 +454,7 @@ mod tests {
     /// second.
     #[test]
     fn present_names_lists_what_is_in_the_cache_directory() {
-        let d = std::env::temp_dir().join(format!("rr_present_{}_{}", std::process::id(), line!()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
+        let d = test_dir::path("present");
         std::fs::write(d.join("a.jpg"), b"x").unwrap();
         std::fs::write(d.join("b.jpeg"), b"x").unwrap();
         std::fs::create_dir_all(d.join("a_directory")).unwrap();
@@ -700,8 +696,7 @@ mod tests {
     /// every cache miss forever.
     #[test]
     fn a_cached_photo_gets_no_remote_thumbnail() {
-        let dir = std::env::temp_dir().join(format!("rustroom_rt_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = test_dir::path("rt");
         let p = dir.join("11111111.RAF");
         std::fs::write(&p, b"x").unwrap();
         let shared: SharedConnection =
@@ -732,10 +727,7 @@ mod tests {
         assert!(remote_thumbnail(
             &shared,
             &shared_versions(),
-            &crate::thumb_store::ThumbStore::new(
-                std::env::temp_dir().join("rustroom_unconf_store"),
-                u64::MAX
-            ),
+            &crate::thumb_store::ThumbStore::new(test_dir::path("unconf-store"), u64::MAX),
             p
         )
         .is_none());
@@ -907,8 +899,7 @@ mod tests {
 
     #[test]
     fn is_cached_is_false_before_the_file_exists_and_true_after() {
-        let dir = std::env::temp_dir().join(format!("rustroom_immich_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = test_dir::path("immich");
         let p = dir.join("a.RAF");
         let _ = std::fs::remove_file(&p);
         assert!(!is_cached(&p));

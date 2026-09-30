@@ -120,15 +120,7 @@ mod tests {
     use exif::{Field, In, Tag, Value};
 
     fn temp_file(tag: &str) -> std::path::PathBuf {
-        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "rustroom_quicklook_{tag}_{}_{}",
-            std::process::id(),
-            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join("f")
+        test_dir::path(&format!("quicklook-{tag}")).join("f")
     }
 
     /// A 16×8 JPEG — the thumbnail the EXIF block will carry.

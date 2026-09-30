@@ -100,18 +100,9 @@ pub fn clear(path: &Path) {
 mod tests {
     use super::*;
 
-    /// ⚠ Temp-dir isolation on pid **and** a counter — `immich_list_cache`'s pattern, not
-    /// `immich_source`'s pid-only one.
-    static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
+    /// `stacks.json` in a fresh directory of its own.
     fn temp(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "rustroom_stackcache_{tag}_{}_{}",
-            std::process::id(),
-            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        d.join("stacks.json")
+        test_dir::path(&format!("stackcache-{tag}")).join("stacks.json")
     }
 
     fn stack(id: &str, members: &[&str]) -> immich::Stack {

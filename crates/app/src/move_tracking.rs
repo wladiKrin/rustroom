@@ -40,8 +40,7 @@ mod tests {
     use super::*;
 
     fn dir(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("rustroom_carry_{tag}_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
+        let d = test_dir::path(&format!("carry-{tag}"));
         std::fs::create_dir_all(d.join("a")).unwrap();
         std::fs::create_dir_all(d.join("b")).unwrap();
         d

@@ -9,3 +9,7 @@ core-image = { path = "../core-image" }
 serde = { workspace = true }
 rusqlite = { workspace = true }
 dirs = { workspace = true }
+
+[dev-dependencies]
+# M10.7c: every test directory comes from here — unique per test and per run, and cleaned up.
+test-dir = { path = "../test-dir" }

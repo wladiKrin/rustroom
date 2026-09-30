@@ -509,7 +509,7 @@ mod tests {
     /// "Immich only" starts a run with **nowhere to put anything** once the key is gone.
     #[test]
     fn can_export_needs_a_folder_only_when_files_are_kept() {
-        let tmp = std::env::temp_dir();
+        let tmp = test_dir::path("options");
         let with_dir = |d: Destination| ExportOptions {
             dest_dir: tmp.clone(),
             destination: d,
@@ -554,7 +554,7 @@ mod tests {
     #[test]
     fn nowhere_can_never_start_a_run() {
         let o = ExportOptions {
-            dest_dir: std::env::temp_dir(),
+            dest_dir: test_dir::path("options"),
             destination: Destination::Nowhere,
             ..ExportOptions::default()
         };

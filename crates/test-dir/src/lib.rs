@@ -136,6 +136,9 @@ mod tests {
         unique.sort();
         unique.dedup();
         assert_eq!(unique.len(), paths.len(), "{paths:?}");
+        for p in paths {
+            let _ = std::fs::remove_dir_all(p);
+        }
     }
 
     #[test]
@@ -147,6 +150,7 @@ mod tests {
         assert!(!p.exists(), "dropping did not delete {p:?}");
         let kept = path("kept");
         assert!(kept.is_dir(), "a kept directory was deleted");
+        let _ = std::fs::remove_dir_all(kept);
     }
 
     /// ⚠ Both halves, in a base of the test's own: a root whose run has ended (its lock is free) goes;
@@ -182,5 +186,68 @@ mod tests {
             .open(run_root().join(".lock"))
             .unwrap();
         assert!(other.try_lock().is_err(), "this run's lock is not held");
+    }
+
+    /// The one place outside this crate allowed to name the system temp directory: the export
+    /// staging directory, which is production code with its own unique name.
+    const ALLOWED: &str = "app/src/batch_export/worker.rs";
+
+    /// Every `.rs` file under `dir`, recursively.
+    fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                rust_files(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+
+    /// Each file under every crate's `src/` and `tests/` that names the system temp directory, as
+    /// a path relative to `crates/`. Examples are manual tools and stay out of it.
+    fn temp_dir_users() -> (usize, Vec<String>) {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let mut files = Vec::new();
+        for c in std::fs::read_dir(crates).unwrap().flatten() {
+            rust_files(&c.path().join("src"), &mut files);
+            rust_files(&c.path().join("tests"), &mut files);
+        }
+        let pattern = ["env::", "temp_dir()"].concat();
+        let users = files
+            .iter()
+            .filter(|f| std::fs::read_to_string(f).is_ok_and(|s| s.contains(&pattern)))
+            .map(|f| {
+                let rel = f.strip_prefix(crates).unwrap();
+                rel.to_string_lossy().replace('\\', "/")
+            })
+            .collect();
+        (files.len(), users)
+    }
+
+    /// ⚠⚠ A test path taken straight from the system temp directory is the collision this crate
+    /// exists to end: a fixed name meets the same name in a concurrent gate, a process-id one meets
+    /// another test of the same run. Every test directory comes from here.
+    #[test]
+    fn no_crate_names_the_temp_directory_but_this_one() {
+        let (scanned, users) = temp_dir_users();
+        // ⚠ The sample first: a walk that found nothing would pass everything.
+        assert!(scanned > 300, "only {scanned} source files found");
+        // Positive control: the one allowed site must be found, or the pattern is blind.
+        assert!(
+            users.iter().any(|u| u == ALLOWED),
+            "the sweep did not find {ALLOWED}: {users:?}"
+        );
+        let offenders: Vec<_> = users
+            .iter()
+            .filter(|u| *u != ALLOWED && !u.starts_with("test-dir/"))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "use test_dir::TempDir or test_dir::path instead: {offenders:?}"
+        );
     }
 }

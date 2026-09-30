@@ -22,10 +22,7 @@ pub(crate) struct TempDir(pub(crate) PathBuf);
 
 impl TempDir {
     pub(crate) fn new(tag: &str) -> Self {
-        let p = std::env::temp_dir().join(format!("rustroom_export_{tag}"));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        Self(p)
+        Self(test_dir::path(&format!("export-{tag}")))
     }
 }
 

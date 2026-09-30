@@ -3551,7 +3551,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let path = std::env::temp_dir().join("rustroom_edits_roundtrip.json");
+        let path = test_dir::path("edits-roundtrip").join("roundtrip.json");
         e.to_json_file(&path).unwrap();
         let back = Edits::from_json_file(&path).unwrap();
         assert_eq!(e, back);

@@ -252,11 +252,7 @@ mod tests {
 
     impl TempDir {
         fn new(tag: &str) -> Self {
-            let p =
-                std::env::temp_dir().join(format!("rustroom_looks_{tag}_{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&p);
-            std::fs::create_dir_all(&p).unwrap();
-            Self(p)
+            Self(test_dir::path(&format!("looks-{tag}")))
         }
     }
 

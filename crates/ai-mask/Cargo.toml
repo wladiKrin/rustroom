@@ -12,3 +12,7 @@ ureq = { workspace = true }
 image = { workspace = true }
 sha2 = "0.10"
 tract-onnx = "0.23.8"
+
+[dev-dependencies]
+# M10.7c: every test directory comes from here — unique per test and per run, and cleaned up.
+test-dir = { path = "../test-dir" }

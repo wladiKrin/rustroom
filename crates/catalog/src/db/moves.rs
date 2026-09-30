@@ -126,9 +126,7 @@ mod tests {
     }
 
     fn world(tag: &str) -> World {
-        let root =
-            std::env::temp_dir().join(format!("rustroom_moves_{tag}_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = test_dir::path(&format!("moves-{tag}"));
         std::fs::create_dir_all(root.join("a")).unwrap();
         std::fs::create_dir_all(root.join("b")).unwrap();
         let x = root.join("a/x.RAF");

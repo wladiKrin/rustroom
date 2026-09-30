@@ -51,17 +51,7 @@ pub struct TempDir(std::path::PathBuf);
 
 impl TempDir {
     pub fn new() -> Self {
-        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        // ⚠ Process id plus a counter, never the clock: `cargo test` runs tests in parallel, and
-        // two directories created in the same tick would collide. This project has already been
-        // bitten by a clock-derived temp name.
-        let p = std::env::temp_dir().join(format!(
-            "rustroom-profiles-{}-{}",
-            std::process::id(),
-            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&p).unwrap();
-        Self(p)
+        Self(test_dir::path("profiles"))
     }
     pub fn path(&self) -> &std::path::Path {
         &self.0

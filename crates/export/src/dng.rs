@@ -332,9 +332,7 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> std::path::PathBuf {
-        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let i = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        std::env::temp_dir().join(format!("rustroom_dng_{}_{i}_{name}", std::process::id()))
+        test_dir::path("dng").join(name)
     }
 
     /// A colourful, not-tile-aligned picture: gradients across both axes and a saturated patch.

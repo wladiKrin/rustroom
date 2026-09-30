@@ -447,9 +447,7 @@ mod tests {
     use std::sync::Arc;
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("rustroom_iw_{}_{}", tag, std::process::id()));
-        std::fs::create_dir_all(&d).unwrap();
-        d
+        test_dir::path(&format!("iw-{tag}"))
     }
 
     /// Block until `f` is true or the deadline passes, polling the worker.

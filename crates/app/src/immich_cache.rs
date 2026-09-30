@@ -62,18 +62,9 @@ pub fn remove_downloads(paths: &[PathBuf]) -> Removed {
 mod tests {
     use super::*;
 
-    /// ⚠ Its own directory per test, process id **and** a counter — the collision `thumb_store`'s doc
-    /// records having already bitten this repo.
+    /// A fresh directory of its own — `test_dir` makes it unique per test and per run.
     fn temp_dir(tag: &str) -> PathBuf {
-        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let p = std::env::temp_dir().join(format!(
-            "rustroom_imcache_{tag}_{}_{}",
-            std::process::id(),
-            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        p
+        test_dir::path(&format!("imcache-{tag}"))
     }
 
     /// ⚠⚠ **THE TEST THIS FEATURE EXISTS TO PASS.** The sidecar holds the user's edits. It is safe by

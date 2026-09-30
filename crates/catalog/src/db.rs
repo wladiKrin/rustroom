@@ -1798,16 +1798,7 @@ mod tests {
 
     impl TempDb {
         fn new(tag: &str) -> Self {
-            use std::sync::atomic::{AtomicUsize, Ordering};
-            static N: AtomicUsize = AtomicUsize::new(0);
-            let dir = std::env::temp_dir().join(format!(
-                "rustroom_catalogdb_{tag}_{}_{}",
-                std::process::id(),
-                N.fetch_add(1, Ordering::Relaxed)
-            ));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            Self(dir.join("catalog.db"))
+            Self(test_dir::path(&format!("catalogdb-{tag}")).join("catalog.db"))
         }
     }
 

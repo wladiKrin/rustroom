@@ -547,9 +547,7 @@ mod tests {
 
     /// Write `names` as `.cube` files into a fresh directory, and return it with a store.
     fn look_store(tag: &str, names: &[&str]) -> (PathBuf, crate::looks::LookStore) {
-        let d = std::env::temp_dir().join(format!("rustroom_thumb_look_{tag}"));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
+        let d = test_dir::path(&format!("thumb-look-{tag}"));
         for n in names {
             let mut t = String::from("LUT_3D_SIZE 2\n");
             for _ in 0..8 {
@@ -1059,15 +1057,7 @@ mod tests {
     /// fixture has to be checked in.
     #[test]
     fn a_saturation_edit_really_reaches_the_pixels() {
-        let dir = std::env::temp_dir().join(format!(
-            "rustroom_thumbrender_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .subsec_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = test_dir::path("thumbrender");
         let path = dir.join("red.png");
 
         // A strongly red image, so a monochrome conversion is unmistakable.
@@ -1322,17 +1312,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A scratch directory for the carrier tests, unique by process id and line.
+    /// A scratch directory for the carrier tests.
     fn carrier_dir(tag: &str) -> PathBuf {
-        use std::sync::atomic::AtomicU64;
-        static N: AtomicU64 = AtomicU64::new(0);
-        let p = std::env::temp_dir().join(format!(
-            "rustroom_carrier_{tag}_{}_{}",
-            std::process::id(),
-            N.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        p
+        test_dir::path(&format!("carrier-{tag}"))
     }
 }
