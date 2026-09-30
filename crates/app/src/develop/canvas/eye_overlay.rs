@@ -263,3 +263,82 @@ fn circle(painter: &egui::Painter, c: egui::Pos2, r: f32, stroke: egui::Stroke) 
         .collect();
     painter.add(egui::Shape::closed_line(pts, stroke));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::develop::canvas::test_support::{eye_app, eyes, retouch_app, spots};
+
+    /// M9.11: a click in an eye mode places one eye and no patch, as one undo step, selected.
+    #[test]
+    fn an_eye_mode_click_places_one_eye_and_no_spot_as_one_history_step() {
+        let ctx = egui::Context::default();
+        let mut app = eye_app(&ctx, edit_model::EyeKind::Red);
+        let depth = app.session.as_ref().unwrap().history.undo_depth();
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        assert_eq!(
+            eyes(&app).len(),
+            1,
+            "the click did not place exactly one eye"
+        );
+        assert!(spots(&app).is_empty(), "an eye-mode click placed a spot");
+        let s = app.session.as_ref().unwrap();
+        assert_eq!(s.history.undo_depth(), depth + 1, "not one history step");
+        assert_eq!(s.history.get(), &s.edits);
+        assert_eq!(s.selected_eye, Some(0));
+        assert_eq!(s.selected_spot, None);
+        // The test photo is a flat chart: nothing to detect, so the fallback circle and its
+        // message — a click is never a no-op.
+        assert!(
+            app.status.contains("No red pupil"),
+            "no message for a failed detection: {:?}",
+            app.status
+        );
+    }
+
+    /// The guard on the guard: patch mode still places patches, and no eyes.
+    #[test]
+    fn patch_mode_places_no_eye() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        assert!(eyes(&app).is_empty(), "patch mode placed an eye");
+        assert_eq!(spots(&app).len(), 1);
+    }
+
+    #[test]
+    fn clicking_a_placed_eye_selects_it_and_a_drag_inside_moves_it_as_one_step() {
+        let ctx = egui::Context::default();
+        let mut app = eye_app(&ctx, edit_model::EyeKind::Red);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        {
+            // Grabbable at test scale: the fallback radius is a few screen points here.
+            let s = app.session.as_mut().unwrap();
+            s.edits.eyes[0].radius = 0.2;
+            s.history.push(s.edits.clone());
+            s.selected_eye = None;
+        }
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        assert_eq!(eyes(&app).len(), 1, "the second click stacked an eye");
+        assert_eq!(app.session.as_ref().unwrap().selected_eye, Some(0));
+        let depth = app.session.as_ref().unwrap().history.undo_depth();
+        let before = eyes(&app)[0].centre;
+        crate::develop::canvas::test_support::drag_through(
+            &mut app,
+            &ctx,
+            centre,
+            centre + egui::vec2(10.0, 0.0),
+        );
+        let s = app.session.as_ref().unwrap();
+        assert_ne!(
+            s.edits.eyes[0].centre, before,
+            "the drag did not move the eye"
+        );
+        assert_eq!(s.edits.eyes[0].radius, 0.2, "a move resized the eye");
+        assert_eq!(s.history.undo_depth(), depth + 1, "a move was not one step");
+        assert_eq!(s.suppressed_eye, None, "the eye stayed out of the view");
+    }
+}

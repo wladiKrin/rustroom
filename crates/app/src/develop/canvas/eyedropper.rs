@@ -122,3 +122,89 @@ pub(super) fn pick_fringe(
         )),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ⚠⚠ The wiring test, and it is the half this project has repeatedly shipped broken: the
+    /// solve has its own unit tests, but nothing else can see that a click on the canvas ever
+    /// reaches it. Arming the eyedropper and clicking must change `Edits`.
+    #[test]
+    fn an_armed_eyedropper_sets_the_white_balance_from_a_click() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        {
+            let s = app.session.as_mut().expect("a session");
+            s.picking_wb = true;
+            assert_eq!(s.edits.white_balance, edit_model::WhiteBalance::default());
+        }
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        let s = app.session.as_ref().expect("a session");
+        assert!(
+            s.edits.white_balance.kelvin.is_some(),
+            "the click set no temperature"
+        );
+        // ⚠ And it disarms, or every later click — one meant to select a mask, or to dismiss
+        // something — would silently re-set the white balance.
+        assert!(!s.picking_wb, "the eyedropper stayed armed after a pick");
+    }
+
+    /// ⚠⚠ The defringe eyedropper's wiring test (M9.6), `an_armed_eyedropper_sets_the_white_balance
+    /// _from_a_click`'s twin: the pick rule has unit tests, and nothing else can see that a click
+    /// reaches it. A purple source sets the purple range and amount and disarms; a grey one changes
+    /// nothing, says so, and disarms too.
+    #[test]
+    fn an_armed_fringe_picker_sets_the_purple_range_from_a_click() {
+        let run = |colour: [f32; 3]| {
+            let ctx = egui::Context::default();
+            let mut app = crate::test_app::for_test();
+            crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+            let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+            {
+                let s = app.session.as_mut().expect("a session");
+                let (w, h) = (s.buffer.width(), s.buffer.height());
+                let mut img = core_image::ImageBuf::new(w, h);
+                for y in 0..h {
+                    for x in 0..w {
+                        img.set_pixel(x, y, colour);
+                    }
+                }
+                s.buffer = std::sync::Arc::new(img);
+                s.picking_fringe = true;
+            }
+            crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+            let s = app.session.as_ref().expect("a session");
+            assert!(!s.picking_fringe, "the picker stayed armed after a click");
+            (s.edits.defringe, app.status.clone())
+        };
+        let (d, status) = run(color::srgb_to_prophoto([0.35, 0.12, 0.55]));
+        assert!(
+            d.purple_amount > 0.0,
+            "the click set no purple amount: {d:?}"
+        );
+        assert_ne!(d.purple_hue, edit_model::Defringe::DEFAULT_PURPLE_HUE);
+        assert_eq!(d.green_amount, 0.0);
+        assert!(status.contains("purple"), "{status}");
+
+        let (d, status) = run([0.3; 3]);
+        assert_eq!(d, edit_model::Defringe::default());
+        assert!(status.contains("No colour"), "{status}");
+    }
+
+    /// ⚠ The guard on the guard: "a click changed the edits" means nothing unless a click with
+    /// the eyedropper **off** leaves them alone. Without this, a `pick_white_balance` that ran
+    /// unconditionally would pass the test above.
+    #[test]
+    fn a_click_without_the_eyedropper_leaves_the_white_balance_alone() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, centre);
+        let s = app.session.as_ref().expect("a session");
+        assert_eq!(s.edits.white_balance, edit_model::WhiteBalance::default());
+    }
+}

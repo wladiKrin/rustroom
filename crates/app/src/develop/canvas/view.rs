@@ -352,3 +352,119 @@ pub(super) fn debug_place(
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The rung drop [`super::rungs_to_drop`] chooses, for a `Faster` setting.
+    fn drop_for(dragging: bool, suppressed: Option<usize>) -> u32 {
+        // A canvas gesture on a suppressed mask is view-only; nothing else here is.
+        let view_only = suppressed.is_some();
+        super::rungs_to_drop(dragging, 1, view_only)
+    }
+
+    /// ⚠⚠ **The defect, as a test.** The request condition ends in
+    /// `|| max_dim != s.render_rung`, which fires even when `covered` is true — so the first
+    /// frame of a pan discarded a texture that already covered the viewport and replaced it with
+    /// one a rung lower, for nothing.
+    ///
+    /// ⚠⚠ **`buffer_long` is raised to 3200 and that is what makes this test able to see
+    /// anything.** The fixture's 80x40 buffer gives `fit_cap` 80 and a **one-rung ladder**, so
+    /// `rung_below` returns the same rung whatever the drop — the first version of this test
+    /// passed with the exemption deleted. A ladder needs `buffer_long > 1600` to have a second
+    /// rung at all.
+    ///
+    /// ⚠ It settles with **idle** frames rather than a warm-up drag. A warm-up that dragged would
+    /// already have dropped the rung under the sabotage, leaving the measured drag with no rung
+    /// change to make and the test blind again for a second reason.
+    ///
+    /// ⚠⚠ **This guards the RUNG rule and not the coverage rule, and saying so is the point.** It
+    /// seeds `rendered_region` as the whole image, which contains the margined rect as well as the
+    /// visible one — so restoring the old `contains(r, want)` comparison leaves it **green**. That
+    /// was verified by sabotage, not assumed. The canvas harness structurally cannot see it: a
+    /// margin of 256 rendered pixels needs an image far larger than any fixture that can reach a
+    /// native rung, since `tier_max_dim` needs `fit * zoom > 1` and zoom caps at 8.
+    /// `view_region::a_small_pan_stays_inside_the_margin_but_not_inside_a_margined_rect` is what
+    /// guards the coverage rule, and it carries its own fixture check.
+    #[test]
+    fn a_pan_inside_the_margin_asks_for_nothing_and_leaves_the_rung_alone() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        app.settings.drag_quality = rustroom_app::settings::DragQuality::Faster;
+        {
+            let s = app.session.as_mut().expect("session");
+            s.buffer_long = 3200;
+            // ⚠ Zoomed in, so the image genuinely exceeds the viewport and a *region* render is
+            // in use. At fit the whole image is visible, `want` is `None`, and the seeded
+            // `rendered_region` below would then hit `covered`'s `_ => false` arm — making every
+            // pan re-request for a reason that has nothing to do with the rung.
+            s.zoom = 4.0;
+        }
+
+        // Two idle frames, so the canvas settles on the top rung with nothing being dragged.
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        let _ = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        // ⚠⚠ **Seeded, because no frame ever lands in this harness.** `rendered_region` is
+        // written by `shell.rs`, which the canvas tests do not run, so without this it stays
+        // `None`, `covered` is never true and every pan re-requests for a reason that has
+        // nothing to do with the rung. `crop_overlay`'s tests seed it for the same reason.
+        // At rung 3200 the post-geometry image is 160x80 rendered pixels, so this covers it.
+        {
+            let s = app.session.as_mut().expect("session");
+            s.rendered_region = Some(rustroom_app::render_engine::RegionRect {
+                x: 0,
+                y: 0,
+                w: 160,
+                h: 80,
+            });
+        }
+        let (before_rung, before_reqs) = {
+            let s = app.session.as_ref().expect("session");
+            (s.render_rung, s.engine.requests_issued())
+        };
+        assert_eq!(
+            before_rung, 3200,
+            "fixture check: the ladder must have settled on its top rung, or a drop is \
+             unrepresentable and this test proves nothing"
+        );
+
+        let _ = crate::develop::canvas::test_support::drag_through_with(
+            &mut app,
+            &ctx,
+            centre,
+            centre + egui::vec2(6.0, 4.0),
+            egui::PointerButton::Middle,
+        );
+        let s = app.session.as_ref().expect("session");
+        assert_eq!(
+            s.render_rung, before_rung,
+            "a pan changed the render rung, so the whole view went soft for nothing"
+        );
+        assert_eq!(
+            s.engine.requests_issued(),
+            before_reqs,
+            "a pan inside the rendered margin asked for a render"
+        );
+    }
+
+    /// ⚠ The other half, and it is what stops the fix silently deleting a feature confirmed by
+    /// use. A test that only checked the pan would pass against a version that never drops the
+    /// rung at all.
+    #[test]
+    fn a_slider_drag_still_drops_the_rung() {
+        assert_eq!(
+            drop_for(true, None),
+            1,
+            "a drag that changes the picture must still drop a rung — the interactive rung took \
+             a masked-exposure drag from 137.9 ms to 40.0 ms and is confirmed by use"
+        );
+        assert_eq!(drop_for(false, None), 0, "nothing is being dragged");
+        assert_eq!(
+            drop_for(true, Some(0)),
+            0,
+            "a canvas gesture on a suppressed mask changes no pixels"
+        );
+    }
+}

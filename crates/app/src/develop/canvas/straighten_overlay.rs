@@ -196,3 +196,202 @@ pub(super) fn settle(s: &mut Session, angle: f32, tool: Tool) -> bool {
     s.history.push(s.edits.clone());
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::develop::canvas::test_support::crop_app;
+
+    /// ⚠⚠ The wiring test: an armed drag must reach `angle_for_line` and land in `Edits`. The
+    /// angle has its own unit tests, and nothing else can see that a drag on the canvas ever
+    /// reaches it — `an_armed_eyedropper_sets_the_white_balance_from_a_click` exists for exactly
+    /// this reason.
+    #[test]
+    fn an_armed_straighten_drag_sets_the_angle_and_one_history_entry() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        app.session.as_mut().expect("a session").straighten_armed = true;
+        let before = app
+            .session
+            .as_ref()
+            .expect("a session")
+            .edits
+            .geometry
+            .angle;
+        assert_eq!(before, 0.0, "fixture check: the angle starts neutral");
+        // A clearly tilted, clearly diagonal drag.
+        crate::develop::canvas::test_support::drag_through(
+            &mut app,
+            &ctx,
+            centre - egui::vec2(60.0, 20.0),
+            centre + egui::vec2(60.0, 20.0),
+        );
+        let s = app.session.as_ref().expect("a session");
+        assert!(
+            s.edits.geometry.angle.abs() > 1.0,
+            "the drag did not reach the angle: {}",
+            s.edits.geometry.angle
+        );
+        // ⚠ `can_undo`, not only `Edits`. The headless-canvas work records that "the edits change
+        // during the drag… only the undo push happens on release", so an `Edits` assertion alone
+        // cannot see a missing release commit.
+        assert!(s.history.can_undo(), "the release pushed no history entry");
+        // ⚠ And it disarms, or every later drag would rotate the photo instead of moving the crop.
+        assert!(!s.straighten_armed, "the mode stayed armed after one line");
+    }
+
+    /// ⚠⚠ **A straighten line clears the perspective guides, and leaves the sliders alone.** It
+    /// writes `geometry.angle`, one of the three values a guide solve owns, so guides left on
+    /// screen would describe a solve that no longer holds — and this project's records call a
+    /// stale-but-plausible overlay worse than none, because it gets trusted. The rule is the one
+    /// `panel/geometry.rs` already applies to the Straighten slider.
+    ///
+    /// ⚠ Asserts **both halves**. A version that cleared the whole solve — guides *and* the
+    /// perspective sliders — would pass a guides-only assertion, and `Clear`'s own contract is
+    /// "the sliders they produced are left alone."
+    ///
+    /// ⚠ Driven through the real drag rather than by calling `settle` directly: the wiring half is
+    /// what this project has repeatedly shipped broken.
+    #[test]
+    fn a_straighten_line_clears_the_guides_and_leaves_the_perspective_alone() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        {
+            let s = app.session.as_mut().expect("a session");
+            s.straighten_armed = true;
+            s.edits.perspective.vertical = 30.0;
+            for x in [0.2f32, 0.8] {
+                s.guides.push(pipeline::perspective::guides::Guide {
+                    from: [x, 0.2],
+                    to: [x, 0.8],
+                });
+            }
+            // ⚠ Set deliberately: with `active_guide` left `None` the clearing of it is a no-op
+            // on this fixture, so the assertion below could not see it being dropped — found by
+            // the sabotage, which went uncaught until this line existed. A stale index into a
+            // list that has just been emptied is exactly what `restore_snapshot` clears
+            // `selected_mask` for.
+            s.active_guide = Some((1, 1));
+        }
+        crate::develop::canvas::test_support::drag_through(
+            &mut app,
+            &ctx,
+            centre - egui::vec2(60.0, 20.0),
+            centre + egui::vec2(60.0, 20.0),
+        );
+        let s = app.session.as_ref().expect("a session");
+        assert!(s.guides.is_empty(), "the guides survived a straighten line");
+        assert_eq!(s.active_guide, None, "a stale active guide survived");
+        assert_eq!(
+            s.edits.perspective.vertical, 30.0,
+            "the straighten line cleared the perspective solve too"
+        );
+    }
+
+    /// The guard on the guard: with the mode unarmed the drag belongs to the crop rectangle, so
+    /// "the angle moved after a drag" means nothing without this.
+    #[test]
+    fn an_unarmed_drag_leaves_the_straighten_angle_alone() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::drag_through(
+            &mut app,
+            &ctx,
+            centre - egui::vec2(60.0, 20.0),
+            centre + egui::vec2(60.0, 20.0),
+        );
+        let s = app.session.as_ref().expect("a session");
+        assert_eq!(
+            s.edits.geometry.angle, 0.0,
+            "an unarmed drag rotated the photo"
+        );
+    }
+
+    /// ⚠⚠ The point of keeping the line: after release it must read **level on screen**, which is
+    /// the only feedback that says a subtle correction worked. Asserted through the same forward
+    /// map the overlay draws with, so a line stored in the wrong space cannot pass.
+    ///
+    /// ⚠⚠ **Mapped through `s.edits`, NOT through `s.shown_geo` — and the plan predicted this
+    /// exact substitution.** `shown_geo` is advanced at the frame-landing site in `shell.rs`,
+    /// which this harness does not run, so it never moves on its own here.
+    /// `s.edits.geometry.angle` is the angle the release just wrote and the one the next frame
+    /// will render with, so this is the property the user actually sees — a frame later.
+    ///
+    /// ⚠⚠ **The fixture carries a 5° correction ALREADY APPLIED, and that is what gives the test
+    /// leverage.** With `shown_geo` at its default the raw frame and the corrected frame coincide,
+    /// so `from_frame`/`to_frame` are the identity and `shown_angle + a == a` — under which
+    /// **two sabotages this test names went uncaught**: storing the *screen* endpoints instead of
+    /// the raw ones, and dropping the `shown_angle +` that makes the new angle relative. Both are
+    /// invisible at zero. Seeding a photo that has already been straightened once is the case
+    /// where they differ, and it is also the real workflow: straighten, look again, straighten
+    /// better.
+    #[test]
+    fn the_settled_straighten_line_reads_level_afterwards() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        {
+            let s = app.session.as_mut().expect("a session");
+            s.straighten_armed = true;
+            // A frame that has already landed carrying 5° — `edits` and `shown_geo` agree, as
+            // they do in the app once the render catches up.
+            s.edits.geometry.angle = 5.0;
+            s.shown_geo = (s.edits.perspective, 5.0);
+        }
+        crate::develop::canvas::test_support::drag_through(
+            &mut app,
+            &ctx,
+            centre - egui::vec2(60.0, 20.0),
+            centre + egui::vec2(60.0, 20.0),
+        );
+        let s = app.session.as_ref().expect("a session");
+        let (from, to) = s.straighten_line.expect("the line was not kept");
+        let aspect = s.fit_image_size.x / s.fit_image_size.y.max(1.0);
+        let hom = pipeline::perspective::Homography::from_edits(&s.edits.perspective, aspect);
+        let angle = s.edits.geometry.angle.to_radians();
+        let a = pipeline::perspective::guides::to_frame(from, &hom, angle, aspect);
+        let b = pipeline::perspective::guides::to_frame(to, &hom, angle, aspect);
+        // ⚠ The guard on the guard: a stored line that was never rotated would also have a small
+        // rise if the drag itself had been level, so assert the drag really was tilted.
+        assert!(
+            (to[1] - from[1]).abs() > 0.05,
+            "fixture check: the drawn line was not tilted ({from:?} to {to:?})"
+        );
+        // ⚠ And the angle really did move off the 5° the fixture started at, or the "level" check
+        // below would be measuring a photo nothing happened to.
+        assert!(
+            (s.edits.geometry.angle - 5.0).abs() > 1.0,
+            "fixture check: the release did not change the angle: {}",
+            s.edits.geometry.angle
+        );
+        // Levelled: the mapped line's screen-space rise is ~0.
+        let rise = (b[1] - a[1]).abs();
+        assert!(
+            rise < 0.02,
+            "the line did not come out level: rise {rise} (from {a:?} to {b:?})"
+        );
+    }
+
+    /// ⚠ A non-primary drag must leave it alone. egui reports `dragged()` for every button, so a
+    /// bare `dragged()` would let the middle-drag pan binding rotate the photo as it passed over
+    /// the canvas — and no test using Primary alone can see that.
+    #[test]
+    fn a_non_primary_drag_does_not_straighten() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        app.session.as_mut().expect("a session").straighten_armed = true;
+        crate::develop::canvas::test_support::drag_through_with(
+            &mut app,
+            &ctx,
+            centre - egui::vec2(60.0, 20.0),
+            centre + egui::vec2(60.0, 20.0),
+            egui::PointerButton::Middle,
+        );
+        let s = app.session.as_ref().expect("a session");
+        assert_eq!(s.edits.geometry.angle, 0.0, "a middle-drag straightened");
+    }
+}

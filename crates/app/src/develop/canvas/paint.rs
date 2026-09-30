@@ -254,3 +254,320 @@ fn paint_stale(ui: &mut egui::Ui, stale: Option<&egui::TextureHandle>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The texture ids of every textured rect the canvas painted in one frame.
+    fn painted_texture_ids(
+        app: &mut crate::RustroomApp,
+        ctx: &egui::Context,
+    ) -> Vec<egui::TextureId> {
+        fn collect(s: &egui::Shape, out: &mut Vec<egui::TextureId>) {
+            match s {
+                egui::Shape::Rect(r) => {
+                    if let Some(b) = &r.brush {
+                        out.push(b.fill_texture_id);
+                    }
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
+                _ => {}
+            }
+        }
+        let c = ctx.clone();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(crate::develop::canvas::test_support::screen()),
+                ..Default::default()
+            },
+            |ui| {
+                crate::develop::canvas::show(app, ui, &c);
+            },
+        );
+        let mut ids = Vec::new();
+        out.shapes.iter().for_each(|s| collect(&s.shape, &mut ids));
+        ids
+    }
+
+    /// ⚠⚠ **Reported in use: panning at 1:1 showed black rectangles at the edges that snapped to
+    /// image as each new region landed** — "very stuttery", "very unpleasant". A region render
+    /// paints only `img_rect`; outside it nothing was painted at all.
+    ///
+    /// ⚠ The backdrop is drawn **only** while a region is on screen. With a whole-image frame the
+    /// two rects coincide and it would be a wasted draw of the same pixels — so a test that only
+    /// counted "is there a backdrop" would pass against a version that always painted one.
+    #[test]
+    fn a_region_render_paints_a_backdrop_under_it_and_a_whole_image_one_does_not() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let tex = app
+            .session
+            .as_ref()
+            .expect("session")
+            .texture
+            .clone()
+            .expect("fixture check: the session must have a texture to use as a backdrop");
+        {
+            let s = app.session.as_mut().expect("session");
+            s.backdrop = Some((tex, (s.fit_image_size.x, s.fit_image_size.y)));
+        }
+        let whole = textured_rects(&mut app, &ctx);
+
+        {
+            let s = app.session.as_mut().expect("session");
+            s.zoom = 2.0;
+            s.rendered_long = 80.0;
+            s.rendered_region = Some(rustroom_app::render_engine::RegionRect {
+                x: 3,
+                y: 2,
+                w: 40,
+                h: 20,
+            });
+        }
+        let region = textured_rects(&mut app, &ctx);
+        assert_eq!(
+            region,
+            whole + 1,
+            "a region render must paint the backdrop under it and a whole-image one must not; \
+             whole={whole} region={region}"
+        );
+    }
+
+    /// M9.14: at fit the live render is painted; asked for more pixels than the buffer has,
+    /// 2026-09-29: a ghost whose preview has not answered shows no 512-px render — the
+    /// previous frame dimmed, or a spinner — and shows its own render only once the loader has
+    /// said there is no preview.
+    #[test]
+    fn a_ghost_waits_for_its_preview_and_shows_its_own_render_only_after_a_miss() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 800, 400);
+        let (live_id, key) = {
+            let s = app.session.as_mut().expect("session");
+            s.buffer_is_ghost = true;
+            s.buffer_is_full_res = false;
+            s.buffer_long = 800;
+            s.fit_image_size = egui::vec2(800.0, 400.0);
+            let key = rustroom_app::thumb_key::ThumbKey::new(
+                rustroom_app::photo_id::PhotoId::new(s.path.clone(), s.copy),
+                &s.edits,
+            );
+            (s.texture.as_ref().expect("live texture").id(), key)
+        };
+        let waiting = painted_texture_ids(&mut app, &ctx);
+        assert!(
+            !waiting.contains(&live_id),
+            "the ghost's own render was painted while its preview was still on its way"
+        );
+        app.preview_misses.insert(key);
+        let after_miss = painted_texture_ids(&mut app, &ctx);
+        assert!(
+            after_miss.contains(&live_id),
+            "with no preview to come, the ghost's render is all there is and must show"
+        );
+    }
+
+    /// the preview is painted in its place; once the buffer is full resolution, the live render
+    /// again. Pixel-level, through the real `show`.
+    #[test]
+    fn a_preview_stands_in_only_where_the_buffer_falls_short() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        // ⚠ 800×400 on a 400×300 screen, so fit is 0.5 and the buffer has the pixels at fit —
+        // an 80-px fixture blown up 5× would be short of pixels at fit too, and the preview
+        // would legitimately win everywhere.
+        crate::test_app::open_test_photo(&mut app, &ctx, 800, 400);
+        let (live_id, key) = {
+            let s = app.session.as_mut().expect("session");
+            s.buffer_is_full_res = false;
+            s.buffer_long = 800;
+            s.fit_image_size = egui::vec2(800.0, 400.0);
+            let key = rustroom_app::thumb_key::ThumbKey::new(
+                rustroom_app::photo_id::PhotoId::new(s.path.clone(), s.copy),
+                &s.edits,
+            );
+            (s.texture.as_ref().expect("live texture").id(), key)
+        };
+        let preview = crate::test_app::texture(&ctx, "preview", 1600, 800);
+        let preview_id = preview.id();
+        app.preview_textures.insert(
+            key,
+            (preview, rustroom_app::preview_loader::PreviewSource::Camera),
+            1600 * 800 * 4,
+        );
+
+        let at_fit = painted_texture_ids(&mut app, &ctx);
+        assert!(
+            at_fit.contains(&live_id),
+            "at fit the live render is painted"
+        );
+        assert!(
+            !at_fit.contains(&preview_id),
+            "at fit the preview stays out of it"
+        );
+
+        app.session.as_mut().expect("session").zoom = 8.0;
+        let zoomed = painted_texture_ids(&mut app, &ctx);
+        assert!(
+            zoomed.contains(&preview_id),
+            "zoomed past the buffer, the preview stands in"
+        );
+        assert!(
+            !zoomed.contains(&live_id),
+            "and the soft live render is not painted over it"
+        );
+
+        app.session.as_mut().expect("session").buffer_is_full_res = true;
+        let full = painted_texture_ids(&mut app, &ctx);
+        assert!(
+            full.contains(&live_id),
+            "the full buffer wins at every zoom"
+        );
+        assert!(!full.contains(&preview_id));
+    }
+
+    /// 2026-09-29: while the decode runs, the preview zooms with the pinch and the session
+    /// inherits that view — "it takes three seconds to be responsive" was the wait for exactly
+    /// this.
+    #[test]
+    fn a_pending_photo_zooms_on_its_preview_and_the_session_inherits_the_view() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        let id = rustroom_app::photo_id::PhotoId::original(std::path::PathBuf::from(
+            "/test/pending.RAF",
+        ));
+        let req = app.preview_request(id.clone(), app.settings.initial_edits(None));
+        let preview = crate::test_app::texture(&ctx, "pending-preview", 800, 400);
+        app.preview_textures.insert(
+            req.key(),
+            (preview, rustroom_app::preview_loader::PreviewSource::Camera),
+            800 * 400 * 4,
+        );
+        app.view = crate::AppView::Develop;
+        app.pending = Some(crate::PendingOpen {
+            id: id.clone(),
+            placeholder: None,
+            start_at: std::time::Instant::now() + std::time::Duration::from_secs(3600),
+            seq: None,
+            preview_request: req,
+            zoom: 1.0,
+            pan: egui::Vec2::ZERO,
+            fit_long: 0.0,
+        });
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        let c = ctx.clone();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(crate::develop::canvas::test_support::screen()),
+                events: vec![egui::Event::PointerMoved(centre), egui::Event::Zoom(2.0)],
+                ..Default::default()
+            },
+            |ui| {
+                crate::develop::canvas::show(&mut app, ui, &c);
+            },
+        );
+        let zoom = app.pending.as_ref().expect("still pending").zoom;
+        assert!(
+            zoom > 1.0,
+            "the pinch did not zoom the pending preview: {zoom}"
+        );
+
+        let view = app.pending.as_ref().map(|p| (p.zoom, p.pan)).unwrap();
+        app.pending = None;
+        app.finalize_session_with_view(&ctx, id, crate::test_app::fake_decode(), view);
+        let s = app.session.as_ref().expect("session");
+        assert_eq!(s.zoom, zoom, "the session did not inherit the pending zoom");
+    }
+
+    /// ⚠ A backdrop from a different framing is dropped rather than stretched. A crop or an
+    /// orientation change moves the frame, and this is painted across the *whole* frame rect — so
+    /// a stale one is visibly wrong, not subtly.
+    #[test]
+    fn a_backdrop_from_a_different_framing_is_not_painted() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let tex = app
+            .session
+            .as_ref()
+            .expect("session")
+            .texture
+            .clone()
+            .expect("fixture check: the session must have a texture");
+        {
+            let s = app.session.as_mut().expect("session");
+            s.zoom = 2.0;
+            s.rendered_long = 80.0;
+            s.rendered_region = Some(rustroom_app::render_engine::RegionRect {
+                x: 3,
+                y: 2,
+                w: 40,
+                h: 20,
+            });
+            s.backdrop = Some((tex.clone(), (s.fit_image_size.x, s.fit_image_size.y)));
+        }
+        let matching = textured_rects(&mut app, &ctx);
+        {
+            let s = app.session.as_mut().expect("session");
+            // As a crop would leave it: the same texture, a framing that no longer applies.
+            s.backdrop = Some((tex, (s.fit_image_size.x * 0.6, s.fit_image_size.y * 0.6)));
+        }
+        let stale = textured_rects(&mut app, &ctx);
+        assert_eq!(
+            stale,
+            matching - 1,
+            "a backdrop whose framing no longer matches must not be painted; \
+             matching={matching} stale={stale}"
+        );
+    }
+
+    /// How many **textured rectangles** a frame paints with no pointer over it.
+    /// `egui::Image::paint_at` — the frame and the tint alike — emits a `RectShape` with a
+    /// brush, not a mesh; the loupe's `painter.image` is what emits meshes.
+    fn textured_rects(app: &mut crate::RustroomApp, ctx: &egui::Context) -> usize {
+        fn count(s: &egui::Shape) -> usize {
+            match s {
+                egui::Shape::Rect(r) if r.brush.is_some() => 1,
+                egui::Shape::Vec(v) => v.iter().map(count).sum(),
+                _ => 0,
+            }
+        }
+        let c = ctx.clone();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(crate::develop::canvas::test_support::screen()),
+                ..Default::default()
+            },
+            |ui| {
+                crate::develop::canvas::show(app, ui, &c);
+            },
+        );
+        out.shapes.iter().map(|s| count(&s.shape)).sum()
+    }
+
+    /// ⚠ The view's texture is one extra textured rect over the photograph, painted at the
+    /// image rect; absent, it paints nothing. Counted, the way the loupe is.
+    #[test]
+    fn a_landed_plane_is_painted_over_the_photograph() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 60);
+        let idle = textured_rects(&mut app, &ctx);
+        assert_eq!(idle, 1, "setup: the photograph itself is one textured rect");
+        {
+            let s = app.session.as_mut().expect("a session");
+            let rgba = rustroom_app::grade_view::tint_rgba(&vec![200u8; 80 * 60]);
+            let img = egui::ColorImage::from_rgba_unmultiplied([80, 60], &rgba);
+            s.grade_view_texture =
+                Some(ctx.load_texture("grade_view_test", img, egui::TextureOptions::LINEAR));
+        }
+        let tinted = textured_rects(&mut app, &ctx);
+        assert_eq!(
+            tinted,
+            idle + 1,
+            "expected one extra textured rect — the range tint; got {tinted} tinted, {idle} idle"
+        );
+    }
+}

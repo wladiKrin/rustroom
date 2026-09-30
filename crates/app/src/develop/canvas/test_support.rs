@@ -177,3 +177,31 @@ pub(super) fn hover_through(app: &mut RustroomApp, ctx: &egui::Context, at: egui
 pub(super) fn hover_away(app: &mut RustroomApp, ctx: &egui::Context) {
     hover_through(app, ctx, egui::pos2(-100.0, -100.0));
 }
+
+pub(super) fn crop_app(ctx: &egui::Context) -> crate::RustroomApp {
+    let mut app = crate::test_app::for_test();
+    crate::test_app::open_test_photo(&mut app, ctx, 80, 60);
+    app.tool = rustroom_app::tool::Tool::Crop;
+    app
+}
+
+pub(super) fn retouch_app(ctx: &egui::Context) -> crate::RustroomApp {
+    let mut app = crate::test_app::for_test();
+    crate::test_app::open_test_photo(&mut app, ctx, 80, 60);
+    app.tool = rustroom_app::tool::Tool::Retouch;
+    app
+}
+
+pub(super) fn spots(app: &crate::RustroomApp) -> Vec<edit_model::Spot> {
+    app.session.as_ref().expect("a session").edits.spots.clone()
+}
+
+pub(super) fn eye_app(ctx: &egui::Context, kind: edit_model::EyeKind) -> crate::RustroomApp {
+    let mut app = retouch_app(ctx);
+    app.eye_tool.active = Some(kind);
+    app
+}
+
+pub(super) fn eyes(app: &crate::RustroomApp) -> Vec<edit_model::Eye> {
+    app.session.as_ref().expect("a session").edits.eyes.clone()
+}
