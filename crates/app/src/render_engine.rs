@@ -1188,7 +1188,7 @@ fn render_cached(
     source_scale: f32,
     lens: Option<lens_profile::LensShot>,
     wb_baseline: color::wb::Illuminant,
-    profile: pipeline::TailRendering<'_>,
+    rendering: pipeline::TailRendering<'_>,
     cache: &mut PrefixCache,
     brush_cache: &mut BrushCache,
 ) -> (RenderedFrame, Ran) {
@@ -1199,7 +1199,7 @@ fn render_cached(
         source_scale,
         lens,
         wb_baseline,
-        profile,
+        rendering,
         cache,
         brush_cache,
         false,
@@ -1219,7 +1219,7 @@ fn render_cached_with(
     source_scale: f32,
     lens: Option<lens_profile::LensShot>,
     wb_baseline: color::wb::Illuminant,
-    profile: pipeline::TailRendering<'_>,
+    rendering: pipeline::TailRendering<'_>,
     cache: &mut PrefixCache,
     brush_cache: &mut BrushCache,
     handoff: bool,
@@ -1728,7 +1728,7 @@ fn render_cached_with(
             // ⚠ The display rendering, by contrast, lives in the **tail** — so this must be
             // carried, or every render would silently take the built-in curve and the built-in
             // baseline while a profile that declares its own sat unused.
-            profile,
+            rendering,
         );
         // ⚠⚠ The tail only. Every accelerated stage is a tail stage, and accelerating the prefix
         // would make `PrefixKey` describe two different computations under one key.
@@ -1749,7 +1749,7 @@ fn render_cached_with(
                     scale,
                     gpu_pipeline::TailFacts {
                         region,
-                        profile,
+                        rendering,
                         spec: render_spec,
                     },
                     ctx,
@@ -1884,7 +1884,7 @@ fn render_cached_with(
                         airlight: Some(airlight),
                     },
                     None,
-                    profile,
+                    rendering,
                 );
                 let mid = halves.before_grade.run(unshare(input));
                 // ⚠ Blending and Balance are read from the edits whether or not the grade is

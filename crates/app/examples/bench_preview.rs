@@ -523,7 +523,7 @@ fn main() {
                     sc,
                     gpu_pipeline::TailFacts {
                         region: None,
-                        profile: pipeline::TailRendering::default(),
+                        rendering: pipeline::TailRendering::default(),
                         spec: pipeline::RenderSpec::default(),
                         // ⚠ The bench applies its prefix stage by hand, without offering.
                     },
@@ -565,7 +565,7 @@ fn main() {
                     sc,
                     gpu_pipeline::TailFacts {
                         region: None,
-                        profile: pipeline::TailRendering::default(),
+                        rendering: pipeline::TailRendering::default(),
                         spec: pipeline::RenderSpec::default(),
                         // ⚠ The bench applies its prefix stage by hand, without offering.
                     },

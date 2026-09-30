@@ -1440,7 +1440,7 @@ pub fn build_pipeline_split_in_region(
     edits: &Edits,
     scale: RenderScale,
     region: Option<Region>,
-    profile: TailRendering<'_>,
+    rendering: TailRendering<'_>,
 ) -> (Pipeline, Pipeline) {
     build_pipeline_split_in_region_with_brush(
         edits,
@@ -1449,7 +1449,7 @@ pub fn build_pipeline_split_in_region(
         None,
         RenderSpec::default(),
         None,
-        profile,
+        rendering,
     )
 }
 
@@ -1554,13 +1554,13 @@ pub fn build_pipeline_split_tapped(
     spec: RenderSpec,
     lens: Option<lens_profile::LensShot>,
     // What the *tail's* rendering needs that `Edits` cannot carry.
-    profile: TailRendering<'_>,
+    rendering: TailRendering<'_>,
 ) -> (Pipeline, TailHalves) {
     let TailRendering {
         curve: profile_curve,
         baseline_ev,
         look: look_table,
-    } = profile;
+    } = rendering;
     let RenderSpec {
         space,
         intent,
@@ -1800,10 +1800,10 @@ pub fn build_pipeline_split_in_region_with_brush(
     brush: Option<&std::sync::Arc<BrushCoverage>>,
     spec: RenderSpec,
     lens: Option<lens_profile::LensShot>,
-    profile: TailRendering<'_>,
+    rendering: TailRendering<'_>,
 ) -> (Pipeline, Pipeline) {
     let (prefix, halves) =
-        build_pipeline_split_tapped(edits, scale, region, brush, spec, lens, profile);
+        build_pipeline_split_tapped(edits, scale, region, brush, spec, lens, rendering);
     let mut tail = halves.before_grade.into_stages();
     tail.extend(halves.from_grade.into_stages());
     (prefix, Pipeline::new(tail))
@@ -1813,9 +1813,9 @@ pub fn build_pipeline_split_in_region_with_brush(
 pub fn build_pipeline_split(
     edits: &Edits,
     scale: RenderScale,
-    profile: TailRendering<'_>,
+    rendering: TailRendering<'_>,
 ) -> (Pipeline, Pipeline) {
-    build_pipeline_split_in_region(edits, scale, None, profile)
+    build_pipeline_split_in_region(edits, scale, None, rendering)
 }
 
 /// Build the ordered stage list for a set of edits, rendered at `scale` relative to the
@@ -1825,8 +1825,8 @@ pub fn build_pipeline_split(
 /// ⚠ Resamples with [`Resampler::default`]. Every **production** render goes through
 /// [`build_pipeline_with`] instead, so the user's choice reaches it; this wrapper exists so the
 /// goldens, the examples and the debug tools compile untouched — the `Region` precedent.
-pub fn build_pipeline(edits: &Edits, scale: RenderScale, profile: TailRendering<'_>) -> Pipeline {
-    build_pipeline_with(edits, scale, Resampler::default(), profile)
+pub fn build_pipeline(edits: &Edits, scale: RenderScale, rendering: TailRendering<'_>) -> Pipeline {
+    build_pipeline_with(edits, scale, Resampler::default(), rendering)
 }
 
 /// As [`build_pipeline`], resampling with the caller's chosen kernel.
@@ -1834,9 +1834,9 @@ pub fn build_pipeline_with(
     edits: &Edits,
     scale: RenderScale,
     resampler: Resampler,
-    profile: TailRendering<'_>,
+    rendering: TailRendering<'_>,
 ) -> Pipeline {
-    build_pipeline_to(edits, scale, color::OutputSpace::Srgb, resampler, profile)
+    build_pipeline_to(edits, scale, color::OutputSpace::Srgb, resampler, rendering)
 }
 
 /// As [`build_pipeline`], writing to `space` rather than sRGB.
@@ -1850,7 +1850,7 @@ pub fn build_pipeline_to(
     scale: RenderScale,
     space: color::OutputSpace,
     resampler: Resampler,
-    profile: TailRendering<'_>,
+    rendering: TailRendering<'_>,
 ) -> Pipeline {
     build_pipeline_spec(
         edits,
@@ -1861,7 +1861,7 @@ pub fn build_pipeline_to(
             resampler,
             ..RenderSpec::default()
         },
-        profile,
+        rendering,
     )
 }
 
@@ -1871,9 +1871,9 @@ pub fn build_pipeline_spec(
     edits: &Edits,
     scale: RenderScale,
     spec: RenderSpec,
-    profile: TailRendering<'_>,
+    rendering: TailRendering<'_>,
 ) -> Pipeline {
-    build_pipeline_rendered(edits, scale, spec, profile)
+    build_pipeline_rendered(edits, scale, spec, rendering)
 }
 
 /// As [`build_pipeline_spec`], differing only in that it takes the whole [`RenderSpec`] **and** the
@@ -1893,10 +1893,10 @@ pub fn build_pipeline_rendered(
     edits: &Edits,
     scale: RenderScale,
     spec: RenderSpec,
-    profile: TailRendering<'_>,
+    rendering: TailRendering<'_>,
 ) -> Pipeline {
     let (prefix, tail) =
-        build_pipeline_split_in_region_with_brush(edits, scale, None, None, spec, None, profile);
+        build_pipeline_split_in_region_with_brush(edits, scale, None, None, spec, None, rendering);
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());
     Pipeline::new(stages)

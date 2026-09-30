@@ -129,10 +129,10 @@ const REPLACEABLE: &[(&str, Builder)] = &[
     // what the CPU tail applies before constructing this stage — skipping it would render every
     // camera whose profile declares an identity curve differently from the CPU, which is most of
     // them, the X-T4 included.
-    ("display_rendering", |_, _, _, profile, _, ctx| {
+    ("display_rendering", |_, _, _, rendering, _, ctx| {
         Some(Box::new(GpuDisplayRenderingStage::new(
-            pipeline::effective_profile_curve(profile.curve),
-            profile.baseline_ev,
+            pipeline::effective_profile_curve(rendering.curve),
+            rendering.baseline_ev,
             ctx,
         )))
     }),
@@ -141,10 +141,10 @@ const REPLACEABLE: &[(&str, Builder)] = &[
     // a lone `display_rendering` run possible at all, and that run is the one case
     // `TRANSFER_COST`'s doc records as sitting inside the float band and being refused.
     //
-    // ⚠ The only row that can DECLINE: the cube comes from the profile, and the tail placed this
-    // stage only because it had one. Declining leaves the CPU stage rather than panicking.
-    ("creative_look", |e, _, _, profile, _, ctx| {
-        profile.look.map(|cube| {
+    // ⚠ The only row that can DECLINE: the cube comes from the tail's rendering, and the tail placed
+    // this stage only because it had one. Declining leaves the CPU stage rather than panicking.
+    ("creative_look", |e, _, _, rendering, _, ctx| {
+        rendering.look.map(|cube| {
             Box::new(crate::GpuCreativeLookStage::new(
                 cube,
                 e.look.space,
@@ -430,7 +430,7 @@ pub struct TailFacts<'a> {
     /// The viewport region this render is scoped to, if any.
     pub region: Option<Region>,
     /// The camera rendering in force.
-    pub profile: TailRendering<'a>,
+    pub rendering: TailRendering<'a>,
     /// What the render is producing.
     pub spec: RenderSpec,
 }
@@ -444,7 +444,7 @@ pub fn accelerate(
 ) -> (Pipeline, Option<GpuChain>) {
     let TailFacts {
         region,
-        profile,
+        rendering,
         spec,
     } = facts;
     // ⚠⚠ **Depth one, and it is structural rather than a bolted-on limit.** The accelerator handed
@@ -467,7 +467,7 @@ pub fn accelerate(
             // ⚠ Carried for one rule rather than because anything reads it: `LocalAdjustments`
             // has no vignette, so no mask sub-stage can ask about the frame.
             region,
-            profile,
+            rendering,
             spec,
             ctx,
             None,
@@ -484,7 +484,7 @@ pub fn accelerate(
         edits,
         scale,
         region,
-        profile,
+        rendering,
         spec,
         ctx,
         Some(&inner as &pipeline::SubStageAccelerator<'_>),
@@ -507,7 +507,7 @@ fn walk(
     edits: &Edits,
     scale: RenderScale,
     region: Option<Region>,
-    profile: TailRendering<'_>,
+    rendering: TailRendering<'_>,
     spec: RenderSpec,
     ctx: &Arc<GpuContext>,
     inner: Option<&pipeline::SubStageAccelerator<'_>>,
@@ -548,7 +548,7 @@ fn walk(
         // `MaskedAdjustment`, and `the_replaceable_names_occur_at_most_once_in_a_tail` rests on
         // each name appearing once — while a tail legitimately holds several masks.
         if let Some(names) = mask_subs {
-            if let Some(g) = gpu_mask(s.as_ref(), &names, scale, region, profile, spec, ctx) {
+            if let Some(g) = gpu_mask(s.as_ref(), &names, scale, region, rendering, spec, ctx) {
                 run.push((g, s));
                 continue;
             }
@@ -556,7 +556,7 @@ fn walk(
         match REPLACEABLE
             .iter()
             .find(|(n, _)| *n == s.name())
-            .and_then(|(_, build)| build(edits, scale, region, profile, spec, ctx))
+            .and_then(|(_, build)| build(edits, scale, region, rendering, spec, ctx))
         {
             // ⚠ `and_then`, so a builder that declines falls through to the CPU arm below rather
             // than being treated as a replaceable stage with nothing behind it.
@@ -622,7 +622,7 @@ fn gpu_mask(
     names: &[&'static str],
     scale: RenderScale,
     region: Option<Region>,
-    profile: TailRendering<'_>,
+    rendering: TailRendering<'_>,
     spec: RenderSpec,
     ctx: &Arc<GpuContext>,
 ) -> Option<Box<dyn GpuStage>> {
@@ -633,7 +633,7 @@ fn gpu_mask(
     let mut subs: Vec<Box<dyn GpuStage>> = Vec::with_capacity(names.len());
     for n in names {
         let (_, build) = REPLACEABLE.iter().find(|(r, _)| r == n)?;
-        subs.push(build(&e, scale, region, profile, spec, ctx)?);
+        subs.push(build(&e, scale, region, rendering, spec, ctx)?);
     }
     // ⚠ The whole per-component slice, base first — `BrushCoverage`'s own `[mask][component]`
     // shape, handed over as it stands rather than indexed here. Picking out index 0 is what this
@@ -1703,7 +1703,7 @@ mod tests {
         tail: Pipeline,
         e: &Edits,
         scale: RenderScale,
-        profile: TailRendering<'_>,
+        rendering: TailRendering<'_>,
         spec: RenderSpec,
         ctx: &Arc<GpuContext>,
     ) -> Pipeline {
@@ -1713,7 +1713,7 @@ mod tests {
             scale,
             TailFacts {
                 region: None,
-                profile,
+                rendering,
                 spec,
             },
             ctx,
@@ -1728,7 +1728,7 @@ mod tests {
             SCALE,
             TailFacts {
                 region: None,
-                profile: TailRendering::default(),
+                rendering: TailRendering::default(),
                 spec: RenderSpec::default(),
             },
             ctx,
@@ -1751,7 +1751,7 @@ mod tests {
             SCALE,
             TailFacts {
                 region: None,
-                profile: TailRendering::default(),
+                rendering: TailRendering::default(),
                 spec: RenderSpec::default(),
             },
             &ctx,
@@ -2020,7 +2020,7 @@ mod tests {
             SCALE,
             TailFacts {
                 region,
-                profile: TailRendering::colorimetric(),
+                rendering: TailRendering::colorimetric(),
                 spec: RenderSpec::default(),
             },
             &ctx,
@@ -2077,7 +2077,7 @@ mod tests {
             SCALE,
             TailFacts {
                 region: None,
-                profile: TailRendering::colorimetric(),
+                rendering: TailRendering::colorimetric(),
                 spec: RenderSpec::default(),
             },
             &ctx,
@@ -3192,7 +3192,7 @@ mod tests {
                 SCALE,
                 TailFacts {
                     region: r,
-                    profile: TailRendering::default(),
+                    rendering: TailRendering::default(),
                     spec: RenderSpec::default(),
                 },
                 &ctx,

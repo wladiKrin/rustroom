@@ -104,7 +104,7 @@ fn main() {
             scale,
             gpu_pipeline::TailFacts {
                 region: None,
-                profile: TailRendering::default(),
+                rendering: TailRendering::default(),
                 spec,
                 // ⚠ This probe builds no prefix at all — it asks about a MASK's producer.
             },
@@ -152,7 +152,7 @@ fn main() {
                     scale,
                     gpu_pipeline::TailFacts {
                         region: None,
-                        profile: TailRendering::default(),
+                        rendering: TailRendering::default(),
                         spec,
                     },
                     ctx,

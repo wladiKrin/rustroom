@@ -160,7 +160,7 @@ fn main() {
             scale,
             gpu_pipeline::TailFacts {
                 region: None,
-                profile: TailRendering::default(),
+                rendering: TailRendering::default(),
                 spec,
                 // ⚠⚠ **False on purpose, so run A below genuinely uploads.** This probe measures
                 // the seam by running the SAME chain both ways; letting `accelerate` wire the take

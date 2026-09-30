@@ -34,7 +34,7 @@ fn accel(
         scale,
         gpu_pipeline::TailFacts {
             region: None,
-            profile: Default::default(),
+            rendering: Default::default(),
             spec: Default::default(),
             // ⚠ This bench builds no prefix, so there is never a plane to take.
         },
