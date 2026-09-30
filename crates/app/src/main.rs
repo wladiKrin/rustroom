@@ -1,13 +1,17 @@
-//! The application's state and its bootstrap — and **nothing else**.
+//! The binary's root: the module list, the constants several modules share, and `fn main` — **and
+//! nothing else**.
 //!
 //! ⚠⚠ `main.rs` reached 4,375 lines one reasonable-seeming addition at a time. The rule that
-//! replaced it: **this file holds the type definitions, `RustroomApp::new` and `fn main`.**
-//! Behaviour lives in a topic module beside it. An inherent impl only has to be in the same
-//! *crate*, not the same module, so a method moves with `self` staying `self` and no call site
-//! changes — which is why there is no excuse for adding one here.
+//! replaced it: **the state is defined in [`app`] and [`session`] and built in [`bootstrap`]; this
+//! file holds only what every module shares.** Behaviour lives in a topic module beside it. An
+//! inherent impl only has to be in the same *crate*, not the same module, so a method moves with
+//! `self` staying `self` and no call site changes — which is why there is no excuse for adding one
+//! here.
 //!
 //! | Where | What |
 //! |---|---|
+//! | [`app`] / [`session`] | the application's state / the photo open in Develop |
+//! | [`bootstrap`] | building the application at startup: stores, workers, first values |
 //! | [`session_flow`] | opening a photo, the decode handover, the full-resolution upgrade, the per-frame pumps |
 //! | [`sources`] | folders, All Photos, collections, keywords |
 //! | [`smart_sources`] | the two query-driven sources: dates and smart collections |
