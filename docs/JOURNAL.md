@@ -166,7 +166,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-10-01 — Move to folder, Immich downloads included (branch `move-to-folder`, awaiting use)
+### 2026-10-01 — Move to folder, Immich downloads included (branch `move-to-folder`, merged 2026-10-01)
 
 **Input:** *"I'd like the option to move images from one folder to another from rustroom directly.
 Especially for ones that have been downloaded from immich."* Not in any milestone — M9.9 only
@@ -198,7 +198,7 @@ cross-volume fallback (1); undownloaded assets not skipped (1).
 `entries_from_assets` silently returned nothing. ⚠ Left: downloading undownloaded assets and then moving
 them (`docs/BACKLOG.md`). **3368 tests.**
 
-### 2026-10-01 — Virtual copies from the Library: made and deleted without leaving it (branch `library-copy-actions`, awaiting use)
+### 2026-10-01 — Virtual copies from the Library: made and deleted without leaving it (branch `library-copy-actions`, merged 2026-10-01)
 
 **Reported in use:** *"Creating a virtual copy in the library view should not open it automatically in
 the Develop view"*, and *"an option in the right-click menu to delete virtual copies whenever it is
@@ -218,7 +218,7 @@ view (1); delete offered for an original (1); each deletion its own step (1). �
 session arrives when it finishes — so "it opened the photo" was invisible. `pending` is set at once;
 the tests assert both now. **3351 tests.**
 
-### 2026-10-01 — Remove from collection, undoable collections, and views of member copies only (branch `remove-from-collection`, awaiting use)
+### 2026-10-01 — Remove from collection, undoable collections, and views of member copies only (branch `remove-from-collection`, merged 2026-10-01)
 
 **Input:** found while fixing the live views — nothing in the app took a photo out of a collection
 (`Catalog::remove_from_collection` existed since M4.1, uncalled), and adding was not undoable. The
