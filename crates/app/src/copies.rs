@@ -6,7 +6,7 @@
 //! the undo log still holds it — see `Sidecar::copy_hwm`. Snapshots number the same way and live
 //! in [`crate::snapshots`].
 
-use crate::{LibrarySource, RustroomApp};
+use crate::{AppView, LibrarySource, RustroomApp};
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
 use rustroom_app::file_rename;
@@ -17,20 +17,39 @@ use rustroom_app::sidecar;
 use std::path::Path;
 
 impl RustroomApp {
-    /// Duplicate the open photo as a new virtual copy, and open it.
+    /// Photo → Create virtual copy: of the open photo in Develop, of the selected one in the Library.
+    pub(crate) fn create_virtual_copy(&mut self, ctx: &egui::Context) {
+        if let Some(id) = self.copy_subjects().into_iter().next() {
+            self.create_copy_of(ctx, &id);
+        }
+    }
+
+    /// Duplicate `id` as a new virtual copy, selected — and opened only when Develop is showing.
     ///
     /// ⚠ Copies the photo's **current** edits rather than starting neutral — "try a variation"
-    /// should be one keystroke, not one keystroke plus redoing your work.
-    pub(crate) fn create_virtual_copy(&mut self, ctx: &egui::Context) {
-        let Some(s) = self.session.as_ref() else {
-            return;
+    /// should be one keystroke, not one keystroke plus redoing your work. The open photo's come from
+    /// its live session; any other's from its sidecar.
+    ///
+    /// ⚠⚠ **The Library stays the Library** (the author, 2026-10-01): the right-click used to open
+    /// the photo in Develop first and then the new copy. In the Library the copy is made and
+    /// selected, and nothing is decoded.
+    pub(crate) fn create_copy_of(&mut self, ctx: &egui::Context, id: &PhotoId) {
+        let edits = if self.open_photo().as_ref() == Some(id) {
+            // ⚠ Persist the *current* copy first, or its unsaved edits are lost when the session
+            // is replaced by the new one below.
+            self.persist_current_session();
+            self.session.as_ref().map(|s| s.edits.clone())
+        } else {
+            None
         };
-        let (path, edits) = (s.path.clone(), s.edits.clone());
-        // ⚠ Persist the *current* copy first, or its unsaved edits are lost when the session is
-        // replaced by the new one below.
-        self.persist_current_session();
-
+        let path = id.path.clone();
         let mut sidecar = sidecar::load_all(&path);
+        let edits = edits.unwrap_or_else(|| {
+            sidecar
+                .get(id.copy)
+                .map(|c| c.edits.clone())
+                .unwrap_or_default()
+        });
         let n = sidecar.next_copy();
         sidecar.set_edits(n, edits);
         if let Err(e) = sidecar::persist_all(&path, &sidecar) {
@@ -50,53 +69,100 @@ impl RustroomApp {
                 }
             }
         }
-        let id = PhotoId::new(path, n);
+        let new = PhotoId::new(path, n);
         if let Some(copies) = self.library.as_mut().and_then(|l| l.copies.as_mut()) {
-            copies.insert(id.clone());
+            copies.insert(new.clone());
         }
-        self.rebuild_entries(Some(&id));
+        self.rebuild_entries(Some(&new));
         self.status = format!("Created copy {n}");
-        self.open_path(ctx, id);
+        if self.view == AppView::Develop {
+            self.open_path(ctx, new);
+        }
     }
 
-    /// Delete the open virtual copy. The original cannot be deleted — it *is* the file.
+    /// Photo → Delete virtual copy: the open photo in Develop, the selected copies in the Library.
     pub(crate) fn delete_virtual_copy(&mut self, ctx: &egui::Context) {
-        let Some(s) = self.session.as_ref() else {
-            return;
+        let ids = self.copy_subjects();
+        self.delete_copies(ctx, &ids);
+    }
+
+    /// What the Photo menu's copy commands act on: the open photo in Develop, the selection in the
+    /// Library (its active photo first).
+    fn copy_subjects(&self) -> Vec<PhotoId> {
+        if self.view == AppView::Develop {
+            return self.open_photo().into_iter().collect();
+        }
+        let Some(lib) = self.library.as_ref() else {
+            return Vec::new();
         };
-        if s.copy == 0 {
+        let active = lib
+            .selection
+            .active()
+            .and_then(|i| lib.entries.get(i))
+            .map(|e| e.id.clone());
+        let mut ids: Vec<PhotoId> = active.iter().cloned().collect();
+        ids.extend(
+            lib.selected_ids()
+                .into_iter()
+                .filter(|id| Some(id) != active.as_ref()),
+        );
+        ids
+    }
+
+    /// Delete the virtual copies among `ids` as **one** undo step. An original is the file itself
+    /// and is skipped.
+    ///
+    /// ⚠ The catalog rows stay, so an undo brings a copy back with its rating, flags and
+    /// collections — `CopyDelete` restores the sidecar entry only.
+    pub(crate) fn delete_copies(&mut self, ctx: &egui::Context, ids: &[PhotoId]) {
+        let copies: Vec<&PhotoId> = ids.iter().filter(|id| id.copy != 0).collect();
+        if copies.is_empty() {
             self.status = "The original cannot be deleted".to_string();
             return;
         }
-        let (path, copy) = (s.path.clone(), s.copy);
-
-        let mut sidecar = sidecar::load_all(&path);
-        let Some(entry) = sidecar.get(copy).cloned() else {
+        let open = self.open_photo();
+        let mut steps = Vec::new();
+        let mut gone: Vec<PhotoId> = Vec::new();
+        for id in copies {
+            let mut sidecar = sidecar::load_all(&id.path);
+            let Some(entry) = sidecar.get(id.copy).cloned() else {
+                continue;
+            };
+            sidecar.copies.retain(|c| c.copy != id.copy);
+            if let Err(e) = sidecar::persist_all(&id.path, &sidecar) {
+                self.status = format!("Could not delete the copy: {e}");
+                break;
+            }
+            // ⚠ Drop this copy's stack *and* its log entries: the copy no longer exists, so an
+            // undo reaching it would pop steps for a photo that is not there.
+            self.actions.forget_edits_of(id);
+            steps.push(ActionKind::CopyDelete {
+                path: id.path.clone(),
+                entry: Box::new(entry),
+            });
+            gone.push(id.clone());
+        }
+        let Some(first) = gone.first() else {
             return;
         };
-        sidecar.copies.retain(|c| c.copy != copy);
-        if let Err(e) = sidecar::persist_all(&path, &sidecar) {
-            self.status = format!("Could not delete the copy: {e}");
-            return;
+        let back = PhotoId::original(first.path.clone());
+        self.status = match gone.len() {
+            1 => format!("Deleted copy {} — Ctrl+Z to restore", first.copy),
+            n => format!("Deleted {n} virtual copies — Ctrl+Z to restore"),
+        };
+        match steps.len() {
+            1 => self.actions.push(steps.remove(0), None),
+            _ => self.actions.push(ActionKind::Batch(steps), None),
         }
-        // ⚠ Drop this copy's stack *and* its log entries before the session goes: the copy no
-        // longer exists, so an undo reaching it would pop steps for a photo that is not there.
-        self.actions
-            .forget_edits_of(&PhotoId::new(path.clone(), copy));
-        self.actions.push(
-            ActionKind::CopyDelete {
-                path: path.clone(),
-                entry: Box::new(entry),
-            },
-            None,
-        );
-        let back = PhotoId::original(path.clone());
         self.rebuild_entries(Some(&back));
-        self.status = format!("Deleted copy {copy} — Ctrl+Z to restore");
-        // The session is being replaced, so its edits must not be written back to a copy that
-        // no longer exists.
-        self.session = None;
-        self.open_path(ctx, PhotoId::original(path));
+        if let Some(open) = open.filter(|o| gone.contains(o)) {
+            // The session is being replaced, so its edits must not be written back to a copy
+            // that no longer exists.
+            self.session = None;
+            if self.view == AppView::Develop {
+                self.open_path(ctx, PhotoId::original(open.path));
+            }
+        }
     }
 
     /// What a copy is currently called, or `None` if it has never been named.
@@ -429,6 +495,7 @@ impl RustroomApp {
 mod tests {
     use super::*;
     use edit_model::Edits;
+    use std::path::PathBuf;
 
     /// A folder with `n` files that `catalog::scan_folder` will report.
     ///
@@ -694,8 +761,7 @@ mod tests {
         let bw = cat.create_collection("BW").unwrap();
         cat.add_to_collection(bw, &a, 0).unwrap();
         app.open_collection(&ctx, bw, "BW");
-        crate::test_app::open_test_photo(&mut app, &ctx, 8, 4);
-        app.session.as_mut().unwrap().path = a.clone();
+        app.library.as_mut().unwrap().selection.click(0);
 
         app.create_virtual_copy(&ctx);
 
@@ -719,5 +785,157 @@ mod tests {
             .map(|e| e.id.copy)
             .collect();
         assert_eq!(shown, vec![0, 1], "the new copy is on screen");
+    }
+
+    /// A real RAW whose sidecar holds copies `1..=n` (copy k at exposure k), open as a folder in the
+    /// Library.
+    fn with_copies(tag: &str, n: u32) -> (crate::test_app::TestDir, crate::RustroomApp, PathBuf) {
+        let ctx = egui::Context::default();
+        let dir = crate::test_app::TestDir::new(tag);
+        let a = dir.0.join("a.RAF");
+        std::fs::write(&a, b"not a real raw").unwrap();
+        for k in 1..=n {
+            sidecar::persist_copy(&a, k, &edited(k as f32)).unwrap();
+        }
+        let mut app = crate::test_app::for_test();
+        let scan = catalog::scan_folder(&dir.0).unwrap();
+        app.open_scan(&ctx, LibrarySource::Folder(dir.0.clone()), scan);
+        (dir, app, a)
+    }
+
+    fn index_of(app: &crate::RustroomApp, copy: u32) -> usize {
+        let lib = app.library.as_ref().unwrap();
+        lib.entries.iter().position(|e| e.id.copy == copy).unwrap()
+    }
+
+    fn active(app: &crate::RustroomApp) -> Option<PhotoId> {
+        let lib = app.library.as_ref().unwrap();
+        lib.selection
+            .active()
+            .and_then(|i| lib.entries.get(i))
+            .map(|e| e.id.clone())
+    }
+
+    /// ⚠⚠ The author's report (2026-10-01): a copy made from the Library's right-click opened
+    /// Develop. It stays in the Library now, the new copy selected and nothing decoded — carrying
+    /// the clicked copy's edits, not the original's.
+    #[test]
+    fn a_copy_made_in_the_library_stays_in_the_library() {
+        let (_d, mut app, a) = with_copies("copy_in_library", 1);
+        let ctx = egui::Context::default();
+        assert!(app.view == crate::AppView::Library, "the sample");
+        let i = index_of(&app, 1);
+        crate::library::apply_cell_action(
+            &mut app,
+            &ctx,
+            i,
+            crate::library::CellAction::VirtualCopy,
+        );
+        assert!(app.view == crate::AppView::Library, "it went to Develop");
+        // ⚠ `pending` as well as `session`: opening starts a decode and the session arrives only
+        // when it finishes, so a test reading `session` alone stayed green while the copy opened.
+        assert!(
+            app.session.is_none() && app.pending.is_none(),
+            "it opened the photo"
+        );
+        let s = sidecar::load_all(&a);
+        assert_eq!(
+            s.get(2).map(|c| c.edits.clone()),
+            Some(edited(1.0)),
+            "copy 1's edits"
+        );
+        assert_eq!(
+            active(&app),
+            Some(PhotoId::new(a, 2)),
+            "the new copy is selected"
+        );
+    }
+
+    /// Photo → Create virtual copy in the Library copies the selected photo, and stays.
+    #[test]
+    fn the_menu_command_in_the_library_copies_the_selection() {
+        let (_d, mut app, a) = with_copies("copy_cmd_library", 0);
+        app.library.as_mut().unwrap().selection.click(0);
+        app.create_virtual_copy(&egui::Context::default());
+        assert!(app.view == crate::AppView::Library);
+        assert!(app.session.is_none() && app.pending.is_none());
+        assert!(sidecar::load_all(&a).get(1).is_some(), "copy 1 made");
+    }
+
+    /// The right-click offers to delete only a virtual copy, and counts several.
+    #[test]
+    fn the_menu_offers_delete_only_for_a_virtual_copy() {
+        let a = PathBuf::from("/x/a.RAF");
+        let source = LibrarySource::Folder(PathBuf::from("/x"));
+        let labels = |targets: &[PhotoId]| -> Vec<String> {
+            crate::test_ui::nodes(&crate::test_ui::ctx(), |ui| {
+                let _ = crate::library::cell_menu(ui, None, &source, targets);
+            })
+            .into_iter()
+            .map(|n| n.label)
+            .collect()
+        };
+        let original = labels(&[PhotoId::original(a.clone())]);
+        assert!(
+            original.iter().any(|l| l == "Edit"),
+            "the sample: {original:?}"
+        );
+        assert!(
+            !original.iter().any(|l| l.starts_with("Delete")),
+            "{original:?}"
+        );
+        let one = labels(&[PhotoId::original(a.clone()), PhotoId::new(a.clone(), 1)]);
+        assert!(one.iter().any(|l| l == "Delete virtual copy"), "{one:?}");
+        let two = labels(&[PhotoId::new(a.clone(), 1), PhotoId::new(a, 2)]);
+        assert!(
+            two.iter().any(|l| l == "Delete 2 virtual copies"),
+            "{two:?}"
+        );
+    }
+
+    /// Deleting two selected copies from the Library is one undo step, keeps the original, and never
+    /// leaves the Library — not on the delete and not on its undo.
+    #[test]
+    fn deleting_copies_in_the_library_is_one_step_and_stays_there() {
+        let (_d, mut app, a) = with_copies("copy_delete_library", 2);
+        let ctx = egui::Context::default();
+        let lib = app.library.as_mut().unwrap();
+        let (one, two) = (
+            lib.entries.iter().position(|e| e.id.copy == 1).unwrap(),
+            lib.entries.iter().position(|e| e.id.copy == 2).unwrap(),
+        );
+        lib.selection.click(one);
+        lib.selection.toggle(two);
+        crate::library::apply_cell_action(
+            &mut app,
+            &ctx,
+            one,
+            crate::library::CellAction::DeleteVirtualCopies,
+        );
+        let s = sidecar::load_all(&a);
+        assert!(s.get(1).is_none() && s.get(2).is_none(), "both deleted");
+        let copies: Vec<u32> = app
+            .library
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .map(|e| e.id.copy)
+            .collect();
+        assert_eq!(copies, vec![0], "the original stays");
+        assert!(
+            app.view == crate::AppView::Library && app.session.is_none() && app.pending.is_none()
+        );
+        app.undo_action(&ctx);
+        let s = sidecar::load_all(&a);
+        assert!(
+            s.get(1).is_some() && s.get(2).is_some(),
+            "one undo brings both back"
+        );
+        assert!(
+            app.view == crate::AppView::Library && app.session.is_none() && app.pending.is_none(),
+            "undo opened it"
+        );
+        assert!(!app.actions.can_undo(None), "one step");
     }
 }

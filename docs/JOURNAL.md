@@ -166,6 +166,26 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-10-01 — Virtual copies from the Library: made and deleted without leaving it (branch `library-copy-actions`, awaiting use)
+
+**Reported in use:** *"Creating a virtual copy in the library view should not open it automatically in
+the Develop view"*, and *"an option in the right-click menu to delete virtual copies whenever it is
+one"*. **Cause:** the right-click ran `open_entry` (which switches to Develop) and then
+`create_virtual_copy`, which copied *the open photo* and opened the copy.
+
+**Fixed:** `create_copy_of(id)` takes the photo, carries its edits (the live session's when it is the
+open one, else its sidecar's), selects the new copy, and opens it only when Develop is showing; Photo →
+Create virtual copy acts on the selection in the Library. **Delete virtual copy** (or *Delete N virtual
+copies*) appears in the right-click whenever a target is one; `delete_copies` skips originals, deletes
+as **one** undo step, and is what Photo → Delete virtual copy runs too. Undo and redo of a copy
+deletion reopen only in Develop.
+
+**Sabotages, each red:** the old right-click; a new copy opened in any view (2); undo reopening in any
+view (1); delete offered for an original (1); each deletion its own step (1). ⚠⚠ Two of them were
+**green at first**: the tests asserted `session.is_none()`, but opening only *starts* a decode — the
+session arrives when it finishes — so "it opened the photo" was invisible. `pending` is set at once;
+the tests assert both now. **3351 tests.**
+
 ### 2026-10-01 — Remove from collection, undoable collections, and views of member copies only (branch `remove-from-collection`, awaiting use)
 
 **Input:** found while fixing the live views — nothing in the app took a photo out of a collection

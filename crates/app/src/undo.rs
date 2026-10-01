@@ -52,7 +52,11 @@ impl RustroomApp {
                 // working.
                 let id = PhotoId::new(path, n);
                 self.rebuild_entries(Some(&id));
-                self.open_path(ctx, id);
+                // ⚠ Only in Develop: a deletion undone in the Library stays in the Library, where
+                // the restored copy is selected (2026-10-01).
+                if self.view == crate::AppView::Develop {
+                    self.open_path(ctx, id);
+                }
             }
             ActionKind::SnapshotDelete { id, entry } => {
                 self.put_back_snapshot(&id, *entry);
@@ -148,7 +152,9 @@ impl RustroomApp {
                 // The copy is gone, so whatever was showing it must move to the original.
                 let id = PhotoId::original(path);
                 self.rebuild_entries(Some(&id));
-                self.open_path(ctx, id);
+                if self.view == crate::AppView::Develop {
+                    self.open_path(ctx, id);
+                }
             }
             ActionKind::SnapshotDelete { id, entry } => {
                 let mut sidecar = sidecar::load_all(&id.path);
