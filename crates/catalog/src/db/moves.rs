@@ -143,12 +143,13 @@ impl Catalog {
 /// ⚠⚠ **Every table keyed on `(folder_id, file_name)`** — a new one must be added here, or a move
 /// (whether Rustroom made it or only noticed it) would leave its rows behind. One list, shared by
 /// [`Catalog::relink_moved`] and [`Catalog::move_photo`], so the two cannot disagree.
-const PER_FILE_TABLES: [&str; 5] = [
+const PER_FILE_TABLES: [&str; 6] = [
     "photos",
     "photo_keywords",
     "photo_capture",
     "photo_description",
     "photo_history",
+    "photo_stacks",
 ];
 
 #[cfg(test)]
