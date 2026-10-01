@@ -85,6 +85,8 @@ struct GridOutcome {
     /// ⚠ Collected rather than applied: `lib` is borrowed through the grid closure, and flipping it
     /// must trigger a **rebuild** of `entries` rather than patch the list the closure is indexing.
     stack_toggle: Option<rustroom_app::stack::StackKey>,
+    /// A photo dropped onto another member of its unfurled stack: `(dragged, onto)` (M10.8c).
+    stack_move: Option<(PhotoId, PhotoId)>,
     /// ⚠ Declared out here, like `open_index` and `rename`: applying it needs `&mut RustroomApp`
     /// while the closure below still holds `&mut app.library`.
     /// ⚠⚠ **The targets travel WITH the action, and that is the whole safety of auto-advance.**
@@ -111,6 +113,8 @@ struct GridInputs<'a> {
     filter: &'a rustroom_app::library_filter::LibraryFilter,
     /// Immich's asset → stack map, so a stack's badge keys as the grouping did (M10.8c).
     remote: &'a std::collections::HashMap<String, String>,
+    /// What reorders an unfurled stack (Settings → Input).
+    stack_drag: rustroom_app::settings::StackDrag,
 }
 
 /// Pinch, or ctrl/cmd+scroll, resizes the grid; the size is saved once the gesture settles.
@@ -174,6 +178,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         scroll_was,
         filter: &app.filter,
         remote: &app.immich_stacks.of_asset,
+        stack_drag: app.settings.stack_drag,
     };
     egui::CentralPanel::default().show(ui, |ui| grid::panel(ui, &mut app.library, inp, &mut out));
 
@@ -186,6 +191,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠⚠ Applied by **rebuilding** the entry list, never by patching it: the grid, the filmstrip,
     // `selection` and `view_region` all index into `lib.entries`, and `entries`' own doc records
     // three sparse-index bugs on exactly that. A rebuild is measured at 4.6 ms for 830 files.
+    if let Some((from, onto)) = out.stack_move.take() {
+        app.move_in_stack(&from, &onto);
+    }
     if let Some(k) = out.stack_toggle {
         if let Some(lib) = app.library.as_mut() {
             if !lib.stack_expanded.remove(&k) {

@@ -49,6 +49,7 @@ pub(super) fn panel(
         scroll_was,
         filter,
         remote,
+        stack_drag,
     } = inp;
     // ⚠ The grid's own gap, 12 each way (`docs/DESIGN.md` §5) — scoped to this panel, because
     // `item_spacing` is also every control row's air and 12 there would double the panel.
@@ -157,6 +158,7 @@ pub(super) fn panel(
                             cell,
                             name_size,
                             remote,
+                            stack_drag,
                         },
                         out,
                     );

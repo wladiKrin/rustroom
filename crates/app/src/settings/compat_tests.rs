@@ -317,6 +317,8 @@ fn settings_round_trip_carries_the_export_options() {
         pan_drag: PanDrag::Secondary,
         erase_drag: EraseDrag::Middle,
         parametric_drag: ParametricDrag::Off,
+        // Non-default, so a re-defaulted field cannot pass.
+        stack_drag: StackDrag::AltDrag,
         // Both non-default, for the same reason: a field re-defaulted on load would look
         // like it round-tripped.
         library_sort: catalog::SortOrder::ModifiedDesc,

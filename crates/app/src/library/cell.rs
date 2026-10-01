@@ -33,7 +33,52 @@ pub(super) struct CellInputs<'a, 'b> {
     pub(super) name_size: f32,
     /// Immich's asset → stack map — the badge keys as the grouping did.
     pub(super) remote: &'a std::collections::HashMap<String, String>,
+    /// What reorders an unfurled stack (Settings → Input).
+    pub(super) stack_drag: rustroom_app::settings::StackDrag,
 }
+
+/// A drag that starts on a member of an **unfurled** stack moves it within the stack (M10.8c after
+/// use) — Settings → Input says whether ⌥ must be held — and dropping it on another member takes that
+/// member's place. From anywhere else a drag is the selection rectangle, which `interactions` starts.
+fn reorder_gesture(
+    ui: &mut egui::Ui,
+    resp: &egui::Response,
+    lib: &crate::Library,
+    i: usize,
+    stack_drag: rustroom_app::settings::StackDrag,
+    out: &mut GridOutcome,
+) {
+    let here = &lib.entries[i];
+    if !here.stack.is_some_and(|s| s.expanded) {
+        return;
+    }
+    if resp.drag_started_by(egui::PointerButton::Primary)
+        && stack_drag.reorders(ui.input(|inp| inp.modifiers.alt))
+    {
+        resp.dnd_set_drag_payload(StackMove(here.id.clone()));
+    }
+    if resp
+        .dnd_hover_payload::<StackMove>()
+        .is_some_and(|p| p.0 != here.id)
+    {
+        ui.painter().rect_stroke(
+            resp.rect,
+            3.0,
+            egui::Stroke::new(2.0, ui.visuals().selection.bg_fill),
+            egui::StrokeKind::Outside,
+        );
+    }
+    if let Some(p) = resp.dnd_release_payload::<StackMove>() {
+        if p.0 != here.id {
+            out.stack_move = Some((p.0.clone(), here.id.clone()));
+        }
+    }
+}
+
+/// The drag payload of a photo being moved within its unfurled stack. ⚠ Its own type, so no other
+/// drag in the app can be taken for one — `keyword_rows`' rule.
+#[derive(Clone)]
+struct StackMove(PhotoId);
 
 /// Draw cell `i` and collect what its interactions asked for.
 pub(super) fn draw(
@@ -53,6 +98,7 @@ pub(super) fn draw(
         cell,
         name_size,
         remote,
+        stack_drag,
     } = c;
     // ⚠⚠ A stable id per photo, not egui's auto-id counter. Under
     // `show_rows` that counter shifts with the scroll position — it skips
@@ -129,6 +175,8 @@ pub(super) fn draw(
             // begin a rubber band. A plain click still reports
             // `clicked()`; egui distinguishes the two.
             .interact(egui::Sense::click_and_drag());
+        // ⚠ Before `interactions`: a drag this starts is a reorder, and the band then stays down.
+        reorder_gesture(ui, &resp, lib, i, stack_drag, out);
         interactions(ui, &resp, lib, i, &caption, catalog, out);
     });
 }
@@ -365,7 +413,10 @@ fn interactions(
     // egui reports a drag for **every** button, so the pan binding
     // would otherwise rubber-band as it passed over the grid — the
     // trap the canvas-navigation work recorded.
-    if resp.drag_started_by(egui::PointerButton::Primary) {
+    // ⚠ Not when `reorder_gesture` has just made this drag a reorder (M10.8c after use).
+    if resp.drag_started_by(egui::PointerButton::Primary)
+        && !egui::DragAndDrop::has_any_payload(ui.ctx())
+    {
         out.band_started = resp.interact_pointer_pos();
     }
     // ⚠⚠ A secondary click does **not** fire `clicked()`, so the

@@ -167,6 +167,8 @@ pub struct Settings {
     pub erase_drag: EraseDrag,
     /// What a drag in the tone curve's Parametric mode does. See [`ParametricDrag`].
     pub parametric_drag: ParametricDrag,
+    /// What reorders the photos of an unfurled stack (M10.8c).
+    pub stack_drag: StackDrag,
     /// Turn lens corrections on for photos that have no sidecar yet.
     ///
     /// ⚠ A **preference**, not an op-list default. `Edits::default()` stays strictly neutral so
@@ -465,6 +467,7 @@ impl Default for Settings {
             pan_drag: PanDrag::default(),
             erase_drag: EraseDrag::default(),
             parametric_drag: ParametricDrag::default(),
+            stack_drag: StackDrag::default(),
             auto_lens_correction: true,
             default_rendering: edit_model::Rendering::Camera,
             library_sort: catalog::SortOrder::default(),

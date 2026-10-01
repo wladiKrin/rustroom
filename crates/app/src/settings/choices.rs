@@ -207,6 +207,40 @@ impl ParametricDrag {
     }
 }
 
+/// What reorders the photos of an unfurled stack in the Library grid (M10.8c, after use).
+///
+/// ⚠ A drag that starts anywhere else always draws the selection rectangle; this decides only what a
+/// drag that starts **on a member of an unfurled stack** does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum StackDrag {
+    /// A plain drag moves the photo — the author's choice.
+    #[default]
+    Drag,
+    /// Only a drag with ⌥ held moves it; a plain one draws the selection rectangle as anywhere else.
+    AltDrag,
+}
+
+impl StackDrag {
+    /// Every variant, for the settings dropdown and for table-driven tests.
+    pub const ALL: [StackDrag; 2] = [StackDrag::Drag, StackDrag::AltDrag];
+
+    /// How to describe this binding in the UI. See [`PanDrag::label`] for why it is named here.
+    pub fn label(self) -> &'static str {
+        match self {
+            StackDrag::Drag => "drag a photo",
+            StackDrag::AltDrag => "⌥ + drag a photo",
+        }
+    }
+
+    /// Whether a drag with ⌥ held (`alt`) or not reorders.
+    pub fn reorders(self, alt: bool) -> bool {
+        match self {
+            StackDrag::Drag => true,
+            StackDrag::AltDrag => alt,
+        }
+    }
+}
+
 /// A mouse button, named here so this module needs no `egui` dependency.
 ///
 /// ⚠ `crates/app/src/lib.rs` has no egui by rule — that separation is what keeps these types
@@ -393,5 +427,12 @@ mod tests {
     fn the_default_pan_drag_is_the_middle_button() {
         assert_eq!(PanDrag::default(), PanDrag::Middle);
         assert_eq!(Settings::default().pan_drag, PanDrag::Middle);
+    }
+
+    #[test]
+    fn a_stack_reorders_on_a_plain_drag_or_only_with_option() {
+        assert!(StackDrag::Drag.reorders(false) && StackDrag::Drag.reorders(true));
+        assert!(!StackDrag::AltDrag.reorders(false) && StackDrag::AltDrag.reorders(true));
+        assert_eq!(StackDrag::default(), StackDrag::Drag, "the author's choice");
     }
 }

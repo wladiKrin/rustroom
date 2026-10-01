@@ -111,6 +111,48 @@ impl RustroomApp {
         );
     }
 
+    /// Move `from` to `onto`'s place within their unfurled stack — the drag (M10.8c after use); the
+    /// leftmost is the top. ⚠ A name or server stack reordered becomes a hand stack in that order, and
+    /// stays unfurled under its new key.
+    pub(crate) fn move_in_stack(&mut self, from: &PhotoId, onto: &PhotoId) {
+        let (Some(lib), Some(cat)) = (&self.library, &self.catalog) else {
+            return;
+        };
+        let remote = &self.immich_stacks.of_asset;
+        let key = |p: &Path| rustroom_app::stack::key_for(p, remote, &lib.hand_stacks);
+        let k = key(&from.path);
+        if k.is_none() || k != key(&onto.path) {
+            return;
+        }
+        let mut order: Vec<PathBuf> = lib
+            .entries
+            .iter()
+            .filter(|e| e.stack.is_some_and(|s| s.expanded) && key(&e.id.path) == k)
+            .map(|e| e.id.path.clone())
+            .collect();
+        let (Some(a), Some(b)) = (
+            order.iter().position(|p| *p == from.path),
+            order.iter().position(|p| *p == onto.path),
+        ) else {
+            return;
+        };
+        let moved = order.remove(a);
+        order.insert(b, moved);
+        let next = cat.next_stack_id().unwrap_or(1);
+        let changes = stack_by_hand::set_order(&order, &lib.hand_stacks, next);
+        let stack = changes
+            .iter()
+            .find(|(p, _)| *p == from.path)
+            .and_then(|(_, m)| m.map(|m| m.stack));
+        if let (Some(stack), Some(dir), Some(lib)) =
+            (stack, from.path.parent(), self.library.as_mut())
+        {
+            lib.stack_expanded
+                .insert((dir.to_path_buf(), format!("hand:{stack}")));
+        }
+        self.apply_stack_changes(changes, "Reordered the stack — Ctrl+Z to undo".to_string());
+    }
+
     /// Photo → Make top of stack: the active photo.
     pub(crate) fn make_active_top_of_stack(&mut self) {
         if let Some(id) = self.selection_ids().into_iter().next() {
@@ -340,10 +382,12 @@ mod tests {
                 draw(&mut app, ui)
             });
         }
+        // ⚠ The largest rect of that name: the caption under a cell carries the name too.
         let cell = found
             .iter()
-            .find(|(l, _)| l == "rustroom_00000.RAF")
+            .filter(|(l, _)| l == "rustroom_00000.RAF")
             .map(|(_, r)| *r)
+            .max_by(|a, b| a.area().total_cmp(&b.area()))
             .expect("the stack's cell");
         // The badge sits 4 pt in from the picture's top-right corner, 20 × 16.
         let badge = egui::pos2(cell.right() - 14.0, cell.top() + 12.0);
@@ -398,5 +442,116 @@ mod tests {
             "the time stacks came apart, the user's stayed: {r:?}"
         );
         assert_eq!(r.iter().filter(|(_, c)| *c == Some(2)).count(), 1);
+    }
+
+    fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        }
+    }
+
+    /// ⚠⚠ After use: dragging a photo of an unfurled stack onto another takes its place — through the
+    /// drawn grid. The stack of 0, 1, 2 (0 on top) becomes 2, 0, 1, so 2 is the top.
+    #[test]
+    fn dragging_a_photo_within_an_unfurled_stack_reorders_it() {
+        let mut app = four();
+        app.view = crate::AppView::Library;
+        run(&mut app, Command::Stack);
+        let lib = app.library.as_mut().unwrap();
+        let first = lib.scan[0].path.clone();
+        let key =
+            rustroom_app::stack::key_for(&first, &Default::default(), &lib.hand_stacks).unwrap();
+        lib.stack_expanded.insert(key);
+        app.rebuild_entries(None);
+        assert_eq!(rows(&app).len(), 4, "the sample: unfurled");
+        let ctx = crate::test_ui::ctx();
+        let mut t = 1.0;
+        let mut frame = |app: &mut crate::RustroomApp, events: Vec<egui::Event>| {
+            t += 0.02;
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(crate::test_ui::screen()),
+                    time: Some(t),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let c = ui.ctx().clone();
+                    crate::library::show(app, ui, &c);
+                },
+            );
+        };
+        frame(&mut app, vec![]);
+        let found = crate::test_ui::labelled_rects_on(&ctx, crate::test_ui::screen(), |ui| {
+            let c = ui.ctx().clone();
+            crate::library::show(&mut app, ui, &c);
+        });
+        // ⚠ The largest rect of that name: the caption under a cell carries the name too.
+        let at = |name: &str| {
+            found
+                .iter()
+                .filter(|(l, _)| l == name)
+                .map(|(_, r)| *r)
+                .max_by(|a, b| a.area().total_cmp(&b.area()))
+                .map(|r| r.center())
+                .unwrap_or_else(|| panic!("no cell {name}"))
+        };
+        let (from, to) = (at("rustroom_00002.RAF"), at("rustroom_00000.RAF"));
+        frame(&mut app, vec![egui::Event::PointerMoved(from)]);
+        frame(&mut app, vec![press(from, true)]);
+        for k in 1..=8 {
+            let p = from + (to - from) * (k as f32 / 8.0);
+            frame(&mut app, vec![egui::Event::PointerMoved(p)]);
+        }
+        frame(&mut app, vec![press(to, false)]);
+        frame(&mut app, vec![]);
+        let lib = app.library.as_ref().unwrap();
+        let ord = |n: usize| lib.hand_stacks[&lib.scan[n].path].ord;
+        assert!(
+            ord(2) < ord(0) && ord(0) < ord(1),
+            "2, 0, 1 — {}",
+            app.status
+        );
+        assert!(app.status.starts_with("Reordered"), "{}", app.status);
+        assert_eq!(rows(&app).len(), 4, "still unfurled");
+    }
+
+    /// Reordering a RAW+JPEG pair makes it a hand stack in that order, still unfurled.
+    #[test]
+    fn a_reordered_pair_becomes_a_hand_stack() {
+        let mut app = test_app::for_test();
+        app.settings.stacking.enabled = true;
+        app.library = Some(test_app::library_of_names(&["a.RAF", "a.JPG", "b.RAF"]));
+        test_app::catalog_library(&mut app);
+        let lib = app.library.as_mut().unwrap();
+        let first = lib.scan[0].path.clone();
+        lib.stack_expanded
+            .insert(rustroom_app::stack::key_of(&first).unwrap());
+        app.rebuild_entries(None);
+        assert_eq!(rows(&app).len(), 3, "the sample: the pair unfurled");
+        // ⚠ By name: the rebuild sorted the scan, and a.JPG sorts before a.RAF.
+        let lib = app.library.as_ref().unwrap();
+        let by_name = |n: &str| {
+            lib.scan
+                .iter()
+                .find(|e| e.file_name == n)
+                .unwrap()
+                .path
+                .clone()
+        };
+        let (raw, jpg) = (by_name("a.RAF"), by_name("a.JPG"));
+        app.move_in_stack(
+            &rustroom_app::photo_id::PhotoId::original(jpg.clone()),
+            &rustroom_app::photo_id::PhotoId::original(raw.clone()),
+        );
+        // Shown JPEG, RAW (by name); the JPEG dropped onto the RAW takes its place: RAW, JPEG.
+        let lib = app.library.as_ref().unwrap();
+        assert_eq!(lib.hand_stacks[&raw].ord, 0, "the RAW on top now");
+        assert_eq!(lib.hand_stacks[&jpg].ord, 1);
+        assert!(!lib.hand_stacks[&jpg].by_time, "the user's");
+        assert_eq!(rows(&app).len(), 3, "still unfurled under its new key");
     }
 }
