@@ -65,6 +65,14 @@ impl eframe::App for RustroomApp {
 }
 
 impl RustroomApp {
+    /// What the menus' check marks reflect (M10.8b).
+    pub(crate) fn menu_state(&self) -> rustroom_app::menu::MenuState {
+        rustroom_app::menu::MenuState {
+            layout: self.settings.layout,
+            filmstrip_shown: self.show_filmstrip,
+        }
+    }
+
     /// Open a folder or photos dropped on the window.
     fn open_dropped_files(&mut self, ctx: &egui::Context) {
         // ⚠ A folder or photos dropped on the window open, the way the empty Library promises.
@@ -125,6 +133,9 @@ impl RustroomApp {
         for cmd in crate::native_menu::poll() {
             commands::execute(self, ctx, cmd);
         }
+        // M10.8b: the system menu's check marks follow the state — AppKit is touched only on a change.
+        #[cfg(target_os = "macos")]
+        crate::native_menu::sync(&self.menu_state());
         self.handle_clipboard_keys(ctx);
         // ⚠ After `handle_clipboard_keys`, which owns ⌘C / ⌘V for the reason in
         // `pressed_command`'s doc comment.
@@ -164,7 +175,8 @@ impl RustroomApp {
             // ⚠ macOS gets the real system menu bar instead; drawing this one too would put a
             // redundant row under a nearly-empty system menu.
             if !cfg!(target_os = "macos") {
-                if let Some(cmd) = menu_bar::show(ui, &self.settings.recent_folders) {
+                let state = self.menu_state();
+                if let Some(cmd) = menu_bar::show(ui, &self.settings.recent_folders, &state) {
                     pending_command = Some(cmd);
                 }
             }

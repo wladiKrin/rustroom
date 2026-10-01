@@ -9,11 +9,17 @@ use eframe::egui;
 use rustroom_app::menu::{self, Command, Item};
 
 /// Draw the bar. Returns the command the user picked, if any.
-pub fn show(ui: &mut egui::Ui, recent: &[std::path::PathBuf]) -> Option<Command> {
+pub fn show(
+    ui: &mut egui::Ui,
+    recent: &[std::path::PathBuf],
+    state: &menu::MenuState,
+) -> Option<Command> {
     let mut picked = None;
     egui::containers::menu::MenuBar::new().ui(ui, |ui| {
         for section in menu::model_with(recent) {
-            let r = ui.menu_button(section.title, |ui| items(ui, &section.items, &mut picked));
+            let r = ui.menu_button(section.title, |ui| {
+                items(ui, &section.items, &mut picked, state)
+            });
             // ⚠ A menu, not a button: its label and its items say what it does, so it carries no
             // hover sentence, and `hover_coverage` exempts it by this role (M10.6b).
             ui.ctx().accesskit_node_builder(r.response.id, |n| {
@@ -25,7 +31,7 @@ pub fn show(ui: &mut egui::Ui, recent: &[std::path::PathBuf]) -> Option<Command>
 }
 
 /// One level of a menu; a submenu opens a nested one.
-fn items(ui: &mut egui::Ui, items: &[Item], picked: &mut Option<Command>) {
+fn items(ui: &mut egui::Ui, items: &[Item], picked: &mut Option<Command>, state: &menu::MenuState) {
     for item in items {
         match item {
             Item::Separator => {
@@ -35,7 +41,7 @@ fn items(ui: &mut egui::Ui, items: &[Item], picked: &mut Option<Command>) {
                 label,
                 items: nested,
             } => {
-                ui.menu_button(label, |ui| self::items(ui, nested, picked));
+                ui.menu_button(label, |ui| self::items(ui, nested, picked, state));
             }
             Item::Action {
                 label,
@@ -48,7 +54,16 @@ fn items(ui: &mut egui::Ui, items: &[Item], picked: &mut Option<Command>) {
                     Some(sc) => format!("{label}   {}", sc.label()),
                     None => label.clone(),
                 };
-                if ui.button(text).clicked() {
+                // M10.8b: a mark where the command has one — a radio for a place, a checkbox for a
+                // toggle — so this bar shows what the native menu's check marks show.
+                let clicked = match menu::checked(*command, state) {
+                    Some(on) if matches!(command, Command::FilmstripAt(_)) => {
+                        ui.radio(on, text).clicked()
+                    }
+                    Some(mut on) => ui.checkbox(&mut on, text).clicked(),
+                    None => ui.button(text).clicked(),
+                };
+                if clicked {
                     *picked = Some(*command);
                     ui.close();
                 }
@@ -68,9 +83,16 @@ mod tests {
         // model's own tests can see. It also runs on macOS, where the bar is never shown, so
         // the renderer cannot rot unnoticed.
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let picked = show(ui, &[]);
-            assert!(picked.is_none(), "nothing was clicked");
-        });
+        // Both values of every mark, so a checkbox and a radio are each drawn checked and not.
+        for shown in [true, false] {
+            let state = menu::MenuState {
+                layout: rustroom_app::layout::Layout::default(),
+                filmstrip_shown: shown,
+            };
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let picked = show(ui, &[], &state);
+                assert!(picked.is_none(), "nothing was clicked");
+            });
+        }
     }
 }

@@ -5,7 +5,7 @@
 //! `commands.rs`, which are built everywhere, and keep this to installation and plumbing.
 
 use eframe::egui;
-use muda::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
+use muda::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use rustroom_app::menu::{self, Command, Item};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -26,6 +26,10 @@ struct Installed {
     /// Held only to keep the menu alive; never read.
     _menu: Menu,
     by_id: HashMap<MenuId, Command>,
+    /// The items that carry a check mark (M10.8b), by command — what [`sync`] sets.
+    checks: Vec<(Command, CheckMenuItem)>,
+    /// The state the marks were last set from; `None` until the first [`sync`].
+    synced: Option<menu::MenuState>,
 }
 
 /// Our own channel, fed by the event handler.
@@ -112,9 +116,10 @@ pub fn install(ctx: &egui::Context, recent: &[std::path::PathBuf]) {
     let _ = app_menu.append(&PredefinedMenuItem::quit(None));
     let _ = menu.append(&app_menu);
 
+    let mut checks = Vec::new();
     for section in menu::model_with(recent) {
         let sub = Submenu::new(section.title, true);
-        append_items(&sub, section.items, &mut by_id);
+        append_items(&sub, section.items, &mut by_id, &mut checks);
         let _ = menu.append(&sub);
     }
 
@@ -142,7 +147,14 @@ pub fn install(ctx: &egui::Context, recent: &[std::path::PathBuf]) {
         ctx.request_repaint();
     }));
 
-    MENU.with(|m| *m.borrow_mut() = Some(Installed { _menu: menu, by_id }));
+    MENU.with(|m| {
+        *m.borrow_mut() = Some(Installed {
+            _menu: menu,
+            by_id,
+            checks,
+            synced: None,
+        })
+    });
 }
 
 /// Drain any menu activations since the last frame.
@@ -153,6 +165,24 @@ pub fn refresh(ctx: &egui::Context, recent: &[std::path::PathBuf]) {
         return;
     }
     install(ctx, recent);
+}
+
+/// Set the check marks from `state` (M10.8b). ⚠ Called every frame and cheap: AppKit is touched only
+/// when the state differs from the one last set — and after an `install`, which starts unset.
+pub fn sync(state: &menu::MenuState) {
+    MENU.with(|m| {
+        let mut m = m.borrow_mut();
+        let Some(installed) = m.as_mut() else { return };
+        if installed.synced.as_ref() == Some(state) {
+            return;
+        }
+        for (command, item) in &installed.checks {
+            if let Some(on) = menu::checked(*command, state) {
+                item.set_checked(on);
+            }
+        }
+        installed.synced = Some(*state);
+    });
 }
 
 pub fn poll() -> Vec<Command> {
@@ -295,7 +325,12 @@ fn forbid_window_tabbing() {
 ///
 /// ⚠ About and Settings are skipped: they live in the application menu, where macOS expects
 /// them, and the app menu is built by hand above.
-fn append_items(sub: &Submenu, items: Vec<Item>, by_id: &mut HashMap<MenuId, Command>) {
+fn append_items(
+    sub: &Submenu,
+    items: Vec<Item>,
+    by_id: &mut HashMap<MenuId, Command>,
+    checks: &mut Vec<(Command, CheckMenuItem)>,
+) {
     for item in items {
         match item {
             Item::Separator => {
@@ -303,7 +338,7 @@ fn append_items(sub: &Submenu, items: Vec<Item>, by_id: &mut HashMap<MenuId, Com
             }
             Item::Submenu { label, items } => {
                 let nested = Submenu::new(native_label(&label), true);
-                append_items(&nested, items, by_id);
+                append_items(&nested, items, by_id, checks);
                 let _ = sub.append(&nested);
             }
             Item::Action {
@@ -325,9 +360,22 @@ fn append_items(sub: &Submenu, items: Vec<Item>, by_id: &mut HashMap<MenuId, Com
                     Some(sc) => (format!("{label}   {}", sc.label()), None),
                     None => (label.to_string(), None),
                 };
-                let mi = MenuItem::new(native_label(&text), true, accel);
-                by_id.insert(mi.id().clone(), command);
-                let _ = sub.append(&mi);
+                // M10.8b: a command with a mark is a checkable item, set by `sync` — not here, since
+                // the state is not known at install.
+                let unset = menu::MenuState {
+                    layout: rustroom_app::layout::Layout::default(),
+                    filmstrip_shown: true,
+                };
+                if menu::checked(command, &unset).is_some() {
+                    let mi = CheckMenuItem::new(native_label(&text), true, false, accel);
+                    by_id.insert(mi.id().clone(), command);
+                    let _ = sub.append(&mi);
+                    checks.push((command, mi));
+                } else {
+                    let mi = MenuItem::new(native_label(&text), true, accel);
+                    by_id.insert(mi.id().clone(), command);
+                    let _ = sub.append(&mi);
+                }
             }
         }
     }
