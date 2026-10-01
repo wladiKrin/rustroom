@@ -160,6 +160,8 @@ pub(crate) struct Library {
     /// too — the view is built from files, and `entries::build` expands every copy the sidecar lists
     /// (measured 2026-10-01).
     pub(crate) copies: Option<std::collections::HashSet<PhotoId>>,
+    /// The hand stacks of the files on view (M10.8c) — read with the view and after every stack command.
+    pub(crate) hand_stacks: rustroom_app::stack::HandStacks,
     /// The catalog's change count when this source's members were last read (`source_refresh`).
     pub(crate) members_read_at: u64,
     /// A change count seen once and waiting to be seen again before the members are re-read — a
@@ -305,13 +307,38 @@ pub(crate) fn browser_entries(
     remote: &std::collections::HashMap<String, String>,
     // ⚠ `Library::copies`: only these rows, for a source that holds copies rather than files.
     copies: Option<&std::collections::HashSet<PhotoId>>,
+    // ⚠ M10.8c: the hand stacks, keyed before the server's and the name's.
+    hand: &rustroom_app::stack::HandStacks,
 ) -> Vec<entries::PhotoEntry> {
     let mut rows = entries::build(scan, sidecar::load_all);
     if let Some(keep) = copies {
         // ⚠ Before grouping, so a stack is made of the rows that are actually shown.
         rows.retain(|e| keep.contains(&e.id));
     }
-    rustroom_app::stack::group(rows, stacking, expanded, remote)
+    rustroom_app::stack::group_with(rows, stacking, expanded, remote, hand)
+}
+
+/// The hand stacks of `scan`'s files, read from the catalog — one query per folder (M10.8c).
+pub(crate) fn hand_stacks_of(
+    cat: Option<&catalog::db::Catalog>,
+    scan: &[catalog::CatalogEntry],
+) -> rustroom_app::stack::HandStacks {
+    let mut out = rustroom_app::stack::HandStacks::new();
+    let Some(cat) = cat else { return out };
+    let mut folders: Vec<&std::path::Path> = Vec::new();
+    for e in scan {
+        if let Some(dir) = e.path.parent() {
+            if !folders.contains(&dir) {
+                folders.push(dir);
+            }
+        }
+    }
+    for dir in folders {
+        for (path, id, top) in cat.hand_stacks_in(dir).unwrap_or_default() {
+            out.insert(path, (id, top));
+        }
+    }
+    out
 }
 
 impl RustroomApp {
@@ -386,6 +413,7 @@ impl RustroomApp {
             &lib.stack_expanded,
             &remote,
             lib.copies.as_ref(),
+            &lib.hand_stacks,
         );
 
         // ⚠ The selection is by *index*, and the indices have just shifted — so it is re-derived
@@ -529,7 +557,14 @@ mod tests {
 
         // ⚠ The sample assertion: the scan really holds two files, or "grouped to one" is vacuous.
         assert_eq!(pair.len(), 2);
-        let grouped = browser_entries(&pair, &on, &Default::default(), &Default::default(), None);
+        let grouped = browser_entries(
+            &pair,
+            &on,
+            &Default::default(),
+            &Default::default(),
+            None,
+            &Default::default(),
+        );
         assert_eq!(grouped.len(), 1, "the pair must collapse on the open path");
         assert!(grouped[0].stack.is_some());
 
@@ -537,7 +572,15 @@ mod tests {
         // above is about grouping rather than about the fixture.
         let off = rustroom_app::stack::Stacking::default();
         assert_eq!(
-            browser_entries(&pair, &off, &Default::default(), &Default::default(), None).len(),
+            browser_entries(
+                &pair,
+                &off,
+                &Default::default(),
+                &Default::default(),
+                None,
+                &Default::default()
+            )
+            .len(),
             2
         );
     }

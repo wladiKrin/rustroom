@@ -103,6 +103,7 @@ impl RustroomApp {
             | ActionKind::KeywordCreate { .. } => self.replay_keyword_action(&kind, false),
             ActionKind::CollectionChange { .. } => self.replay_collection_change(&kind, false),
             ActionKind::PhotoMove { .. } => self.replay_photo_move(ctx, &kind, false),
+            ActionKind::StackChange { .. } => self.replay_stack_change(&kind, false),
             ActionKind::PresetDelete { name } => {
                 match self.preset_store.restore(&name) {
                     Ok(Some(p)) => self.status = format!("Restored preset “{}”", p.name),
@@ -202,6 +203,7 @@ impl RustroomApp {
             | ActionKind::KeywordCreate { .. } => self.replay_keyword_action(&kind, true),
             ActionKind::CollectionChange { .. } => self.replay_collection_change(&kind, true),
             ActionKind::PhotoMove { .. } => self.replay_photo_move(ctx, &kind, true),
+            ActionKind::StackChange { .. } => self.replay_stack_change(&kind, true),
             ActionKind::PresetDelete { name } => {
                 match self.preset_store.delete(&name) {
                     Ok(()) => self.status = format!("Deleted preset “{name}”"),

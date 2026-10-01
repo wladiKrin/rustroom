@@ -78,6 +78,7 @@ mod smart_sources;
 mod snapshots;
 mod source_refresh;
 mod sources;
+mod stack_ops;
 mod status_bar;
 #[cfg(test)]
 mod test_app;

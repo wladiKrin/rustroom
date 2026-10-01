@@ -180,6 +180,10 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
             }
         }
         Command::ToggleFilmstrip => app.show_filmstrip = !app.show_filmstrip,
+        Command::Stack => app.stack_selection(),
+        Command::Unstack => app.unstack_selection(),
+        Command::MakeTopOfStack => app.make_active_top_of_stack(),
+        Command::StackByTime(secs) => app.stack_by_capture_time(secs),
         Command::TogglePanels => app.show_panels = !app.show_panels,
         Command::LightsOut => app.lights_out = (app.lights_out + 1) % 3,
         Command::ToggleInfoOverlay => app.show_info_overlay = !app.show_info_overlay,

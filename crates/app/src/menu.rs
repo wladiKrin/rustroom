@@ -42,6 +42,14 @@ pub enum Command {
     ZoomActual,
     ToggleBeforeAfter,
     ToggleFilmstrip,
+    /// Stack the selection by hand (M10.8c) — ⌘G.
+    Stack,
+    /// Take apart the hand stacks the selection touches — ⇧⌘G.
+    Unstack,
+    /// Make the active photo the top of its hand stack.
+    MakeTopOfStack,
+    /// Stack runs of photos taken within this many seconds of each other.
+    StackByTime(u32),
     /// Hide or show the panels, the rail and the filmstrip — Tab, as in Lightroom.
     TogglePanels,
     /// Cycle the surround: normal → dimmed → black, the picture alone — L, as in Lightroom.
@@ -284,6 +292,18 @@ pub fn model_with(recent: &[PathBuf]) -> Vec<Section> {
                     Some(Shortcut::cmd(']')),
                 ),
                 Item::Separator,
+                // M10.8c: stacks by hand. ⌘G is safe as a native accelerator — not a text chord.
+                action("Stack", Command::Stack, Some(Shortcut::cmd('G'))),
+                action("Unstack", Command::Unstack, Some(Shortcut::cmd_shift('G'))),
+                action("Make top of stack", Command::MakeTopOfStack, None),
+                Item::Submenu {
+                    label: "Stack by capture time".to_owned(),
+                    items: STACK_GAPS
+                        .iter()
+                        .map(|&(label, secs)| action(label, Command::StackByTime(secs), None))
+                        .collect(),
+                },
+                Item::Separator,
                 action("Save as preset…", Command::SavePreset, None),
                 Item::Separator,
                 action("Build previews", Command::BuildPreviews, None),
@@ -318,6 +338,16 @@ pub fn checked(command: Command, s: &MenuState) -> Option<bool> {
         _ => None,
     }
 }
+
+/// Stack by capture time's gaps (M10.8c): what the submenus offer, and in seconds.
+pub const STACK_GAPS: [(&str, u32); 6] = [
+    ("Within 1 second", 1),
+    ("Within 2 seconds", 2),
+    ("Within 5 seconds", 5),
+    ("Within 10 seconds", 10),
+    ("Within 30 seconds", 30),
+    ("Within 1 minute", 60),
+];
 
 /// The View menu's items.
 ///

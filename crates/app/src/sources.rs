@@ -303,12 +303,14 @@ impl RustroomApp {
         // ⚠⚠ **Through `browser_entries`, never a bare `entries::build`.** This is the
         // folder-open path, and building the rows here without grouping is exactly the bug that
         // shipped: stacking worked after a re-sort and did nothing when a folder was opened.
+        let hand_stacks = crate::library_state::hand_stacks_of(self.catalog.as_ref(), &scan);
         let entries = crate::library_state::browser_entries(
             &scan,
             &self.settings.stacking,
             &Default::default(),
             &self.immich_stacks.of_asset,
             copies.as_ref(),
+            &hand_stacks,
         );
         let n = entries.len();
         let ctx2 = ctx.clone();
@@ -335,6 +337,7 @@ impl RustroomApp {
             captures: std::collections::HashMap::new(),
             band: None,
             copies,
+            hand_stacks,
             members_read_at: read_at,
             members_settling: None,
         });

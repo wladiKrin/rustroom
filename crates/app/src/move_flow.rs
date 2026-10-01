@@ -31,37 +31,14 @@ impl RustroomApp {
         self.move_files(ctx, &files, &dest);
     }
 
-    /// The files a right-click's targets stand for: one per file — copies share it — and every file
-    /// of a **collapsed** stack, since its one row is all of them to the eye.
+    /// The files a right-click's targets stand for — `files_of` (`stack_ops`).
     pub(crate) fn files_to_move(&self, clicked: usize) -> Vec<PathBuf> {
-        let Some(lib) = &self.library else {
-            return Vec::new();
-        };
-        let remote = &self.immich_stacks.of_asset;
-        let mut out: Vec<PathBuf> = Vec::new();
-        let mut add = |p: &Path| {
-            if !out.iter().any(|q| q == p) {
-                out.push(p.to_path_buf());
-            }
-        };
-        for id in crate::library::menu_targets(lib, clicked) {
-            add(&id.path);
-            let collapsed = lib
-                .entries
-                .iter()
-                .find(|e| e.id == id)
-                .and_then(|e| e.stack.as_ref())
-                .is_some_and(|s| !s.expanded);
-            if collapsed {
-                let key = rustroom_app::stack::key_of_with(&id.path, remote);
-                for e in &lib.scan {
-                    if key.is_some() && rustroom_app::stack::key_of_with(&e.path, remote) == key {
-                        add(&e.path);
-                    }
-                }
-            }
-        }
-        out
+        let targets = self
+            .library
+            .as_ref()
+            .map(|l| crate::library::menu_targets(l, clicked))
+            .unwrap_or_default();
+        self.files_of(&targets)
     }
 
     /// Move `files` into `dest`, as one undo step. Returns how many photos moved.
@@ -488,7 +465,7 @@ mod tests {
         let lib = test_app::library_of(1);
         let targets = vec![lib.entries[0].id.clone()];
         let labels: Vec<String> = crate::test_ui::nodes(&crate::test_ui::ctx(), |ui| {
-            let _ = crate::library::cell_menu(ui, None, &lib.source, &targets);
+            let _ = crate::library::cell_menu(ui, None, &lib.source, &Default::default(), &targets);
         })
         .into_iter()
         .map(|n| n.label)

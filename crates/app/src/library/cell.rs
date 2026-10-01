@@ -370,7 +370,7 @@ fn interactions(
             out.menu_select = Some(i);
         }
         let targets = menu_targets(lib, i);
-        if let Some(a) = cell_menu(ui, catalog, &lib.source, &targets) {
+        if let Some(a) = cell_menu(ui, catalog, &lib.source, &lib.hand_stacks, &targets) {
             out.menu = Some((i, a));
         }
     });
