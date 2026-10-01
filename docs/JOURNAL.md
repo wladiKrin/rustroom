@@ -166,6 +166,40 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-10-01 — M10.8b: movable panels and a vertical filmstrip (branch `m10.8b-layout`, awaiting use)
+
+**Input:** Phase 10's *"a vertical filmstrip"*, widened when the brainstorm opened: *"all sidecars, i.e.
+the edit sidecar and also the one in the library view should be movable"* — the side panels. The
+author's choices: **the View menu, remembered** (Capture One's way; dragging to the other side not
+chosen); **each piece on its own**; a strip on the edit panel's side **at the window edge**. Spec and
+plan `2026-10-01-m10.8b-layout`.
+
+**Built:**
+- **Lib `layout`:** `Side`, `StripPlace`, `Layout` (default left / right / bottom — today's; a settings
+  file without it loads that) and `develop_order` — outermost first, since egui gives a side panel what
+  the earlier ones left: the strip first only on the panel's side; a bottom strip after the side panels,
+  so it still spans only the photo column.
+- **Menus:** three commands appended to View; ⚠ **check marks are new**, and come from the command
+  (`menu::checked(command, MenuState)`), so `Item` kept its shape — a checkbox or radio in the in-window
+  bar, a `CheckMenuItem` on macOS set by a per-frame `native_menu::sync` that touches AppKit only on a
+  change. The existing *Filmstrip* toggle has its mark too.
+- **Bin:** `side_panel::side` — one place for left or right; `develop::body` draws `develop_order`; the
+  filmstrip along either axis (the cell from the cross size, 3:2 either way; `thumb_window` along the
+  main axis; its own panel id on a side, so a width and a height are not one remembered size).
+
+**Tests:** all six Develop layouts drawn, read from egui's **stored panel rectangles** (no overlap, the
+rail outside the panel, the strip outermost on a shared side, a bottom strip under the photo column);
+the Library rail on both sides of the grid; a side strip that is a column, draws only its window and
+stays centred while resized; the marks; the commands. **Sabotages, each red** (against a 47-test
+control): the shared side not outermost (2); the strip ignoring its axis (2); the Library rail ignoring
+its side (1); the edit panel ignoring its side (1); `checked` always `None` (1); a place chosen without
+showing the strip (1).
+
+⚠ Two of my own slips on the way: AccessKit's node order is not the screen's (the column check sorted by
+y), and **a commit made before reading clippy's exit code** shipped a tree whose tests did not compile
+(`hover_coverage` called the old `menu_bar::show`) — amended only after a green gate. ⚠ The native
+check marks are reachable by no test (AppKit), verified by use. **3378 tests.**
+
 ### 2026-10-01 — Move to folder, Immich downloads included (branch `move-to-folder`, merged 2026-10-01)
 
 **Input:** *"I'd like the option to move images from one folder to another from rustroom directly.
