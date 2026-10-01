@@ -173,7 +173,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-29)
 
-**3351 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
+**3368 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -288,6 +288,10 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   `Catalog::change_count` has moved and settled — never a list of writers. A new catalog-backed source
   must answer `source_members`, and its opener must read it too. ⚠ `rebuild_entries(None)` keeps the
   selection **by id**; `Selection::clear()` keeps the active *index*, so never use it across a rebuild.
+- ⚠⚠ **A new per-file catalog table joins `PER_FILE_TABLES`** (`catalog/src/db/moves.rs`) — the one list
+  both a move Rustroom makes (`move_photo`, Move to folder) and one it only notices (`relink_moved`) re-key;
+  a table missing from it leaves its rows behind. ⚠ A collection or smart-collection view shows only its
+  member **copies** (`Library::copies`, applied in `browser_entries`); keyword and date views every copy.
 - ⚠⚠ **NO SOURCE FILE OVER 1,000 LINES OF CODE AND DOC COMMENTS — the gate enforces it** (M10.7d):
   `test-dir`'s `no_file_is_over_a_thousand_lines_of_code_and_doc`. Its measure, `code_and_doc_lines`,
   counts non-blank lines outside every `#[cfg(test)]` item **wherever it sits**, and skips a file

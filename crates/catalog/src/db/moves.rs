@@ -67,8 +67,56 @@ impl Catalog {
     }
 
     /// Move every row keyed on `(old_folder, name)` to the folder at `new_path`, in one
-    /// transaction. ⚠ Every per-file table — a new one keyed on the file must be added here.
+    /// transaction.
     fn relink(&self, old_folder: i64, new_path: &str, name: &str) -> Result<(), CatalogError> {
+        self.move_rows(old_folder, name, new_path, name)
+    }
+
+    /// Follow a move Rustroom made itself: `from` is now `to`, in another folder and perhaps under
+    /// another name (2026-10-01, Move to folder). Every copy's rows and every per-file table follow;
+    /// collection membership rides the photo row's id. A photo the catalog does not know is not an
+    /// error — the catalog is not authoritative.
+    pub fn move_photo(&self, from: &Path, to: &Path) -> Result<(), CatalogError> {
+        let (Some((from_dir, from_name)), Some((to_dir, to_name))) =
+            (super::split(from), super::split(to))
+        else {
+            return Ok(());
+        };
+        let old: Option<i64> = self
+            .conn
+            .query_row("SELECT id FROM folders WHERE path = ?1", [&from_dir], |r| {
+                r.get(0)
+            })
+            .ok();
+        match old {
+            Some(old) => self.move_rows(old, &from_name, &to_dir, &to_name),
+            None => Ok(()),
+        }
+    }
+
+    /// Whether the catalog has a photo row at `path` — a destination name a move must not take even
+    /// when no file is there (a vanished file's rows are kept: absence is not deletion).
+    pub fn knows(&self, path: &Path) -> Result<bool, CatalogError> {
+        let Some((dir, name)) = super::split(path) else {
+            return Ok(false);
+        };
+        Ok(self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM photos p JOIN folders f ON f.id = p.folder_id
+                            WHERE f.path = ?1 AND p.file_name = ?2)",
+            rusqlite::params![dir, name],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Re-key every per-file row from `(old_folder, old_name)` to `(new_path, new_name)`, creating the
+    /// destination folder's row if it is new — one transaction.
+    fn move_rows(
+        &self,
+        old_folder: i64,
+        old_name: &str,
+        new_path: &str,
+        new_name: &str,
+    ) -> Result<(), CatalogError> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
             "INSERT INTO folders (path, last_seen) VALUES (?1, 0) ON CONFLICT(path) DO NOTHING",
@@ -78,24 +126,30 @@ impl Catalog {
             tx.query_row("SELECT id FROM folders WHERE path = ?1", [new_path], |r| {
                 r.get(0)
             })?;
-        for table in [
-            "photos",
-            "photo_keywords",
-            "photo_capture",
-            "photo_description",
-            "photo_history",
-        ] {
+        for table in PER_FILE_TABLES {
             tx.execute(
                 &format!(
-                    "UPDATE {table} SET folder_id = ?1 WHERE folder_id = ?2 AND file_name = ?3"
+                    "UPDATE {table} SET folder_id = ?1, file_name = ?4
+                     WHERE folder_id = ?2 AND file_name = ?3"
                 ),
-                rusqlite::params![new_folder, old_folder, name],
+                rusqlite::params![new_folder, old_folder, old_name, new_name],
             )?;
         }
         tx.commit()?;
         Ok(())
     }
 }
+
+/// ⚠⚠ **Every table keyed on `(folder_id, file_name)`** — a new one must be added here, or a move
+/// (whether Rustroom made it or only noticed it) would leave its rows behind. One list, shared by
+/// [`Catalog::relink_moved`] and [`Catalog::move_photo`], so the two cannot disagree.
+const PER_FILE_TABLES: [&str; 5] = [
+    "photos",
+    "photo_keywords",
+    "photo_capture",
+    "photo_description",
+    "photo_history",
+];
 
 #[cfg(test)]
 mod tests {
@@ -292,5 +346,62 @@ mod tests {
             .relink_moved(&w.root.join("b"), &[entry(&to)], |p| !p.exists())
             .unwrap();
         assert!(moved.is_empty());
+    }
+
+    /// ⚠⚠ A move Rustroom makes — into a folder the catalog has never seen, **renamed** on the way —
+    /// takes every per-file row and keeps the photo in its collection (2026-10-01).
+    #[test]
+    fn move_photo_takes_every_row_to_a_new_folder_and_name() {
+        let w = world("move_photo");
+        let from = w.root.join("a/x.RAF");
+        let c = w.cat.create_collection("Trips").unwrap();
+        w.cat.add_to_collection(c, &from, 0).unwrap();
+        let to = w.root.join("c/y.RAF");
+        assert!(
+            w.cat.knows(&from).unwrap() && !w.cat.knows(&to).unwrap(),
+            "the sample"
+        );
+
+        w.cat.move_photo(&from, &to).unwrap();
+
+        assert!(!w.cat.knows(&from).unwrap() && w.cat.knows(&to).unwrap());
+        assert_eq!(w.cat.marks(&to, 0).unwrap().rating, 4, "the rating");
+        assert!(w.cat.photo_id(&to, 1).unwrap().is_some(), "the copy");
+        assert_eq!(
+            w.cat.load_history(&to, 0).unwrap().as_deref(),
+            Some("history")
+        );
+        assert_eq!(
+            w.cat
+                .description_of(&to)
+                .unwrap()
+                .map(|d| d.title)
+                .as_deref(),
+            Some("Eiffel")
+        );
+        assert_eq!(
+            w.cat.capture_of(&to).unwrap().and_then(|c| c.iso),
+            Some(3200)
+        );
+        let kw = w.cat.keywords().unwrap()[0].id;
+        assert!(w.cat.file_has_keyword(kw, &to).unwrap(), "the keyword");
+        assert_eq!(w.cat.collection_members(c).unwrap(), vec![(to.clone(), 0)]);
+        assert!(
+            w.cat
+                .folders()
+                .unwrap()
+                .iter()
+                .any(|f| f.path == w.root.join("c")),
+            "the new folder is known"
+        );
+    }
+
+    #[test]
+    fn moving_a_photo_the_catalog_does_not_know_is_harmless() {
+        let w = world("move_unknown");
+        w.cat
+            .move_photo(&w.root.join("z/none.RAF"), &w.root.join("b/none.RAF"))
+            .unwrap();
+        assert!(w.cat.knows(&w.root.join("a/x.RAF")).unwrap());
     }
 }

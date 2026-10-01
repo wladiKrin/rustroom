@@ -132,6 +132,9 @@ pub enum ActionKind {
         add: bool,
         members: Vec<PhotoId>,
     },
+    /// Photos moved to another folder (2026-10-01): each file's `(from, to)`, as it happened. Undo
+    /// moves them back, redo moves them again — the sidecars and the catalog rows with them.
+    PhotoMove { moves: Vec<(PathBuf, PathBuf)> },
     /// Several actions performed by one gesture, undone and redone as a unit.
     ///
     /// Pasting into a multi-selection is the motivating case: it changes the open photo
@@ -200,6 +203,7 @@ fn reachable(kind: &ActionKind, open: Option<&PhotoId>) -> bool {
         | ActionKind::KeywordTag { .. }
         | ActionKind::KeywordCreate { .. }
         | ActionKind::CollectionChange { .. }
+        | ActionKind::PhotoMove { .. }
         | ActionKind::Rename { .. } => true,
         ActionKind::Batch(parts) => parts.iter().all(|p| reachable(p, open)),
     }

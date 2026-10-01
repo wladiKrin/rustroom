@@ -166,7 +166,39 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-10-01 — Virtual copies from the Library: made and deleted without leaving it (branch `library-copy-actions`, awaiting use)
+### 2026-10-01 — Move to folder, Immich downloads included (branch `move-to-folder`, merged 2026-10-01)
+
+**Input:** *"I'd like the option to move images from one folder to another from rustroom directly.
+Especially for ones that have been downloaded from immich."* Not in any milestone — M9.9 only
+*recognises* a move made outside. The author's choices: right-click → **Move to folder…** through the
+system picker (dragging onto the rail's folders not chosen); a download **leaves the cache**; it takes
+its **original name**. Spec and plan `2026-10-01-move-to-folder`.
+
+**Built:**
+- **Catalog:** `move_photo(from, to)` — another folder *and* another name — re-keys every per-file table
+  from **one list shared with `relink`** (`PER_FILE_TABLES`), so a table added later cannot be forgotten by
+  one of them; `knows(path)`. **Schema v10**, `immich_names`: the cache names a download by asset id and
+  its original name lived only in memory; `record_assets` now writes it whenever an album or month opens,
+  so the *immich (downloaded)* folder view renames too.
+- **Lib `photo_move`:** `plan` (names kept, an Immich original wanted, `-1` on a clash on disk / by a
+  sidecar / by a vanished file's catalog row, a pair keeps one stem, the same folder plans nothing) and
+  `move_file` (the JSON sidecar and a RAW's XMP follow or the photo goes back; across volumes
+  `copy_verified` then delete; a destination that appeared since is refused — `rename` would replace it).
+- **Bin `move_flow`:** the targets as files (a collapsed stack's every file), the session saved first,
+  undownloaded assets skipped and counted, one `ActionKind::PhotoMove`; `after_move` re-keys the decode
+  cache, drops the old paths' in-memory history, and updates the Library per source (a folder drops what
+  left and takes back what an undo returns; an Immich view keeps its cache paths; a catalog view rewrites
+  paths, selection kept). The open photo reopens in Develop, closes in the Library.
+
+**Sabotages, each red** (against a 21-test control): the JSON sidecar left behind (2); a pair split by a
+collision (2); the catalog not following (1); undo not moving back (1); the Immich name ignored (1); no
+cross-volume fallback (1); undownloaded assets not skipped (1).
+
+⚠ HEIC is not a format the catalog supports — the first test fixture used `.HEIC` names and
+`entries_from_assets` silently returned nothing. ⚠ Left: downloading undownloaded assets and then moving
+them (`docs/BACKLOG.md`). **3368 tests.**
+
+### 2026-10-01 — Virtual copies from the Library: made and deleted without leaving it (branch `library-copy-actions`, merged 2026-10-01)
 
 **Reported in use:** *"Creating a virtual copy in the library view should not open it automatically in
 the Develop view"*, and *"an option in the right-click menu to delete virtual copies whenever it is
@@ -186,7 +218,7 @@ view (1); delete offered for an original (1); each deletion its own step (1). �
 session arrives when it finishes — so "it opened the photo" was invisible. `pending` is set at once;
 the tests assert both now. **3351 tests.**
 
-### 2026-10-01 — Remove from collection, undoable collections, and views of member copies only (branch `remove-from-collection`, awaiting use)
+### 2026-10-01 — Remove from collection, undoable collections, and views of member copies only (branch `remove-from-collection`, merged 2026-10-01)
 
 **Input:** found while fixing the live views — nothing in the app took a photo out of a collection
 (`Catalog::remove_from_collection` existed since M4.1, uncalled), and adding was not undoable. The
