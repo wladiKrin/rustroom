@@ -178,12 +178,15 @@ pub fn cell_with(
     };
     paint_pile(ui, at, step, pile);
     if !pile.is_empty() {
-        // ⚠ A dark rim around the top photo, so it stands off the layer right behind it.
-        ui.painter().rect_filled(
-            at.expand(1.5),
-            egui::CornerRadius::same(CORNER),
-            egui::Color32::from_black_alpha(110),
-        );
+        // ⚠ A rim around the top photo, so it stands off the layer right behind it — dark on the light
+        // theme, light on the dark one, where a dark rim vanished into the panel (the author).
+        let rim = if ui.visuals().dark_mode {
+            egui::Color32::from_white_alpha(110)
+        } else {
+            egui::Color32::from_black_alpha(110)
+        };
+        ui.painter()
+            .rect_filled(at.expand(1.5), egui::CornerRadius::same(CORNER), rim);
     }
     match thumb {
         Some(tex) => {
@@ -855,5 +858,43 @@ mod tests {
             );
         }
         assert!(piled.len() > plain.len(), "the pile added shapes");
+    }
+
+    /// The rim around a pile's top photo is light on the dark theme and dark on the light one.
+    #[test]
+    fn the_rim_contrasts_with_the_theme() {
+        let rim = |dark: bool| {
+            let ctx = egui::Context::default();
+            ctx.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            let mut top = egui::Rect::NOTHING;
+            let out = ctx.run_ui(Default::default(), |ui| {
+                cell_with(
+                    ui,
+                    egui::vec2(160.0, 106.0),
+                    None,
+                    None,
+                    Default::default(),
+                    CellStyle::default(),
+                    &[None],
+                );
+                top = image_rect(ui).unwrap();
+            });
+            out.shapes
+                .iter()
+                .find_map(|c| match &c.shape {
+                    egui::Shape::Rect(r) if (r.rect.min - top.expand(1.5).min).length() < 0.01 => {
+                        Some(r.fill)
+                    }
+                    _ => None,
+                })
+                .expect("the rim was painted")
+        };
+        let (dark, light) = (rim(true), rim(false));
+        assert!(dark.r() > 0, "light on the dark theme: {dark:?}");
+        assert_eq!(light.r(), 0, "dark on the light theme: {light:?}");
     }
 }
