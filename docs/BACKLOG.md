@@ -105,6 +105,11 @@ assignment time, so it needs a schema change, and the author chose the same capt
 keywords instead; and suggestions from the picture's *content* — an AI tagger, unscheduled (M10.16 is
 masks, denoise and removal).
 
+**Move to folder left one thing out, on purpose (2026-10-01):** an Immich asset not downloaded yet is
+skipped and counted rather than downloaded and then moved — the author asked for "ones that have been
+downloaded", and download-then-move is an asynchronous chain (`Job::Original`, then the move when its
+outcome lands) worth its own design.
+
 ⚠⚠ **One entry changed shape rather than being scheduled: EXIF/IPTC editing.** It was blocked on
 "modify the original" versus "a second XMP sidecar". **Writing metadata only into the *exported*
 file is neither** — the original is untouched, no new sidecar exists, and it is exactly what M6.1b
