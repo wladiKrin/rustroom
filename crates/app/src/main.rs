@@ -62,6 +62,7 @@ mod library_state;
 mod list_row;
 mod menu_bar;
 mod modals;
+mod move_flow;
 mod multi;
 mod name_edit;
 #[cfg(target_os = "macos")]

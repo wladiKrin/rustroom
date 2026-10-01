@@ -12,7 +12,7 @@ milestone: M9.9 only *recognises* a move made outside Rustroom (`Catalog::relink
 - **Right-click → Move to folder…**, through the system folder picker (which can make a folder).
   Dragging onto the rail's folders was offered and not chosen.
 - **An Immich download moves out of the cache** and becomes an ordinary local photo.
-- **It takes its original name** (`IMG_1234.HEIC`), not the asset id the cache names it by.
+- **It takes its original name** (`IMG_1234.JPG`), not the asset id the cache names it by.
 
 ## Design
 

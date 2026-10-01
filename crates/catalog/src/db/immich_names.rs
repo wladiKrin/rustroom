@@ -1,8 +1,8 @@
 //! The original file names of Immich downloads (2026-10-01, Move to folder).
 //!
-//! ⚠⚠ **Why this exists.** The Immich cache names a download by its asset id (`<uuid>.HEIC`) — on
+//! ⚠⚠ **Why this exists.** The Immich cache names a download by its asset id (`<uuid>.JPG`) — on
 //! purpose, see `immich_source::cache_path` — and a `photos` row is keyed on that name. The name the
-//! photo had on the phone (`IMG_1234.HEIC`) lived only in the asset list held in memory, so a photo
+//! photo had on the phone (`IMG_1234.JPG`) lived only in the asset list held in memory, so a photo
 //! moved out of the cache would have kept the id as its name. `record_assets` writes it here whenever
 //! an album or a month is opened, which is what lets the *immich (downloaded)* folder view rename too.
 //!

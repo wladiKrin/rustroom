@@ -29,6 +29,8 @@ pub enum CellAction {
     AddToCollection(i64),
     /// Delete the virtual copies among the targets.
     DeleteVirtualCopies,
+    /// Move the targets' files to a folder the system picker asks for.
+    MoveToFolder,
     /// Take every target out of the collection on screen.
     RemoveFromCollection(i64),
     /// Assign a keyword across the targets, or remove it from all of them.
@@ -201,6 +203,10 @@ pub fn cell_menu(
         action = Some(CellAction::Reveal);
         ui.close();
     }
+    if ui.button("Move to folder…").clicked() {
+        action = Some(CellAction::MoveToFolder);
+        ui.close();
+    }
     let Some(cat) = catalog else {
         return action;
     };
@@ -353,6 +359,7 @@ pub fn apply_cell_action(
                 .unwrap_or_default();
             app.delete_copies(ctx, &targets);
         }
+        CellAction::MoveToFolder => app.move_targets_to_folder(ctx, index),
         CellAction::Reveal => {
             if let Err(e) = rustroom_app::reveal::in_file_manager(&id.path) {
                 app.status = format!("Could not show the file: {e}");
