@@ -205,7 +205,7 @@ under appearance"):** the three layout choices left the View menu and its comman
 group in Settings → Appearance (`modals/settings_layout.rs` — `settings.rs` is over 800 lines of code),
 three segmented controls applied with the rest of the draft; a new filmstrip place still shows the
 strip. The check-mark mechanism stayed, now on the *Filmstrip* toggle alone. Sabotaged: the layout not
-applied, a new place not shown — both red.
+applied, a new place not shown — both red. **3377 tests.**
 
 ### 2026-10-01 — Move to folder, Immich downloads included (branch `move-to-folder`, merged 2026-10-01)
 
