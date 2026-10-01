@@ -219,7 +219,9 @@ apart (2); time-stacking touching the user's (1); a reorder keeping `by_time` (6
 green; re-run against the real text, red. ⚠ Two test slips: a cell and its caption share an AccessKit name
 (take the larger rect), and the pile moved the badge off the cell's corner (click it by name).
 **3404 tests.** Then *"a bit more pronounced"*: steps up to **10 pt** within about **a fifth** of the box
-(was 6 pt and a tenth), a lighter scrim (20 + 18·depth), and a dark rim around the top photo.
+(was 6 pt and a tenth), a lighter scrim (20 + 18·depth), and a dark rim around the top photo. Then: the
+rim **light on the dark theme** (a dark one vanished there; `the_rim_contrasts_with_the_theme`, sabotaged
+red), and the step **back to 6 pt** within the wider reach. **3405 tests.**
 
 ### 2026-10-01 — M10.8b: movable panels and a vertical filmstrip (branch `m10.8b-layout`, merged 2026-10-01)
 
