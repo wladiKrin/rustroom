@@ -28,7 +28,7 @@ and a pointer, not deleted.
 | --- | --- |
 | **M10.6** your to-do + a design leftover | (from the vault's `to dos.md` and `DESIGN.md`; the welcome screen and the empty Library's text went to **M11.4**) |
 | **M10.7** code health | *Exports are not bit-reproducible* (a, ✅ 2026-09-30); the `ProfileRendering` → `TailRendering` rename (b, 2026-09-30 — the entries below keep the old name, as history); the temp-dir test isolation (c, ✅ 2026-09-30 — the `test-dir` crate); the large files split, with M10.7e's `PrefixCache` tests (d, 2026-09-30); the follow-ups d left on purpose are below the table |
-| **M10.8** Library & workflow | keyword suggestions (a, built 2026-10-01 — from M4.2b's caveat, never an entry here; its two omissions are below the table); P-26's batch rename (d); *Library: … vertical filmstrip* (b) |
+| **M10.8** Library & workflow | keyword suggestions (a, ✅ 2026-10-01 — from M4.2b's caveat, never an entry here; its two omissions are below the table); P-26's batch rename (d); *Library: … vertical filmstrip* (b) |
 | **M10.9** presets & shortcuts | *Presets: no import/export…* (a); *No user-defined keyboard shortcuts* (b) |
 | **M10.10** export | P-26's image watermark (a) and export sizing (b) |
 | **M10.11** Develop additions | *Film negative inversion* (a); P-26's Grain (b) |

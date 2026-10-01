@@ -166,7 +166,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-10-01 — Live views: a keyword, collection, smart-collection or date view follows the catalog (branch `library-live-sources`, awaiting use)
+### 2026-10-01 — Live views: a keyword, collection, smart-collection or date view follows the catalog (branch `library-live-sources`, merged 2026-10-01)
 
 **Reported in use, trying M10.8a:** *"when filtering for a keyword … and then removing that keyword
 from an image, it stays until the view is updated by e.g. switching to a different folder … same for
@@ -202,7 +202,7 @@ photo leaving the view drops the selection (the rule above); by `step_open_photo
 run** — ←/→ would then step from the first photo, since it starts from `active().unwrap_or(0)`.
 **3332 tests.**
 
-### 2026-10-01 — M10.8a: keyword suggestions, type to tag, and tagging made undoable (branch `m10.8a-keyword-suggestions`, awaiting use)
+### 2026-10-01 — M10.8a: keyword suggestions, type to tag, and tagging made undoable (branch `m10.8a-keyword-suggestions`, merged 2026-10-01)
 
 **Input:** Phase 10's *"Keyword suggestions (2026-08-26)"* — M4.2b's accepted caveat (6), "needs usage
 data and a heuristic". The author's choices: **the same capture day + companion keywords + typing
