@@ -37,12 +37,23 @@ impl RustroomApp {
             self.status = format!("Could not create a copy: {e}");
             return;
         }
+        let viewing = self.selected_collection();
         if let Some(cat) = &self.catalog {
             if let Err(e) = cat.add_copy(&path, n) {
                 eprintln!("catalog: {e}");
             }
+            // ⚠⚠ A copy made while a collection is on screen joins it — Lightroom's rule, and the
+            // only way it can stay visible, since that view shows its member copies alone.
+            if let Some(c) = viewing {
+                if let Err(e) = cat.add_to_collection(c, &path, n) {
+                    eprintln!("catalog: {e}");
+                }
+            }
         }
         let id = PhotoId::new(path, n);
+        if let Some(copies) = self.library.as_mut().and_then(|l| l.copies.as_mut()) {
+            copies.insert(id.clone());
+        }
         self.rebuild_entries(Some(&id));
         self.status = format!("Created copy {n}");
         self.open_path(ctx, id);
@@ -661,5 +672,52 @@ mod tests {
             2,
             "the new file must appear"
         );
+    }
+
+    /// ⚠⚠ A copy made while a collection is on screen joins it (2026-10-01, Lightroom's rule): the
+    /// view shows member copies only, so otherwise the new copy would vanish the moment it was made.
+    #[test]
+    fn a_copy_made_in_a_collection_view_joins_the_collection() {
+        let ctx = egui::Context::default();
+        let dir = crate::test_app::TestDir::new("copy_joins");
+        let a = dir.0.join("a.RAF");
+        std::fs::write(&a, b"not a real raw").unwrap();
+        let mut app = crate::test_app::for_test();
+        let cat = app.catalog.as_ref().unwrap();
+        let entry = catalog::CatalogEntry {
+            path: a.clone(),
+            file_name: "a.RAF".into(),
+            modified: std::time::SystemTime::UNIX_EPOCH,
+            edited: None,
+        };
+        cat.sync_folder(&dir.0, &[entry]).unwrap();
+        let bw = cat.create_collection("BW").unwrap();
+        cat.add_to_collection(bw, &a, 0).unwrap();
+        app.open_collection(&ctx, bw, "BW");
+        crate::test_app::open_test_photo(&mut app, &ctx, 8, 4);
+        app.session.as_mut().unwrap().path = a.clone();
+
+        app.create_virtual_copy(&ctx);
+
+        let members = app
+            .catalog
+            .as_ref()
+            .unwrap()
+            .collection_members(bw)
+            .unwrap();
+        assert!(
+            members.contains(&(a.clone(), 1)),
+            "{members:?} — {}",
+            app.status
+        );
+        let shown: Vec<u32> = app
+            .library
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .map(|e| e.id.copy)
+            .collect();
+        assert_eq!(shown, vec![0, 1], "the new copy is on screen");
     }
 }

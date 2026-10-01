@@ -56,6 +56,8 @@ fn empty_library(ui: &mut egui::Ui) -> Option<rustroom_app::menu::Command> {
 #[derive(Default)]
 struct GridOutcome {
     open_index: Option<usize>,
+    /// Delete or Backspace in the grid: the selection leaves the collection on screen, if one is.
+    remove_from_collection: bool,
     /// ⚠ Declared out here like `open_index`: the empty state's buttons run a command that needs
     /// `&mut RustroomApp`, which the closure cannot have while it borrows fields of it.
     empty_pick: Option<rustroom_app::menu::Command>,
@@ -174,6 +176,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
     if let Some((targets, a)) = out.mark {
         app.apply_mark_to(&targets, a);
+    }
+    if out.remove_from_collection {
+        app.remove_selection_from_viewed_collection();
     }
     // ⚠⚠ Applied by **rebuilding** the entry list, never by patching it: the grid, the filmstrip,
     // `selection` and `view_region` all index into `lib.entries`, and `entries`' own doc records

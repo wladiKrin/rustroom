@@ -83,6 +83,7 @@ pub mod spot_source;
 pub mod spot_tool;
 pub mod stack;
 pub mod stand_in;
+pub mod status_text;
 pub mod straighten_line;
 pub mod sync;
 pub mod thumb_cache;

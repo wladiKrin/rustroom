@@ -125,6 +125,13 @@ pub enum ActionKind {
         name: String,
         parent: Option<i64>,
     },
+    /// Copies put into (`add`) or taken out of a collection (2026-10-01). ⚠⚠ `members` are only the
+    /// copies whose membership **changed** — undoing an add must not take out one already in.
+    CollectionChange {
+        collection: i64,
+        add: bool,
+        members: Vec<PhotoId>,
+    },
     /// Several actions performed by one gesture, undone and redone as a unit.
     ///
     /// Pasting into a multi-selection is the motivating case: it changes the open photo
@@ -192,6 +199,7 @@ fn reachable(kind: &ActionKind, open: Option<&PhotoId>) -> bool {
         | ActionKind::KeywordMerge(_)
         | ActionKind::KeywordTag { .. }
         | ActionKind::KeywordCreate { .. }
+        | ActionKind::CollectionChange { .. }
         | ActionKind::Rename { .. } => true,
         ActionKind::Batch(parts) => parts.iter().all(|p| reachable(p, open)),
     }

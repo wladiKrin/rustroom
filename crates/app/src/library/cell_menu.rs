@@ -27,6 +27,8 @@ pub enum CellAction {
     /// ⚠ Acts on the **selection**, not on the right-clicked index — which is why the menu
     /// selects the photo first when it is not already selected.
     AddToCollection(i64),
+    /// Take every target out of the collection on screen.
+    RemoveFromCollection(i64),
     /// Assign a keyword across the targets, or remove it from all of them.
     SetKeyword { id: i64, on: bool },
 }
@@ -87,6 +89,7 @@ const MARK_NONE: &str = "☐ ";
 pub fn cell_menu(
     ui: &mut egui::Ui,
     catalog: Option<&catalog::db::Catalog>,
+    source: &crate::LibrarySource,
     targets: &[PhotoId],
 ) -> Option<CellAction> {
     let mut action = None;
@@ -206,6 +209,15 @@ pub fn cell_menu(
         }
     });
 
+    // ⚠ Only while a collection is on screen: "remove from" needs one to mean anything, and the
+    // rail's `−` reaches every other collection from anywhere.
+    if let crate::LibrarySource::Collection { id, name } = source {
+        if ui.button(format!("Remove from “{name}”")).clicked() {
+            action = Some(CellAction::RemoveFromCollection(*id));
+            ui.close();
+        }
+    }
+
     ui.menu_button("Keywords", |ui| {
         if let Some(a) = keyword_menu(ui, cat, targets) {
             action = Some(a);
@@ -302,6 +314,7 @@ pub fn apply_cell_action(
         }
         // ⚠ These two act on the targets, not on `index` — see `menu_targets`.
         CellAction::AddToCollection(cid) => app.add_targets_to_collection(cid, index),
+        CellAction::RemoveFromCollection(cid) => app.remove_targets_from_collection(cid, index),
         CellAction::SetKeyword { id: kid, on } => app.set_keyword_on_targets(kid, on, index),
         CellAction::Mark(mark) => {
             let targets = app
@@ -435,6 +448,37 @@ mod tests {
         assert!(
             top < cats && cats < bottom,
             "the suggestion leads: {found:?}"
+        );
+    }
+
+    /// "Remove from" appears while a collection is on screen, and nowhere else.
+    #[test]
+    fn remove_from_is_offered_only_in_a_collection() {
+        let cat = catalog::db::Catalog::open_in_memory().unwrap();
+        let lib = crate::test_app::library_of(1);
+        let targets = vec![lib.entries[0].id.clone()];
+        let labels = |source: &crate::LibrarySource| -> Vec<String> {
+            crate::test_ui::nodes(&crate::test_ui::ctx(), |ui| {
+                let _ = cell_menu(ui, Some(&cat), source, &targets);
+            })
+            .into_iter()
+            .map(|n| n.label)
+            .collect()
+        };
+        let trips = crate::LibrarySource::Collection {
+            id: 7,
+            name: "Trips".into(),
+        };
+        let shown = labels(&trips);
+        assert!(shown.iter().any(|l| l == "Edit"), "the sample: {shown:?}");
+        assert!(
+            shown.iter().any(|l| l == "Remove from “Trips”"),
+            "{shown:?}"
+        );
+        let folder = labels(&lib.source);
+        assert!(
+            !folder.iter().any(|l| l.starts_with("Remove from")),
+            "{folder:?}"
         );
     }
 }

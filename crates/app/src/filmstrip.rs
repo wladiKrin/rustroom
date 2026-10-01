@@ -157,9 +157,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                         menu_select = Some(i);
                                     }
                                     let targets = crate::library::menu_targets(lib, i);
-                                    if let Some(a) =
-                                        crate::library::cell_menu(ui, catalog, &targets)
-                                    {
+                                    if let Some(a) = crate::library::cell_menu(
+                                        ui,
+                                        catalog,
+                                        &lib.source,
+                                        &targets,
+                                    ) {
                                         menu = Some((i, a));
                                     }
                                 });

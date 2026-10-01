@@ -166,6 +166,40 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-10-01 — Remove from collection, undoable collections, and views of member copies only (branch `remove-from-collection`, awaiting use)
+
+**Input:** found while fixing the live views — nothing in the app took a photo out of a collection
+(`Catalog::remove_from_collection` existed since M4.1, uncalled), and adding was not undoable. The
+author's choices: all three routes, both directions undoable, and member copies only. Spec and plan
+`2026-10-01-remove-from-collection`.
+
+**Built:**
+- **Routes:** right-click **Remove from “<name>”** while a collection is on screen (on `menu_targets`);
+  **Delete or Backspace** in the grid (only asked for by `grid_keys`; the app removes only when a
+  collection is on screen — never a menu-bar key equivalent, which could fire in the search field;
+  listed in Help → Keyboard shortcuts); a **`−`** on each rail collection row, from any view.
+- **One funnel**, `collection_ops::change_collection`, for those three and both adds: records only the
+  copies whose membership changed as one `ActionKind::CollectionChange`; nothing changed, nothing pushed.
+  The catalog's add and remove now report a change. *Add to collection* moved out of `catalog_ops`.
+- **Member copies only.** ⚠⚠ Measured by a throwaway test first: a collection holding only copy 1 of a
+  file **showed copy 0 as well** — the view is built per file and `entries::build` expands every copy.
+  `LibrarySource::is_per_copy` (collection, smart) and `Library::copies`, applied in `browser_entries`
+  before grouping; `smart_members` returns the matching copies; the live refresh compares copies too.
+  A virtual copy made in a collection view **joins it** (Lightroom's rule) — `create_virtual_copy` had no
+  direct test; it has one now.
+- The plural helper moved to the lib's `status_text`, its second caller having arrived.
+
+**Sabotages, each red** (against a 37-test control): the funnel recording every target (2); `browser_
+entries` ignoring `copies` (3); the refresh comparing files only (1); the key acting outside a
+collection (1); the key never read (1); the menu item gone (1); the new copy not joining (1); the rail's
+`−` adding (1). ⚠ The first sabotage run reported **0 passed, 0 failed for all seven** — zsh does not
+word-split a quoted `$T`, so five filters arrived as one that matched nothing: shape (b) again, caught
+only because the counts were printed. Re-run with an array and a control.
+
+⚠ Known, left: in a smart-collection view a new copy stays only if it matches the rule, and copies do not
+inherit the original's rating. ⚠ `collections_panel.rs` is **813** lines of code; it gained only wiring.
+**3347 tests.**
+
 ### 2026-10-01 — Live views: a keyword, collection, smart-collection or date view follows the catalog (branch `library-live-sources`, merged 2026-10-01)
 
 **Reported in use, trying M10.8a:** *"when filtering for a keyword … and then removing that keyword

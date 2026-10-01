@@ -36,6 +36,7 @@ mod ai_flow;
 mod app;
 mod bootstrap;
 mod catalog_ops;
+mod collection_ops;
 mod collections_panel;
 mod commands;
 mod copies;

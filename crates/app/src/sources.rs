@@ -12,6 +12,7 @@ use crate::library_state::fs_modified;
 use crate::{AppView, Library, LibrarySource, RustroomApp};
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
+use rustroom_app::photo_id::PhotoId;
 use rustroom_app::selection::Selection;
 use rustroom_app::sidecar;
 use rustroom_app::thumb_loader::ThumbLoader;
@@ -287,6 +288,18 @@ impl RustroomApp {
         source: LibrarySource,
         scan: Vec<catalog::CatalogEntry>,
     ) -> usize {
+        self.open_scan_with(ctx, source, scan, None)
+    }
+
+    /// [`Self::open_scan`] for a source that holds copies rather than files: only `copies` are shown
+    /// (`Library::copies`).
+    pub(crate) fn open_scan_with(
+        &mut self,
+        ctx: &egui::Context,
+        source: LibrarySource,
+        scan: Vec<catalog::CatalogEntry>,
+        copies: Option<std::collections::HashSet<PhotoId>>,
+    ) -> usize {
         // ⚠⚠ **Through `browser_entries`, never a bare `entries::build`.** This is the
         // folder-open path, and building the rows here without grouping is exactly the bug that
         // shipped: stacking worked after a re-sort and did nothing when a folder was opened.
@@ -295,6 +308,7 @@ impl RustroomApp {
             &self.settings.stacking,
             &Default::default(),
             &self.immich_stacks.of_asset,
+            copies.as_ref(),
         );
         let n = entries.len();
         let ctx2 = ctx.clone();
@@ -320,6 +334,7 @@ impl RustroomApp {
             marks: std::collections::HashMap::new(),
             captures: std::collections::HashMap::new(),
             band: None,
+            copies,
             members_read_at: read_at,
             members_settling: None,
         });
@@ -364,7 +379,8 @@ impl RustroomApp {
         let mut scan =
             rustroom_app::collections::scan_of(&members, sidecar::edited_at, fs_modified);
         catalog::sort(&mut scan, self.settings.library_sort);
-        let n = self.open_scan(ctx, source, scan);
+        let copies = crate::source_refresh::copies_of(&source, &members);
+        let n = self.open_scan_with(ctx, source, scan, copies);
         self.status = if n == 0 {
             format!("“{name}” is empty")
         } else {

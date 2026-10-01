@@ -359,6 +359,7 @@ pub fn library_of_names(names: &[&str]) -> Library {
         marks: std::collections::HashMap::new(),
         captures: std::collections::HashMap::new(),
         band: None,
+        copies: None,
         members_read_at: 0,
         members_settling: None,
     };
