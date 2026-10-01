@@ -198,7 +198,8 @@ is no whole-frame harness — so it is verified by use.
 
 ⚠ Known and left: **nothing in the app removes a photo from a collection** (`remove_from_collection`
 exists in the catalog, uncalled), so the collection half can only be seen by adding. ⚠ In Develop, a
-photo leaving the view drops the selection (the rule above), so ←/→ then start from the first photo.
+photo leaving the view drops the selection (the rule above); by `step_open_photo`'s code — **read, not
+run** — ←/→ would then step from the first photo, since it starts from `active().unwrap_or(0)`.
 **3332 tests.**
 
 ### 2026-10-01 — M10.8a: keyword suggestions, type to tag, and tagging made undoable (branch `m10.8a-keyword-suggestions`, awaiting use)
