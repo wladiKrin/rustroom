@@ -31,6 +31,8 @@ pub(super) struct CellInputs<'a, 'b> {
     pub(super) layout: rustroom_app::cell_layout::GridCell,
     pub(super) cell: f32,
     pub(super) name_size: f32,
+    /// Immich's asset → stack map — the badge keys as the grouping did.
+    pub(super) remote: &'a std::collections::HashMap<String, String>,
 }
 
 /// Draw cell `i` and collect what its interactions asked for.
@@ -50,6 +52,7 @@ pub(super) fn draw(
         layout,
         cell,
         name_size,
+        remote,
     } = c;
     // ⚠⚠ A stable id per photo, not egui's auto-id counter. Under
     // `show_rows` that counter shifts with the scroll position — it skips
@@ -102,7 +105,7 @@ pub(super) fn draw(
                         },
                     );
                     let e = &lib.entries[i];
-                    stack_badge(ui, e, &cell_resp, out);
+                    stack_badge(ui, e, &cell_resp, out, remote, &lib.hand_stacks);
                     // ⚠ The selected cell's name is drawn in the strong
                     // text colour: the border says "selected" at the edge
                     // of the eye, the name says it where you read.
@@ -136,6 +139,8 @@ fn stack_badge(
     e: &rustroom_app::entries::PhotoEntry,
     cell_resp: &egui::Response,
     out: &mut GridOutcome,
+    remote: &std::collections::HashMap<String, String>,
+    hand: &rustroom_app::stack::HandStacks,
 ) {
     // ⚠⚠ Drawn **here** rather than inside `cell_with`, and for
     // two reasons: the count badge must be **clickable** while
@@ -146,7 +151,9 @@ fn stack_badge(
     // top-right **of the picture**, not of the cell, or a
     // portrait's badge floated in the empty corner beside it.
     if let Some(st) = e.stack {
-        if let Some(k) = rustroom_app::stack::key_of(&e.id.path) {
+        // ⚠⚠ `key_for`, the grouping's own key — `key_of` (the name alone) never matched a hand
+        // stack's key nor an Immich server stack's, so their badges did nothing (M10.8c, after use).
+        if let Some(k) = rustroom_app::stack::key_for(&e.id.path, remote, hand) {
             let full = thumb::image_rect(ui).unwrap_or(cell_resp.rect);
             let pill = egui::Rect::from_min_size(
                 egui::pos2(full.right() - STACK_BADGE.x - 4.0, full.top() + 4.0),

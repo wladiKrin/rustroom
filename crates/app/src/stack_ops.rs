@@ -316,4 +316,36 @@ mod tests {
         app.open_scan(&egui::Context::default(), source, scan);
         assert_eq!(rows(&app).len(), 2);
     }
+
+    /// ⚠⚠ After use: the count badge unfurls a hand stack, as it does a RAW+JPEG pair. It keyed on the
+    /// name alone, so a click on a hand stack's badge did nothing.
+    #[test]
+    fn the_badge_unfurls_a_hand_stack() {
+        let mut app = four();
+        app.view = crate::AppView::Library;
+        run(&mut app, Command::Stack);
+        assert_eq!(rows(&app).len(), 2, "the sample: collapsed");
+        let ctx = crate::test_ui::ctx();
+        let draw = |app: &mut crate::RustroomApp, ui: &mut egui::Ui| {
+            let c = ui.ctx().clone();
+            crate::library::show(app, ui, &c);
+        };
+        let mut found = Vec::new();
+        for _ in 0..2 {
+            found = crate::test_ui::labelled_rects_on(&ctx, crate::test_ui::screen(), |ui| {
+                draw(&mut app, ui)
+            });
+        }
+        let cell = found
+            .iter()
+            .find(|(l, _)| l == "rustroom_00000.RAF")
+            .map(|(_, r)| *r)
+            .expect("the stack's cell");
+        // The badge sits 4 pt in from the picture's top-right corner, 20 × 16.
+        let badge = egui::pos2(cell.right() - 14.0, cell.top() + 12.0);
+        crate::test_ui::click_at(&ctx, badge, false, |ui| draw(&mut app, ui));
+        let r = rows(&app);
+        assert_eq!(r.len(), 4, "unfurled: {r:?}");
+        assert_eq!(r.iter().filter(|(_, c)| *c == Some(3)).count(), 3);
+    }
 }

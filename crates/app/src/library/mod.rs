@@ -109,6 +109,8 @@ struct GridInputs<'a> {
     scroll_was: f32,
     /// The live filter, so an empty grid can say which part of it emptied it.
     filter: &'a rustroom_app::library_filter::LibraryFilter,
+    /// Immich's asset → stack map, so a stack's badge keys as the grouping did (M10.8c).
+    remote: &'a std::collections::HashMap<String, String>,
 }
 
 /// Pinch, or ctrl/cmd+scroll, resizes the grid; the size is saved once the gesture settles.
@@ -171,6 +173,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         auto_advance,
         scroll_was,
         filter: &app.filter,
+        remote: &app.immich_stacks.of_asset,
     };
     egui::CentralPanel::default().show(ui, |ui| grid::panel(ui, &mut app.library, inp, &mut out));
 
