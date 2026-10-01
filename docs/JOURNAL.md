@@ -195,6 +195,31 @@ live mode. Spec and plan `2026-10-01-m10.8c-stacks`.
 "20 passed" ends "0 passed" — so a run of 20 green tests printed nothing and looked like silence. Filter
 with `grep -v ' 0 passed'` instead. **3392 tests.**
 
+**After use** (the author: the badge should unfurl the new stacks; *None* for capture time; reorder by
+moving pictures within an unfurled stack; and a pile "where stacked photos are literally stacked"):
+- **The badge bug:** it keyed on the name alone (`stack::key_of`), so it never matched a hand stack —
+  **nor an Immich server stack**, broken since 2026-09-25 and never reported. It keys with `key_for`, and
+  has an accessible name now (*Stack of N* / *Collapse the stack*).
+- **Schema v12** rebuilds `photo_stacks` with `ord` (lowest on top; v11's `top` migrated to order 0 by
+  `ROW_NUMBER()`) and `by_time`. **Two kinds of hand stack:** the ones *Stack by capture time* made, which
+  its **None** takes apart and another gap **replaces**; the user's (⌘G, or any edit of a stack's order),
+  which that menu never touches and whose photos it leaves out.
+- **Drag to reorder** within an unfurled stack (`reorder_gesture`, a `StackMove` payload; the band starts
+  only when no payload was set; Settings → Input → *Reorder a stack*: drag or ⌥-drag). A RAW+JPEG pair or an
+  Immich stack reordered **becomes a hand stack**, kept unfurled under its new key.
+- **The pile** (Settings → Appearance → Stacking → *Pile*: Photos below (default) or Cards): one layer per
+  photo below the top, up to seven, stepped up-right within a tenth of the box, darker with depth; the top
+  photo gives up the room inside the same box. Peeking requests the hidden members' thumbnails
+  (`group_with_below`, kept on the Library); cards request none.
+
+**Sabotages, each red** (against a 61-test control): the badge keyed on the name (1); None taking nothing
+apart (2); time-stacking touching the user's (1); a reorder keeping `by_time` (6); the hand order ignored
+(3); the v12 order inverted (1); the drag never reordering (1); the pile not drawn (1); peeking ignored (1).
+⚠ My first run of "the hand order ignored" **matched nothing** — fmt had wrapped the line — and reported 61
+green; re-run against the real text, red. ⚠ Two test slips: a cell and its caption share an AccessKit name
+(take the larger rect), and the pile moved the badge off the cell's corner (click it by name).
+**3404 tests.**
+
 ### 2026-10-01 — M10.8b: movable panels and a vertical filmstrip (branch `m10.8b-layout`, merged 2026-10-01)
 
 **Input:** Phase 10's *"a vertical filmstrip"*, widened when the brainstorm opened: *"all sidecars, i.e.
