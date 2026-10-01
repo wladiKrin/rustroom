@@ -227,6 +227,21 @@ impl Catalog {
                  COMMIT;",
             )?;
         }
+        if from < 10 {
+            // ⚠⚠ A **new gate**, never an edit to versions 1–9. The original names of Immich
+            // downloads, which the cache names by asset id — see `db/immich_names.rs`.
+            self.conn.execute_batch(
+                "BEGIN;
+                 CREATE TABLE immich_names (
+                     folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                     file_name TEXT NOT NULL,
+                     original  TEXT NOT NULL,
+                     PRIMARY KEY (folder_id, file_name)
+                 );
+                 PRAGMA user_version = 10;
+                 COMMIT;",
+            )?;
+        }
         Ok(())
     }
 }
@@ -259,6 +274,7 @@ mod tests {
             cat.conn
                 .execute_batch(
                     "DROP TABLE photo_history;
+                     DROP TABLE immich_names;
                      DROP TABLE photo_description;
                      DROP TABLE smart_collections;
                      DROP TABLE photo_capture;
@@ -311,6 +327,7 @@ mod tests {
             cat.conn
                 .execute_batch(
                     "DROP TABLE photo_history;
+                     DROP TABLE immich_names;
                      DROP TABLE photo_description;
                      DROP TABLE smart_collections;
                      DROP TABLE photo_capture;
@@ -360,6 +377,7 @@ mod tests {
             cat.conn
                 .execute_batch(
                     "DROP TABLE photo_history;
+                     DROP TABLE immich_names;
                      DROP TABLE photo_description;
                      ALTER TABLE photos DROP COLUMN xmp_mtime;
                      PRAGMA user_version = 5;",
@@ -405,6 +423,7 @@ mod tests {
             cat.conn
                 .execute_batch(
                     "DROP TABLE photo_history;
+                     DROP TABLE immich_names;
                      DROP TABLE photo_description;
                      PRAGMA user_version = 6;",
                 )
@@ -468,13 +487,16 @@ mod tests {
         );
 
         // Re-run the migration from version 7, as an existing database would.
-        // ⚠ Version 9's table dropped too, or re-running from 7 meets it already there (M9.7).
+        // ⚠ The tables of versions 9 and 10 dropped too, or re-running from 7 meets them already
+        // there (M9.7, Move to folder).
         cat.conn
-            .execute_batch("DROP TABLE photo_history; PRAGMA user_version = 7;")
+            .execute_batch(
+                "DROP TABLE photo_history; DROP TABLE immich_names; PRAGMA user_version = 7;",
+            )
             .unwrap();
         cat.migrate().unwrap();
 
-        assert_eq!(cat.version().unwrap(), 9);
+        assert_eq!(cat.version().unwrap(), SCHEMA_VERSION);
         assert_eq!(
             cat.files_without_capture(Path::new("/a")).unwrap(),
             vec!["blank.JPG".to_string()],

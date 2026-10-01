@@ -26,14 +26,24 @@ use std::path::Path;
 /// ⚠ An asset that has not been downloaded still gets a usable row — `file_facts` records a `None`
 /// size for a missing file — because marking a photo straight from a server thumbnail has to work.
 ///
-/// ⚠ A one-line wrapper on purpose: this is where the reasoning above lives and what the tests
-/// address. If it is still one line after another slice, fold it into the callers.
+/// ⚠ Also records each download's original name (`set_original_names`), which Move to folder gives
+/// the file when it leaves the cache.
 pub fn record_assets(
     cat: &catalog::db::Catalog,
     root: &Path,
     scan: &[catalog::CatalogEntry],
 ) -> Result<(), catalog::db::CatalogError> {
-    cat.sync_folder(root, scan)
+    cat.sync_folder(root, scan)?;
+    // ⚠ The name each download had on the phone — `CatalogEntry::file_name` here, the asset's
+    // `original_file_name` — kept for Move to folder, since the cache names it by asset id.
+    let names: Vec<(String, String)> = scan
+        .iter()
+        .filter_map(|e| {
+            let own = e.path.file_name()?.to_string_lossy().into_owned();
+            Some((own, e.file_name.clone()))
+        })
+        .collect();
+    cat.set_original_names(root, &names)
 }
 
 /// Whether this grid cell should carry the downloaded indicator.
@@ -354,5 +364,26 @@ mod tests {
     fn with_no_server_configured_every_row_is_browsable() {
         let dir = temp_dir("noserver");
         assert!(row_is_browsable(&dir.join("anything.jpg"), None));
+    }
+
+    /// Opening an album records each download's original name against its cache name — what Move to
+    /// folder renames it to (2026-10-01).
+    #[test]
+    fn recording_assets_remembers_their_original_names() {
+        let dir = temp_dir("names");
+        let root = dir.join("immich");
+        let cat = catalog::db::Catalog::open(&dir.join("c.sqlite")).unwrap();
+        let scan = crate::immich_source::entries_from_assets(&[asset("one")], &root);
+        let cached = scan[0].path.clone();
+        assert_ne!(
+            cached.file_name().unwrap().to_string_lossy(),
+            "IMG-2023-one-WA0011.jpg",
+            "the sample: the cache name is not the original"
+        );
+        record_assets(&cat, &root, &scan).unwrap();
+        assert_eq!(
+            cat.original_name(&cached).unwrap().as_deref(),
+            Some("IMG-2023-one-WA0011.jpg")
+        );
     }
 }

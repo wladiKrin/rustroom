@@ -14,7 +14,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// The schema this build expects. Bump it whenever [`Catalog::migrate`] gains a step.
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 
 /// What can go wrong talking to the catalog.
 ///
@@ -50,6 +50,8 @@ mod dates;
 /// A photo's undo history (M9.7) — its own file, because this one is already the largest in the
 /// crate. A child module, so it reaches the private connection.
 mod history;
+/// The original names of Immich downloads, for Move to folder (2026-10-01).
+mod immich_names;
 /// What an import compares a card against (M9.12).
 mod imported;
 /// Renaming, re-parenting and merging keywords (M9.8) — its own file for `history`'s reason.
