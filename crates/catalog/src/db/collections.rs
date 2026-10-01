@@ -82,37 +82,39 @@ impl Catalog {
     ///
     /// ⚠ A photo the catalog does not know is silently skipped: the catalog is not authoritative
     /// and must never be a reason an action fails.
+    ///
+    /// Returns whether a row changed — `false` for a photo already in, or one the catalog does not
+    /// know — so an undo can record only what this call did.
     pub fn add_to_collection(
         &self,
         collection: i64,
         photo: &Path,
         copy: u32,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<bool, CatalogError> {
         let Some(photo_id) = self.photo_id(photo, copy)? else {
-            return Ok(());
+            return Ok(false);
         };
-        self.conn.execute(
+        Ok(self.conn.execute(
             "INSERT INTO collection_photos (collection_id, photo_id, added) VALUES (?1, ?2, ?3)
              ON CONFLICT(collection_id, photo_id) DO NOTHING",
             rusqlite::params![collection, photo_id, unix_now()],
-        )?;
-        Ok(())
+        )? > 0)
     }
 
+    /// Take a copy out of a collection; whether a row changed, as [`Self::add_to_collection`].
     pub fn remove_from_collection(
         &self,
         collection: i64,
         photo: &Path,
         copy: u32,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<bool, CatalogError> {
         let Some(photo_id) = self.photo_id(photo, copy)? else {
-            return Ok(());
+            return Ok(false);
         };
-        self.conn.execute(
+        Ok(self.conn.execute(
             "DELETE FROM collection_photos WHERE collection_id = ?1 AND photo_id = ?2",
             rusqlite::params![collection, photo_id],
-        )?;
-        Ok(())
+        )? > 0)
     }
 
     /// Everything in a collection, as `(path, copy)` — **across every folder**.
@@ -286,5 +288,24 @@ mod tests {
         cat.add_to_collection(c, Path::new("/ghost/x.RAF"), 0)
             .expect("must not error");
         assert_eq!(cat.collections().unwrap()[0].count, 0);
+    }
+
+    /// Adding and removing report whether they changed a row (2026-10-01) — what lets an undo of
+    /// "add" leave a photo that was already in the collection.
+    #[test]
+    fn adding_and_removing_report_a_change() {
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+        let c = cat.create_collection("Portfolio").unwrap();
+        let a = Path::new("/x/a.RAF");
+        assert!(cat.add_to_collection(c, a, 0).unwrap());
+        assert!(!cat.add_to_collection(c, a, 0).unwrap(), "already in");
+        assert!(cat.remove_from_collection(c, a, 0).unwrap());
+        assert!(!cat.remove_from_collection(c, a, 0).unwrap(), "already out");
+        assert!(
+            !cat.add_to_collection(c, Path::new("/x/unknown.RAF"), 0)
+                .unwrap(),
+            "a photo the catalog does not know changes nothing"
+        );
     }
 }
