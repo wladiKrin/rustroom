@@ -166,6 +166,35 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-10-01 — M10.8c: stacks by hand, and stacking by capture time (branch `m10.8c-stacks`, awaiting use)
+
+**Input:** Phase 10's *"stack arbitrary photos by hand, and group by capture time rather than stem"*. The
+author's choices: right-click **and** the Photo menu (⌘G / ⇧⌘G); the active photo on top, changeable
+(*Make top of stack*); capture time as **a command that makes stacks** (Lightroom's Auto-Stack), not a
+live mode. Spec and plan `2026-10-01-m10.8c-stacks`.
+
+**Built:**
+- **Catalog:** schema **v11**, `photo_stacks (folder, file, stack_id, top)` — one of `PER_FILE_TABLES`,
+  so a move carries it, and in the folder snapshot, so undoing *Forget folder* restores it.
+- **Lib:** `stack::key_for` — **a hand stack first** (`(folder, "hand:<id>")`), then Immich's, then the
+  name — and `group_with`/`stacked_keys_with` (the old names call them with none, so the 15 existing
+  calls stayed). A hand stack takes part **whatever the name switch and the format list say**, and
+  collapses to its top. `stack_by_hand` (pure): `stack` (per folder; a file in a hand stack brings its
+  stack — the merge), `unstack`, `make_top`, `by_capture_time` (runs whose gaps are **at most** the
+  choice; the earliest on top; no time, no stack) and `tidy` (no stack of one survives any command).
+- **Bin `stack_ops`:** `files_of` (a collapsed row's every file — now shared with Move to folder), the
+  four commands over the selection or the right-click's targets, one `ActionKind::StackChange` (each
+  file's before and after) per command. The Photo menu's Stack ⌘G, Unstack ⇧⌘G, Make top of stack and
+  *Stack by capture time ▸ 1 s … 1 min*; the right-click offers Unstack and Make top only where they act.
+
+**Sabotages, each red** (against a 34-test control): the hand key not first (6); the top ignored (2);
+`tidy` off (1); the merge off (1); undo not restoring (1); `photo_stacks` missing from `PER_FILE_TABLES`
+(1); hand stacks under the name switch (1).
+
+⚠ **A grep of mine was blind for weeks:** `[1-9] (passed|failed)` cannot match a count ending in 0 —
+"20 passed" ends "0 passed" — so a run of 20 green tests printed nothing and looked like silence. Filter
+with `grep -v ' 0 passed'` instead. **3392 tests.**
+
 ### 2026-10-01 — M10.8b: movable panels and a vertical filmstrip (branch `m10.8b-layout`, merged 2026-10-01)
 
 **Input:** Phase 10's *"a vertical filmstrip"*, widened when the brainstorm opened: *"all sidecars, i.e.
