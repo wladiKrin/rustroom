@@ -73,6 +73,7 @@ mod session;
 mod session_flow;
 mod settings_apply;
 mod shell;
+mod side_panel;
 mod smart_sources;
 mod snapshots;
 mod source_refresh;

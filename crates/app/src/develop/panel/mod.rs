@@ -151,7 +151,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     // second, the `apply_view_demosaic` rule.
     let guide_before = app.settings.composition_guide;
     let custom_before = app.settings.custom_aspect;
-    egui::Panel::right("panel")
+    // M10.8b: on the side the View menu put it.
+    crate::side_panel::side(app.settings.layout.edit_panel, "panel")
         // ⚠ 320, up from 270 (2026-09-23, user's call); 270 was up from 240 (2026-09-21), when the
         // snapshot strip's Now row and the longer slider names were cut off.
         //

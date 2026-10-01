@@ -90,21 +90,36 @@ fn delete_selected_retouch(app: &mut RustroomApp, ctx: &egui::Context) -> bool {
 }
 
 pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+    use rustroom_app::layout::Piece;
     app.handle_develop_arrows(ctx);
     let mut photo_edited = false;
     // ⚠ The rail writes into a local, which is then applied through `select_tool` — the one
     // place that owns the re-render. The 1–4 keys and the Photo menu arrive through the same
     // method, so none of the three can switch tools without re-rendering.
     let mut picked = app.tool;
-    if app.session.is_some() && app.show_panels {
-        rail::show(ui, &mut picked);
-    }
-    app.select_tool(picked);
-    if app.show_panels {
-        photo_edited |= panel::show(app, ui);
-    }
-    if app.show_filmstrip && app.show_panels && app.library.is_some() {
-        filmstrip::show(app, ui, ctx);
+    // ⚠⚠ M10.8b: in `develop_order` — outermost first, since egui gives a side panel the room the
+    // ones before it left. A strip on the edit panel's side comes first and sits at the window edge;
+    // a bottom strip comes after the side panels and spans only the photo column.
+    let layout = app.settings.layout;
+    for piece in rustroom_app::layout::develop_order(&layout) {
+        match piece {
+            Piece::ToolRail => {
+                if app.session.is_some() && app.show_panels {
+                    rail::show(ui, &mut picked, layout.edit_panel);
+                }
+                app.select_tool(picked);
+            }
+            Piece::EditPanel => {
+                if app.show_panels {
+                    photo_edited |= panel::show(app, ui);
+                }
+            }
+            Piece::Filmstrip => {
+                if app.show_filmstrip && app.show_panels && app.library.is_some() {
+                    filmstrip::show(app, ui, ctx);
+                }
+            }
+        }
     }
     // ⚠ After the filmstrip, so it sits above it: egui stacks bottom panels outward in call
     // order. It spans the canvas column, the rail and the panel having taken their sides.
