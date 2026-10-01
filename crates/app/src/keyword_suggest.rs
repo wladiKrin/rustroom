@@ -255,9 +255,18 @@ mod tests {
 
     /// Berlin is on both selected files; ten photos share their day, six of them Street and two
     /// Night; Paris goes with Berlin on three of Berlin's ten files.
+    ///
+    /// ⚠⚠ Berlin, Europe and Places carry evidence of their own — four and five of the day's photos,
+    /// two of Berlin's files — so only the exclusions keep them out. Without it the zero-score
+    /// filter dropped them anyway, and turning the ancestor exclusion off left this green.
     #[test]
     fn the_same_day_and_companions_are_suggested_and_the_rest_is_not() {
-        let got = ranked(&[(3, 2)], 2, (10, &[(6, 6), (7, 2)]), &[((3, 4), 3)]);
+        let got = ranked(
+            &[(3, 2)],
+            2,
+            (10, &[(6, 6), (7, 2), (3, 4), (2, 5)]),
+            &[((3, 4), 3), ((3, 1), 2)],
+        );
         // ⚠ The sample first: a ranking that returned nothing would pass every exclusion below.
         assert!(!got.is_empty(), "no suggestion at all");
         assert_eq!(got, vec![6, 4, 7], "Street 0.6, Paris 0.3, Night 0.2");
