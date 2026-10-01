@@ -48,8 +48,9 @@ pub enum Command {
     Unstack,
     /// Make the active photo the top of its hand stack.
     MakeTopOfStack,
-    /// Stack runs of photos taken within this many seconds of each other.
-    StackByTime(u32),
+    /// Stack runs of photos taken within this many seconds of each other; `None` takes the time stacks
+    /// apart.
+    StackByTime(Option<u32>),
     /// Hide or show the panels, the rail and the filmstrip — Tab, as in Lightroom.
     TogglePanels,
     /// Cycle the surround: normal → dimmed → black, the picture alone — L, as in Lightroom.
@@ -340,13 +341,16 @@ pub fn checked(command: Command, s: &MenuState) -> Option<bool> {
 }
 
 /// Stack by capture time's gaps (M10.8c): what the submenus offer, and in seconds.
-pub const STACK_GAPS: [(&str, u32); 6] = [
-    ("Within 1 second", 1),
-    ("Within 2 seconds", 2),
-    ("Within 5 seconds", 5),
-    ("Within 10 seconds", 10),
-    ("Within 30 seconds", 30),
-    ("Within 1 minute", 60),
+///
+/// ⚠ *None* first (the author, after use): it takes apart the stacks this menu made, and only those.
+pub const STACK_GAPS: [(&str, Option<u32>); 7] = [
+    ("None", None),
+    ("Within 1 second", Some(1)),
+    ("Within 2 seconds", Some(2)),
+    ("Within 5 seconds", Some(5)),
+    ("Within 10 seconds", Some(10)),
+    ("Within 30 seconds", Some(30)),
+    ("Within 1 minute", Some(60)),
 ];
 
 /// The View menu's items.

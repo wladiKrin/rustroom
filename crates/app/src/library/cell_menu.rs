@@ -37,8 +37,8 @@ pub enum CellAction {
     Unstack,
     /// Make the clicked photo the top of its hand stack.
     MakeTop,
-    /// Stack by capture time, within this many seconds.
-    StackByTime(u32),
+    /// Stack by capture time, within this many seconds — `None` takes the time stacks apart.
+    StackByTime(Option<u32>),
     /// Take every target out of the collection on screen.
     RemoveFromCollection(i64),
     /// Assign a keyword across the targets, or remove it from all of them.
@@ -230,7 +230,9 @@ pub fn cell_menu(
         action = Some(CellAction::Unstack);
         ui.close();
     }
-    let lower = single && hand.get(&targets[0].path).is_some_and(|(_, top)| !top);
+    let lower = single
+        && hand.contains_key(&targets[0].path)
+        && !rustroom_app::stack::is_top(hand, &targets[0].path);
     if lower && ui.button("Make top of stack").clicked() {
         action = Some(CellAction::MakeTop);
         ui.close();
@@ -592,9 +594,14 @@ mod tests {
                 .any(|l| l == "Unstack" || l == "Make top of stack"),
             "{plain:?}"
         );
+        let member = |ord| catalog::db::HandMember {
+            stack: 1,
+            ord,
+            by_time: false,
+        };
         let hand: rustroom_app::stack::HandStacks = [
-            (ids[0].path.clone(), (1, true)),
-            (ids[1].path.clone(), (1, false)),
+            (ids[0].path.clone(), member(0)),
+            (ids[1].path.clone(), member(1)),
         ]
         .into_iter()
         .collect();

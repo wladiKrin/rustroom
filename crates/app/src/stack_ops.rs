@@ -119,7 +119,9 @@ impl RustroomApp {
     }
 
     /// Photo → Stack by capture time: the selection, or the whole view with fewer than two selected.
-    pub(crate) fn stack_by_capture_time(&mut self, secs: u32) {
+    ///
+    /// `None` is the menu's *None*: the time stacks there come apart, and nothing new is made.
+    pub(crate) fn stack_by_capture_time(&mut self, secs: Option<u32>) {
         let ids = self.selection_ids();
         let files = if ids.len() >= 2 {
             self.files_of(&ids)
@@ -140,19 +142,21 @@ impl RustroomApp {
             })
             .collect();
         let next = cat.next_stack_id().unwrap_or(1);
-        let changes = stack_by_hand::by_capture_time(&timed, secs as i64, &lib.hand_stacks, next);
+        let changes =
+            stack_by_hand::by_capture_time(&timed, secs.map(i64::from), &lib.hand_stacks, next);
         let stacks: std::collections::HashSet<i64> = changes
             .iter()
-            .filter_map(|(_, m)| m.map(|(id, _)| id))
+            .filter_map(|(_, m)| m.map(|m| m.stack))
             .collect();
         let n = stacks.len();
-        self.apply_stack_changes(
-            changes,
-            format!(
+        let said = match secs {
+            None => "Took the time stacks apart — Ctrl+Z to undo".to_string(),
+            Some(_) => format!(
                 "Made {n} {} — Ctrl+Z to undo",
                 if n == 1 { "stack" } else { "stacks" }
             ),
-        );
+        };
+        self.apply_stack_changes(changes, said);
     }
 
     /// Write `changes`, record them as **one** undo step, and rebuild the rows.
@@ -298,7 +302,7 @@ mod tests {
             cat.set_capture(p, &c).unwrap();
         }
         app.reload_captures();
-        run(&mut app, Command::StackByTime(2));
+        run(&mut app, Command::StackByTime(Some(2)));
         let r = rows(&app);
         assert_eq!(r.len(), 2, "{r:?} — {}", app.status);
         assert!(r.iter().all(|(_, c)| *c == Some(2)));
@@ -347,5 +351,52 @@ mod tests {
         let r = rows(&app);
         assert_eq!(r.len(), 4, "unfurled: {r:?}");
         assert_eq!(r.iter().filter(|(_, c)| *c == Some(3)).count(), 3);
+    }
+
+    /// After use: *None* takes apart what Stack by capture time made, and leaves a ⌘G stack alone.
+    #[test]
+    fn none_takes_apart_only_the_time_stacks() {
+        let mut app = test_app::for_test();
+        app.library = Some(test_app::library_of(6));
+        test_app::catalog_library(&mut app);
+        let paths: Vec<_> = app
+            .library
+            .as_ref()
+            .unwrap()
+            .scan
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
+        let cat = app.catalog.as_ref().unwrap();
+        // 0–1 close together, 2–3 close together, 4–5 far apart.
+        for (p, t) in paths.iter().zip([100, 101, 200, 201, 300, 400]) {
+            let c = core_image::Capture {
+                taken: Some(t),
+                ..Default::default()
+            };
+            cat.set_capture(p, &c).unwrap();
+        }
+        app.reload_captures();
+        // A stack of the user's: 4 and 5.
+        let lib = app.library.as_mut().unwrap();
+        lib.selection.click(4);
+        lib.selection.toggle(5);
+        run(&mut app, Command::Stack);
+        app.library.as_mut().unwrap().selection = Default::default();
+        run(&mut app, Command::StackByTime(Some(2)));
+        assert_eq!(
+            rows(&app).len(),
+            3,
+            "two time stacks and the user's: {:?}",
+            rows(&app)
+        );
+        run(&mut app, Command::StackByTime(None));
+        let r = rows(&app);
+        assert_eq!(
+            r.len(),
+            5,
+            "the time stacks came apart, the user's stayed: {r:?}"
+        );
+        assert_eq!(r.iter().filter(|(_, c)| *c == Some(2)).count(), 1);
     }
 }

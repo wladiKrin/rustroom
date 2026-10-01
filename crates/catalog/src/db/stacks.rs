@@ -7,20 +7,39 @@
 use super::{split, Catalog, CatalogError};
 use std::path::{Path, PathBuf};
 
+/// A file's place in a hand stack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HandMember {
+    /// The stack it belongs to.
+    pub stack: i64,
+    /// Its place in the stack — the lowest is the top, the photo a collapsed stack shows (v12; v11
+    /// carried only a `top` flag, migrated as order 0).
+    pub ord: i64,
+    /// Made by *Stack by capture time* — which that menu may take apart or replace; ⌘G's are never
+    /// touched by it (the author's choice, M10.8c after use).
+    pub by_time: bool,
+}
+
 impl Catalog {
-    /// Every file in `folder` that belongs to a hand stack: `(path, stack id, top)`.
-    pub fn hand_stacks_in(&self, folder: &Path) -> Result<Vec<(PathBuf, i64, bool)>, CatalogError> {
+    /// Every file in `folder` that belongs to a hand stack, with its place in it.
+    pub fn hand_stacks_in(
+        &self,
+        folder: &Path,
+    ) -> Result<Vec<(PathBuf, HandMember)>, CatalogError> {
         let dir = folder.to_string_lossy().to_string();
         let mut st = self.conn.prepare(
-            "SELECT s.file_name, s.stack_id, s.top FROM photo_stacks s
+            "SELECT s.file_name, s.stack_id, s.ord, s.by_time FROM photo_stacks s
              JOIN folders f ON f.id = s.folder_id WHERE f.path = ?1",
         )?;
         let rows = st
             .query_map([&dir], |r| {
                 Ok((
                     folder.join(r.get::<_, String>(0)?),
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, i64>(2)? != 0,
+                    HandMember {
+                        stack: r.get(1)?,
+                        ord: r.get(2)?,
+                        by_time: r.get::<_, i64>(3)? != 0,
+                    },
                 ))
             })?
             .filter_map(Result::ok)
@@ -28,22 +47,22 @@ impl Catalog {
         Ok(rows)
     }
 
-    /// Put `photo` in a hand stack (`Some((id, top))`) or take it out (`None`). A photo whose folder
-    /// the catalog does not know is a quiet no-op — the catalog is not authoritative.
+    /// Put `photo` in a hand stack (`Some`) or take it out (`None`). A photo whose folder the catalog
+    /// does not know is a quiet no-op — the catalog is not authoritative.
     pub fn set_hand_stack(
         &self,
         photo: &Path,
-        stack: Option<(i64, bool)>,
+        member: Option<HandMember>,
     ) -> Result<(), CatalogError> {
         let Some((folder, name)) = split(photo) else {
             return Ok(());
         };
-        match stack {
-            Some((id, top)) => self.conn.execute(
-                "INSERT INTO photo_stacks (folder_id, file_name, stack_id, top)
-                 SELECT id, ?2, ?3, ?4 FROM folders WHERE path = ?1
-                 ON CONFLICT(folder_id, file_name) DO UPDATE SET stack_id = ?3, top = ?4",
-                rusqlite::params![folder, name, id, top as i64],
+        match member {
+            Some(m) => self.conn.execute(
+                "INSERT INTO photo_stacks (folder_id, file_name, stack_id, ord, by_time)
+                 SELECT id, ?2, ?3, ?4, ?5 FROM folders WHERE path = ?1
+                 ON CONFLICT(folder_id, file_name) DO UPDATE SET stack_id = ?3, ord = ?4, by_time = ?5",
+                rusqlite::params![folder, name, m.stack, m.ord, m.by_time as i64],
             )?,
             None => self.conn.execute(
                 "DELETE FROM photo_stacks
@@ -67,8 +86,16 @@ impl Catalog {
 #[cfg(test)]
 mod tests {
     use crate::db::test_support::entry;
-    use crate::db::Catalog;
+    use crate::db::{Catalog, HandMember};
     use std::path::{Path, PathBuf};
+
+    fn m(stack: i64, ord: i64) -> Option<HandMember> {
+        Some(HandMember {
+            stack,
+            ord,
+            by_time: false,
+        })
+    }
 
     #[test]
     fn a_hand_stack_round_trips_and_comes_apart() {
@@ -76,26 +103,23 @@ mod tests {
         cat.sync_folder(Path::new("/x"), &[entry("a.RAF"), entry("b.RAF")])
             .unwrap();
         assert_eq!(cat.next_stack_id().unwrap(), 1);
-        cat.set_hand_stack(Path::new("/x/a.RAF"), Some((1, true)))
-            .unwrap();
-        cat.set_hand_stack(Path::new("/x/b.RAF"), Some((1, false)))
-            .unwrap();
+        cat.set_hand_stack(Path::new("/x/a.RAF"), m(1, 0)).unwrap();
+        cat.set_hand_stack(Path::new("/x/b.RAF"), m(1, 1)).unwrap();
         let mut got = cat.hand_stacks_in(Path::new("/x")).unwrap();
-        got.sort();
+        got.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(
             got,
             vec![
-                (PathBuf::from("/x/a.RAF"), 1, true),
-                (PathBuf::from("/x/b.RAF"), 1, false)
+                (PathBuf::from("/x/a.RAF"), m(1, 0).unwrap()),
+                (PathBuf::from("/x/b.RAF"), m(1, 1).unwrap())
             ]
         );
         assert_eq!(cat.next_stack_id().unwrap(), 2);
-        cat.set_hand_stack(Path::new("/x/a.RAF"), Some((1, false)))
-            .unwrap();
+        cat.set_hand_stack(Path::new("/x/a.RAF"), m(1, 1)).unwrap();
         cat.set_hand_stack(Path::new("/x/b.RAF"), None).unwrap();
         assert_eq!(
             cat.hand_stacks_in(Path::new("/x")).unwrap(),
-            vec![(PathBuf::from("/x/a.RAF"), 1, false)],
+            vec![(PathBuf::from("/x/a.RAF"), m(1, 1).unwrap())],
             "an upsert replaces, a None removes"
         );
     }
@@ -105,14 +129,13 @@ mod tests {
     fn a_move_carries_the_membership() {
         let cat = Catalog::open_in_memory().unwrap();
         cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
-        cat.set_hand_stack(Path::new("/x/a.RAF"), Some((4, true)))
-            .unwrap();
+        cat.set_hand_stack(Path::new("/x/a.RAF"), m(4, 0)).unwrap();
         cat.move_photo(Path::new("/x/a.RAF"), Path::new("/y/c.RAF"))
             .unwrap();
         assert!(cat.hand_stacks_in(Path::new("/x")).unwrap().is_empty());
         assert_eq!(
             cat.hand_stacks_in(Path::new("/y")).unwrap(),
-            vec![(PathBuf::from("/y/c.RAF"), 4, true)]
+            vec![(PathBuf::from("/y/c.RAF"), m(4, 0).unwrap())]
         );
     }
 
@@ -122,10 +145,8 @@ mod tests {
         let cat = Catalog::open_in_memory().unwrap();
         cat.sync_folder(Path::new("/x"), &[entry("a.RAF"), entry("b.RAF")])
             .unwrap();
-        cat.set_hand_stack(Path::new("/x/a.RAF"), Some((2, true)))
-            .unwrap();
-        cat.set_hand_stack(Path::new("/x/b.RAF"), Some((2, false)))
-            .unwrap();
+        cat.set_hand_stack(Path::new("/x/a.RAF"), m(2, 0)).unwrap();
+        cat.set_hand_stack(Path::new("/x/b.RAF"), m(2, 1)).unwrap();
         let id = cat
             .folders()
             .unwrap()

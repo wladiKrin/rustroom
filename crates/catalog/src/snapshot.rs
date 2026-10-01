@@ -95,8 +95,8 @@ pub enum CatalogSnapshot {
         memberships: Vec<(i64, i64, i64)>,
         /// `(file_name, keyword_id)`; the folder id is remapped.
         keywords: Vec<(String, i64)>,
-        /// `(file_name, stack_id, top)` — the hand stacks (M10.8c); the folder id is remapped.
-        stacks: Vec<(String, i64, bool)>,
+        /// `(file_name, member)` — the hand stacks (M10.8c); the folder id is remapped.
+        stacks: Vec<(String, crate::db::HandMember)>,
     },
 }
 

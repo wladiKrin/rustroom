@@ -106,11 +106,19 @@ impl Catalog {
             .collect();
         drop(st);
 
-        let mut st =
-            tx.prepare("SELECT file_name, stack_id, top FROM photo_stacks WHERE folder_id = ?1")?;
-        let stacks: Vec<(String, i64, bool)> = st
+        let mut st = tx.prepare(
+            "SELECT file_name, stack_id, ord, by_time FROM photo_stacks WHERE folder_id = ?1",
+        )?;
+        let stacks: Vec<(String, crate::db::HandMember)> = st
             .query_map([id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? != 0))
+                Ok((
+                    r.get(0)?,
+                    crate::db::HandMember {
+                        stack: r.get(1)?,
+                        ord: r.get(2)?,
+                        by_time: r.get::<_, i64>(3)? != 0,
+                    },
+                ))
             })?
             .filter_map(Result::ok)
             .collect();
@@ -304,11 +312,12 @@ impl Catalog {
                     )?;
                 }
 
-                for (file_name, stack_id, top) in stacks {
+                for (file_name, m) in stacks {
                     tx.execute(
-                        "INSERT OR REPLACE INTO photo_stacks (folder_id, file_name, stack_id, top)
-                         VALUES (?1, ?2, ?3, ?4)",
-                        rusqlite::params![fid, file_name, stack_id, *top as i64],
+                        "INSERT OR REPLACE INTO photo_stacks
+                             (folder_id, file_name, stack_id, ord, by_time)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![fid, file_name, m.stack, m.ord, m.by_time as i64],
                     )?;
                 }
             }

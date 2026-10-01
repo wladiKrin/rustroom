@@ -334,8 +334,8 @@ pub(crate) fn hand_stacks_of(
         }
     }
     for dir in folders {
-        for (path, id, top) in cat.hand_stacks_in(dir).unwrap_or_default() {
-            out.insert(path, (id, top));
+        for (path, m) in cat.hand_stacks_in(dir).unwrap_or_default() {
+            out.insert(path, m);
         }
     }
     out

@@ -139,8 +139,19 @@ pub fn key_of_with(path: &Path, remote: &HashMap<String, String>) -> Option<Stac
     Some((dir, stem.to_uppercase()))
 }
 
-/// The hand stacks of the files on view (M10.8c): each file's stack id and whether it is the top.
-pub type HandStacks = HashMap<PathBuf, (i64, bool)>;
+/// The hand stacks of the files on view (M10.8c): each file's stack, its place in it, and whether
+/// *Stack by capture time* made it.
+pub type HandStacks = HashMap<PathBuf, catalog::db::HandMember>;
+
+/// Whether `path` is the top of its hand stack — the lowest place in it.
+pub fn is_top(hand: &HandStacks, path: &Path) -> bool {
+    let Some(m) = hand.get(path) else {
+        return false;
+    };
+    hand.values()
+        .filter(|o| o.stack == m.stack)
+        .all(|o| o.ord >= m.ord)
+}
 
 /// The key a file stacks under: **a hand stack first**, then Immich's server stack, then its name.
 ///
@@ -151,9 +162,9 @@ pub fn key_for(
     remote: &HashMap<String, String>,
     hand: &HandStacks,
 ) -> Option<StackKey> {
-    if let Some((id, _)) = hand.get(path) {
+    if let Some(m) = hand.get(path) {
         let dir = path.parent().unwrap_or(Path::new("")).to_path_buf();
-        return Some((dir, format!("hand:{id}")));
+        return Some((dir, format!("hand:{}", m.stack)));
     }
     key_of_with(path, remote)
 }
@@ -208,6 +219,24 @@ pub fn group_with(
     remote: &HashMap<String, String>,
     hand: &HandStacks,
 ) -> Vec<PhotoEntry> {
+    group_with_below(entries, s, expanded, remote, hand).0
+}
+
+/// What a collapsed stack hides: each collapsed row's id → the members below it, in their order — what
+/// the pile draws (M10.8c after use).
+pub type Below = HashMap<crate::photo_id::PhotoId, Vec<PhotoEntry>>;
+
+/// [`group_with`], and what each collapsed row hides.
+///
+/// ⚠ A **hand** stack is in its own order — `ord`, the lowest on top — expanded or collapsed; a name or
+/// server stack keeps the sort order and its primary rule.
+pub fn group_with_below(
+    entries: Vec<PhotoEntry>,
+    s: &Stacking,
+    expanded: &HashSet<StackKey>,
+    remote: &HashMap<String, String>,
+    hand: &HandStacks,
+) -> (Vec<PhotoEntry>, Below) {
     let key = |e: &PhotoEntry| -> Option<StackKey> {
         if e.id.copy != 0 {
             return None;
@@ -232,6 +261,7 @@ pub fn group_with(
 
     let mut emitted: HashSet<StackKey> = HashSet::new();
     let mut out: Vec<PhotoEntry> = Vec::with_capacity(entries.len());
+    let mut below = Below::new();
     for (i, e) in entries.iter().enumerate() {
         let k = key(e).filter(|k| members.contains_key(k));
         let Some(k) = k else {
@@ -244,10 +274,20 @@ pub fn group_with(
         if !emitted.insert(k.clone()) {
             continue; // already handled at the group's first member
         }
-        let idx = &members[&k];
+        let mut idx = members[&k].clone();
+        let is_hand = k.1.starts_with("hand:");
+        if is_hand {
+            idx.sort_by_key(|&j| {
+                let m = &entries[j];
+                (
+                    hand.get(&m.id.path).map_or(0, |h| h.ord),
+                    m.file_name.clone(),
+                )
+            });
+        }
         let count = idx.len();
         if expanded.contains(&k) {
-            for &j in idx {
+            for &j in &idx {
                 let mut m = entries[j].clone();
                 m.stack = Some(Stack {
                     count,
@@ -256,12 +296,10 @@ pub fn group_with(
                 out.push(m);
             }
         } else {
-            // A hand stack's chosen top wins; otherwise the usual rule.
-            let top = idx
-                .iter()
-                .copied()
-                .find(|&j| hand.get(&entries[j].id.path).is_some_and(|(_, t)| *t));
-            let best = top.unwrap_or_else(|| {
+            // A hand stack's top is its first; a name or server stack's, the usual rule.
+            let best = if is_hand {
+                idx[0]
+            } else {
                 *idx.iter()
                     .min_by_key(|&&j| {
                         let m = &entries[j];
@@ -276,16 +314,23 @@ pub fn group_with(
                         (edited, rank(&m.id.path, s.primary), m.file_name.clone())
                     })
                     .unwrap_or(&i)
-            });
+            };
             let mut m = entries[best].clone();
             m.stack = Some(Stack {
                 count,
                 expanded: false,
             });
+            below.insert(
+                m.id.clone(),
+                idx.iter()
+                    .filter(|&&j| j != best)
+                    .map(|&j| entries[j].clone())
+                    .collect(),
+            );
             out.push(m);
         }
     }
-    out
+    (out, below)
 }
 
 /// Every stack key present in **already-grouped** rows, for "Expand all".
@@ -626,9 +671,19 @@ mod tests {
         );
     }
 
-    fn hand(of: &[(&str, i64, bool)]) -> HandStacks {
+    /// `(path, stack, ord)` — not made by capture time.
+    fn hand(of: &[(&str, i64, i64)]) -> HandStacks {
         of.iter()
-            .map(|(p, id, top)| (PathBuf::from(p), (*id, *top)))
+            .map(|(p, stack, ord)| {
+                (
+                    PathBuf::from(p),
+                    catalog::db::HandMember {
+                        stack: *stack,
+                        ord: *ord,
+                        by_time: false,
+                    },
+                )
+            })
             .collect()
     }
 
@@ -640,7 +695,7 @@ mod tests {
             entry("/f/b.RAF", 0, true),
             entry("/f/c.RAF", 0, false),
         ];
-        let h = hand(&[("/f/a.RAF", 7, false), ("/f/c.RAF", 7, true)]);
+        let h = hand(&[("/f/a.RAF", 7, 1), ("/f/c.RAF", 7, 0)]);
         let off = Stacking::default();
         let out = group_with(input, &off, &HashSet::new(), &Default::default(), &h);
         let rows: Vec<&str> = out.iter().map(|e| e.file_name.as_str()).collect();
@@ -667,7 +722,7 @@ mod tests {
             &HandStacks::new(),
         );
         assert_eq!(plain.len(), 2, "the pair collapses");
-        let h = hand(&[("/f/a.RAF", 3, true), ("/f/b.RAF", 3, false)]);
+        let h = hand(&[("/f/a.RAF", 3, 0), ("/f/b.RAF", 3, 1)]);
         let out = group_with(input, &on(), &HashSet::new(), &Default::default(), &h);
         let rows: Vec<&str> = out.iter().map(|e| e.file_name.as_str()).collect();
         assert_eq!(
@@ -678,5 +733,28 @@ mod tests {
         assert_eq!(out[0].stack.map(|s| s.count), Some(2));
         let keys = stacked_keys_with(&out, &Default::default(), &h);
         assert!(keys.contains(&(PathBuf::from("/f"), "hand:3".to_string())));
+    }
+
+    /// After use: an unfurled hand stack is in its own order, and a collapsed one says what it hides,
+    /// in that order — what the pile draws.
+    #[test]
+    fn a_hand_stack_keeps_its_order_and_says_what_it_hides() {
+        let input = vec![
+            entry("/f/a.RAF", 0, false),
+            entry("/f/b.RAF", 0, false),
+            entry("/f/c.RAF", 0, false),
+        ];
+        let h = hand(&[("/f/a.RAF", 1, 2), ("/f/b.RAF", 1, 0), ("/f/c.RAF", 1, 1)]);
+        let key = key_for(Path::new("/f/a.RAF"), &Default::default(), &h).unwrap();
+        let open: HashSet<StackKey> = [key].into_iter().collect();
+        let names =
+            |v: &[PhotoEntry]| -> Vec<String> { v.iter().map(|e| e.file_name.clone()).collect() };
+        let unfurled = group_with(input.clone(), &on(), &open, &Default::default(), &h);
+        assert_eq!(names(&unfurled), ["b.RAF", "c.RAF", "a.RAF"], "by ord");
+        let (rows, below) =
+            group_with_below(input, &on(), &HashSet::new(), &Default::default(), &h);
+        assert_eq!(names(&rows), ["b.RAF"]);
+        assert_eq!(names(&below[&rows[0].id]), ["c.RAF", "a.RAF"]);
+        assert!(is_top(&h, Path::new("/f/b.RAF")) && !is_top(&h, Path::new("/f/c.RAF")));
     }
 }
