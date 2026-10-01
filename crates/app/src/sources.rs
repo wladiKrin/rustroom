@@ -304,6 +304,9 @@ impl RustroomApp {
         let budget = self.settings.thumb_budget_mb as u64 * 1024 * 1024;
         let immich_budget = self.settings.immich_thumb_budget_mb as u64 * 1024 * 1024;
         let loader = ThumbLoader::new(space, budget, immich_budget, move || ctx2.request_repaint());
+        // ⚠ Read here, before `import_xmp` below writes, so a keyword or rating it imports from
+        // another program's sidecar reaches a view of it on the next frame — `source_refresh`.
+        let read_at = self.catalog.as_ref().map_or(0, |c| c.change_count());
         self.library = Some(Library {
             source,
             scan,
@@ -317,6 +320,8 @@ impl RustroomApp {
             marks: std::collections::HashMap::new(),
             captures: std::collections::HashMap::new(),
             band: None,
+            members_read_at: read_at,
+            members_settling: None,
         });
         // ⚠ Applied explicitly rather than left to `reload_marks`, which early-returns when there
         // is no catalog — the filter must hold across a source switch whether or not one is open.
@@ -341,28 +346,25 @@ impl RustroomApp {
     /// ⚠⚠ The members are re-read from the catalog every time rather than cached: a photo added
     /// from another view must appear here without a restart.
     pub(crate) fn open_collection(&mut self, ctx: &egui::Context, id: i64, name: &str) {
-        let Some(cat) = &self.catalog else {
-            self.status = "No catalog".into();
-            return;
+        let source = LibrarySource::Collection {
+            id,
+            name: name.to_string(),
         };
-        let members = match cat.collection_members(id) {
-            Ok(m) => m,
-            Err(e) => {
+        let members = match self.source_members(&source) {
+            Some(Ok(m)) => m,
+            Some(Err(e)) => {
                 self.status = format!("Could not read the collection: {e}");
+                return;
+            }
+            None => {
+                self.status = "No catalog".into();
                 return;
             }
         };
         let mut scan =
             rustroom_app::collections::scan_of(&members, sidecar::edited_at, fs_modified);
         catalog::sort(&mut scan, self.settings.library_sort);
-        let n = self.open_scan(
-            ctx,
-            LibrarySource::Collection {
-                id,
-                name: name.to_string(),
-            },
-            scan,
-        );
+        let n = self.open_scan(ctx, source, scan);
         self.status = if n == 0 {
             format!("“{name}” is empty")
         } else {
@@ -375,28 +377,25 @@ impl RustroomApp {
     /// ⚠ The same shape as `open_collection`, deliberately: both are "a set of photos from
     /// anywhere", and giving them two different loaders is how two idioms grow for one concept.
     pub(crate) fn open_keyword(&mut self, ctx: &egui::Context, id: i64, name: &str) {
-        let Some(cat) = &self.catalog else {
-            self.status = "No catalog".into();
-            return;
+        let source = LibrarySource::Keyword {
+            id,
+            name: name.to_string(),
         };
-        let members = match cat.keyword_members(id) {
-            Ok(m) => m,
-            Err(e) => {
+        let members = match self.source_members(&source) {
+            Some(Ok(m)) => m,
+            Some(Err(e)) => {
                 self.status = format!("Could not read the keyword: {e}");
+                return;
+            }
+            None => {
+                self.status = "No catalog".into();
                 return;
             }
         };
         let mut scan =
             rustroom_app::collections::scan_of(&members, sidecar::edited_at, fs_modified);
         catalog::sort(&mut scan, self.settings.library_sort);
-        let n = self.open_scan(
-            ctx,
-            LibrarySource::Keyword {
-                id,
-                name: name.to_string(),
-            },
-            scan,
-        );
+        let n = self.open_scan(ctx, source, scan);
         self.status = if n == 0 {
             format!("Nothing tagged “{name}”")
         } else {

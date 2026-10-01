@@ -57,6 +57,10 @@ impl eframe::App for RustroomApp {
 
         develop::ambient::draw(self, &ctx);
         modals::draw(self, &ctx);
+
+        // A keyword, collection, smart-collection or date view follows the catalog. ⚠ Last, after
+        // everything this frame could write — the panels apply their clicks after drawing.
+        self.pump_source_membership(&ctx);
     }
 }
 
