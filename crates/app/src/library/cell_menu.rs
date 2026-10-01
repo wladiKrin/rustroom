@@ -27,6 +27,8 @@ pub enum CellAction {
     /// ⚠ Acts on the **selection**, not on the right-clicked index — which is why the menu
     /// selects the photo first when it is not already selected.
     AddToCollection(i64),
+    /// Delete the virtual copies among the targets.
+    DeleteVirtualCopies,
     /// Take every target out of the collection on screen.
     RemoveFromCollection(i64),
     /// Assign a keyword across the targets, or remove it from all of them.
@@ -178,6 +180,19 @@ pub fn cell_menu(
         action = Some(CellAction::VirtualCopy);
         ui.close();
     }
+    // ⚠ Only when a target IS a virtual copy — an original is the file, and deleting files is not
+    // what this menu does.
+    let copies = targets.iter().filter(|t| t.copy != 0).count();
+    if copies > 0 {
+        let label = match copies {
+            1 => "Delete virtual copy".to_string(),
+            n => format!("Delete {n} virtual copies"),
+        };
+        if ui.button(label).clicked() {
+            action = Some(CellAction::DeleteVirtualCopies);
+            ui.close();
+        }
+    }
     if ui
         .add_enabled(single, egui::Button::new("Show in Finder"))
         .on_disabled_hover_text("One photo at a time")
@@ -327,9 +342,16 @@ pub fn apply_cell_action(
         CellAction::Export => {
             crate::commands::execute(app, ctx, rustroom_app::menu::Command::Export);
         }
-        CellAction::VirtualCopy => {
-            app.open_entry(ctx, index);
-            app.create_virtual_copy(ctx);
+        // ⚠ The clicked photo, never "open it, then copy the open one": that put the Library into
+        // Develop (2026-10-01).
+        CellAction::VirtualCopy => app.create_copy_of(ctx, &id),
+        CellAction::DeleteVirtualCopies => {
+            let targets = app
+                .library
+                .as_ref()
+                .map(|l| menu_targets(l, index))
+                .unwrap_or_default();
+            app.delete_copies(ctx, &targets);
         }
         CellAction::Reveal => {
             if let Err(e) = rustroom_app::reveal::in_file_manager(&id.path) {
