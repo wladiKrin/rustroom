@@ -621,4 +621,56 @@ mod tests {
         app.redo_action(&ctx);
         assert_eq!(count(&app), 3);
     }
+
+    /// ⚠⚠ The whole path through the drawn rail: `c`, taken the same day as the selection, carries
+    /// `Street`, so the rail suggests it; the Suggested row's `+` tags both selected photos and
+    /// writes their XMP, as one undo step.
+    #[test]
+    fn the_rail_suggests_from_the_same_day_and_its_plus_writes_the_xmp() {
+        let (d, mut app, a, b, _eu, _paris) = selected("kw_suggest_rail");
+        let c = d.0.join("c.RAF");
+        std::fs::write(&c, b"not a real raw").unwrap();
+        let entry = |p: &Path| catalog::CatalogEntry {
+            path: p.to_path_buf(),
+            file_name: p.file_name().unwrap().to_string_lossy().into_owned(),
+            modified: std::time::SystemTime::UNIX_EPOCH,
+            edited: None,
+        };
+        let cat = app.catalog.as_ref().unwrap();
+        cat.sync_folder(&d.0, &[entry(&a), entry(&b), entry(&c)])
+            .unwrap();
+        for p in [&a, &b, &c] {
+            let capture = core_image::Capture {
+                taken: Some(20_590 * 86_400 + 3_600),
+                ..Default::default()
+            };
+            cat.set_capture(p, &capture).unwrap();
+        }
+        let street = cat.create_keyword("Street", None).unwrap();
+        cat.assign_keyword(street, &c).unwrap();
+        app.settings.panel_sections.keywords = true;
+
+        let ctx = crate::test_ui::ctx();
+        let tags: Vec<egui::Pos2> = crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            crate::collections_panel::show(&mut app, ui, &ctx)
+        })
+        .into_iter()
+        .filter(|(l, _)| l == "Tag Street")
+        .map(|(_, p)| p)
+        .collect();
+        // ⚠ The sample: the tree's row and the suggestion's — one would mean no suggestion.
+        assert_eq!(tags.len(), 2, "{tags:?}");
+        // The suggestions sit above the tree.
+        let at = tags.into_iter().min_by(|p, q| p.y.total_cmp(&q.y)).unwrap();
+        crate::test_ui::click_at(&ctx, at, false, |ui| {
+            crate::collections_panel::show(&mut app, ui, &ctx)
+        });
+        assert!(has(&app, street, &a) && has(&app, street, &b));
+        assert!(xmp(&a).contains(">Street<"), "{}", xmp(&a));
+        assert!(xmp(&b).contains(">Street<"), "{}", xmp(&b));
+        assert!(matches!(
+            app.actions.peek_undo(None),
+            Some(ActionKind::KeywordTag { on: true, .. })
+        ));
+    }
 }

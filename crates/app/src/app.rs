@@ -230,6 +230,8 @@ pub(crate) struct RustroomApp {
     pub(crate) new_keyword_parent: Option<i64>,
     /// The Keywords field's highlighted row (M10.8a).
     pub(crate) keyword_field: crate::keyword_field::FieldState,
+    /// The selection's keyword suggestions, remembered until the selection or the catalog changes.
+    pub(crate) keyword_suggest: rustroom_app::keyword_suggest::Cache,
     /// Scratch text for the filename field, with **the photo it belongs to**.
     ///
     /// ⚠ A draft rather than writing through, so a half-typed name is never committed and a

@@ -207,32 +207,62 @@ pub fn cell_menu(
     });
 
     ui.menu_button("Keywords", |ui| {
-        let kws = cat.keywords().unwrap_or_default();
-        if kws.is_empty() {
-            crate::theme::hint(ui, "No keywords yet.");
-        }
-        let files = distinct_files(targets);
-        let counts = cat.keyword_counts(&files).unwrap_or_default();
-        for k in &kws {
-            let have = counts.get(&k.id).copied().unwrap_or(0);
-            // ⚠ Three states, not two: filled when every file carries it, a dash when only some
-            // do. A two-state tick on a mixed selection claims something false about half of it.
-            let mark = if have == files.len() && have > 0 {
-                MARK_ALL
-            } else if have > 0 {
-                MARK_SOME
-            } else {
-                MARK_NONE
-            };
-            let text = format!("{mark}{}{}", "  ".repeat(k.depth), k.name);
-            if ui.button(text).clicked() {
-                // Clicking makes the selection uniform: on unless everything already has it.
-                let on = !(have == files.len() && have > 0);
-                action = Some(CellAction::SetKeyword { id: k.id, on });
-                ui.close();
-            }
+        if let Some(a) = keyword_menu(ui, cat, targets) {
+            action = Some(a);
+            ui.close();
         }
     });
+    action
+}
+
+/// The Keywords submenu: the targets' suggestions first (M10.8a), then the whole tree, every
+/// entry with its tri-state mark.
+///
+/// ⚠ The suggestions are queried here, uncached: a menu's body runs only while it is open, the
+/// rule this file already follows for its other queries.
+fn keyword_menu(
+    ui: &mut egui::Ui,
+    cat: &catalog::db::Catalog,
+    targets: &[PhotoId],
+) -> Option<CellAction> {
+    let kws = cat.keywords().unwrap_or_default();
+    if kws.is_empty() {
+        crate::theme::hint(ui, "No keywords yet.");
+        return None;
+    }
+    let files = distinct_files(targets);
+    let counts = cat.keyword_counts(&files).unwrap_or_default();
+    let mut action = None;
+    let mut item = |ui: &mut egui::Ui, k: &catalog::db::KeywordRow, depth: usize| {
+        let have = counts.get(&k.id).copied().unwrap_or(0);
+        let all = have == files.len() && have > 0;
+        // ⚠ Three states, not two: filled when every file carries it, a dash when only some
+        // do. A two-state tick on a mixed selection claims something false about half of it.
+        let mark = if all {
+            MARK_ALL
+        } else if have > 0 {
+            MARK_SOME
+        } else {
+            MARK_NONE
+        };
+        let text = format!("{mark}{}{}", "  ".repeat(depth), k.name);
+        if ui.button(text).clicked() {
+            // Clicking makes the selection uniform: on unless everything already has it.
+            action = Some(CellAction::SetKeyword { id: k.id, on: !all });
+        }
+    };
+    let suggested =
+        rustroom_app::keyword_suggest::suggest(cat, &files, rustroom_app::keyword_suggest::LIMIT);
+    if !suggested.is_empty() {
+        crate::theme::sub_label(ui, "Suggested");
+        for k in &suggested {
+            item(ui, k, 0);
+        }
+        ui.separator();
+    }
+    for k in &kws {
+        item(ui, k, k.depth);
+    }
     action
 }
 
@@ -354,5 +384,57 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The Keywords submenu lists the suggestions first: `Street` is on a photo taken the same day
+    /// as the two targets, so it appears twice — above the separator and in the tree — and the
+    /// unrelated `Cats` only once.
+    #[test]
+    fn the_keyword_menu_lists_the_suggestions_first() {
+        let mut app = crate::test_app::for_test();
+        app.library = Some(crate::test_app::library_of(3));
+        crate::test_app::catalog_library(&mut app);
+        let lib = app.library.as_ref().unwrap();
+        let ids: Vec<PhotoId> = lib.entries.iter().map(|e| e.id.clone()).collect();
+        let cat = app.catalog.as_ref().unwrap();
+        for id in &ids {
+            let capture = core_image::Capture {
+                taken: Some(20_590 * 86_400),
+                ..Default::default()
+            };
+            cat.set_capture(&id.path, &capture).unwrap();
+        }
+        let street = cat.create_keyword("Street", None).unwrap();
+        cat.create_keyword("Cats", None).unwrap();
+        cat.assign_keyword(street, &ids[2].path).unwrap();
+        let targets = &ids[..2];
+        let ctx = crate::test_ui::ctx();
+        let found = crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            let _ = keyword_menu(ui, cat, targets);
+        });
+        let ys = |name: &str| -> Vec<f32> {
+            found
+                .iter()
+                .filter(|(l, _)| l.ends_with(name))
+                .map(|(_, p)| p.y)
+                .collect()
+        };
+        assert_eq!(
+            ys("Cats").len(),
+            1,
+            "the sample: the tree is drawn — {found:?}"
+        );
+        let street_ys = ys("Street");
+        assert_eq!(street_ys.len(), 2, "{found:?}");
+        // The tree is by name, Cats before Street: only a suggestion can put a Street above Cats.
+        let cats = ys("Cats")[0];
+        let (top, bottom) = (
+            street_ys.iter().copied().fold(f32::MAX, f32::min),
+            street_ys.iter().copied().fold(f32::MIN, f32::max),
+        );
+        assert!(
+            top < cats && cats < bottom,
+            "the suggestion leads: {found:?}"
+        );
     }
 }

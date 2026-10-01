@@ -422,6 +422,27 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                         if kws.is_empty() {
                                             crate::theme::hint(ui, "No keywords yet.");
                                         }
+                                        // M10.8a: the selection's suggestions, between the field
+                                        // and the tree. ⚠ Cached — the rail redraws every frame.
+                                        let files = app.selected_files();
+                                        let suggested = match &app.catalog {
+                                            Some(cat) if !files.is_empty() => {
+                                                app.keyword_suggest.get(cat, &files).to_vec()
+                                            }
+                                            _ => Vec::new(),
+                                        };
+                                        match crate::keyword_rows::suggested(
+                                            ui, &suggested, &kws, picked,
+                                        ) {
+                                            Some(crate::keyword_rows::Out::Tag(id)) => {
+                                                action = Action::TagSelection(id)
+                                            }
+                                            Some(crate::keyword_rows::Out::Open(id, name)) => {
+                                                app.new_keyword_parent = Some(id);
+                                                action = Action::OpenKeyword(id, name)
+                                            }
+                                            _ => {}
+                                        }
                                         let picked_kw = app.selected_keyword();
                                         // ⚠ M9.8: the rows, their rename field and their drag live in
                                         // `keyword_rows`; this maps what they asked for onto `Action`.
