@@ -218,7 +218,8 @@ apart (2); time-stacking touching the user's (1); a reorder keeping `by_time` (6
 ⚠ My first run of "the hand order ignored" **matched nothing** — fmt had wrapped the line — and reported 61
 green; re-run against the real text, red. ⚠ Two test slips: a cell and its caption share an AccessKit name
 (take the larger rect), and the pile moved the badge off the cell's corner (click it by name).
-**3404 tests.**
+**3404 tests.** Then *"a bit more pronounced"*: steps up to **10 pt** within about **a fifth** of the box
+(was 6 pt and a tenth), a lighter scrim (20 + 18·depth), and a dark rim around the top photo.
 
 ### 2026-10-01 — M10.8b: movable panels and a vertical filmstrip (branch `m10.8b-layout`, merged 2026-10-01)
 
