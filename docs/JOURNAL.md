@@ -166,6 +166,41 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-10-01 — Live views: a keyword, collection, smart-collection or date view follows the catalog (branch `library-live-sources`, awaiting use)
+
+**Reported in use, trying M10.8a:** *"when filtering for a keyword … and then removing that keyword
+from an image, it stays until the view is updated by e.g. switching to a different folder … same for
+collections etc"*. **Root cause:** every catalog-backed opener (`open_keyword`, `open_collection`,
+`open_smart`, `open_periods`) read its members once into `lib.scan`, and nothing re-read them; a rating
+only refiltered the rows already loaded (`reload_marks`).
+
+**Fixed — by the change count, not by a list of writers** (`keyword_suggest::Cache`'s rule).
+`source_refresh` (bin): `source_members` is the **one** definition of what such a view holds — the
+openers read it too, and `open_smart`'s evaluation became `smart_members` — and
+`pump_source_membership`, last in the frame, re-reads it once `Catalog::change_count` has moved and
+**settled** (the same count two frames running: a metadata scan writes a capture each frame, and a smart
+collection costs ~60 ms per evaluation at 10,000 photos). Rows are rebuilt only when the member **files**
+differ (`collections::refreshed_scan` keeps a retained file's entry and stats only newcomers), and it
+is never a re-open — `open_scan` would throw Develop back to the Library. Folders (a click re-scans),
+All Photos (it changes only on open/forget/import, and re-reading it per rating would tax every cull
+keystroke) and Immich views are left alone.
+
+**A second, older bug it exposed:** `rebuild_entries` reset the selection with `Selection::clear()`,
+which means "back to just the active photo" — it **kept the active index**, the very thing its comment
+said it avoided. Expanding a stack above the selection left it on whichever photo shifted into place
+(pinned red against the old code by `expanding_a_stack_keeps_the_same_photos_selected`). It now restores
+the selection by id; an active photo that is gone takes the selection with it (`retain_visible`'s rule).
+
+**Sabotages, each red:** the refresh never rebuilding (6 tests); no settling (1 — the test asserts the
+first frame only notices); `clear()` back (1); smart not a live source (1); `refreshed_scan` dropping
+newcomers (1). ⚠ The one line calling the pump from `eframe::App::ui` is reachable by **no** test — there
+is no whole-frame harness — so it is verified by use.
+
+⚠ Known and left: **nothing in the app removes a photo from a collection** (`remove_from_collection`
+exists in the catalog, uncalled), so the collection half can only be seen by adding. ⚠ In Develop, a
+photo leaving the view drops the selection (the rule above), so ←/→ then start from the first photo.
+**3332 tests.**
+
 ### 2026-10-01 — M10.8a: keyword suggestions, type to tag, and tagging made undoable (branch `m10.8a-keyword-suggestions`, awaiting use)
 
 **Input:** Phase 10's *"Keyword suggestions (2026-08-26)"* — M4.2b's accepted caveat (6), "needs usage
