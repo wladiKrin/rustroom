@@ -363,7 +363,6 @@ fn append_items(
                 // M10.8b: a command with a mark is a checkable item, set by `sync` — not here, since
                 // the state is not known at install.
                 let unset = menu::MenuState {
-                    layout: rustroom_app::layout::Layout::default(),
                     filmstrip_shown: true,
                 };
                 if menu::checked(command, &unset).is_some() {

@@ -200,6 +200,13 @@ y), and **a commit made before reading clippy's exit code** shipped a tree whose
 (`hover_coverage` called the old `menu_bar::show`) — amended only after a green gate. ⚠ The native
 check marks are reachable by no test (AppKit), verified by use. **3378 tests.**
 
+**After use (the author: "works, but move these settings away from view and into the settings menu,
+under appearance"):** the three layout choices left the View menu and its command enum for a **Layout**
+group in Settings → Appearance (`modals/settings_layout.rs` — `settings.rs` is over 800 lines of code),
+three segmented controls applied with the rest of the draft; a new filmstrip place still shows the
+strip. The check-mark mechanism stayed, now on the *Filmstrip* toggle alone. Sabotaged: the layout not
+applied, a new place not shown — both red.
+
 ### 2026-10-01 — Move to folder, Immich downloads included (branch `move-to-folder`, merged 2026-10-01)
 
 **Input:** *"I'd like the option to move images from one folder to another from rustroom directly.

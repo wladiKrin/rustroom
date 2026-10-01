@@ -37,6 +37,7 @@ pub mod info;
 pub mod presets;
 pub mod rule_edit;
 pub mod settings;
+mod settings_layout;
 
 use crate::develop::panel::section::{header, Header};
 use crate::{theme, RustroomApp};

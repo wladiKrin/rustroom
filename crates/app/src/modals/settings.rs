@@ -46,6 +46,7 @@ pub struct SettingsDraft {
     drag_quality: DragQuality,
     display_space: color::OutputSpace,
     stacking: rustroom_app::stack::Stacking,
+    layout: rustroom_app::layout::Layout,
     immich_enabled: bool,
     immich_url: String,
     immich_key: String,
@@ -112,6 +113,7 @@ impl SettingsDraft {
             drag_quality: s.drag_quality,
             display_space: s.display_space,
             stacking: s.stacking.clone(),
+            layout: s.layout,
             immich_enabled: s.immich_enabled,
             immich_url: s.immich_url.clone(),
             immich_key: s.immich_key.clone(),
@@ -181,6 +183,15 @@ impl SettingsDraft {
             // indexes into that list. Without this the grid keeps the old grouping until the next
             // folder open — the same shape as the Immich worker that kept a stale connection.
             app.rebuild_entries(None);
+            plain = true;
+        }
+        // M10.8b: where the panels sit. ⚠ A new place for the filmstrip shows it — choosing where it
+        // goes is asking to see it there.
+        if self.layout != app.settings.layout {
+            if self.layout.filmstrip != app.settings.layout.filmstrip {
+                app.show_filmstrip = true;
+            }
+            app.settings.layout = self.layout;
             plain = true;
         }
         if self.immich_upload_key != app.settings.immich_upload_key {
@@ -307,7 +318,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                 egui::Id::new("settings_tab"),
                 &[
                     ("Behaviour", "Shows what happens when you delete, open and save"),
-                    ("Appearance", "Shows the theme, accent, text size and stacking"),
+                    ("Appearance", "Shows the theme, accent, text size, stacking and where the panels sit"),
                     ("Display", "Shows the colour space the photo is shown in"),
                     ("Performance", "Shows preview quality, the caches, the GPU and how many photos export at once"),
                     ("Input", "Shows which mouse buttons pan, erase and draw"),
@@ -429,6 +440,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 });
                             });
                             ui.end_row();
+                            super::settings_layout::rows(ui, &mut d.layout);
                         });
                 }
                 2 => {
@@ -909,5 +921,38 @@ mod tests {
             app.settings.immich_key, browse_before,
             "the browse key must not change when only the upload key does"
         );
+    }
+
+    /// M10.8b: where the panels sit is set in Appearance — the draft lands on Apply, and a new place
+    /// for the filmstrip shows it.
+    #[test]
+    fn the_layout_lands_on_apply_and_a_new_strip_place_shows_it() {
+        use rustroom_app::layout::{Side, StripPlace};
+        let (ctx, mut app) = open_settings();
+        app.show_filmstrip = false;
+        settle(&ctx, &mut app);
+        test_ui::click(&ctx, "Appearance", |_| show(&mut app, &ctx));
+        let labels: Vec<String> = test_ui::nodes(&ctx, |_| show(&mut app, &ctx))
+            .into_iter()
+            .map(|n| n.label)
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Bottom"),
+            "the rows are drawn: {labels:?}"
+        );
+        let d = app.settings_draft.as_mut().unwrap();
+        d.layout.library_rail = Side::Right;
+        d.layout.filmstrip = StripPlace::Left;
+        assert_eq!(
+            app.settings.layout.library_rail,
+            Side::Left,
+            "not before Apply"
+        );
+        test_ui::click(&ctx, "Apply", |_| show(&mut app, &ctx));
+        assert_eq!(app.settings.layout.library_rail, Side::Right);
+        assert_eq!(app.settings.layout.filmstrip, StripPlace::Left);
+        assert!(app.show_filmstrip, "a new place shows the strip");
+        let saved = app.settings_store.load();
+        assert_eq!(saved.layout, app.settings.layout, "and it was saved");
     }
 }

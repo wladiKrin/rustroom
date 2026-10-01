@@ -54,12 +54,9 @@ fn items(ui: &mut egui::Ui, items: &[Item], picked: &mut Option<Command>, state:
                     Some(sc) => format!("{label}   {}", sc.label()),
                     None => label.clone(),
                 };
-                // M10.8b: a mark where the command has one — a radio for a place, a checkbox for a
-                // toggle — so this bar shows what the native menu's check marks show.
+                // M10.8b: a checkbox where the command has a mark, so this bar shows what the native
+                // menu's check marks show.
                 let clicked = match menu::checked(*command, state) {
-                    Some(on) if matches!(command, Command::FilmstripAt(_)) => {
-                        ui.radio(on, text).clicked()
-                    }
                     Some(mut on) => ui.checkbox(&mut on, text).clicked(),
                     None => ui.button(text).clicked(),
                 };
@@ -86,7 +83,6 @@ mod tests {
         // Both values of every mark, so a checkbox and a radio are each drawn checked and not.
         for shown in [true, false] {
             let state = menu::MenuState {
-                layout: rustroom_app::layout::Layout::default(),
                 filmstrip_shown: shown,
             };
             let _ = ctx.run_ui(egui::RawInput::default(), |ui| {

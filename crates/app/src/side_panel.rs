@@ -16,10 +16,9 @@ pub(crate) fn side(side: Side, id: impl Into<egui::Id>) -> egui::Panel {
 
 #[cfg(test)]
 mod tests {
-    use crate::{test_app, test_ui, AppView, RustroomApp};
+    use crate::{test_app, test_ui, AppView};
     use eframe::egui;
     use rustroom_app::layout::{Side, StripPlace};
-    use rustroom_app::menu::Command;
 
     /// The rectangle egui stored for the panel `id` — what the panel actually occupied.
     fn panel_rect(ctx: &egui::Context, id: &str) -> Option<egui::Rect> {
@@ -147,25 +146,5 @@ mod tests {
                 Side::Right => assert!(cell.max.x <= rail.min.x + 1.0, "{rail:?} {cell:?}"),
             }
         }
-    }
-
-    fn run(app: &mut RustroomApp, cmd: Command) {
-        crate::commands::execute(app, &egui::Context::default(), cmd);
-    }
-
-    /// The View commands flip and set the layout, and choosing a place shows a hidden strip.
-    #[test]
-    fn the_view_commands_move_the_panels() {
-        let mut app = test_app::for_test();
-        run(&mut app, Command::ToggleLibraryRailSide);
-        run(&mut app, Command::ToggleEditPanelSide);
-        assert_eq!(app.settings.layout.library_rail, Side::Right);
-        assert_eq!(app.settings.layout.edit_panel, Side::Left);
-        run(&mut app, Command::ToggleEditPanelSide);
-        assert_eq!(app.settings.layout.edit_panel, Side::Right, "a toggle");
-        app.show_filmstrip = false;
-        run(&mut app, Command::FilmstripAt(StripPlace::Right));
-        assert_eq!(app.settings.layout.filmstrip, StripPlace::Right);
-        assert!(app.show_filmstrip, "choosing a place shows the strip");
     }
 }

@@ -42,12 +42,6 @@ pub enum Command {
     ZoomActual,
     ToggleBeforeAfter,
     ToggleFilmstrip,
-    /// Put the Library rail on the other side (M10.8b).
-    ToggleLibraryRailSide,
-    /// Put the edit panel, and its tool rail, on the other side.
-    ToggleEditPanelSide,
-    /// Put the filmstrip here — and show it, if it was hidden.
-    FilmstripAt(crate::layout::StripPlace),
     /// Hide or show the panels, the rail and the filmstrip — Tab, as in Lightroom.
     TogglePanels,
     /// Cycle the surround: normal → dimmed → black, the picture alone — L, as in Lightroom.
@@ -305,24 +299,22 @@ pub fn model_with(recent: &[PathBuf]) -> Vec<Section> {
     ]
 }
 
-/// What the View menu's check marks reflect (M10.8b).
+/// What the menus' check marks reflect (M10.8b).
+///
+/// ⚠ The layout's three choices were View items for one build and moved to Settings → Appearance at
+/// the author's word (2026-10-01): where a panel sits is a setting, not a view toggle. The marks stayed
+/// for the toggles that are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MenuState {
-    pub layout: crate::layout::Layout,
     pub filmstrip_shown: bool,
 }
 
 /// Whether `command`'s item is checked — `None` for an ordinary action, which carries no mark.
 ///
-/// ⚠ From the **command**, so `Item` keeps its shape and both renderers ask the same question. A
-/// toggle answers whether it is on; a [`Command::FilmstripAt`] whether the strip is there.
+/// ⚠ From the **command**, so `Item` keeps its shape and both renderers ask the same question.
 pub fn checked(command: Command, s: &MenuState) -> Option<bool> {
-    use crate::layout::Side;
     match command {
         Command::ToggleFilmstrip => Some(s.filmstrip_shown),
-        Command::ToggleLibraryRailSide => Some(s.layout.library_rail == Side::Right),
-        Command::ToggleEditPanelSide => Some(s.layout.edit_panel == Side::Left),
-        Command::FilmstripAt(place) => Some(s.layout.filmstrip == place),
         _ => None,
     }
 }
@@ -416,29 +408,6 @@ fn view_items() -> Vec<Item> {
         label: "Colour management".to_owned(),
         items: colour,
     });
-
-    // M10.8b: where the panels sit, each on its own. Toggles and a choice, all with check marks
-    // (`checked`); remembered in Settings.
-    items.push(Item::Separator);
-    items.push(action(
-        "Library rail on the right",
-        Command::ToggleLibraryRailSide,
-        None,
-    ));
-    items.push(action(
-        "Edit panel on the left",
-        Command::ToggleEditPanelSide,
-        None,
-    ));
-    items.push(Item::Separator);
-    use crate::layout::StripPlace;
-    for (label, place) in [
-        ("Filmstrip at the bottom", StripPlace::Bottom),
-        ("Filmstrip on the left", StripPlace::Left),
-        ("Filmstrip on the right", StripPlace::Right),
-    ] {
-        items.push(action(label, Command::FilmstripAt(place), None));
-    }
 
     // ⚠ **No shortcuts on any of these.** A bare key is stolen from every text field and a
     // text-editing chord breaks editing inside one — `Shortcut::safe_as_native_accelerator`
@@ -777,86 +746,17 @@ mod tests {
         assert_eq!(Shortcut::bare('\t').label(), "Tab");
     }
 
-    /// M10.8b: the layout items are in View, after everything else, and every one carries a mark.
+    /// The *Filmstrip* toggle's mark follows the state; an ordinary action has none.
     #[test]
-    fn the_view_menu_ends_with_the_layout_items_and_each_has_a_mark() {
-        let view = model().into_iter().find(|s| s.title == "View").unwrap();
-        let labels: Vec<(String, Command)> = view
-            .items
-            .iter()
-            .filter_map(|i| match i {
-                Item::Action { label, command, .. } => Some((label.clone(), *command)),
-                _ => None,
-            })
-            .collect();
-        let tail: Vec<&str> = labels[labels.len() - 5..]
-            .iter()
-            .map(|(l, _)| l.as_str())
-            .collect();
-        assert_eq!(
-            tail,
-            [
-                "Library rail on the right",
-                "Edit panel on the left",
-                "Filmstrip at the bottom",
-                "Filmstrip on the left",
-                "Filmstrip on the right"
-            ]
-        );
-        let state = MenuState {
-            layout: crate::layout::Layout::default(),
+    fn the_filmstrip_mark_follows_the_state() {
+        let shown = MenuState {
             filmstrip_shown: true,
         };
-        for (l, c) in &labels[labels.len() - 5..] {
-            assert!(checked(*c, &state).is_some(), "{l} has no mark");
-        }
-    }
-
-    /// The marks follow the state; an ordinary action has none.
-    #[test]
-    fn the_marks_follow_the_layout() {
-        use crate::layout::{Layout, Side, StripPlace};
-        let at = |layout: Layout, shown: bool| MenuState {
-            layout,
-            filmstrip_shown: shown,
+        let hidden = MenuState {
+            filmstrip_shown: false,
         };
-        let default = at(Layout::default(), true);
-        assert_eq!(checked(Command::ToggleFilmstrip, &default), Some(true));
-        assert_eq!(
-            checked(Command::ToggleFilmstrip, &at(Layout::default(), false)),
-            Some(false)
-        );
-        assert_eq!(
-            checked(Command::ToggleLibraryRailSide, &default),
-            Some(false)
-        );
-        assert_eq!(checked(Command::ToggleEditPanelSide, &default), Some(false));
-        assert_eq!(
-            checked(Command::FilmstripAt(StripPlace::Bottom), &default),
-            Some(true)
-        );
-        assert_eq!(
-            checked(Command::FilmstripAt(StripPlace::Left), &default),
-            Some(false)
-        );
-        let moved = at(
-            Layout {
-                library_rail: Side::Right,
-                edit_panel: Side::Left,
-                filmstrip: StripPlace::Left,
-            },
-            true,
-        );
-        assert_eq!(checked(Command::ToggleLibraryRailSide, &moved), Some(true));
-        assert_eq!(checked(Command::ToggleEditPanelSide, &moved), Some(true));
-        assert_eq!(
-            checked(Command::FilmstripAt(StripPlace::Left), &moved),
-            Some(true)
-        );
-        assert_eq!(
-            checked(Command::FilmstripAt(StripPlace::Bottom), &moved),
-            Some(false)
-        );
-        assert_eq!(checked(Command::ZoomIn, &moved), None, "an ordinary action");
+        assert_eq!(checked(Command::ToggleFilmstrip, &shown), Some(true));
+        assert_eq!(checked(Command::ToggleFilmstrip, &hidden), Some(false));
+        assert_eq!(checked(Command::ZoomIn, &shown), None, "an ordinary action");
     }
 }

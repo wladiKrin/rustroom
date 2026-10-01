@@ -209,7 +209,6 @@ fn menu_bar(w: &mut Walk) {
     let ctx = themed_ctx();
     let nodes = test_ui::nodes(&ctx, |ui| {
         let state = rustroom_app::menu::MenuState {
-            layout: rustroom_app::layout::Layout::default(),
             filmstrip_shown: true,
         };
         let _ = crate::menu_bar::show(ui, &[], &state);

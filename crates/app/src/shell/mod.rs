@@ -68,7 +68,6 @@ impl RustroomApp {
     /// What the menus' check marks reflect (M10.8b).
     pub(crate) fn menu_state(&self) -> rustroom_app::menu::MenuState {
         rustroom_app::menu::MenuState {
-            layout: self.settings.layout,
             filmstrip_shown: self.show_filmstrip,
         }
     }

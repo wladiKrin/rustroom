@@ -180,23 +180,6 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
             }
         }
         Command::ToggleFilmstrip => app.show_filmstrip = !app.show_filmstrip,
-        // M10.8b: where the panels sit — remembered, so saved at once.
-        Command::ToggleLibraryRailSide => {
-            let l = &mut app.settings.layout;
-            l.library_rail = l.library_rail.other();
-            app.save_settings();
-        }
-        Command::ToggleEditPanelSide => {
-            let l = &mut app.settings.layout;
-            l.edit_panel = l.edit_panel.other();
-            app.save_settings();
-        }
-        // ⚠ Choosing where the strip goes is asking to see it there.
-        Command::FilmstripAt(place) => {
-            app.settings.layout.filmstrip = place;
-            app.show_filmstrip = true;
-            app.save_settings();
-        }
         Command::TogglePanels => app.show_panels = !app.show_panels,
         Command::LightsOut => app.lights_out = (app.lights_out + 1) % 3,
         Command::ToggleInfoOverlay => app.show_info_overlay = !app.show_info_overlay,
