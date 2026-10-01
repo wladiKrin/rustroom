@@ -705,10 +705,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             app.status = format!("Added {n} to the collection");
         }
         Action::CreateKeyword => {
-            if let Some(cat) = &app.catalog {
-                let _ = cat.create_keyword(app.new_keyword.trim(), app.new_keyword_parent);
-            }
-            app.new_keyword.clear();
+            let typed = std::mem::take(&mut app.new_keyword);
+            app.create_keyword_and_tag(&typed);
         }
         Action::OpenAllPhotos => app.open_all_photos(ctx),
         Action::OpenSmart(id, name) => app.open_smart(ctx, id, &name),

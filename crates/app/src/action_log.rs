@@ -111,6 +111,20 @@ pub enum ActionKind {
     /// One keyword merged into another. Boxed for `Sync`'s reason: the record can list many
     /// assignments, and an inline variant would make every entry in the log that large.
     KeywordMerge(Box<catalog::db::KeywordMerge>),
+    /// A keyword put on (`on`) or taken off files (M10.8a). ⚠⚠ `files` are only the ones whose
+    /// state **changed** — undoing a tag must not strip it from a photo that already had it.
+    KeywordTag {
+        keyword: i64,
+        on: bool,
+        files: Vec<PathBuf>,
+    },
+    /// A keyword created (M10.8a). Undo deletes it; redo puts it back under its own id, so a later
+    /// entry naming that id still means it.
+    KeywordCreate {
+        id: i64,
+        name: String,
+        parent: Option<i64>,
+    },
     /// Several actions performed by one gesture, undone and redone as a unit.
     ///
     /// Pasting into a multi-selection is the motivating case: it changes the open photo
@@ -176,6 +190,8 @@ fn reachable(kind: &ActionKind, open: Option<&PhotoId>) -> bool {
         | ActionKind::KeywordRename { .. }
         | ActionKind::KeywordMove { .. }
         | ActionKind::KeywordMerge(_)
+        | ActionKind::KeywordTag { .. }
+        | ActionKind::KeywordCreate { .. }
         | ActionKind::Rename { .. } => true,
         ActionKind::Batch(parts) => parts.iter().all(|p| reachable(p, open)),
     }
