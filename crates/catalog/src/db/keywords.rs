@@ -49,22 +49,58 @@ pub struct KeywordRow {
     pub count: i64,
 }
 
+/// The photos taken on the selection's capture day(s), and the keywords they carry.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct DayCounts {
+    /// How many photos those days hold, the selection excluded.
+    pub neighbours: usize,
+    /// How many of them carry each keyword.
+    pub counts: std::collections::HashMap<i64, usize>,
+}
+
 impl Catalog {
     /// Create a keyword under `parent`, or return the existing one of that name and parent.
     ///
     /// ⚠ A duplicate is not an error, for the reason `create_collection` gives: the name is the
     /// identity a user thinks in.
     pub fn create_keyword(&self, name: &str, parent: Option<i64>) -> Result<i64, CatalogError> {
-        self.conn.execute(
+        self.create_keyword_reporting(name, parent)
+            .map(|(id, _)| id)
+    }
+
+    /// [`Self::create_keyword`], and whether this call made the row (M10.8a): an undo of a
+    /// "create" that returned an existing keyword must not delete it.
+    pub fn create_keyword_reporting(
+        &self,
+        name: &str,
+        parent: Option<i64>,
+    ) -> Result<(i64, bool), CatalogError> {
+        let created = self.conn.execute(
             "INSERT INTO keywords (name, parent_id) VALUES (?1, ?2)
              ON CONFLICT DO NOTHING",
             rusqlite::params![name, parent],
-        )?;
-        Ok(self.conn.query_row(
+        )? > 0;
+        let id = self.conn.query_row(
             "SELECT id FROM keywords WHERE name = ?1 AND COALESCE(parent_id, 0) = COALESCE(?2, 0)",
             rusqlite::params![name, parent],
             |r| r.get(0),
-        )?)
+        )?;
+        Ok((id, created))
+    }
+
+    /// Put back a keyword an undo removed, under its **original id** — `unmerge_keyword`'s rule, so
+    /// an undo step recorded before it still names it.
+    pub fn recreate_keyword(
+        &self,
+        id: i64,
+        name: &str,
+        parent: Option<i64>,
+    ) -> Result<(), CatalogError> {
+        self.conn.execute(
+            "INSERT INTO keywords (id, name, parent_id) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, name, parent],
+        )?;
+        Ok(())
     }
 
     /// The whole tree, depth-first and name-ordered within each level.
@@ -162,30 +198,110 @@ impl Catalog {
     ///
     /// ⚠ Keyed on `(folder, file_name)` rather than on a photo row, which is what makes that true
     /// with no inheritance rule to maintain.
-    pub fn assign_keyword(&self, keyword: i64, photo: &Path) -> Result<(), CatalogError> {
+    /// Tag `photo` with `keyword`; `true` when it was not already tagged (M10.8a — what lets an
+    /// undo remove exactly the tags this call added).
+    pub fn assign_keyword(&self, keyword: i64, photo: &Path) -> Result<bool, CatalogError> {
         let Some((folder, name)) = split(photo) else {
-            return Ok(());
+            return Ok(false);
         };
-        self.conn.execute(
+        Ok(self.conn.execute(
             "INSERT INTO photo_keywords (folder_id, file_name, keyword_id)
              SELECT f.id, ?2, ?3 FROM folders f WHERE f.path = ?1
              ON CONFLICT DO NOTHING",
             rusqlite::params![folder, name, keyword],
-        )?;
-        Ok(())
+        )? > 0)
     }
 
-    pub fn unassign_keyword(&self, keyword: i64, photo: &Path) -> Result<(), CatalogError> {
+    /// Untag `photo`; `true` when it was tagged.
+    pub fn unassign_keyword(&self, keyword: i64, photo: &Path) -> Result<bool, CatalogError> {
         let Some((folder, name)) = split(photo) else {
-            return Ok(());
+            return Ok(false);
         };
-        self.conn.execute(
+        Ok(self.conn.execute(
             "DELETE FROM photo_keywords
              WHERE keyword_id = ?3 AND file_name = ?2
                AND folder_id = (SELECT id FROM folders WHERE path = ?1)",
             rusqlite::params![folder, name, keyword],
+        )? > 0)
+    }
+
+    /// The photos taken on the same capture day(s) as `photos` — `photos` themselves excluded — and
+    /// how many of them carry each keyword (M10.8a's same-day evidence).
+    ///
+    /// ⚠ A day is `date(taken, 'unixepoch')`, the Dates tree's day: `taken` is wall-clock time
+    /// stored as if UTC, so this is the date on the camera. A photo with no time has no day.
+    pub fn day_keyword_counts(&self, photos: &[PathBuf]) -> Result<DayCounts, CatalogError> {
+        let mut own = std::collections::HashSet::new();
+        let mut days = std::collections::BTreeSet::new();
+        let mut day_of = self.conn.prepare(
+            "SELECT pc.folder_id, date(pc.taken, 'unixepoch') FROM photo_capture pc
+             JOIN folders f ON f.id = pc.folder_id
+             WHERE f.path = ?1 AND pc.file_name = ?2",
         )?;
-        Ok(())
+        for photo in photos {
+            let Some((folder, name)) = split(photo) else {
+                continue;
+            };
+            let rows = day_of.query_map(rusqlite::params![folder, name], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?))
+            })?;
+            for (fid, day) in rows.filter_map(Result::ok) {
+                own.insert((fid, name.clone()));
+                days.extend(day);
+            }
+        }
+        let mut on_day = self.conn.prepare(
+            "SELECT pc.folder_id, pc.file_name, pk.keyword_id FROM photo_capture pc
+             LEFT JOIN photo_keywords pk
+                    ON pk.folder_id = pc.folder_id AND pk.file_name = pc.file_name
+             WHERE date(pc.taken, 'unixepoch') = ?1",
+        )?;
+        let mut neighbours = std::collections::HashSet::new();
+        let mut counts = std::collections::HashMap::new();
+        for day in &days {
+            let rows = on_day.query_map([day], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                ))
+            })?;
+            for (fid, file, kw) in rows.filter_map(Result::ok) {
+                if own.contains(&(fid, file.clone())) {
+                    continue;
+                }
+                neighbours.insert((fid, file));
+                if let Some(k) = kw {
+                    *counts.entry(k).or_insert(0) += 1;
+                }
+            }
+        }
+        Ok(DayCounts {
+            neighbours: neighbours.len(),
+            counts,
+        })
+    }
+
+    /// For each `j` in `keywords`, how many files carry both `j` and each other keyword `k`, keyed
+    /// `(j, k)` — M10.8a's companion evidence.
+    pub fn companion_counts(
+        &self,
+        keywords: &[i64],
+    ) -> Result<std::collections::HashMap<(i64, i64), usize>, CatalogError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT b.keyword_id, count(*) FROM photo_keywords a
+             JOIN photo_keywords b ON b.folder_id = a.folder_id AND b.file_name = a.file_name
+             WHERE a.keyword_id = ?1 AND b.keyword_id != ?1
+             GROUP BY b.keyword_id",
+        )?;
+        let mut out = std::collections::HashMap::new();
+        for &j in keywords {
+            let rows = stmt.query_map([j], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
+            for (k, n) in rows.filter_map(Result::ok) {
+                out.insert((j, k), n as usize);
+            }
+        }
+        Ok(out)
     }
 
     /// How many of `files` carry each keyword — the tri-state a photo menu needs.
@@ -892,5 +1008,125 @@ mod tests {
         let k = c.create_keyword("Paris", None).unwrap();
         c.assign_keyword(k, Path::new("/a/one.RAF")).unwrap();
         assert_eq!(c.keyword_delete_scope(k).unwrap(), (0, 1));
+    }
+
+    /// M10.8a: a write reports whether it changed anything — what makes a tag's undo exact.
+    #[test]
+    fn tagging_reports_whether_it_changed_anything() {
+        let c = cat();
+        let k = c.create_keyword("Berlin", None).unwrap();
+        assert!(c.assign_keyword(k, &p("a.raf")).unwrap());
+        assert!(
+            !c.assign_keyword(k, &p("a.raf")).unwrap(),
+            "a second tag changed something"
+        );
+        assert!(c.unassign_keyword(k, &p("a.raf")).unwrap());
+        assert!(
+            !c.unassign_keyword(k, &p("a.raf")).unwrap(),
+            "removing an absent tag changed something"
+        );
+    }
+
+    /// ⚠ `create_keyword` returns an existing keyword's id for a name already there, so an undo of
+    /// "create" must know whether this call made the row — or it deletes a keyword it never created.
+    #[test]
+    fn creating_reports_a_new_keyword_and_recreating_keeps_its_id() {
+        let c = cat();
+        let (id, new) = c.create_keyword_reporting("Berlin", None).unwrap();
+        assert!(new);
+        assert_eq!(
+            c.create_keyword_reporting("Berlin", None).unwrap(),
+            (id, false)
+        );
+        c.delete_keyword(id).unwrap();
+        c.recreate_keyword(id, "Berlin", None).unwrap();
+        assert!(c
+            .keywords()
+            .unwrap()
+            .iter()
+            .any(|k| k.id == id && k.name == "Berlin"));
+    }
+
+    /// The selection's capture day(s): its other photos, and which keywords they carry. Neither
+    /// the next day, nor a photo without a date, nor the selection's own tags are evidence.
+    #[test]
+    fn day_counts_cover_the_selections_days_and_nothing_else() {
+        let c = Catalog::open_in_memory().unwrap();
+        let names = [
+            "sel.raf",
+            "same1.raf",
+            "same2.raf",
+            "other.raf",
+            "undated.raf",
+        ];
+        let entries: Vec<CatalogEntry> = names
+            .iter()
+            .map(|n| CatalogEntry {
+                path: p(n),
+                file_name: n.to_string(),
+                modified: std::time::SystemTime::UNIX_EPOCH,
+                edited: None,
+            })
+            .collect();
+        c.sync_folder(Path::new("/p"), &entries).unwrap();
+        let midnight = 1_700_000_000 - 1_700_000_000 % 86_400;
+        let at = |n: &str, taken: Option<i64>| {
+            let cap = core_image::Capture {
+                taken,
+                ..Default::default()
+            };
+            c.set_capture(&p(n), &cap).unwrap();
+        };
+        at("sel.raf", Some(midnight + 3_600));
+        at("same1.raf", Some(midnight + 7_200));
+        at("same2.raf", Some(midnight + 80_000));
+        at("other.raf", Some(midnight + 86_400 + 10));
+        at("undated.raf", None);
+        let street = c.create_keyword("Street", None).unwrap();
+        let night = c.create_keyword("Night", None).unwrap();
+        c.assign_keyword(street, &p("same1.raf")).unwrap();
+        c.assign_keyword(street, &p("same2.raf")).unwrap();
+        c.assign_keyword(night, &p("other.raf")).unwrap();
+        c.assign_keyword(night, &p("sel.raf")).unwrap();
+        let d = c.day_keyword_counts(&[p("sel.raf")]).unwrap();
+        assert_eq!(
+            d.neighbours, 2,
+            "the photos taken that day, the selection excluded"
+        );
+        assert_eq!(d.counts.get(&street), Some(&2));
+        assert_eq!(
+            d.counts.get(&night),
+            None,
+            "the next day's photo, or the selection's own tag, counted"
+        );
+    }
+
+    #[test]
+    fn companion_counts_count_the_files_carrying_both() {
+        let c = cat();
+        let berlin = c.create_keyword("Berlin", None).unwrap();
+        let street = c.create_keyword("Street", None).unwrap();
+        let night = c.create_keyword("Night", None).unwrap();
+        for f in ["a.raf", "b.raf"] {
+            c.assign_keyword(berlin, &p(f)).unwrap();
+            c.assign_keyword(street, &p(f)).unwrap();
+        }
+        c.assign_keyword(berlin, &p("c.raf")).unwrap();
+        c.assign_keyword(night, &p("c.raf")).unwrap();
+        let m = c.companion_counts(&[berlin]).unwrap();
+        assert_eq!(m.get(&(berlin, street)), Some(&2));
+        assert_eq!(m.get(&(berlin, night)), Some(&1));
+        assert_eq!(m.get(&(berlin, berlin)), None);
+    }
+
+    /// The suggestion cache's key: every write moves it, a read does not.
+    #[test]
+    fn the_change_count_moves_on_a_write_and_not_on_a_read() {
+        let c = cat();
+        let before = c.change_count();
+        let _ = c.keywords().unwrap();
+        assert_eq!(c.change_count(), before);
+        c.create_keyword("Berlin", None).unwrap();
+        assert!(c.change_count() > before);
     }
 }
