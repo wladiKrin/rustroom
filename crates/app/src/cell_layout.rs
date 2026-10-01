@@ -24,13 +24,14 @@ pub const BOX_ASPECT: f32 = 1.5;
 pub const PILE_LAYERS: usize = 7;
 
 /// How far each of `layers` layers sits from the one above it, up and to the right: the whole pile
-/// within a tenth of the box (6–20 pt), each step at most 6 pt so a small stack reads as separate cards.
+/// within about a fifth of the box (10–32 pt), each step at most 10 pt so a small stack reads as
+/// separate cards. ⚠ Doubled from a tenth and 6 pt after use: "a bit more pronounced" (the author).
 pub fn pile_step(layers: usize, side: f32) -> f32 {
     if layers == 0 {
         return 0.0;
     }
-    let total = (side * 0.10).clamp(6.0, 20.0);
-    (total / layers as f32).min(6.0)
+    let total = (side * 0.18).clamp(10.0, 32.0);
+    (total / layers as f32).min(10.0)
 }
 
 pub fn grid_cell(cell: f32, caption_h: f32, marks_h: f32, spacing_y: f32) -> GridCell {
@@ -63,17 +64,17 @@ mod tests {
     }
 
     #[test]
-    fn a_pile_fits_a_tenth_of_the_box_and_steps_at_most_six() {
+    fn a_pile_fits_a_fifth_of_the_box_and_steps_at_most_ten() {
         assert_eq!(pile_step(0, 200.0), 0.0);
-        assert_eq!(pile_step(1, 200.0), 6.0, "a pair: one clear card");
+        assert_eq!(pile_step(1, 200.0), 10.0, "a pair: one clear card");
         for layers in 1..=PILE_LAYERS {
             let step = pile_step(layers, 200.0);
-            assert!(step > 0.0 && step <= 6.0);
-            assert!(step * layers as f32 <= 20.0 + 1e-3, "{layers}: {step}");
+            assert!(step > 0.0 && step <= 10.0);
+            assert!(step * layers as f32 <= 36.0 + 1e-3, "{layers}: {step}");
         }
         assert!(
-            pile_step(7, 60.0) * 7.0 <= 6.0 + 1e-3,
-            "a small box: 6 in all"
+            pile_step(7, 40.0) * 7.0 <= 10.0 + 1e-3,
+            "a small box: 10 in all"
         );
     }
 }

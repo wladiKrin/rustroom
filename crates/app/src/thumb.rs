@@ -177,6 +177,14 @@ pub fn cell_with(
         None => inner,
     };
     paint_pile(ui, at, step, pile);
+    if !pile.is_empty() {
+        // ⚠ A dark rim around the top photo, so it stands off the layer right behind it.
+        ui.painter().rect_filled(
+            at.expand(1.5),
+            egui::CornerRadius::same(CORNER),
+            egui::Color32::from_black_alpha(110),
+        );
+    }
     match thumb {
         Some(tex) => {
             egui::Image::new(tex)
@@ -264,7 +272,8 @@ fn paint_pile(ui: &egui::Ui, top: egui::Rect, step: f32, pile: &[Option<&egui::T
         ui.painter().rect_filled(
             r,
             egui::CornerRadius::same(CORNER),
-            egui::Color32::from_black_alpha((40.0 + 20.0 * depth).min(180.0) as u8),
+            // ⚠ Lighter after use ("more pronounced"): the photos below show through.
+            egui::Color32::from_black_alpha((20.0 + 18.0 * depth).min(150.0) as u8),
         );
         ui.painter().rect_stroke(
             r,
