@@ -39,6 +39,7 @@ and a pointer, not deleted.
 | **M10.16** AI tools | depth masks (a); P-23 (b); P-26's content-aware remove (c) |
 | **M10.17** merge | P-24 |
 | **M10.18** new modules | P-25 (brought in by the author) |
+| **M10.19** found in use | HEIC/HEIF support (a, new 2026-10-01 — never an entry here); *Move to folder left one thing out* (b) |
 | **M11.2** Windows & Linux | *The in-window menu bar has never been run*; *Multi-monitor on Linux and Windows*; P-28 |
 | **M11.3** / **M11.5** | *Contributor-facing documentation* / *A plugin system* |
 
@@ -105,7 +106,7 @@ assignment time, so it needs a schema change, and the author chose the same capt
 keywords instead; and suggestions from the picture's *content* — an AI tagger, unscheduled (M10.16 is
 masks, denoise and removal).
 
-**Move to folder left one thing out, on purpose (2026-10-01):** an Immich asset not downloaded yet is
+**Move to folder left one thing out, on purpose (2026-10-01) → M10.19b:** an Immich asset not downloaded yet is
 skipped and counted rather than downloaded and then moved — the author asked for "ones that have been
 downloaded", and download-then-move is an asynchronous chain (`Job::Original`, then the move when its
 outcome lands) worth its own design.
