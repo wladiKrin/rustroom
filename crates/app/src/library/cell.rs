@@ -35,6 +35,8 @@ pub(super) struct CellInputs<'a, 'b> {
     pub(super) remote: &'a std::collections::HashMap<String, String>,
     /// What reorders an unfurled stack (Settings → Input).
     pub(super) stack_drag: rustroom_app::settings::StackDrag,
+    /// How a collapsed stack is drawn (Settings → Appearance).
+    pub(super) look: rustroom_app::stack::StackLook,
 }
 
 /// A drag that starts on a member of an **unfurled** stack moves it within the stack (M10.8c after
@@ -99,6 +101,7 @@ pub(super) fn draw(
         name_size,
         remote,
         stack_drag,
+        look,
     } = c;
     // ⚠⚠ A stable id per photo, not egui's auto-id counter. Under
     // `show_rows` that counter shifts with the scroll position — it skips
@@ -131,6 +134,30 @@ pub(super) fn draw(
                         .get(&lib.entries[i].id)
                         .copied()
                         .unwrap_or_default();
+                    // M10.8c after use: a collapsed stack is drawn as a pile — the photos
+                    // below peeking out, or plain cards (Settings → Appearance).
+                    let pile: Vec<Option<&egui::TextureHandle>> = match lib.entries[i].stack {
+                        Some(st) if !st.expanded => lib
+                            .below
+                            .get(&lib.entries[i].id)
+                            .into_iter()
+                            .flatten()
+                            .take(rustroom_app::cell_layout::PILE_LAYERS)
+                            .map(|m| match look {
+                                rustroom_app::stack::StackLook::Peek => {
+                                    let want = rustroom_app::thumb_loader::ThumbRequest {
+                                        id: m.id.clone(),
+                                        edits: m.edits.clone(),
+                                    };
+                                    lib.cache
+                                        .get(&want.key())
+                                        .or_else(|| lib.cache.get_stale(&m.id))
+                                }
+                                rustroom_app::stack::StackLook::Cards => None,
+                            })
+                            .collect(),
+                        _ => Vec::new(),
+                    };
                     // ⚠ The marks go in a row under the picture, not over
                     // it — see `thumb::marks_row`.
                     let cell_resp = thumb::cell_with(
@@ -149,6 +176,7 @@ pub(super) fn draw(
                             downloaded: downloaded.get(i).copied().unwrap_or(false),
                             sit_on_bottom: true,
                         },
+                        &pile,
                     );
                     let e = &lib.entries[i];
                     stack_badge(ui, e, &cell_resp, out, remote, &lib.hand_stacks);
@@ -208,6 +236,13 @@ fn stack_badge(
                 STACK_BADGE,
             );
             let r = ui.interact(pill, ui.id().with("stack_badge"), egui::Sense::click());
+            // ⚠ A name for a screen reader and a test — the pill shows only a number.
+            let name = if st.expanded {
+                "Collapse the stack".to_string()
+            } else {
+                format!("Stack of {}", st.count)
+            };
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
             let v = ui.visuals();
             // ⚠ The thumbnail badge's colours (§7.10): white
             // on 55 % black at rest, the accent under the

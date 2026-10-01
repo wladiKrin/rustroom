@@ -376,22 +376,9 @@ mod tests {
             let c = ui.ctx().clone();
             crate::library::show(app, ui, &c);
         };
-        let mut found = Vec::new();
-        for _ in 0..2 {
-            found = crate::test_ui::labelled_rects_on(&ctx, crate::test_ui::screen(), |ui| {
-                draw(&mut app, ui)
-            });
-        }
-        // ⚠ The largest rect of that name: the caption under a cell carries the name too.
-        let cell = found
-            .iter()
-            .filter(|(l, _)| l == "rustroom_00000.RAF")
-            .map(|(_, r)| *r)
-            .max_by(|a, b| a.area().total_cmp(&b.area()))
-            .expect("the stack's cell");
-        // The badge sits 4 pt in from the picture's top-right corner, 20 × 16.
-        let badge = egui::pos2(cell.right() - 14.0, cell.top() + 12.0);
-        crate::test_ui::click_at(&ctx, badge, false, |ui| draw(&mut app, ui));
+        // ⚠ By the badge's own name: the pile shrinks the picture, so the badge is not at the cell's
+        // corner.
+        crate::test_ui::click(&ctx, "Stack of 3", |ui| draw(&mut app, ui));
         let r = rows(&app);
         assert_eq!(r.len(), 4, "unfurled: {r:?}");
         assert_eq!(r.iter().filter(|(_, c)| *c == Some(3)).count(), 3);
@@ -553,5 +540,29 @@ mod tests {
         assert_eq!(lib.hand_stacks[&jpg].ord, 1);
         assert!(!lib.hand_stacks[&jpg].by_time, "the user's");
         assert_eq!(rows(&app).len(), 3, "still unfurled under its new key");
+    }
+
+    /// Peeking asks for the thumbnails of the photos below a collapsed stack; cards ask for none.
+    #[test]
+    fn peeking_asks_for_the_photos_below_and_cards_do_not() {
+        let wanted = |look| {
+            let mut app = four();
+            app.view = crate::AppView::Library;
+            app.settings.stacking.look = look;
+            run(&mut app, Command::Stack);
+            let ctx = crate::test_ui::ctx();
+            let _ = crate::test_ui::nodes(&ctx, |ui| {
+                let c = ui.ctx().clone();
+                crate::library::show(&mut app, ui, &c);
+            });
+            app.library.as_ref().unwrap().last_want.len()
+        };
+        let peek = wanted(rustroom_app::stack::StackLook::Peek);
+        let cards = wanted(rustroom_app::stack::StackLook::Cards);
+        assert_eq!(
+            cards, 2,
+            "two rows on screen: the stack and the fourth photo"
+        );
+        assert_eq!(peek, 4, "and the stack's two photos below");
     }
 }

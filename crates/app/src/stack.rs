@@ -100,6 +100,30 @@ pub struct Stacking {
     /// general than just raw and jpeg".
     pub formats: FormatFilter,
     pub primary: StackPrimary,
+    /// How a collapsed stack is drawn (M10.8c after use).
+    pub look: StackLook,
+}
+
+/// How a collapsed stack is drawn: a pile behind its top photo — the photos below peeking out, or
+/// plain cards (the author's option: "for performance reasons").
+///
+/// ⚠⚠ **Append variants, never insert** — serialised into `Settings`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum StackLook {
+    /// The photos below peek out — their thumbnails are loaded too.
+    #[default]
+    Peek,
+    /// Plain cards — no extra thumbnails.
+    Cards,
+}
+
+impl StackLook {
+    pub fn label(self) -> &'static str {
+        match self {
+            StackLook::Peek => "Photos below",
+            StackLook::Cards => "Cards",
+        }
+    }
 }
 
 impl Stacking {

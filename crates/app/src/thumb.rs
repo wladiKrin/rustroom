@@ -104,6 +104,7 @@ pub fn cell(
             downloaded: false,
             sit_on_bottom: false,
         },
+        &[],
     )
 }
 
@@ -133,6 +134,9 @@ pub fn cell_with(
     badge: Option<&str>,
     marks: catalog::db::Marks,
     style: CellStyle,
+    // ⚠ M10.8c after use: a collapsed stack's pile, one layer per photo below the top, nearest first —
+    // its thumbnail when peeking and loaded, else a plain card. Empty for anything else.
+    pile: &[Option<&egui::TextureHandle>],
 ) -> egui::Response {
     let CellStyle {
         overlay_marks,
@@ -140,38 +144,55 @@ pub fn cell_with(
         sit_on_bottom,
     } = style;
     let (rect, resp) = ui.allocate_exact_size(box_size, egui::Sense::hover());
-    match thumb {
+    // ⚠ The pile steps up and to the right, so the top photo gives up that much of the box at its top
+    // and its right — the cell's own size never changes (the reflow rule above).
+    let step = rustroom_app::cell_layout::pile_step(pile.len(), box_size.x.min(box_size.y));
+    let reach = step * pile.len() as f32;
+    let inner = egui::Rect::from_min_max(
+        egui::pos2(rect.left(), rect.top() + reach),
+        egui::pos2(rect.right() - reach, rect.bottom()),
+    );
+    let at = match thumb {
         Some(tex) => {
             // Fit inside the cell without upscaling — the same result
             // `Image::max_size(..).maintain_aspect_ratio(true)` produced, minus the effect
             // on layout.
             let size = tex.size_vec2();
-            let scale = (box_size.x / size.x).min(box_size.y / size.y).min(1.0);
+            let scale = (inner.width() / size.x)
+                .min(inner.height() / size.y)
+                .min(1.0);
             let painted = size * scale;
-            let at = if sit_on_bottom {
+            if sit_on_bottom {
                 egui::Rect::from_min_size(
-                    egui::pos2(rect.center().x - painted.x * 0.5, rect.bottom() - painted.y),
+                    egui::pos2(
+                        inner.center().x - painted.x * 0.5,
+                        inner.bottom() - painted.y,
+                    ),
                     painted,
                 )
             } else {
-                egui::Rect::from_center_size(rect.center(), painted)
-            };
+                egui::Rect::from_center_size(inner.center(), painted)
+            }
+        }
+        None => inner,
+    };
+    paint_pile(ui, at, step, pile);
+    match thumb {
+        Some(tex) => {
             egui::Image::new(tex)
                 .corner_radius(egui::CornerRadius::same(CORNER))
                 .paint_at(ui, at);
-            ui.ctx()
-                .memory_mut(|m| m.data.insert_temp(image_id(ui), at));
         }
         None => {
             ui.painter().rect_filled(
-                rect,
+                at,
                 egui::CornerRadius::same(CORNER),
                 crate::theme::tokens::of(ui).raised,
             );
-            ui.ctx()
-                .memory_mut(|m| m.data.insert_temp(image_id(ui), rect));
         }
     }
+    ui.ctx()
+        .memory_mut(|m| m.data.insert_temp(image_id(ui), at));
     let mut badge_end: Option<f32> = None;
     if let Some(text) = badge {
         // ⚠ Sized to its text, not fixed: a badge used to hold only a copy number, and a label
@@ -218,6 +239,40 @@ pub fn cell_with(
     }
 
     resp
+}
+
+/// The layers behind a collapsed stack's top photo (M10.8c after use), farthest first so the nearest
+/// sits on top: each the top's rect stepped `k × step` up and to the right, the photo below peeking out
+/// when its thumbnail is given — else a plain card — and darker the deeper it lies.
+fn paint_pile(ui: &egui::Ui, top: egui::Rect, step: f32, pile: &[Option<&egui::TextureHandle>]) {
+    let t = crate::theme::tokens::of(ui);
+    for (k, layer) in pile.iter().enumerate().rev() {
+        let depth = (k + 1) as f32;
+        let r = top.translate(egui::vec2(depth * step, -depth * step));
+        match layer {
+            Some(tex) => {
+                egui::Image::new(*tex)
+                    .corner_radius(egui::CornerRadius::same(CORNER))
+                    .paint_at(ui, r);
+            }
+            None => {
+                ui.painter()
+                    .rect_filled(r, egui::CornerRadius::same(CORNER), t.raised);
+            }
+        }
+        // ⚠ A scrim over a photograph, as the badges use — deeper is darker, so the pile reads in depth.
+        ui.painter().rect_filled(
+            r,
+            egui::CornerRadius::same(CORNER),
+            egui::Color32::from_black_alpha((40.0 + 20.0 * depth).min(180.0) as u8),
+        );
+        ui.painter().rect_stroke(
+            r,
+            egui::CornerRadius::same(CORNER),
+            egui::Stroke::new(1.0, t.line),
+            egui::StrokeKind::Inside,
+        );
+    }
 }
 
 /// A circled downward arrow, marking a photo whose original is on disk.
@@ -537,6 +592,7 @@ mod tests {
                             None,
                             marks,
                             CellStyle::default(),
+                            &[],
                         );
                         ui.label(egui::RichText::new("DSCF6509.RAF").small());
                         marks_row(ui, box_size.x, marks, 9.0);
@@ -742,5 +798,53 @@ mod tests {
                 g as u32
             );
         }
+    }
+
+    /// M10.8c after use: a collapsed stack of four draws three layers behind its top photo, each
+    /// stepped up and to the right, and the top photo gives up that room inside the same box.
+    #[test]
+    fn a_pile_draws_one_layer_per_photo_below() {
+        let ctx = egui::Context::default();
+        let box_size = egui::vec2(160.0, 106.0);
+        let cards: [Option<&egui::TextureHandle>; 3] = [None, None, None];
+        let shapes_and_top = |pile: &[Option<&egui::TextureHandle>]| {
+            let mut top = egui::Rect::NOTHING;
+            let out = ctx.run_ui(Default::default(), |ui| {
+                cell_with(
+                    ui,
+                    box_size,
+                    None,
+                    None,
+                    Default::default(),
+                    CellStyle::default(),
+                    pile,
+                );
+                top = image_rect(ui).unwrap();
+            });
+            (out.shapes, top)
+        };
+        let (plain, alone) = shapes_and_top(&[]);
+        let (piled, top) = shapes_and_top(&cards);
+        let step = rustroom_app::cell_layout::pile_step(3, box_size.y);
+        assert!(step > 0.0, "the sample");
+        assert!(
+            (alone.width() - top.width() - 3.0 * step).abs() < 0.01,
+            "room for the pile"
+        );
+        let rects: Vec<egui::Rect> = piled
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Rect(r) => Some(r.rect),
+                _ => None,
+            })
+            .collect();
+        for k in 1..=3 {
+            let want = top.translate(egui::vec2(k as f32 * step, -(k as f32) * step));
+            assert!(
+                rects.iter().any(|r| (r.min - want.min).length() < 0.01),
+                "layer {k} at {want:?}: {rects:?}"
+            );
+        }
+        assert!(piled.len() > plain.len(), "the pile added shapes");
     }
 }

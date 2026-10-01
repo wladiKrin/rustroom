@@ -162,6 +162,8 @@ pub(crate) struct Library {
     pub(crate) copies: Option<std::collections::HashSet<PhotoId>>,
     /// The hand stacks of the files on view (M10.8c) — read with the view and after every stack command.
     pub(crate) hand_stacks: rustroom_app::stack::HandStacks,
+    /// What each collapsed stack hides, in its order — the pile's layers (M10.8c after use).
+    pub(crate) below: rustroom_app::stack::Below,
     /// The catalog's change count when this source's members were last read (`source_refresh`).
     pub(crate) members_read_at: u64,
     /// A change count seen once and waiting to be seen again before the members are re-read — a
@@ -309,13 +311,13 @@ pub(crate) fn browser_entries(
     copies: Option<&std::collections::HashSet<PhotoId>>,
     // ⚠ M10.8c: the hand stacks, keyed before the server's and the name's.
     hand: &rustroom_app::stack::HandStacks,
-) -> Vec<entries::PhotoEntry> {
+) -> (Vec<entries::PhotoEntry>, rustroom_app::stack::Below) {
     let mut rows = entries::build(scan, sidecar::load_all);
     if let Some(keep) = copies {
         // ⚠ Before grouping, so a stack is made of the rows that are actually shown.
         rows.retain(|e| keep.contains(&e.id));
     }
-    rustroom_app::stack::group_with(rows, stacking, expanded, remote, hand)
+    rustroom_app::stack::group_with_below(rows, stacking, expanded, remote, hand)
 }
 
 /// The hand stacks of `scan`'s files, read from the catalog — one query per folder (M10.8c).
@@ -407,7 +409,7 @@ impl RustroomApp {
             .map(|e| e.id.clone());
         let was_selected = lib.selected_ids();
         catalog::sort(&mut lib.scan, sort);
-        lib.entries = browser_entries(
+        (lib.entries, lib.below) = browser_entries(
             &lib.scan,
             &stacking,
             &lib.stack_expanded,
@@ -557,7 +559,7 @@ mod tests {
 
         // ⚠ The sample assertion: the scan really holds two files, or "grouped to one" is vacuous.
         assert_eq!(pair.len(), 2);
-        let grouped = browser_entries(
+        let (grouped, _) = browser_entries(
             &pair,
             &on,
             &Default::default(),
@@ -580,6 +582,7 @@ mod tests {
                 None,
                 &Default::default()
             )
+            .0
             .len(),
             2
         );

@@ -50,6 +50,7 @@ pub(super) fn panel(
         filter,
         remote,
         stack_drag,
+        look,
     } = inp;
     // ⚠ The grid's own gap, 12 each way (`docs/DESIGN.md` §5) — scoped to this panel, because
     // `item_spacing` is also every control row's air and 12 there would double the panel.
@@ -159,6 +160,7 @@ pub(super) fn panel(
                             name_size,
                             remote,
                             stack_drag,
+                            look,
                         },
                         out,
                     );
@@ -184,6 +186,25 @@ pub(super) fn panel(
             // sharing one cache entry while a thumbnail was the camera's JPEG; now each copy
             // renders its own edits, so each is its own request.
             window.push(lib.thumb_request(visible[pos], live.as_ref()));
+            // ⚠ M10.8c after use: a collapsed stack's pile shows the photos below it — their
+            // thumbnails too, up to the pile's depth, but only when peeking: cards need none.
+            if look == rustroom_app::stack::StackLook::Peek {
+                let e = &lib.entries[visible[pos]];
+                if e.stack.is_some_and(|s| !s.expanded) {
+                    for m in lib
+                        .below
+                        .get(&e.id)
+                        .into_iter()
+                        .flatten()
+                        .take(rustroom_app::cell_layout::PILE_LAYERS)
+                    {
+                        window.push(ThumbRequest {
+                            id: m.id.clone(),
+                            edits: m.edits.clone(),
+                        });
+                    }
+                }
+            }
         }
     }
     lib.sync_thumb_window(&window);

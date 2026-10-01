@@ -444,6 +444,27 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                     // means "takes part". Reused for the jpg/jpeg aliasing.
                                     stack_format_chips(ui, &mut d.stacking);
                                 });
+                                // ⚠ Outside the switch above: the pile draws every stack, the ones
+                                // made by hand included (M10.8c after use).
+                                ui.horizontal(|ui| {
+                                    ui.label("Pile");
+                                    crate::segmented::segmented(
+                                        ui,
+                                        &mut d.stacking.look,
+                                        &[
+                                            (
+                                                rustroom_app::stack::StackLook::Peek,
+                                                "Photos below",
+                                                "Shows the photos below a stack's top one peeking out",
+                                            ),
+                                            (
+                                                rustroom_app::stack::StackLook::Cards,
+                                                "Cards",
+                                                "Draws plain cards below a stack's top photo, which loads no extra thumbnails",
+                                            ),
+                                        ],
+                                    );
+                                });
                             });
                             ui.end_row();
                             super::settings_layout::rows(ui, &mut d.layout);

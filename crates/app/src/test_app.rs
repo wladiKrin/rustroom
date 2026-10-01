@@ -361,6 +361,7 @@ pub fn library_of_names(names: &[&str]) -> Library {
         band: None,
         copies: None,
         hand_stacks: Default::default(),
+        below: Default::default(),
         members_read_at: 0,
         members_settling: None,
     };

@@ -115,6 +115,8 @@ struct GridInputs<'a> {
     remote: &'a std::collections::HashMap<String, String>,
     /// What reorders an unfurled stack (Settings → Input).
     stack_drag: rustroom_app::settings::StackDrag,
+    /// How a collapsed stack is drawn (Settings → Appearance).
+    look: rustroom_app::stack::StackLook,
 }
 
 /// Pinch, or ctrl/cmd+scroll, resizes the grid; the size is saved once the gesture settles.
@@ -179,6 +181,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         filter: &app.filter,
         remote: &app.immich_stacks.of_asset,
         stack_drag: app.settings.stack_drag,
+        look: app.settings.stacking.look,
     };
     egui::CentralPanel::default().show(ui, |ui| grid::panel(ui, &mut app.library, inp, &mut out));
 
