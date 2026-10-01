@@ -99,6 +99,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         Open(i64, String),
         Delete(i64),
         AddSelection(i64),
+        RemoveSelection(i64),
         OpenKeyword(i64, String),
         DeleteKeyword(i64, String),
         TagSelection(i64),
@@ -256,6 +257,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                         // ⚠ Enabled only with a selection, and the hover names the count, so it
                                         // can never be ambiguous about what it is about to do.
                                         let add_hover = format!("Add {picked} selected");
+                                        let remove_hover = format!("Remove {picked} selected");
                                         for c in &rows {
                                             let r = list_row::row(
                                                 ui,
@@ -279,12 +281,19 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                             hover: &add_hover,
                                                             enabled: picked > 0,
                                                         },
+                                                        RowAction {
+                                                            glyph: '−',
+                                                            verb: "Remove from",
+                                                            hover: &remove_hover,
+                                                            enabled: picked > 0,
+                                                        },
                                                     ],
                                                 },
                                             );
                                             match r.action {
                                                 Some(0) => action = Action::Delete(c.id),
-                                                Some(_) => action = Action::AddSelection(c.id),
+                                                Some(1) => action = Action::AddSelection(c.id),
+                                                Some(_) => action = Action::RemoveSelection(c.id),
                                                 None if r.clicked => {
                                                     action = Action::Open(c.id, c.name.clone())
                                                 }
@@ -710,28 +719,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 app.status = "Collection deleted".into();
             }
         }
-        Action::AddSelection(id) => {
-            let chosen: Vec<_> = app
-                .library
-                .as_ref()
-                .map(|l| {
-                    l.selection
-                        .iter()
-                        .filter_map(|i| l.entries.get(i))
-                        .map(|e| e.id.clone())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let mut n = 0;
-            if let Some(cat) = &app.catalog {
-                for pid in &chosen {
-                    if cat.add_to_collection(id, &pid.path, pid.copy).is_ok() {
-                        n += 1;
-                    }
-                }
-            }
-            app.status = format!("Added {n} to the collection");
-        }
+        Action::AddSelection(id) => app.change_selection_in_collection(id, true),
+        Action::RemoveSelection(id) => app.change_selection_in_collection(id, false),
         Action::CreateKeyword(name) => app.create_keyword_and_tag(&name),
         Action::OpenAllPhotos => app.open_all_photos(ctx),
         Action::OpenSmart(id, name) => app.open_smart(ctx, id, &name),

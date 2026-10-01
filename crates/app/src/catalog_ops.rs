@@ -163,30 +163,6 @@ impl RustroomApp {
         }
     }
 
-    /// Add a right-click's targets to a collection.
-    ///
-    /// ⚠ Per **copy**, not per file — a collection can hold the black-and-white copy and leave
-    /// the colour one out, which is the whole reason collections are not merely saved searches.
-    pub(crate) fn add_targets_to_collection(&mut self, collection: i64, clicked: usize) {
-        let targets = self
-            .library
-            .as_ref()
-            .map(|l| crate::library::menu_targets(l, clicked))
-            .unwrap_or_default();
-        let mut n = 0;
-        if let Some(cat) = &self.catalog {
-            for pid in &targets {
-                if cat
-                    .add_to_collection(collection, &pid.path, pid.copy)
-                    .is_ok()
-                {
-                    n += 1;
-                }
-            }
-        }
-        self.status = format!("Added {n} to the collection");
-    }
-
     /// Assign or remove a keyword across a right-click's targets.
     ///
     /// ⚠ De-duplicated to **files**, `selected_files`' rule: two copies of one photo are one file

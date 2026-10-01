@@ -11,6 +11,7 @@ use crate::modals::Modal;
 use crate::RustroomApp;
 use catalog::db::KeywordChange;
 use rustroom_app::action_log::ActionKind;
+use rustroom_app::status_text::photos;
 use std::path::PathBuf;
 
 impl RustroomApp {
@@ -313,15 +314,6 @@ impl RustroomApp {
             }
             _ => Vec::new(),
         }
-    }
-}
-
-/// "1 photo", "3 photos".
-fn photos(n: usize) -> String {
-    if n == 1 {
-        "1 photo".to_string()
-    } else {
-        format!("{n} photos")
     }
 }
 

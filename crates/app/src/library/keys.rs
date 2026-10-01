@@ -46,6 +46,10 @@ pub(super) fn grid_keys(
     if i.key_pressed(egui::Key::Escape) {
         lib.selection.clear();
     }
+    // ⚠ Only asks: whether a collection is on screen is the app's to answer, after the grid.
+    if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) {
+        out.remove_from_collection = true;
+    }
     // Culling. ⚠⚠ Behind the **same** `typing` gate as the arrows above, and that is not
     // optional: the Library has an editable filename field and a new-collection field,
     // and a bare `5` typed into either must not rate a photo. This project has recorded
@@ -208,5 +212,60 @@ mod tests {
             Some(4),
             "it wrapped to the top of the folder"
         );
+    }
+
+    /// A collection "Trips" holding all `n` photos, on screen, the second selected.
+    fn trips_on_screen(ctx: &egui::Context, n: usize) -> (RustroomApp, i64) {
+        let mut app = grid_app(n);
+        let ids: Vec<_> = app
+            .library
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .map(|e| e.id.clone())
+            .collect();
+        let cat = app.catalog.as_ref().unwrap();
+        let trips = cat.create_collection("Trips").unwrap();
+        for id in &ids {
+            cat.add_to_collection(trips, &id.path, id.copy).unwrap();
+        }
+        app.open_collection(ctx, trips, "Trips");
+        app.library.as_mut().unwrap().selection.click(1);
+        (app, trips)
+    }
+
+    fn count(app: &RustroomApp, c: i64) -> usize {
+        app.catalog
+            .as_ref()
+            .unwrap()
+            .collection_members(c)
+            .unwrap()
+            .len()
+    }
+
+    /// Delete and Backspace take the selection out of the collection on screen.
+    #[test]
+    fn delete_and_backspace_remove_from_the_collection_on_screen() {
+        for key in [egui::Key::Delete, egui::Key::Backspace] {
+            let ctx = crate::test_ui::ctx();
+            let (mut app, trips) = trips_on_screen(&ctx, 3);
+            assert_eq!(count(&app, trips), 3, "the sample");
+            grid_frame(&mut app, &ctx, vec![grid_key(key)]);
+            assert_eq!(count(&app, trips), 2, "{key:?}");
+        }
+    }
+
+    /// Outside a collection the key does nothing — it never deletes a photo.
+    #[test]
+    fn delete_in_a_folder_does_nothing() {
+        let ctx = crate::test_ui::ctx();
+        let (mut app, trips) = trips_on_screen(&ctx, 3);
+        // The same photos, as a folder.
+        app.library = Some(crate::test_app::library_of(3));
+        app.library.as_mut().unwrap().selection.click(1);
+        grid_frame(&mut app, &ctx, vec![grid_key(egui::Key::Delete)]);
+        assert_eq!(count(&app, trips), 3);
+        assert_eq!(app.library.as_ref().unwrap().entries.len(), 3);
     }
 }

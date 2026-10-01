@@ -438,6 +438,13 @@ pub(crate) const EXTRA_KEYS: &[(&str, &[(&str, &str)])] = &[
             ("Resize the tiles", "pinch or ⌃ scroll"),
         ],
     ),
+    (
+        "Collections",
+        &[(
+            "Take the selected photos out of the one on screen",
+            "Delete or Backspace",
+        )],
+    ),
     ("Also", &[("Compare", "Y")]),
 ];
 
