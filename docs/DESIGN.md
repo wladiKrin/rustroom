@@ -205,6 +205,15 @@ control never changes shape on hover (the existing rule).
   result. Every row draws its right-hand cluster first and gives the left-hand text what is left.
   `nothing_in_either_library_row_overlaps` draws both rows at 1440, 1000 and 800 with a status
   longer than any row and fails on any two intersecting widgets.
+- **The panels move** (M10.8b, the author's choices): Settings → Appearance sets the Library rail left or right, the
+  edit panel left or right — its tool rail always on the panel's **outer** edge — and the filmstrip at
+  the bottom, left or right, each remembered on its own. ⚠ Not in the View menu — they were, for one
+  build, and the author moved them: where a panel sits is a setting, not a working toggle. ⚠ A strip on the edit panel's side sits at
+  the **window edge**, so the sliders stay beside the photo; a bottom strip spans only the photo
+  column, as the status row does. On a side the strip is a column, 150 wide by default and resizable,
+  its cells 3:2 at the column's width. The diagram above is the default layout.
+  `layout::develop_order` is the allocation order; `every_develop_layout_puts_each_piece_where_it_says`
+  draws all six.
 - **The panel's sections are cards on the panel surface** (§7.5); the Library rail's groups
   are uppercase headers without cards, so the rail reads as a list and the panel as controls.
 
@@ -343,7 +352,9 @@ slider (110 wide) and ⋯. It exists in Library and Develop at the same place.
 
 ### 7.13 Menus
 `panel` with 12 radius and shadow, rows 28, Body, shortcut in Caption `text2` at the right,
-separators hairline, submenu chevron 12. Context menus and the ⋯ menu use the same.
+separators hairline, submenu chevron 12. Context menus and the ⋯ menu use the same. A toggle or a choice
+in a menu carries a **check mark** (`menu::checked`): a checkbox or a radio in the in-window bar, a
+native check on macOS (M10.8b).
 
 ### 7.14 Empty state
 Centred: Display heading, one Body sentence in `text2`, up to two buttons (one primary). The
@@ -473,3 +484,4 @@ data in the lib crate and testable headless; only the drawing lives in the bin m
 | 2026-09-29 | A list row's actions **always drawn**, `text3` at rest and `text` under the pointer on the row, a `raised` face under the pointed one; action cells **20** wide (`tokens::ROW_ACTION`) — the author, after trying M10.6a | actions drawn only under the pointer (P-13); 30-wide cells |
 | 2026-09-29 | The list-row action glyph at rest **fainter**: `text3` at 55 % (`tokens::ACTION_REST`), below the 3:1 floor by choice | `text3` at rest |
 | 2026-09-30 | **Every clickable control carries one hover sentence, as its AccessKit description too** — one helper, required sentences on the shared widgets, and a walk over the drawn app (537 controls) | sentences at call sites under a source sweep only |
+| 2026-10-01 | **The panels move** (M10.8b): the Library rail, the edit panel with its tool rail, and the filmstrip each on a side set in **Settings → Appearance** (first built as View items, moved there by the author); a strip on the panel's side at the window edge; a vertical filmstrip; check marks in menus, on the *Filmstrip* toggle | fixed sides; a bottom-only filmstrip; marks-less toggles |

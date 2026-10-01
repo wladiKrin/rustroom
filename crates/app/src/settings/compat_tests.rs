@@ -336,6 +336,12 @@ fn settings_round_trip_carries_the_export_options() {
             folders: true,
             ..PanelSections::default()
         },
+        // Non-default in all three, so a re-defaulted layout cannot pass (M10.8b).
+        layout: crate::layout::Layout {
+            library_rail: crate::layout::Side::Right,
+            edit_panel: crate::layout::Side::Left,
+            filmstrip: crate::layout::StripPlace::Left,
+        },
         // Non-default: it defaults to open, so `false` is what proves it round-trips.
         tone_curve_open: false,
         // Likewise non-default: the preference defaults to *on*, so persisting `false` is

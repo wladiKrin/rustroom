@@ -35,8 +35,9 @@ const TINT: f32 = crate::theme::tokens::TINT;
 /// ⚠ Returns nothing on purpose. `body` detects a tool change by comparing against the
 /// previous value, which covers the keyboard shortcuts too — a return value here would catch
 /// only clicks, and the 1–4 keys would then switch tools without re-rendering.
-pub fn show(ui: &mut egui::Ui, tool: &mut Tool) {
-    egui::Panel::right("rail")
+pub fn show(ui: &mut egui::Ui, tool: &mut Tool, side: rustroom_app::layout::Side) {
+    // M10.8b: the edit panel's side — drawn before the panel, so it is the panel's outer edge.
+    crate::side_panel::side(side, "rail")
         .resizable(false)
         .default_size(RAIL_WIDTH)
         .frame(egui::Frame::side_top_panel(ui.style()).inner_margin(4))

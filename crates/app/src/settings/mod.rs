@@ -239,6 +239,8 @@ pub struct Settings {
     /// Which Library panel sections are expanded. ⚠ Persisted because egui's own collapsing
     /// state does not survive a restart here — see [`PanelSections`].
     pub panel_sections: PanelSections,
+    /// Where the Library rail, the edit panel and the filmstrip sit (M10.8b) — the View menu sets it.
+    pub layout: crate::layout::Layout,
     /// Whether the tone curve is expanded — in the Tone section and in a mask's, one choice for
     /// both. Open by default; collapsing it is the author's way to keep "quite large" out of the
     /// way (2026-09-29), so it is **persisted**, for [`Self::panel_sections`]' reason.
@@ -471,6 +473,7 @@ impl Default for Settings {
             survey_cell: DEFAULT_SURVEY_CELL,
             custom_aspect: DEFAULT_CUSTOM_ASPECT,
             panel_sections: PanelSections::default(),
+            layout: crate::layout::Layout::default(),
             tone_curve_open: true,
             snapshot_strip_height: DEFAULT_STRIP_HEIGHT,
             dialog_sizes: std::collections::BTreeMap::new(),

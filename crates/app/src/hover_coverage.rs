@@ -208,7 +208,10 @@ fn status_row(w: &mut Walk) {
 fn menu_bar(w: &mut Walk) {
     let ctx = themed_ctx();
     let nodes = test_ui::nodes(&ctx, |ui| {
-        let _ = crate::menu_bar::show(ui, &[]);
+        let state = rustroom_app::menu::MenuState {
+            filmstrip_shown: true,
+        };
+        let _ = crate::menu_bar::show(ui, &[], &state);
     });
     assert!(
         nodes.iter().any(|n| n.role == Role::MenuItem),

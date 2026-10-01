@@ -299,6 +299,26 @@ pub fn model_with(recent: &[PathBuf]) -> Vec<Section> {
     ]
 }
 
+/// What the menus' check marks reflect (M10.8b).
+///
+/// ⚠ The layout's three choices were View items for one build and moved to Settings → Appearance at
+/// the author's word (2026-10-01): where a panel sits is a setting, not a view toggle. The marks stayed
+/// for the toggles that are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MenuState {
+    pub filmstrip_shown: bool,
+}
+
+/// Whether `command`'s item is checked — `None` for an ordinary action, which carries no mark.
+///
+/// ⚠ From the **command**, so `Item` keeps its shape and both renderers ask the same question.
+pub fn checked(command: Command, s: &MenuState) -> Option<bool> {
+    match command {
+        Command::ToggleFilmstrip => Some(s.filmstrip_shown),
+        _ => None,
+    }
+}
+
 /// The View menu's items.
 ///
 /// ⚠ Its own function because the soft-proof entries are **built from a list** rather than typed
@@ -724,5 +744,19 @@ mod tests {
     #[test]
     fn tab_reads_as_tab() {
         assert_eq!(Shortcut::bare('\t').label(), "Tab");
+    }
+
+    /// The *Filmstrip* toggle's mark follows the state; an ordinary action has none.
+    #[test]
+    fn the_filmstrip_mark_follows_the_state() {
+        let shown = MenuState {
+            filmstrip_shown: true,
+        };
+        let hidden = MenuState {
+            filmstrip_shown: false,
+        };
+        assert_eq!(checked(Command::ToggleFilmstrip, &shown), Some(true));
+        assert_eq!(checked(Command::ToggleFilmstrip, &hidden), Some(false));
+        assert_eq!(checked(Command::ZoomIn, &shown), None, "an ordinary action");
     }
 }

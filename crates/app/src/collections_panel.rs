@@ -136,7 +136,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let mut drag_released = false;
     let mut drop_to: Option<usize> = None;
 
-    egui::Panel::left("collections")
+    // M10.8b: on the side the View menu put it.
+    crate::side_panel::side(app.settings.layout.library_rail, "collections")
         .default_size(240.0)
         .min_size(200.0)
         .show(ui, |ui| {
