@@ -141,6 +141,11 @@ pub(crate) struct Library {
     /// so scrolling mid-drag cannot leave them describing different things — the mistake the
     /// M3.1a mask overlay made by caching a derived screen position.
     pub(crate) band: Option<(egui::Pos2, egui::Pos2)>,
+    /// The catalog's change count when this source's members were last read (`source_refresh`).
+    pub(crate) members_read_at: u64,
+    /// A change count seen once and waiting to be seen again before the members are re-read — a
+    /// burst of writes is read once, when it has settled.
+    pub(crate) members_settling: Option<u64>,
 }
 
 impl Library {
@@ -317,6 +322,8 @@ impl RustroomApp {
     /// ⚠ Touches neither the thumbnail cache nor the loader: both are keyed by **path**, so a
     /// rebuild that only shifts indices invalidates nothing. This used to have to carry the
     /// textures across by hand, and getting it wrong greyed out the whole folder.
+    ///
+    /// `select` names the one photo to select afterwards; `None` keeps the photos that were.
     pub(crate) fn rebuild_entries(&mut self, select: Option<&PhotoId>) {
         // ⚠ Read before the borrow: `self.settings` and `self.library` are disjoint fields, but
         // the compiler only sees that when the read happens first.
@@ -344,16 +351,49 @@ impl RustroomApp {
                 e.edited = sidecar::edited_at(&e.path);
             }
         }
+        // ⚠ Read before the rows change: the selection names photos by index.
+        let was_active = lib
+            .selection
+            .active()
+            .and_then(|i| lib.entries.get(i))
+            .map(|e| e.id.clone());
+        let was_selected = lib.selected_ids();
         catalog::sort(&mut lib.scan, sort);
         lib.entries = browser_entries(&lib.scan, &stacking, &lib.stack_expanded, &remote);
 
         // ⚠ The selection is by *index*, and the indices have just shifted — so it is re-derived
-        // from the photo we mean rather than kept. Keeping it would silently select whichever
+        // from the photos we mean rather than kept. Keeping it would silently select whichever
         // row happened to land on the old number.
-        lib.selection.clear();
-        if let Some(id) = select {
-            if let Some(i) = lib.entries.iter().position(|e| &e.id == id) {
-                lib.selection.click(i);
+        //
+        // ⚠⚠ A fresh `Selection`, never `clear()`: `clear` means "back to just the active photo" and
+        // KEPT the active index — which is exactly the old number. Expanding a stack above the
+        // selection moved it that way, and so did a photo leaving a live view (found 2026-10-01).
+        // With no photo named, the photos that were selected stay selected, by id; if the active one
+        // is gone, nothing is — `Selection::retain_visible`'s rule.
+        lib.selection = Selection::default();
+        let at: std::collections::HashMap<&PhotoId, usize> = lib
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (&e.id, i))
+            .collect();
+        match select {
+            Some(id) => {
+                if let Some(&i) = at.get(id) {
+                    lib.selection.click(i);
+                }
+            }
+            None => {
+                if let Some(&a) = was_active.as_ref().and_then(|id| at.get(id)) {
+                    lib.selection.click(a);
+                    for id in &was_selected {
+                        if let Some(&i) = at.get(id) {
+                            if i != a {
+                                lib.selection.toggle(i);
+                            }
+                        }
+                    }
+                }
             }
         }
         lib.refilter(&filter);
@@ -473,6 +513,54 @@ mod tests {
             browser_entries(&pair, &off, &Default::default(), &Default::default()).len(),
             2
         );
+    }
+
+    /// ⚠⚠ A rebuild with no photo named keeps the photos that were selected — by id, not by
+    /// index. `Selection::clear` kept the active INDEX, so expanding a stack above the selection
+    /// left it on whichever photo shifted into that place. Found by the live sources (2026-10-01),
+    /// where a photo leaving the view did the same.
+    #[test]
+    fn expanding_a_stack_keeps_the_same_photos_selected() {
+        let mut app = crate::test_app::for_test();
+        app.settings.stacking.enabled = true;
+        app.library = Some(crate::test_app::library_of_names(&[
+            "a.JPG", "a.RAF", "b.RAF", "c.RAF",
+        ]));
+        let path_of = |app: &crate::RustroomApp, i: usize| {
+            app.library.as_ref().unwrap().entries[i].id.path.clone()
+        };
+        let lib = app.library.as_mut().unwrap();
+        assert_eq!(lib.entries.len(), 3, "the sample: the pair is one row");
+        let b = lib
+            .entries
+            .iter()
+            .position(|e| e.id.path.ends_with("b.RAF"))
+            .unwrap();
+        let c = lib
+            .entries
+            .iter()
+            .position(|e| e.id.path.ends_with("c.RAF"))
+            .unwrap();
+        lib.selection.click(b);
+        lib.selection.toggle(c);
+        let key = rustroom_app::stack::key_of(std::path::Path::new("/nonexistent/a.RAF")).unwrap();
+        lib.stack_expanded.insert(key);
+        app.rebuild_entries(None);
+        let lib = app.library.as_ref().unwrap();
+        assert_eq!(lib.entries.len(), 4, "the sample: the stack expanded");
+        let active = lib.selection.active().expect("still a selection");
+        assert!(
+            path_of(&app, active).ends_with("b.RAF"),
+            "{:?}",
+            path_of(&app, active)
+        );
+        let mut chosen: Vec<String> = lib
+            .selected_ids()
+            .into_iter()
+            .map(|id| id.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        chosen.sort();
+        assert_eq!(chosen, ["b.RAF", "c.RAF"]);
     }
 
     #[test]

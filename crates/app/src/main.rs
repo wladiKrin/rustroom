@@ -73,6 +73,7 @@ mod settings_apply;
 mod shell;
 mod smart_sources;
 mod snapshots;
+mod source_refresh;
 mod sources;
 mod status_bar;
 #[cfg(test)]

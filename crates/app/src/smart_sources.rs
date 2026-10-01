@@ -15,6 +15,13 @@ use rustroom_app::photo_id::PhotoId;
 use rustroom_app::sidecar;
 use std::path::PathBuf;
 
+/// What a smart collection matches: one member per **file**, and the catalog's modification times
+/// so opening it stats nothing.
+pub(crate) struct SmartMembers {
+    pub(crate) members: Vec<(PathBuf, u32)>,
+    pub(crate) mtimes: std::collections::HashMap<PathBuf, std::time::SystemTime>,
+}
+
 impl RustroomApp {
     pub(crate) fn open_periods(
         &mut self,
@@ -22,28 +29,25 @@ impl RustroomApp {
         periods: &[rustroom_app::date_tree::Period],
         label: &str,
     ) {
-        let Some(cat) = &self.catalog else {
-            self.status = "No catalog".into();
-            return;
+        let source = LibrarySource::Periods {
+            periods: periods.to_vec(),
+            label: label.to_string(),
         };
-        let members = match cat.photos_in_periods(periods) {
-            Ok(m) => m,
-            Err(e) => {
+        let members = match self.source_members(&source) {
+            Some(Ok(m)) => m,
+            Some(Err(e)) => {
                 self.status = format!("Could not read the catalog: {e}");
+                return;
+            }
+            None => {
+                self.status = "No catalog".into();
                 return;
             }
         };
         let mut scan =
             rustroom_app::collections::scan_of(&members, sidecar::edited_at, fs_modified);
         catalog::sort(&mut scan, self.settings.library_sort);
-        let n = self.open_scan(
-            ctx,
-            LibrarySource::Periods {
-                periods: periods.to_vec(),
-                label: label.to_string(),
-            },
-            scan,
-        );
+        let n = self.open_scan(ctx, source, scan);
         self.status = if n == 0 {
             format!("Nothing taken in {label}")
         } else {
@@ -120,11 +124,47 @@ impl RustroomApp {
     /// criterion forces: it reads a copy's own name from the **sidecar**, which SQL cannot see.
     /// Measured at 4.6 ms per 830 sidecars, so ~60 ms at 10,000.
     pub(crate) fn open_smart(&mut self, ctx: &egui::Context, id: i64, name: &str) {
+        if self.catalog.is_none() {
+            self.status = "No catalog".into();
+            return;
+        }
+        let SmartMembers { members, mtimes } = match self.smart_members(id) {
+            Ok(found) => found,
+            Err(why) => {
+                self.status = format!("“{name}” {why}");
+                return;
+            }
+        };
+        let mut scan = rustroom_app::collections::scan_of(&members, sidecar::edited_at, |p| {
+            mtimes
+                .get(p)
+                .copied()
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        });
+        catalog::sort(&mut scan, self.settings.library_sort);
+        let n = self.open_scan(
+            ctx,
+            LibrarySource::Smart {
+                id,
+                name: name.to_string(),
+            },
+            scan,
+        );
+        self.status = if n == 0 {
+            format!("“{name}” matches nothing")
+        } else {
+            format!("“{name}” — {n} photos")
+        };
+    }
+
+    /// The files a saved rule matches now, with the catalog's modification times — what
+    /// [`Self::open_smart`] shows and what `source_refresh` re-reads, evaluated in one place so the
+    /// two cannot disagree. ⚠ The error completes a sentence that starts with the collection's name.
+    pub(crate) fn smart_members(&self, id: i64) -> Result<SmartMembers, String> {
         // ⚠ Read before `cat` borrows `self`.
         let immich_root = self.immich_cache_root();
         let Some(cat) = &self.catalog else {
-            self.status = "No catalog".into();
-            return;
+            return Err("has no catalog".into());
         };
         let Some(row) = cat
             .smart_collections()
@@ -132,18 +172,12 @@ impl RustroomApp {
             .into_iter()
             .find(|r| r.id == id)
         else {
-            self.status = format!("“{name}” is gone");
-            return;
+            return Err("is gone".into());
         };
         // ⚠ A rule that will not parse yields an **empty** collection and a message, never a
         // panic: the text is user-editable, in a file, by hand.
-        let rule: rustroom_app::rule::Expr = match serde_json::from_str(&row.rule) {
-            Ok(r) => r,
-            Err(e) => {
-                self.status = format!("“{name}” has an unreadable rule: {e}");
-                return;
-            }
-        };
+        let rule: rustroom_app::rule::Expr =
+            serde_json::from_str(&row.rule).map_err(|e| format!("has an unreadable rule: {e}"))?;
 
         let rows = cat.all_photos().unwrap_or_default();
         // ⚠⚠ An Immich row exists as soon as its album is browsed, downloaded or not. A
@@ -183,7 +217,9 @@ impl RustroomApp {
 
         // Facts the evaluator needs, gathered once rather than per entry.
         let (colls, keys) = self.memberships();
-        let Some(cat) = &self.catalog else { return };
+        let Some(cat) = &self.catalog else {
+            return Err("has no catalog".into());
+        };
         let mut marks: std::collections::HashMap<PhotoId, catalog::db::Marks> = Default::default();
         let mut captures: std::collections::HashMap<PathBuf, core_image::Capture> =
             Default::default();
@@ -230,26 +266,10 @@ impl RustroomApp {
                 kept.push((p, 0));
             }
         }
-        let mut scan = rustroom_app::collections::scan_of(&kept, sidecar::edited_at, |p| {
-            mtimes
-                .get(p)
-                .copied()
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-        });
-        catalog::sort(&mut scan, self.settings.library_sort);
-        let n = self.open_scan(
-            ctx,
-            LibrarySource::Smart {
-                id,
-                name: name.to_string(),
-            },
-            scan,
-        );
-        self.status = if n == 0 {
-            format!("“{name}” matches nothing")
-        } else {
-            format!("“{name}” — {n} photos")
-        };
+        Ok(SmartMembers {
+            members: kept,
+            mtimes,
+        })
     }
 
     /// Collection ids per photo, and keyword ids per **file**.

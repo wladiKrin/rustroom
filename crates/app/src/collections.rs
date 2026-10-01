@@ -9,6 +9,7 @@
 //! and the filmstrip need no change at all. That is why this costs almost nothing.
 
 use catalog::CatalogEntry;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Build a browsable scan from a collection's members.
@@ -53,6 +54,37 @@ pub fn scan_of(
         });
     }
     out
+}
+
+/// The scan a source holds now, given the one it holds and its members as just re-read — or `None`
+/// when the same files are members, so nothing needs rebuilding.
+///
+/// ⚠ A retained file keeps its entry as it was: only a file that has just **joined** pays for its
+/// times, so re-reading a view of thousands after one photo left costs no stats at all. The order is
+/// left to the caller, which sorts by the Library's order anyway.
+pub fn refreshed_scan(
+    old: &[CatalogEntry],
+    members: &[(PathBuf, u32)],
+    edited_at: impl Fn(&Path) -> Option<std::time::SystemTime>,
+    modified_at: impl Fn(&Path) -> std::time::SystemTime,
+) -> Option<Vec<CatalogEntry>> {
+    let now: HashSet<&Path> = members.iter().map(|(p, _)| p.as_path()).collect();
+    let had: HashSet<&Path> = old.iter().map(|e| e.path.as_path()).collect();
+    if now == had {
+        return None;
+    }
+    let joined: Vec<(PathBuf, u32)> = members
+        .iter()
+        .filter(|(p, _)| !had.contains(p.as_path()))
+        .cloned()
+        .collect();
+    let mut scan: Vec<CatalogEntry> = old
+        .iter()
+        .filter(|e| now.contains(e.path.as_path()))
+        .cloned()
+        .collect();
+    scan.extend(scan_of(&joined, edited_at, modified_at));
+    Some(scan)
 }
 
 #[cfg(test)]
@@ -108,5 +140,66 @@ mod tests {
         let when = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(99);
         let scan = scan_of(&members, |_| None, |_| when);
         assert_eq!(scan[0].modified, when);
+    }
+
+    fn entry(path: &str, secs: u64) -> CatalogEntry {
+        let p = PathBuf::from(path);
+        CatalogEntry {
+            file_name: p.file_name().unwrap().to_string_lossy().into_owned(),
+            path: p,
+            modified: std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+            edited: None,
+        }
+    }
+
+    fn members(paths: &[&str]) -> Vec<(PathBuf, u32)> {
+        paths.iter().map(|p| (PathBuf::from(p), 0)).collect()
+    }
+
+    #[test]
+    fn the_same_files_need_no_rebuild() {
+        let old = vec![entry("/x/a.RAF", 1), entry("/x/b.RAF", 2)];
+        // A second copy of a member is the same file; the order is the query's, not the scan's.
+        let mut now = members(&["/x/b.RAF", "/x/a.RAF"]);
+        now.push((PathBuf::from("/x/a.RAF"), 1));
+        assert!(refreshed_scan(&old, &now, |_| None, |_| unreachable!()).is_none());
+    }
+
+    #[test]
+    fn a_file_that_left_is_dropped_and_the_rest_keep_their_entries() {
+        let old = vec![entry("/x/a.RAF", 1), entry("/x/b.RAF", 2)];
+        let new = refreshed_scan(
+            &old,
+            &members(&["/x/a.RAF"]),
+            |_| None,
+            |_| panic!("a retained file was stat'ed"),
+        )
+        .expect("b left");
+        assert_eq!(new, vec![entry("/x/a.RAF", 1)]);
+    }
+
+    #[test]
+    fn a_file_that_joined_is_added_with_its_times() {
+        let old = vec![entry("/x/a.RAF", 1)];
+        let when = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(7);
+        let stats = std::cell::Cell::new(0);
+        let new = refreshed_scan(
+            &old,
+            &members(&["/x/a.RAF", "/y/c.RAF"]),
+            |_| Some(when),
+            |_| {
+                stats.set(stats.get() + 1);
+                when
+            },
+        )
+        .expect("c joined");
+        assert_eq!(stats.get(), 1, "only the newcomer is stat'ed");
+        assert_eq!(new.len(), 2);
+        assert_eq!(new[0], entry("/x/a.RAF", 1), "a is untouched");
+        assert_eq!(
+            (new[1].file_name.as_str(), new[1].modified),
+            ("c.RAF", when)
+        );
+        assert_eq!(new[1].edited, Some(when));
     }
 }

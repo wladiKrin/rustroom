@@ -173,7 +173,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-29)
 
-**3321 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
+**3332 tests**, **82 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -232,7 +232,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 |---|---|
 | **M10.6** your to-do + a design leftover | a ✅ Immich Timeline at the top, plus the row buttons always faintly drawn and 20 pt wide — merged 2026-09-29 (`grep -n 'M10.6a' docs/JOURNAL.md`) · b ✅ every clickable control's hover sentence, checked on the drawn app; a photo's name on hover in the filmstrip (the grid's caption says it) — merged 2026-09-30 (`grep -n 'M10.6b' docs/JOURNAL.md`) |
 | **M10.7** code health | a ✅ pin lcms2's ICC creation date (reproducible exports, merged 2026-09-30) · b ✅ `ProfileRendering` → `TailRendering`, the type and its bindings (merged 2026-09-30) · c ✅ every test's temp directory from the `test-dir` crate, 54 sites, two gates at once proven safe (merged 2026-09-30) · d ✅ the nine files over 1,000 lines of code split by responsibility and their four giant functions broken into phases, a ceiling guard (merged 2026-09-30) · e ✅ absorbed into d (`PrefixCache`'s tests are in `prefix_cache.rs`) |
-| **M10.8** Library & workflow | a 🟡 keyword suggestions (same capture day + companions), type to tag, tagging undoable — built 2026-10-01 on `m10.8a-keyword-suggestions`, awaiting use (`grep -n 'M10.8a' docs/JOURNAL.md`) · b vertical filmstrip · c stack by hand, group by capture time · d batch rename |
+| **M10.8** Library & workflow | a ✅ keyword suggestions (same capture day + companions), type to tag, tagging undoable — merged 2026-10-01 (`grep -n 'M10.8a' docs/JOURNAL.md`) · b vertical filmstrip · c stack by hand, group by capture time · d batch rename |
 | **M10.9** presets & shortcuts | a presets import/export, folders, rename · b user-defined shortcuts |
 | **M10.10** export | a image watermark · b sizing in cm/in with PPI, a file-size target |
 | **M10.11** Develop additions | a film negative inversion · b Grain |
@@ -283,6 +283,11 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   swept by the next run)** — unique per test and per run under `rustroom-tests/<pid>/`. A sweep in
   `test-dir` fails on `env::temp_dir()` anywhere else; the export staging directory is the one allowed
   site. Two gates at once are safe since M10.7c (on the old code they failed *and* hung).
+- ⚠⚠ **A keyword, collection, smart-collection or date view follows the catalog** (2026-10-01):
+  `source_refresh::pump_source_membership`, last in the frame, re-reads `source_members` once
+  `Catalog::change_count` has moved and settled — never a list of writers. A new catalog-backed source
+  must answer `source_members`, and its opener must read it too. ⚠ `rebuild_entries(None)` keeps the
+  selection **by id**; `Selection::clear()` keeps the active *index*, so never use it across a rebuild.
 - ⚠⚠ **NO SOURCE FILE OVER 1,000 LINES OF CODE AND DOC COMMENTS — the gate enforces it** (M10.7d):
   `test-dir`'s `no_file_is_over_a_thousand_lines_of_code_and_doc`. Its measure, `code_and_doc_lines`,
   counts non-blank lines outside every `#[cfg(test)]` item **wherever it sits**, and skips a file
