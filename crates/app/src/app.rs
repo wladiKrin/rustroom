@@ -228,6 +228,8 @@ pub(crate) struct RustroomApp {
     pub(crate) new_keyword: String,
     /// The keyword a new one will be created under. `None` makes a root.
     pub(crate) new_keyword_parent: Option<i64>,
+    /// The Keywords field's highlighted row (M10.8a).
+    pub(crate) keyword_field: crate::keyword_field::FieldState,
     /// Scratch text for the filename field, with **the photo it belongs to**.
     ///
     /// ⚠ A draft rather than writing through, so a half-typed name is never committed and a

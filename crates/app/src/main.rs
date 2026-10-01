@@ -53,6 +53,7 @@ mod immich_flow;
 mod immich_panel;
 mod import_flow;
 mod interaction;
+mod keyword_field;
 mod keyword_ops;
 mod keyword_rows;
 mod library;

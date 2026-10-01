@@ -173,6 +173,7 @@ pub fn for_test() -> RustroomApp {
         last_period: None,
         new_keyword: String::new(),
         new_keyword_parent: None,
+        keyword_field: Default::default(),
         rename_draft: None,
         label_draft: None,
         snapshot_rename: None,
