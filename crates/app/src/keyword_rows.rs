@@ -153,6 +153,51 @@ pub(crate) fn rows(
     out
 }
 
+/// The selection's suggestions (M10.8a): a `Suggested` label and up to five rows like the tree's —
+/// the name, its parent path where a count would be, `+` to tag; a click on the row opens the
+/// keyword, as in the tree. ⚠ Rows, not chips — `docs/DESIGN.md` §7.7: chips are filters and
+/// states, never buttons. Nothing is drawn without a selection or without a suggestion.
+pub(crate) fn suggested(
+    ui: &mut egui::Ui,
+    rows: &[KeywordRow],
+    kws: &[KeywordRow],
+    picked: usize,
+) -> Option<Out> {
+    if picked == 0 || rows.is_empty() {
+        return None;
+    }
+    crate::theme::sub_label(ui, "Suggested");
+    let tag_hover = format!("Tag {picked} selected");
+    let mut out = None;
+    for k in rows {
+        let path = rustroom_app::keyword_suggest::parent_path(k.id, kws);
+        let r = list_row::row(
+            ui,
+            RowSpec {
+                name: &k.name,
+                count: None,
+                meta: &path,
+                selected: false,
+                indent: 0.0,
+                hover:
+                    "Suggested by the photos taken the same day and the keywords these already have",
+                actions: &[RowAction {
+                    glyph: '+',
+                    verb: "Tag",
+                    hover: &tag_hover,
+                    enabled: true,
+                }],
+            },
+        );
+        match r.action {
+            Some(_) => out = Some(Out::Tag(k.id)),
+            None if r.clicked => out = Some(Out::Open(k.id, k.name.clone())),
+            None => {}
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,6 +413,41 @@ mod tests {
             !h.outs.iter().any(|o| o.starts_with("move")),
             "{:?}",
             h.outs
+        );
+    }
+
+    /// The Suggested rows: drawn for a selection and not without one; `+` tags, a click opens.
+    #[test]
+    fn suggested_rows_tag_with_plus_open_on_click_and_hide_without_a_selection() {
+        let kws = tree();
+        let rows = vec![kws[1].clone()];
+        let ctx = test_ui::ctx();
+        let labels = |picked| -> Vec<String> {
+            test_ui::nodes(&ctx, |ui| {
+                let _ = suggested(ui, &rows, &kws, picked);
+            })
+            .into_iter()
+            .map(|n| n.label)
+            .collect()
+        };
+        assert!(labels(2).iter().any(|l| l == "Pariss"), "{:?}", labels(2));
+        assert!(!labels(0).iter().any(|l| l == "Pariss"), "{:?}", labels(0));
+        let mut outs = Vec::new();
+        test_ui::click(&ctx, "Tag Pariss", |ui| {
+            if let Some(o) = suggested(ui, &rows, &kws, 2) {
+                outs.push(o);
+            }
+        });
+        assert!(matches!(outs.as_slice(), [Out::Tag(2)]), "the + tags");
+        outs.clear();
+        test_ui::click(&ctx, "Pariss", |ui| {
+            if let Some(o) = suggested(ui, &rows, &kws, 2) {
+                outs.push(o);
+            }
+        });
+        assert!(
+            matches!(outs.as_slice(), [Out::Open(2, _)]),
+            "a click opens"
         );
     }
 }

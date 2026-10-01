@@ -103,7 +103,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         DeleteKeyword(i64, String),
         TagSelection(i64),
         UntagSelection(i64),
-        CreateKeyword,
+        CreateKeyword(String),
         RenameKeyword(i64, String),
         MoveKeyword(i64, Option<i64>),
         OpenAllPhotos,
@@ -392,28 +392,56 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     "Keywords",
                                     &n,
                                     |ui| {
-                                        // ⚠⚠ The parent is the keyword last CLICKED — no dropdown (the
-                                        // author's call, 2026-09-27): click one, type, and the new
-                                        // keyword goes under it; a click anywhere else clears it, and
-                                        // the next one goes to the top level. The hint says which.
-                                        let hint = app
+                                        // ⚠⚠ M10.8a: type to tag — `keyword_field`. The parent of a
+                                        // new keyword is the one last CLICKED; a click anywhere else
+                                        // clears it (below), and the hint says which.
+                                        let parent = app
                                             .new_keyword_parent
                                             .and_then(|id| kws.iter().find(|k| k.id == id))
-                                            .map(|k| format!("New keyword under {}", k.name))
-                                            .unwrap_or_else(|| "New keyword".to_string());
-                                        let (field, plus) = new_item_row(
+                                            .map(|k| k.name.clone());
+                                        match crate::keyword_field::field(
                                             ui,
                                             &mut app.new_keyword,
-                                            &hint,
-                                            true,
-                                            "Create a keyword with this name",
-                                        );
-                                        let named = !app.new_keyword.trim().is_empty();
-                                        if named && (plus || theme::committed(ui, &field)) {
-                                            action = Action::CreateKeyword;
+                                            &mut app.keyword_field,
+                                            &kws,
+                                            picked,
+                                            parent.as_deref(),
+                                        ) {
+                                            Some(crate::keyword_field::FieldOut::Tag(id)) => {
+                                                action = Action::TagSelection(id)
+                                            }
+                                            Some(crate::keyword_field::FieldOut::Create(name)) => {
+                                                action = Action::CreateKeyword(name)
+                                            }
+                                            Some(crate::keyword_field::FieldOut::Open(id, name)) => {
+                                                app.new_keyword_parent = Some(id);
+                                                action = Action::OpenKeyword(id, name)
+                                            }
+                                            None => {}
                                         }
                                         if kws.is_empty() {
                                             crate::theme::hint(ui, "No keywords yet.");
+                                        }
+                                        // M10.8a: the selection's suggestions, between the field
+                                        // and the tree. ⚠ Cached — the rail redraws every frame.
+                                        let files = app.selected_files();
+                                        let suggested = match &app.catalog {
+                                            Some(cat) if !files.is_empty() => {
+                                                app.keyword_suggest.get(cat, &files).to_vec()
+                                            }
+                                            _ => Vec::new(),
+                                        };
+                                        match crate::keyword_rows::suggested(
+                                            ui, &suggested, &kws, picked,
+                                        ) {
+                                            Some(crate::keyword_rows::Out::Tag(id)) => {
+                                                action = Action::TagSelection(id)
+                                            }
+                                            Some(crate::keyword_rows::Out::Open(id, name)) => {
+                                                app.new_keyword_parent = Some(id);
+                                                action = Action::OpenKeyword(id, name)
+                                            }
+                                            _ => {}
                                         }
                                         let picked_kw = app.selected_keyword();
                                         // ⚠ M9.8: the rows, their rename field and their drag live in
@@ -704,12 +732,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             }
             app.status = format!("Added {n} to the collection");
         }
-        Action::CreateKeyword => {
-            if let Some(cat) = &app.catalog {
-                let _ = cat.create_keyword(app.new_keyword.trim(), app.new_keyword_parent);
-            }
-            app.new_keyword.clear();
-        }
+        Action::CreateKeyword(name) => app.create_keyword_and_tag(&name),
         Action::OpenAllPhotos => app.open_all_photos(ctx),
         Action::OpenSmart(id, name) => app.open_smart(ctx, id, &name),
         Action::EditSmart(id, name, rule) => {

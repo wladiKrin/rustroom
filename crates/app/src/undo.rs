@@ -94,7 +94,9 @@ impl RustroomApp {
             }
             ActionKind::KeywordRename { .. }
             | ActionKind::KeywordMove { .. }
-            | ActionKind::KeywordMerge(_) => self.replay_keyword_action(&kind, false),
+            | ActionKind::KeywordMerge(_)
+            | ActionKind::KeywordTag { .. }
+            | ActionKind::KeywordCreate { .. } => self.replay_keyword_action(&kind, false),
             ActionKind::PresetDelete { name } => {
                 match self.preset_store.restore(&name) {
                     Ok(Some(p)) => self.status = format!("Restored preset “{}”", p.name),
@@ -187,7 +189,9 @@ impl RustroomApp {
             }
             ActionKind::KeywordRename { .. }
             | ActionKind::KeywordMove { .. }
-            | ActionKind::KeywordMerge(_) => self.replay_keyword_action(&kind, true),
+            | ActionKind::KeywordMerge(_)
+            | ActionKind::KeywordTag { .. }
+            | ActionKind::KeywordCreate { .. } => self.replay_keyword_action(&kind, true),
             ActionKind::PresetDelete { name } => {
                 match self.preset_store.delete(&name) {
                     Ok(()) => self.status = format!("Deleted preset “{name}”"),

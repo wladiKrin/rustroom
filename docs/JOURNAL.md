@@ -166,6 +166,51 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-10-01 — M10.8a: keyword suggestions, type to tag, and tagging made undoable (branch `m10.8a-keyword-suggestions`, awaiting use)
+
+**Input:** Phase 10's *"Keyword suggestions (2026-08-26)"* — M4.2b's accepted caveat (6), "needs usage
+data and a heuristic". The author's choices: **the same capture day + companion keywords + typing
+autocomplete**; the rail **and** the right-click menu; rows like the tree; type to tag; *"whole capture
+day is better, and include the undo"*. Spec and plan `2026-09-30-m10.8a-keyword-suggestions`.
+
+**Built, in six commits, each gated.**
+- **Catalog:** `assign_keyword`/`unassign_keyword` report whether a row changed;
+  `create_keyword_reporting`; `recreate_keyword` (same id, `unmerge_keyword`'s rule);
+  `day_keyword_counts` — the selection's days by `date(taken,'unixepoch')`, the Dates tree's day, the
+  selection itself excluded; `companion_counts`; `change_count` = `Connection::total_changes()`.
+- **Lib `keyword_suggest`:** a keyword scores the share of the day's other photos carrying it plus its
+  best `P(k | j)` over the keywords `j` already on the selection. Excluded: a keyword on **every**
+  selected file and every **ancestor** of one (the XMP path carries parents); one on some stays. Ties by
+  usage, then name; five. `complete`: exact, prefix, substring — ⚠ each group **by name, then path**:
+  the spec said by path, which put a root `Berlinale` above `Places › Europe › Berlin` for "rli" (spec
+  updated). `Cache` keyed on (files, `change_count`) — every write from any route refreshes it, with no
+  list of call sites to keep in step.
+- **Undo — tagging was not undoable at all before this.** `ActionKind::KeywordTag { keyword, on, files }`
+  records only the files whose state **changed**, so an undo never strips a tag a photo already had;
+  `KeywordCreate` deletes on undo and recreates under its id on redo. One funnel, `tag_files`, serves the
+  rail's `+`/`−`, the menu's toggle, a suggestion and the field; `create_keyword_and_tag` pushes create +
+  tag as **one** `Batch`; a reused name records no creation; a no-op pushes nothing.
+- **Bin `keyword_field`:** with photos selected, the matches, then *New keyword “x”* last — Enter takes
+  the first match. With nothing selected *New keyword* **leads**, so Enter creates, and picking a match
+  opens it. An exact name offers no New row (no duplicate); `+` always creates — the only way to make a
+  same-named keyword in another branch. Enter keeps the field focused for the next keyword.
+- **`keyword_rows::suggested`** (rows between the field and the tree; parent path where a count would
+  be) and the menu's **`keyword_menu`** (the suggestions first, a separator, the tree; uncached — a menu
+  body runs only while open).
+
+**Sabotages, each red:** the day signal off (4 tests); `tag_files` recording every file (2); the cache
+keyed on the files alone (1); the on-every-file exclusion off (2). ⚠⚠ **The ancestor exclusion off was
+GREEN at first** — the fixture's ancestors had no evidence, so the zero-score filter dropped them anyway:
+the standing lesson's shape (c), a guard comparing two things that were already the same. Berlin, Europe
+and Places now carry evidence of their own, and it is red.
+
+⚠ AccessKit reports a `TextEdit`'s value, not its hint — the hint test reads the function.
+⚠ `collections_panel.rs` is **824** lines of code; it gained only the wiring, and is still over 600.
+
+**Not done, on purpose:** "recently used" (the catalog keeps no assignment times — a schema change the
+author did not choose); suggestions from the picture's content (an AI tagger, nothing scheduled).
+**3321 tests**, 82 goldens.
+
 ### 2026-09-30 — An empty grid says what emptied it (branch `library-empty-search-message`, merged 2026-09-30)
 
 **Reported in use, trying M10.7d:** gibberish in the search bar emptied the grid, and the grid said

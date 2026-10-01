@@ -147,65 +147,20 @@ impl RustroomApp {
         Expr::All(parts)
     }
 
-    /// Tag every selected photo's **file** with a keyword.
-    ///
-    /// ⚠ De-duplicated by path: two copies of one file are one file. Assigning twice is a no-op
-    /// anyway, but the status count would otherwise lie about how much was tagged.
+    /// Tag every selected photo's **file** with a keyword — the rail's `+`.
     pub(crate) fn assign_keyword_to_selection(&mut self, keyword: i64) {
-        let mut files: Vec<PathBuf> = Vec::new();
-        if let Some(lib) = self.library.as_ref() {
-            for i in lib.selection.iter() {
-                if let Some(e) = lib.entries.get(i) {
-                    if !files.contains(&e.id.path) {
-                        files.push(e.id.path.clone());
-                    }
-                }
-            }
+        let files = self.selected_files();
+        if !files.is_empty() {
+            self.tag_files(keyword, true, &files);
         }
-        if files.is_empty() {
-            return;
-        }
-        let mut n = 0;
-        if let Some(cat) = &self.catalog {
-            for f in &files {
-                if cat.assign_keyword(keyword, f).is_ok() {
-                    n += 1;
-                }
-            }
-        }
-        // ⚠ Keywords are per **file**, so `files` is already the right list — deduplicated
-        // above, and every copy of a photo shares the one sidecar.
-        self.write_xmp_for(&files);
-        self.status = format!("Tagged {n} photos");
     }
 
-    /// Remove a keyword from every selected photo — the panel's `−`, mirroring its `+`.
+    /// Remove a keyword from every selected photo — the rail's `−`, mirroring its `+`.
     pub(crate) fn unassign_keyword_from_selection(&mut self, keyword: i64) {
-        let mut files: Vec<PathBuf> = Vec::new();
-        if let Some(lib) = self.library.as_ref() {
-            for i in lib.selection.iter() {
-                if let Some(e) = lib.entries.get(i) {
-                    if !files.contains(&e.id.path) {
-                        files.push(e.id.path.clone());
-                    }
-                }
-            }
+        let files = self.selected_files();
+        if !files.is_empty() {
+            self.tag_files(keyword, false, &files);
         }
-        if files.is_empty() {
-            return;
-        }
-        let mut n = 0;
-        if let Some(cat) = &self.catalog {
-            for f in &files {
-                if cat.unassign_keyword(keyword, f).is_ok() {
-                    n += 1;
-                }
-            }
-        }
-        // ⚠ Removing a keyword must reach the sidecar too, or Lightroom keeps showing one that
-        // is no longer in the catalog — a stale sidecar is worse than none.
-        self.write_xmp_for(&files);
-        self.status = format!("Removed the keyword from {n} photos");
     }
 
     /// Add a right-click's targets to a collection.
@@ -234,35 +189,15 @@ impl RustroomApp {
 
     /// Assign or remove a keyword across a right-click's targets.
     ///
-    /// ⚠ De-duplicated to **files**, the rule `assign_keyword_to_selection` already follows: two
-    /// copies of one photo are one file to tag, and a count that said otherwise would lie.
+    /// ⚠ De-duplicated to **files**, `selected_files`' rule: two copies of one photo are one file
+    /// to tag, and a count that said otherwise would lie.
     pub(crate) fn set_keyword_on_targets(&mut self, keyword: i64, on: bool, clicked: usize) {
         let files = self
             .library
             .as_ref()
             .map(|l| crate::library::distinct_files(&crate::library::menu_targets(l, clicked)))
             .unwrap_or_default();
-        let mut n = 0;
-        if let Some(cat) = &self.catalog {
-            for f in &files {
-                let ok = if on {
-                    cat.assign_keyword(keyword, f).is_ok()
-                } else {
-                    cat.unassign_keyword(keyword, f).is_ok()
-                };
-                if ok {
-                    n += 1;
-                }
-            }
-        }
-        // ⚠ The context menu's tri-state toggle reaches the sidecar exactly as the panel's
-        // `+`/`−` do — two routes to one change must not disagree about whether it is written.
-        self.write_xmp_for(&files);
-        self.status = if on {
-            format!("Tagged {n} photos")
-        } else {
-            format!("Removed the keyword from {n} photos")
-        };
+        self.tag_files(keyword, on, &files);
     }
 
     /// Delete a keyword and record it, however the deletion was reached.

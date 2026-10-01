@@ -72,7 +72,7 @@ pub use capture::Description;
 pub use collections::CollectionRow;
 pub use dates::DayRow;
 pub use imported::Fingerprint;
-pub use keywords::{Change as KeywordChange, KeywordMerge, KeywordRow};
+pub use keywords::{Change as KeywordChange, DayCounts, KeywordMerge, KeywordRow};
 pub use marks::{Flag, Marks};
 pub use photos::{FolderRow, PhotoRow};
 pub use smart::SmartRow;
@@ -114,6 +114,13 @@ impl Catalog {
         let cat = Self { conn };
         cat.migrate()?;
         Ok(cat)
+    }
+
+    /// Every row this connection has inserted, updated or deleted since it opened — moves on any
+    /// write, never on a read. M10.8a keys its suggestion cache on it, so a change from any route
+    /// refreshes the suggestions without a list of call sites to keep in step.
+    pub fn change_count(&self) -> u64 {
+        self.conn.total_changes()
     }
 
     pub fn version(&self) -> Result<i64, CatalogError> {
