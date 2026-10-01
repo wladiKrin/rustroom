@@ -178,15 +178,12 @@ pub fn cell_with(
     };
     paint_pile(ui, at, step, pile);
     if !pile.is_empty() {
-        // ⚠ A rim around the top photo, so it stands off the layer right behind it — dark on the light
-        // theme, light on the dark one, where a dark rim vanished into the panel (the author).
-        let rim = if ui.visuals().dark_mode {
-            egui::Color32::from_white_alpha(110)
-        } else {
-            egui::Color32::from_black_alpha(110)
-        };
-        ui.painter()
-            .rect_filled(at.expand(1.5), egui::CornerRadius::same(CORNER), rim);
+        // ⚠ A rim around the top photo, so it stands off the layer right behind it.
+        ui.painter().rect_filled(
+            at.expand(1.5),
+            egui::CornerRadius::same(CORNER),
+            pile_rim(ui),
+        );
     }
     match thumb {
         Some(tex) => {
@@ -252,6 +249,16 @@ pub fn cell_with(
     resp
 }
 
+/// The rim around every photo of a pile — dark on the light theme, light on the dark one, where a dark
+/// rim vanished into the panel (the author, after use).
+fn pile_rim(ui: &egui::Ui) -> egui::Color32 {
+    if ui.visuals().dark_mode {
+        egui::Color32::from_white_alpha(110)
+    } else {
+        egui::Color32::from_black_alpha(110)
+    }
+}
+
 /// The layers behind a collapsed stack's top photo (M10.8c after use), farthest first so the nearest
 /// sits on top: each the top's rect stepped `k × step` up and to the right, the photo below peeking out
 /// when its thumbnail is given — else a plain card — and darker the deeper it lies.
@@ -281,7 +288,9 @@ fn paint_pile(ui: &egui::Ui, top: egui::Rect, step: f32, pile: &[Option<&egui::T
         ui.painter().rect_stroke(
             r,
             egui::CornerRadius::same(CORNER),
-            egui::Stroke::new(1.0, t.line),
+            // ⚠ The same rim as the top photo's, on every layer (the author: "for all photos in the
+            // pile"); the theme's `line` vanished on the dark panel.
+            egui::Stroke::new(1.5, pile_rim(ui)),
             egui::StrokeKind::Inside,
         );
     }
@@ -863,7 +872,8 @@ mod tests {
     /// The rim around a pile's top photo is light on the dark theme and dark on the light one.
     #[test]
     fn the_rim_contrasts_with_the_theme() {
-        let rim = |dark: bool| {
+        // The top photo's rim fill and every layer's outline, on one theme.
+        let rims = |dark: bool| -> Vec<egui::Color32> {
             let ctx = egui::Context::default();
             ctx.set_visuals(if dark {
                 egui::Visuals::dark()
@@ -879,22 +889,36 @@ mod tests {
                     None,
                     Default::default(),
                     CellStyle::default(),
-                    &[None],
+                    &[None, None],
                 );
                 top = image_rect(ui).unwrap();
             });
-            out.shapes
-                .iter()
-                .find_map(|c| match &c.shape {
-                    egui::Shape::Rect(r) if (r.rect.min - top.expand(1.5).min).length() < 0.01 => {
-                        Some(r.fill)
+            let mut found = Vec::new();
+            for c in &out.shapes {
+                if let egui::Shape::Rect(r) = &c.shape {
+                    if (r.rect.min - top.expand(1.5).min).length() < 0.01 {
+                        found.push(r.fill);
                     }
-                    _ => None,
-                })
-                .expect("the rim was painted")
+                    if r.stroke.width >= 1.5 {
+                        found.push(r.stroke.color);
+                    }
+                }
+            }
+            found
         };
-        let (dark, light) = (rim(true), rim(false));
-        assert!(dark.r() > 0, "light on the dark theme: {dark:?}");
-        assert_eq!(light.r(), 0, "dark on the light theme: {light:?}");
+        let (dark, light) = (rims(true), rims(false));
+        assert_eq!(
+            dark.len(),
+            3,
+            "the sample: the top's rim and two layers' — {dark:?}"
+        );
+        assert!(
+            dark.iter().all(|c| c.r() > 0),
+            "light on the dark theme: {dark:?}"
+        );
+        assert!(
+            light.iter().all(|c| c.r() == 0),
+            "dark on the light theme: {light:?}"
+        );
     }
 }
