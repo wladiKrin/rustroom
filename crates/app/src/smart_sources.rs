@@ -15,7 +15,7 @@ use rustroom_app::photo_id::PhotoId;
 use rustroom_app::sidecar;
 use std::path::PathBuf;
 
-/// What a smart collection matches: one member per **file**, and the catalog's modification times
+/// What a smart collection matches: the matching **copies**, and the catalog's modification times
 /// so opening it stats nothing.
 pub(crate) struct SmartMembers {
     pub(crate) members: Vec<(PathBuf, u32)>,
@@ -142,14 +142,12 @@ impl RustroomApp {
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
         });
         catalog::sort(&mut scan, self.settings.library_sort);
-        let n = self.open_scan(
-            ctx,
-            LibrarySource::Smart {
-                id,
-                name: name.to_string(),
-            },
-            scan,
-        );
+        let source = LibrarySource::Smart {
+            id,
+            name: name.to_string(),
+        };
+        let copies = crate::source_refresh::copies_of(&source, &members);
+        let n = self.open_scan_with(ctx, source, scan, copies);
         self.status = if n == 0 {
             format!("“{name}” matches nothing")
         } else {
@@ -241,7 +239,7 @@ impl RustroomApp {
         }
 
         let empty: Vec<i64> = Vec::new();
-        let keep: Vec<PathBuf> = all
+        let kept: Vec<(PathBuf, u32)> = all
             .iter()
             .filter(|e| {
                 let capture = captures.get(&e.id.path).cloned().unwrap_or_default();
@@ -255,17 +253,10 @@ impl RustroomApp {
                 };
                 rule.matches(&facts)
             })
-            .map(|e| e.id.path.clone())
+            // ⚠ The **copies** that matched, not their files: the rule is evaluated per copy, and
+            // the view shows just these (`Library::copies`). `scan_of` makes one row per file of them.
+            .map(|e| (e.id.path.clone(), e.id.copy))
             .collect();
-
-        // ⚠ One entry per **file**: `entries::build` expands copies itself, so passing copies
-        // through `scan_of` would double every one of them.
-        let mut kept: Vec<(PathBuf, u32)> = Vec::new();
-        for p in keep {
-            if !kept.iter().any(|(q, _)| q == &p) {
-                kept.push((p, 0));
-            }
-        }
         Ok(SmartMembers {
             members: kept,
             mtimes,

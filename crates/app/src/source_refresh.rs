@@ -17,8 +17,24 @@
 use crate::library_state::fs_modified;
 use crate::{LibrarySource, RustroomApp};
 use eframe::egui;
+use rustroom_app::photo_id::PhotoId;
 use rustroom_app::sidecar;
+use std::collections::HashSet;
 use std::path::PathBuf;
+
+/// The copies a per-copy source shows ([`LibrarySource::is_per_copy`]) — `None` for one that
+/// shows every copy of its files.
+pub(crate) fn copies_of(
+    source: &LibrarySource,
+    members: &[(PathBuf, u32)],
+) -> Option<HashSet<PhotoId>> {
+    source.is_per_copy().then(|| {
+        members
+            .iter()
+            .map(|(path, copy)| PhotoId::new(path.clone(), *copy))
+            .collect()
+    })
+}
 
 impl RustroomApp {
     /// What `source` holds now, as (file, copy) members — `None` without a catalog, or for a source
@@ -93,15 +109,22 @@ impl RustroomApp {
         let Some(lib) = self.library.as_mut() else {
             return false;
         };
-        let Some(scan) = rustroom_app::collections::refreshed_scan(
+        let scan = rustroom_app::collections::refreshed_scan(
             &lib.scan,
             &members,
             sidecar::edited_at,
             fs_modified,
-        ) else {
+        );
+        // ⚠⚠ The copies too: removing one copy of two leaves the file a member, so comparing files
+        // alone would keep the removed copy on screen.
+        let copies = copies_of(&source, &members);
+        if scan.is_none() && copies == lib.copies {
             return false;
-        };
-        lib.scan = scan;
+        }
+        if let Some(scan) = scan {
+            lib.scan = scan;
+        }
+        lib.copies = copies;
         // Re-sorts, rebuilds the rows, keeps the selection by id, refilters, re-reads the marks.
         self.rebuild_entries(None);
         // A photo that joined from a folder no other row is in needs its captures, and maybe a scan.
@@ -292,5 +315,96 @@ mod tests {
         app.tag_files(paris, true, std::slice::from_ref(&p[1]));
         settle(&mut app, &egui::Context::default());
         assert_eq!(shown(&app), p);
+    }
+
+    /// One real RAW with a second copy in its sidecar and in the catalog — the state that tells a
+    /// view of files from a view of copies.
+    fn two_copies(tag: &str) -> (test_app::TestDir, crate::RustroomApp, PathBuf) {
+        let dir = test_app::TestDir::new(tag);
+        let a = dir.0.join("a.RAF");
+        std::fs::write(&a, b"not a real raw").unwrap();
+        let edits = edit_model::Edits {
+            exposure: 1.0,
+            ..Default::default()
+        };
+        rustroom_app::sidecar::persist_copy(&a, 1, &edits).unwrap();
+        let app = test_app::for_test();
+        let cat = app.catalog.as_ref().unwrap();
+        let entry = catalog::CatalogEntry {
+            path: a.clone(),
+            file_name: "a.RAF".into(),
+            modified: std::time::SystemTime::UNIX_EPOCH,
+            edited: None,
+        };
+        cat.sync_folder(&dir.0, &[entry]).unwrap();
+        cat.add_copy(&a, 1).unwrap();
+        (dir, app, a)
+    }
+
+    fn copies(app: &crate::RustroomApp) -> Vec<u32> {
+        let lib = app.library.as_ref().unwrap();
+        lib.entries.iter().map(|e| e.id.copy).collect()
+    }
+
+    /// ⚠⚠ Measured before the fix: a collection holding only copy 1 showed copy 0 as well.
+    #[test]
+    fn a_collection_shows_only_its_member_copies() {
+        let (_d, mut app, a) = two_copies("live_coll_copies");
+        let cat = app.catalog.as_ref().unwrap();
+        let bw = cat.create_collection("BW").unwrap();
+        cat.add_to_collection(bw, &a, 1).unwrap();
+        app.open_collection(&egui::Context::default(), bw, "BW");
+        assert_eq!(copies(&app), vec![1]);
+    }
+
+    /// A keyword belongs to the file: its view keeps every copy.
+    #[test]
+    fn a_keyword_view_still_shows_every_copy() {
+        let (_d, mut app, a) = two_copies("live_kw_copies");
+        let cat = app.catalog.as_ref().unwrap();
+        let k = cat.create_keyword("Paris", None).unwrap();
+        cat.assign_keyword(k, &a).unwrap();
+        app.open_keyword(&egui::Context::default(), k, "Paris");
+        assert_eq!(copies(&app), vec![0, 1]);
+    }
+
+    /// A smart collection matches copy by copy, and now shows just the copies that matched.
+    #[test]
+    fn a_smart_collection_shows_only_the_copies_that_match() {
+        use rustroom_app::rule::{Cmp, Criterion, Expr};
+        let (_d, mut app, a) = two_copies("live_smart_copies");
+        let cat = app.catalog.as_ref().unwrap();
+        let marks = catalog::db::Marks {
+            rating: 4,
+            ..Default::default()
+        };
+        cat.set_marks(&a, 1, marks).unwrap();
+        let rule = Expr::Is(Criterion::Rating {
+            op: Cmp::AtLeast,
+            value: 3,
+        });
+        let good = cat
+            .create_smart("Good", &serde_json::to_string(&rule).unwrap())
+            .unwrap();
+        app.open_smart(&egui::Context::default(), good, "Good");
+        assert_eq!(copies(&app), vec![1]);
+    }
+
+    /// Removing one copy of two takes that copy away and leaves the other — the live refresh
+    /// compares copies, not only files.
+    #[test]
+    fn removing_one_copy_of_two_takes_only_that_copy_away() {
+        let (_d, mut app, a) = two_copies("live_coll_remove_copy");
+        let cat = app.catalog.as_ref().unwrap();
+        let bw = cat.create_collection("BW").unwrap();
+        cat.add_to_collection(bw, &a, 0).unwrap();
+        cat.add_to_collection(bw, &a, 1).unwrap();
+        let ctx = egui::Context::default();
+        app.open_collection(&ctx, bw, "BW");
+        assert_eq!(copies(&app), vec![0, 1], "the sample: both are members");
+        let cat = app.catalog.as_ref().unwrap();
+        cat.remove_from_collection(bw, &a, 1).unwrap();
+        settle(&mut app, &ctx);
+        assert_eq!(copies(&app), vec![0]);
     }
 }

@@ -78,6 +78,18 @@ pub(crate) enum LibrarySource {
     },
 }
 
+impl LibrarySource {
+    /// Whether this source holds individual **copies** rather than files — a collection, and a smart
+    /// collection, whose rule matches copy by copy. A keyword or a date belongs to the file, so their
+    /// views show every copy of it.
+    pub(crate) fn is_per_copy(&self) -> bool {
+        matches!(
+            self,
+            LibrarySource::Collection { .. } | LibrarySource::Smart { .. }
+        )
+    }
+}
+
 /// Browsing state for an opened folder.
 pub(crate) struct Library {
     /// Where these photos came from.
@@ -141,6 +153,13 @@ pub(crate) struct Library {
     /// so scrolling mid-drag cannot leave them describing different things — the mistake the
     /// M3.1a mask overlay made by caching a derived screen position.
     pub(crate) band: Option<(egui::Pos2, egui::Pos2)>,
+    /// The copies a per-copy source holds ([`LibrarySource::is_per_copy`]); `None` shows every copy
+    /// of each file in `scan`.
+    ///
+    /// ⚠ Without it a collection holding only the black-and-white copy showed its colour original
+    /// too — the view is built from files, and `entries::build` expands every copy the sidecar lists
+    /// (measured 2026-10-01).
+    pub(crate) copies: Option<std::collections::HashSet<PhotoId>>,
     /// The catalog's change count when this source's members were last read (`source_refresh`).
     pub(crate) members_read_at: u64,
     /// A change count seen once and waiting to be seen again before the members are re-read — a
@@ -284,13 +303,15 @@ pub(crate) fn browser_entries(
     expanded: &std::collections::HashSet<rustroom_app::stack::StackKey>,
     // ⚠ The server's asset→stack map, empty for every non-Immich folder. See `stack::key_of_with`.
     remote: &std::collections::HashMap<String, String>,
+    // ⚠ `Library::copies`: only these rows, for a source that holds copies rather than files.
+    copies: Option<&std::collections::HashSet<PhotoId>>,
 ) -> Vec<entries::PhotoEntry> {
-    rustroom_app::stack::group(
-        entries::build(scan, sidecar::load_all),
-        stacking,
-        expanded,
-        remote,
-    )
+    let mut rows = entries::build(scan, sidecar::load_all);
+    if let Some(keep) = copies {
+        // ⚠ Before grouping, so a stack is made of the rows that are actually shown.
+        rows.retain(|e| keep.contains(&e.id));
+    }
+    rustroom_app::stack::group(rows, stacking, expanded, remote)
 }
 
 impl RustroomApp {
@@ -359,7 +380,13 @@ impl RustroomApp {
             .map(|e| e.id.clone());
         let was_selected = lib.selected_ids();
         catalog::sort(&mut lib.scan, sort);
-        lib.entries = browser_entries(&lib.scan, &stacking, &lib.stack_expanded, &remote);
+        lib.entries = browser_entries(
+            &lib.scan,
+            &stacking,
+            &lib.stack_expanded,
+            &remote,
+            lib.copies.as_ref(),
+        );
 
         // ⚠ The selection is by *index*, and the indices have just shifted — so it is re-derived
         // from the photos we mean rather than kept. Keeping it would silently select whichever
@@ -502,7 +529,7 @@ mod tests {
 
         // ⚠ The sample assertion: the scan really holds two files, or "grouped to one" is vacuous.
         assert_eq!(pair.len(), 2);
-        let grouped = browser_entries(&pair, &on, &Default::default(), &Default::default());
+        let grouped = browser_entries(&pair, &on, &Default::default(), &Default::default(), None);
         assert_eq!(grouped.len(), 1, "the pair must collapse on the open path");
         assert!(grouped[0].stack.is_some());
 
@@ -510,7 +537,7 @@ mod tests {
         // above is about grouping rather than about the fixture.
         let off = rustroom_app::stack::Stacking::default();
         assert_eq!(
-            browser_entries(&pair, &off, &Default::default(), &Default::default()).len(),
+            browser_entries(&pair, &off, &Default::default(), &Default::default(), None).len(),
             2
         );
     }
