@@ -166,7 +166,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-10-01 — M10.8b: movable panels and a vertical filmstrip (branch `m10.8b-layout`, awaiting use)
+### 2026-10-01 — M10.8b: movable panels and a vertical filmstrip (branch `m10.8b-layout`, merged 2026-10-01)
 
 **Input:** Phase 10's *"a vertical filmstrip"*, widened when the brainstorm opened: *"all sidecars, i.e.
 the edit sidecar and also the one in the library view should be movable"* — the side panels. The
