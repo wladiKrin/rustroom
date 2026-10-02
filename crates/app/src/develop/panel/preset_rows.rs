@@ -1,6 +1,10 @@
 //! The Presets tool's *Yours* (M10.9a): the presets with no folder, then each folder — a collapsible
 //! header with its count — and its presets below. A row applies on a click; a double-click or the
-//! right-click's Rename renames it in place; it drags onto a folder (or onto *Yours*) to move.
+//! right-click's Rename renames it in place; a drag moves it.
+//!
+//! ⚠⚠ **A drop goes by AREA, not by target** (the author, after use): released anywhere in a folder —
+//! its header or among its presets — a preset goes into it; released anywhere else in *Yours*, it
+//! leaves its folder. Aiming at a header or at the caption was the first version, and too fiddly.
 //!
 //! ⚠ Draws from plain data and returns one [`Act`] — the caller performs it — so no `RustroomApp`
 //! borrow is held across the drawing (`develop::panel::presets` applies it).
@@ -54,16 +58,8 @@ pub(crate) fn yours(
     rename: &mut Option<PresetRename>,
 ) -> Option<Act> {
     let mut act = None;
-    let dragging = egui::DragAndDrop::payload::<Dragged>(ui.ctx()).map(|d| (*d).clone());
-
-    // The caption is the drop target for "no folder" — lit while a preset from a folder hovers it.
     let caption = ui.label(egui::RichText::new("Yours").small().weak());
-    if let Some(d) = caption.dnd_release_payload::<Dragged>() {
-        act = Some(Act::Move(d.folder.clone(), d.name.clone(), None));
-    }
-    if dragging.as_ref().is_some_and(|d| d.folder.is_some()) {
-        drop_hint(ui, &caption);
-    }
+    let zone_top = caption.rect.top();
     if c.presets.is_empty() && c.folders.is_empty() {
         ui.label(
             egui::RichText::new("None yet. Save current… keeps this photo's settings.").weak(),
@@ -74,22 +70,78 @@ pub(crate) fn yours(
             act = Some(a);
         }
     }
+    let top_block_bottom = ui.cursor().top();
+    let mut regions: Vec<(String, egui::Rect)> = Vec::new();
     for f in c.folders {
-        if let Some(a) = folder(ui, c, f, rename, dragging.as_ref()) {
+        let (a, region) = folder(ui, c, f, rename);
+        if let Some(a) = a {
             act = Some(a);
         }
+        regions.push((f.clone(), region));
+    }
+    if let Some(a) = drop(ui, zone_top, top_block_bottom, &regions) {
+        act = Some(a);
     }
     act
 }
 
-/// One folder: its header (or the rename field), then its presets when open.
+/// Where a dragged preset would land — `Some(Some(folder))`, `Some(None)` for no folder, `None` for
+/// outside *Yours* — lit while it hovers, a move on release.
+fn drop(
+    ui: &mut egui::Ui,
+    zone_top: f32,
+    top_block_bottom: f32,
+    regions: &[(String, egui::Rect)],
+) -> Option<Act> {
+    let d = egui::DragAndDrop::payload::<Dragged>(ui.ctx())?;
+    let p = ui.ctx().pointer_latest_pos()?;
+    let full = ui.max_rect();
+    let zone = egui::Rect::from_min_max(
+        egui::pos2(full.left(), zone_top),
+        egui::pos2(full.right(), full.bottom().max(ui.cursor().top())),
+    );
+    let target: Option<Option<&str>> = match regions.iter().find(|(_, r)| r.contains(p)) {
+        Some((f, _)) => Some(Some(f.as_str())),
+        None if zone.contains(p) => Some(None),
+        None => None,
+    };
+    let to = target.filter(|t| *t != d.folder.as_deref())?;
+    let lit = match to {
+        Some(f) => regions.iter().find(|(n, _)| n == f).map(|(_, r)| *r)?,
+        None => egui::Rect::from_min_max(
+            egui::pos2(full.left(), zone_top),
+            egui::pos2(full.right(), top_block_bottom),
+        ),
+    };
+    ui.painter().rect_stroke(
+        lit,
+        4.0,
+        egui::Stroke::new(2.0, ui.visuals().selection.bg_fill),
+        egui::StrokeKind::Inside,
+    );
+    if !ui.input(|i| i.pointer.primary_released()) {
+        return None;
+    }
+    let act = Act::Move(d.folder.clone(), d.name.clone(), to.map(str::to_string));
+    egui::DragAndDrop::clear_payload(ui.ctx());
+    Some(act)
+}
+
+/// One folder: its header (or the rename field), then its presets when open. Returns what it asked
+/// for and the area it covers — header and presets, the drop target.
 fn folder(
     ui: &mut egui::Ui,
     c: &Ctx<'_>,
     name: &str,
     rename: &mut Option<PresetRename>,
-    dragging: Option<&Dragged>,
-) -> Option<Act> {
+) -> (Option<Act>, egui::Rect) {
+    let top = ui.cursor().top();
+    let region = |ui: &egui::Ui| {
+        egui::Rect::from_min_max(
+            egui::pos2(ui.max_rect().left(), top),
+            egui::pos2(ui.max_rect().right(), ui.cursor().top()),
+        )
+    };
     let mut act = None;
     if let Some(PresetRename::Folder { name: n, text }) = rename.as_mut() {
         if n == name {
@@ -97,10 +149,10 @@ fn folder(
             match field(ui, text, 0.0) {
                 Field::Commit(t) => {
                     *rename = None;
-                    return Some(Act::RenameFolder(n, t));
+                    return (Some(Act::RenameFolder(n, t)), region(ui));
                 }
                 Field::Cancel => *rename = None,
-                Field::Typing => return None,
+                Field::Typing => return (None, region(ui)),
             }
         }
     }
@@ -117,16 +169,6 @@ fn folder(
         section::Header::new(name).trailing(&count).verbatim(true),
     );
     let r = h.response.clone();
-    if let Some(d) = r.dnd_release_payload::<Dragged>() {
-        act = Some(Act::Move(
-            d.folder.clone(),
-            d.name.clone(),
-            Some(name.into()),
-        ));
-    }
-    if dragging.is_some_and(|d| d.folder.as_deref() != Some(name)) {
-        drop_hint(ui, &r);
-    }
     if r.double_clicked() {
         *rename = Some(PresetRename::Folder {
             name: name.into(),
@@ -169,7 +211,7 @@ fn folder(
             }
         }
     });
-    act
+    (act, region(ui))
 }
 
 /// One preset: the row (or the rename field), its right-click menu, its drag.
@@ -311,18 +353,6 @@ fn field(ui: &mut egui::Ui, text: &mut String, indent: f32) -> Field {
         Field::Commit(text.clone())
     } else {
         Field::Typing
-    }
-}
-
-/// A drop target lit while something droppable hovers it.
-fn drop_hint(ui: &egui::Ui, r: &egui::Response) {
-    if r.contains_pointer() {
-        ui.painter().rect_stroke(
-            r.rect,
-            4.0,
-            egui::Stroke::new(2.0, ui.visuals().selection.bg_fill),
-            egui::StrokeKind::Inside,
-        );
     }
 }
 
@@ -537,27 +567,45 @@ mod tests {
         assert!(h.rename.is_none(), "the field closes");
     }
 
-    /// ⚠⚠ A preset dragged onto a folder's header moves there; one dragged onto *Yours* leaves its
-    /// folder.
+    /// ⚠⚠ A drop goes by AREA (the author, after use): anywhere in a folder — a preset of it, its
+    /// header — puts a preset in; anywhere else in *Yours* takes it out; within its own folder,
+    /// nothing.
     #[test]
-    fn a_drag_moves_a_preset_between_folders() {
-        let mut h = Harness::new();
-        let (from, to) = (h.at("Mine"), h.at("Film"));
-        h.drag(from, to);
-        assert!(
+    fn a_drop_goes_by_area() {
+        let moved = |from: &str, to: Option<&str>, at: Option<egui::Pos2>| {
+            let mut h = Harness::new();
+            let a = h.at(from);
+            let b = at.unwrap_or_else(|| h.at(to.unwrap()));
+            h.drag(a, b);
             h.acts
-                .contains(&Act::Move(None, "Mine".into(), Some("Film".into()))),
-            "{:?}",
-            h.acts
+                .into_iter()
+                .filter(|a| matches!(a, Act::Move(..)))
+                .collect::<Vec<_>>()
+        };
+        let film = || Some("Film".to_string());
+        assert_eq!(
+            moved("Mine", Some("Look"), None),
+            [Act::Move(None, "Mine".into(), film())],
+            "onto a preset inside Film: into Film"
         );
-        let mut h = Harness::new();
-        let (from, to) = (h.at("Look"), h.at("Yours"));
-        h.drag(from, to);
+        assert_eq!(
+            moved("Look", Some("Mine"), None),
+            [Act::Move(film(), "Look".into(), None)],
+            "onto a preset with no folder: out"
+        );
+        assert_eq!(
+            moved("Look", None, Some(egui::pos2(100.0, 1300.0))),
+            [Act::Move(film(), "Look".into(), None)],
+            "below everything: out"
+        );
+        assert_eq!(
+            moved("Mine", Some("Empty"), None),
+            [Act::Move(None, "Mine".into(), Some("Empty".into()))],
+            "onto an empty folder's header: in"
+        );
         assert!(
-            h.acts
-                .contains(&Act::Move(Some("Film".into()), "Look".into(), None)),
-            "{:?}",
-            h.acts
+            moved("Look", Some("Film"), None).is_empty(),
+            "within its own folder: nothing"
         );
     }
 }

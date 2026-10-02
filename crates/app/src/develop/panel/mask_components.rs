@@ -116,6 +116,54 @@ pub struct RowOut {
     pub response: egui::Response,
 }
 
+/// The least share of the text's room the name keeps when the meta wants more.
+const NAME_SHARE: f32 = 0.55;
+/// The gap between the name and the meta.
+const META_GAP: f32 = 8.0;
+/// Narrower than this, the meta is not drawn at all — a sliver of it reads as a glitch.
+const MIN_META: f32 = 16.0;
+
+/// The meta between `left` and `right`: clipped there, and scrolled sideways under the pointer (a
+/// trackpad swipe, Shift and the wheel) when it does not fit — the author's choice over cutting it.
+///
+/// ⚠ Hover-only text in a scroll area that does not drag: a click or a drag on it is still the
+/// row's — applying a preset, reordering a mask.
+fn meta(
+    ui: &mut egui::Ui,
+    spec: &RowSpec<'_>,
+    id: egui::Id,
+    left: f32,
+    right: f32,
+    row: egui::Rect,
+    font: egui::FontId,
+) {
+    let area =
+        egui::Rect::from_min_max(egui::pos2(left, row.top()), egui::pos2(right, row.bottom()));
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(area)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    egui::ScrollArea::horizontal()
+        .id_salt(id.with("meta"))
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .scroll_source(egui::scroll_area::ScrollSource::MOUSE_WHEEL)
+        .max_width(area.width())
+        .show(&mut child, |ui| {
+            ui.set_min_height(area.height());
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(spec.meta)
+                        .font(font)
+                        .color(ui.visuals().weak_text_color()),
+                )
+                .selectable(false)
+                .sense(egui::Sense::hover())
+                .wrap_mode(egui::TextWrapMode::Extend),
+            );
+        });
+}
+
 /// Draw one row.
 ///
 /// ⚠ The `×` and the eye are registered **after** the row so they win the hit-test tie, and a
@@ -139,7 +187,6 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
             spec.accessible,
         )
     });
-    let resp = resp.hover(spec.hover);
     let v = ui.visuals().clone();
     let mut delete = false;
     let mut right = rect.right();
@@ -208,7 +255,46 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         } else {
             v.weak_text_color()
         };
+        right = cell.left();
     }
+    // ⚠⚠ The text's room ends at the first action cell — never under it (M10.9a after use: a
+    // preset's list of groups ran under its `×`). The name is elided with "…" and shows in full on
+    // hover; the meta takes what is left and scrolls sideways when it does not fit.
+    let text = if lit {
+        v.strong_text_color()
+    } else {
+        v.widgets.inactive.fg_stroke.color
+    };
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let meta_font = egui::FontId::proportional(crate::theme::tokens::CAPTION);
+    let glyph_left = rect.left() + spec.indent + 6.0 + if spec.op.is_some() { 14.0 } else { 0.0 };
+    let text_left = glyph_left + GLYPH + 6.0;
+    let text_right = right - 6.0;
+    let span = (text_right - text_left).max(0.0);
+    let meta_w = if spec.meta.is_empty() {
+        0.0
+    } else {
+        let job = egui::text::LayoutJob::simple_singleline(
+            spec.meta.to_owned(),
+            meta_font.clone(),
+            v.weak_text_color(),
+        );
+        ui.fonts_mut(|f| f.layout_job(job)).size().x + META_GAP
+    };
+    // The name gets all the room the meta does not need — but at least `NAME_SHARE` of it.
+    let name_room = (span - meta_w).max(span * NAME_SHARE).min(span);
+    let mut job =
+        egui::text::LayoutJob::simple_singleline(spec.name.to_owned(), font.clone(), text);
+    job.wrap.max_width = name_room;
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('…');
+    let name_galley = ui.fonts_mut(|f| f.layout_job(job));
+    let resp = if name_galley.elided {
+        resp.hover_titled(spec.name, spec.hover)
+    } else {
+        resp.hover(spec.hover)
+    };
     let clicked = resp.clicked() && !delete && !eye && !hold;
 
     if ui.is_rect_visible(rect) {
@@ -226,13 +312,7 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
             painter.rect_filled(rect, 4.0, fill);
         }
         // ⚠ The button-text colour, not body text: the rows are controls, and the mockup's
-        // brighter names were what the user asked for (2026-09-19).
-        let text = if lit {
-            v.strong_text_color()
-        } else {
-            v.widgets.inactive.fg_stroke.color
-        };
-        let font = egui::TextStyle::Body.resolve(ui.style());
+        // brighter names were what the user asked for (2026-09-19) — `text`, above.
         let mut x = rect.left() + spec.indent + 6.0;
         if let Some(op) = spec.op {
             painter.text(
@@ -254,22 +334,19 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
             RowGlyph::Eye(k) => mask_glyph::paint_pupil(&painter, glyph, k, text),
             RowGlyph::Preset => mask_glyph::paint_star(&painter, glyph, text),
         }
-        x += GLYPH + 6.0;
-        let name_rect = painter.text(
-            egui::pos2(x, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            spec.name,
-            font.clone(),
+        debug_assert!(
+            (x + GLYPH + 6.0 - text_left).abs() < 0.01,
+            "one text origin"
+        );
+        let name_right = text_left + name_galley.size().x;
+        painter.galley(
+            egui::pos2(text_left, rect.center().y - name_galley.size().y / 2.0),
+            name_galley,
             text,
         );
-        if !spec.meta.is_empty() {
-            painter.text(
-                egui::pos2(name_rect.right() + 8.0, rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                spec.meta,
-                egui::FontId::proportional(crate::theme::tokens::CAPTION),
-                v.weak_text_color(),
-            );
+        let meta_left = name_right + META_GAP;
+        if !spec.meta.is_empty() && text_right - meta_left > MIN_META {
+            meta(ui, &spec, resp.id, meta_left, text_right, rect, meta_font);
         }
         // The action cells, from the right edge in: `×`, then the eye.
         let mut cell_x = rect.right() - ROW_HEIGHT / 2.0;
@@ -471,6 +548,75 @@ pub fn kind_button(ui: &mut egui::Ui, kind: MaskKind, width: f32) -> egui::Respo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⚠⚠ M10.9a after use: no text runs under the `×` — a long name is elided, a long meta
+    /// clipped before the cell (a preset's list of groups ran under it).
+    #[test]
+    fn the_text_stops_before_the_delete_cell() {
+        let ctx = egui::Context::default();
+        let mut row_rect = egui::Rect::NOTHING;
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(220.0, 200.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let o = row(
+                    ui,
+                    RowSpec {
+                        glyph: RowGlyph::Preset,
+                        op: None,
+                        name: "A very long preset name indeed",
+                        meta: "White balance · Tone · Color · Detail · Lens",
+                        accessible: "x",
+                        selected: false,
+                        current: false,
+                        deletable: true,
+                        delete_hover: "Deletes this preset",
+                        indent: 0.0,
+                        eye: None,
+                        hold: None,
+                        hover: "Applies this preset to the photo",
+                        draggable: false,
+                    },
+                );
+                row_rect = o.rect;
+            },
+        );
+        let cell_left = row_rect.right() - ROW_HEIGHT;
+        let mut seen_texts = Vec::new();
+        for c in &out.shapes {
+            if let egui::Shape::Text(t) = &c.shape {
+                if t.galley.text() == "×" {
+                    continue;
+                }
+                let seen = t.visual_bounding_rect().intersect(c.clip_rect);
+                if seen.is_positive() {
+                    assert!(
+                        seen.right() <= cell_left + 0.5,
+                        "{:?} reaches {} past the × at {}",
+                        t.galley.text(),
+                        seen.right(),
+                        cell_left
+                    );
+                    // ⚠ An elided galley still reports its whole text — the flag says it was cut.
+                    seen_texts.push((t.galley.text().to_string(), t.galley.elided));
+                }
+            }
+        }
+        assert!(
+            seen_texts
+                .iter()
+                .any(|(t, cut)| t.starts_with("A very") && *cut)
+                && seen_texts
+                    .iter()
+                    .any(|(t, _)| t.starts_with("White balance")),
+            "the sample: an elided name and the meta were drawn — {seen_texts:?}"
+        );
+    }
     use crate::{test_app, test_ui};
 
     fn radial() -> edit_model::Mask {
