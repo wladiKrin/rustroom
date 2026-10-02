@@ -166,6 +166,59 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-10-02 — M10.8d: batch rename (branch `m10.8d-batch-rename`, awaiting use)
+
+**Input:** Phase 10's *"Batch rename — today one photo at a time; the import filename template
+exists"*. The author's answers: **the template field** (Import's and Export's) with a live preview;
+**Photo → Rename… and the right-click**; **`{seq}` in grid order from a start number**. Spec
+`docs/superpowers/specs/2026-10-02-m10.8d-batch-rename-design.md`, plan beside it.
+
+**Built:** Photo → **Rename… ⌘R** (⌘R was free; a chord here is a character, so no F2) and the
+right-click's **Rename** — one entry: **one photo is renamed in place** as before (its caption, or a
+copy's label), **two or more open the dialog**. The dialog: the template (remembered in
+`Settings::rename_template`, default `{date}-{seq:3}`), *Start at*, a preview of the first three
+photos (`batch_rename::preview`) and *"and N more"*, the template's error in its place; `{copy}` is
+refused (`Template::parse_for_rename`, `TemplateError::CopyInRename`) — a rename changes the file every
+copy shares. The plan is cached per (template, start) in `Modal::Rename`, because it asks the disk and
+the catalog about every name and a dialog body runs every frame.
+
+- **`batch_rename`** (lib, pure): one photo = the files sharing a folder and a stem — one number, one
+  stem, each extension kept. A name held outside the rename gets `-1` for the whole photo; **the
+  renamed photos' own names count as free** (they are leaving), so a swap or a shifted run plans with
+  no suffix; a photo whose name would not change **stays**, its name reserved.
+- **`photo_move::move_all`**: when a target is another plan's source, **two passes** through
+  `.rustroom-move-<i>.<ext>` in the file's own folder (the extension kept, so a RAW still takes its
+  XMP); a failed second step puts the file back, and says where it is if even that fails.
+  **`Catalog::move_photos`**: one transaction, the same two passes through a name no file can hold
+  (`/rustroom-move-<i>`). Move to folder, Rename and the undo of both share `move_planned` — so
+  undoing a swap works.
+- **Found, then fixed — the single rename** (red first, both): `Catalog::rename_photo` re-keyed only
+  `photos` and `photo_keywords` — a renamed photo **lost its history, description, capture facts and
+  stack** (`left: (4, true, None, None, None, true, false)`); and `rename_file` left a RAW's **XMP
+  behind**. `rename_photo` is gone; `rename_file` uses `photo_move::move_file` and `move_photo`.
+- **`after_move`**, shared: the rows are re-keyed **in every view** before the rebuild (the selection is
+  restored by id, so it follows a rename — and Move to folder's undo), and **`reload_hand_stacks`** runs
+  after every move and rename (a renamed stack member had dropped out of its stack in the view).
+  `path_taken` is shared too, and now counts a RAW's XMP (the move would refuse it).
+- Immich photos and missing files are **left out and counted** — the dialog's note, the status row.
+
+**Sabotages, each red** (against a 33-test control): the pair split (2); the batch's own names counted
+as taken (2); the direct pass on a swap (2); the catalog's single pass (1); `{copy}` accepted (lib 1,
+dialog 1); the selection not re-keyed (1); the stacks not reloaded (1); the grid order ignored (1);
+`rename_file` without the XMP (1); the dialog's hover missing (1).
+⚠⚠ **Two were green at first, and both were the test's fault:** *the grid order* — the fixture's
+active photo was also the grid's first, so the selection's order (active first) and the grid's
+coincided; the test now makes the last photo active and asserts that sample. *`{copy}` in the
+dialog* — twice over: `{name}-{copy}` renames nothing, so Rename was dark for another reason; and
+**a click placed from a window's first frame misses**, because that frame only sizes it — so the
+"nothing happened" check passed whatever it said. The test draws one frame first (the Settings hover
+walk already did); the other dialog tests are flagged for an audit.
+⚠ **My gate script exited 0 on a red clippy** (`type_complexity`), so `gate.sh && git commit`
+committed it; the script now fails unless all three pass, and the local commit was amended.
+⚠ A fixture slip worth knowing: an XMP the catalog has never seen is **imported on open**, and its
+empty description clears one set before — `xmp_sync::apply`'s rule, by design. Set facts after the
+open. **3429 tests.**
+
 ### 2026-10-01 — M10.8c: stacks by hand, and stacking by capture time (branch `m10.8c-stacks`, merged 2026-10-02)
 
 **Input:** Phase 10's *"stack arbitrary photos by hand, and group by capture time rather than stem"*. The
