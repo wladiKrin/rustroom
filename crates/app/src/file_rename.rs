@@ -1,7 +1,7 @@
 //! Renaming a photo on disk.
 //!
 //! ⚠ The rules here are pure and tested without touching the filesystem, because a rename that
-//! goes wrong loses a file rather than mis-rendering one. The IO lives in `main.rs`; every
+//! goes wrong loses a file rather than mis-rendering one. The IO is `photo_move`'s; every
 //! decision about *what* the new path should be lives here.
 
 use crate::safe_name;
@@ -72,14 +72,6 @@ pub fn default_copy_name(file_name: &str, copy: u32) -> String {
     }
 }
 
-/// The sidecar that must move with `photo`.
-///
-/// ⚠ Renaming the photo without its sidecar orphans every edit ever made to it — the file would
-/// open neutral and the old sidecar would linger as litter.
-pub fn sidecar_of(photo: &Path) -> PathBuf {
-    crate::sidecar::path(photo)
-}
-
 /// What the name field should contain for `photo`: the whole filename, extension included.
 pub fn field_text(photo: &Path) -> String {
     photo
@@ -140,13 +132,6 @@ mod tests {
     #[test]
     fn the_field_shows_the_whole_filename() {
         assert_eq!(field_text(&p("/x/DSCF6223.RAF")), "DSCF6223.RAF");
-    }
-
-    #[test]
-    fn the_sidecar_moves_with_the_photo() {
-        // ⚠ Not renaming it orphans every edit: the photo would reopen neutral and the old
-        // sidecar would linger.
-        assert_eq!(sidecar_of(&p("/x/a.RAF")), p("/x/a.RAF.json"));
     }
 }
 

@@ -73,6 +73,9 @@ pub enum TemplateError {
     BadWidth(String),
     /// `{name:3}` — only `{seq}` is a number to pad.
     WidthNotAllowed(String),
+    /// `{copy}` in a rename (M10.8d): a rename changes the file every virtual copy shares, so there
+    /// is no copy for it to name.
+    CopyInRename,
 }
 
 impl std::fmt::Display for TemplateError {
@@ -89,6 +92,10 @@ impl std::fmt::Display for TemplateError {
             Self::WidthNotAllowed(t) => {
                 write!(f, "{{{t}}} takes no width — only {{seq}} can be padded")
             }
+            Self::CopyInRename => write!(
+                f,
+                "{{copy}} names a virtual copy — a rename changes the file every copy shares"
+            ),
         }
     }
 }
@@ -121,7 +128,7 @@ pub fn token_help() -> [(&'static str, &'static str); 5] {
         ("{name}", "the file's own name, without its extension"),
         (
             "{seq}",
-            "position in this export, from 1 — {seq:3} pads it to 001",
+            "position in this batch, from 1 — {seq:3} pads it to 001",
         ),
         ("{date}", "when the photo was taken, as YYYY-MM-DD"),
         ("{camera}", "the camera that took it"),
@@ -140,6 +147,16 @@ pub fn token_help() -> [(&'static str, &'static str); 5] {
 pub fn token_hover() -> String {
     token_help()
         .iter()
+        .map(|(tok, what)| format!("{tok} — {what}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// [`token_hover`] without `{copy}`, which a rename refuses — the Rename dialog's hover (M10.8d).
+pub fn rename_token_hover() -> String {
+    token_help()
+        .iter()
+        .filter(|(tok, _)| *tok != "{copy}")
         .map(|(tok, what)| format!("{tok} — {what}"))
         .collect::<Vec<_>>()
         .join("\n")
@@ -211,6 +228,19 @@ impl Template {
             segments.push(Segment::Literal(lit));
         }
         Ok(Self { segments })
+    }
+
+    /// [`Self::parse`] for renaming files (M10.8d): `{copy}` is refused, since a rename changes the
+    /// file every virtual copy shares. Every other error is reported as `parse` reports it.
+    pub fn parse_for_rename(src: &str) -> Result<Self, TemplateError> {
+        let t = Self::parse(src)?;
+        if t.segments
+            .iter()
+            .any(|s| matches!(s, Segment::Token(Token::Copy)))
+        {
+            return Err(TemplateError::CopyInRename);
+        }
+        Ok(t)
     }
 
     /// The base filename for one photo — no extension, no de-duplication suffix.
@@ -360,6 +390,26 @@ fn non_blank(s: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M10.8d: a rename refuses `{copy}` with its own message, and still reports every other error.
+    #[test]
+    fn a_rename_refuses_copy_and_reports_the_rest() {
+        assert_eq!(
+            Template::parse_for_rename("{name}-{copy}"),
+            Err(TemplateError::CopyInRename)
+        );
+        assert!(
+            Template::parse("{name}-{copy}").is_ok(),
+            "export still takes it"
+        );
+        assert_eq!(
+            Template::parse_for_rename("{camrea}"),
+            Err(TemplateError::UnknownToken("camrea".into()))
+        );
+        assert!(Template::parse_for_rename("{date}-{seq:3}").is_ok());
+        let h = rename_token_hover();
+        assert!(!h.contains("{copy}") && h.contains("{seq}"), "{h}");
+    }
 
     #[test]
     fn the_token_hover_names_every_token_with_its_meaning() {
