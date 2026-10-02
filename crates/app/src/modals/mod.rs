@@ -149,6 +149,7 @@ pub enum Modal {
     /// Confirming a preset deletion. `dont_ask_again` is scratch state — it is committed to
     /// `Settings` only on the Delete path, never on Cancel.
     ConfirmDeletePreset {
+        folder: Option<String>,
         name: String,
         dont_ask_again: bool,
     },

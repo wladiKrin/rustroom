@@ -92,7 +92,11 @@ pub enum ActionKind {
     },
     /// A preset was moved to the trash. Named so a redo can delete the same one again, and
     /// so an undo restores *that* preset rather than whatever happens to be newest.
-    PresetDelete { name: String },
+    PresetDelete {
+        /// The folder it was deleted from — a restore puts it back there (M10.9a).
+        folder: Option<String>,
+        name: String,
+    },
     /// One photo's settings were applied to several others' sidecars.
     ///
     /// **Boxed on purpose:** the payload is a few hundred bytes, and an unboxed variant
@@ -337,6 +341,7 @@ mod tests {
 
     fn del(name: &str) -> ActionKind {
         ActionKind::PresetDelete {
+            folder: None,
             name: name.to_string(),
         }
     }

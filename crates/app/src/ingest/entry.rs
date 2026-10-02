@@ -166,6 +166,7 @@ mod tests {
                 exposure: 0.7,
                 ..Edits::default()
             },
+            folder: None,
         };
         apply(
             &cat,

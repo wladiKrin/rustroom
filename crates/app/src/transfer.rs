@@ -315,13 +315,14 @@ impl RustroomApp {
     }
 
     /// Move a preset to the trash and refresh the cached list.
-    pub(crate) fn delete_preset(&mut self, name: &str) {
-        match self.preset_store.delete(name) {
+    pub(crate) fn delete_preset(&mut self, folder: Option<&str>, name: &str) {
+        match self.preset_store.delete(folder, name) {
             Ok(()) => {
                 self.status = format!("Deleted preset “{name}” — Ctrl+Z to restore");
                 let open = self.open_photo();
                 self.actions.push(
                     ActionKind::PresetDelete {
+                        folder: folder.map(str::to_string),
                         name: name.to_string(),
                     },
                     open.as_ref(),

@@ -59,6 +59,7 @@ pub fn save(app: &mut RustroomApp, ctx: &egui::Context) {
                 name: name.trim().to_string(),
                 groups,
                 edits,
+                folder: None,
             };
             match app.preset_store.save(&preset) {
                 Ok(()) => app.status = format!("Saved preset “{}”", preset.name),
@@ -84,12 +85,14 @@ pub fn save(app: &mut RustroomApp, ctx: &egui::Context) {
 /// is actually tested.
 pub fn confirm_delete(app: &mut RustroomApp, ctx: &egui::Context) {
     let Modal::ConfirmDeletePreset {
+        folder,
         name,
         dont_ask_again,
     } = &mut app.modal
     else {
         return;
     };
+    let folder = folder.take();
     let name = std::mem::take(name);
     let mut dont_ask = *dont_ask_again;
     let mut outcome: Option<ConfirmOutcome> = None;
@@ -118,6 +121,7 @@ pub fn confirm_delete(app: &mut RustroomApp, ctx: &egui::Context) {
         None => {
             // Still open — carry the scratch state to the next frame.
             app.modal = Modal::ConfirmDeletePreset {
+                folder,
                 name,
                 dont_ask_again: dont_ask,
             };
@@ -125,7 +129,7 @@ pub fn confirm_delete(app: &mut RustroomApp, ctx: &egui::Context) {
         Some(o) => {
             let confirm_before = app.settings.confirm_preset_delete;
             if app.settings.apply_delete_confirm(o) {
-                app.delete_preset(&name);
+                app.delete_preset(folder.as_deref(), &name);
             }
             if app.settings.confirm_preset_delete != confirm_before {
                 app.save_settings();

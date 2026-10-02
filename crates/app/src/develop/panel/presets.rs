@@ -24,14 +24,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         None,
         Apply(usize),
         ApplyBuiltin(usize),
-        Delete(String),
+        Delete(Option<String>, String),
         Save,
         UndoDelete,
     }
     let mut action = Action::None;
     let open = app.open_photo();
     let undo_name = match app.actions.peek_undo(open.as_ref()) {
-        Some(ActionKind::PresetDelete { name }) => Some(name.clone()),
+        Some(ActionKind::PresetDelete { name, .. }) => Some(name.clone()),
         _ => None,
     };
 
@@ -151,7 +151,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 },
             );
             if out.delete {
-                action = Action::Delete(p.name.clone());
+                action = Action::Delete(p.folder.clone(), p.name.clone());
             } else if out.clicked {
                 action = Action::Apply(i);
             }
@@ -200,14 +200,15 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             }
         }
         Action::UndoDelete => app.undo_action(ctx),
-        Action::Delete(name) => {
+        Action::Delete(folder, name) => {
             if app.settings.confirm_preset_delete {
                 app.modal = Modal::ConfirmDeletePreset {
+                    folder,
                     name,
                     dont_ask_again: false,
                 };
             } else {
-                app.delete_preset(&name);
+                app.delete_preset(folder.as_deref(), &name);
             }
         }
     }
@@ -261,6 +262,7 @@ mod tests {
                 name: n.to_string(),
                 groups: EditGroups::default(),
                 edits: edit_model::Edits::default(),
+                folder: None,
             })
             .collect();
         app
@@ -384,6 +386,7 @@ mod tests {
 
         app.actions.push(
             ActionKind::PresetDelete {
+                folder: None,
                 name: "Warm".to_string(),
             },
             None,

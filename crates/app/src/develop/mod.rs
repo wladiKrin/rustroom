@@ -154,7 +154,7 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // button's label and must not be lost with it.
     let open = app.open_photo();
     let undo_hint = match app.actions.peek_undo(open.as_ref()) {
-        Some(ActionKind::PresetDelete { name }) => {
+        Some(ActionKind::PresetDelete { name, .. }) => {
             format!("Brings back the deleted preset “{name}” (⌘Z)")
         }
         _ => "Undoes the last change (⌘Z)".to_string(),
