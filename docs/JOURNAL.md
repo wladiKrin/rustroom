@@ -166,7 +166,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-10-01 — M10.8c: stacks by hand, and stacking by capture time (branch `m10.8c-stacks`, awaiting use)
+### 2026-10-01 — M10.8c: stacks by hand, and stacking by capture time (branch `m10.8c-stacks`, merged 2026-10-02)
 
 **Input:** Phase 10's *"stack arbitrary photos by hand, and group by capture time rather than stem"*. The
 author's choices: right-click **and** the Photo menu (⌘G / ⇧⌘G); the active photo on top, changeable
