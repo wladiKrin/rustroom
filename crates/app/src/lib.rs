@@ -8,6 +8,7 @@ pub mod ai_worker;
 pub mod auto_tone_tool;
 pub mod bar_plan;
 pub mod batch_export;
+pub mod batch_rename;
 pub mod brush_tool;
 pub mod buffer_cache;
 pub mod cell_layout;
