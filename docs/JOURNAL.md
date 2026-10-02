@@ -166,7 +166,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-10-02 — M10.9a: preset folders, rename, import and export (branch `m10.9a-presets`, awaiting use)
+### 2026-10-02 — M10.9a: preset folders, rename, import and export (branch `m10.9a-presets`, merged 2026-10-02)
 
 **Input:** Phase 10's *"Develop presets: import/export, folders, rename"*. The author's answers:
 **Rustroom's own JSON** in and out (Lightroom `.xmp` presets are a later item); **one level of
