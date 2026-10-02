@@ -283,6 +283,24 @@ fn info(w: &mut Walk) {
     w.check("Info", &nodes);
 }
 
+/// The Rename dialog (M10.8d), with a photo to rename and one left out, so its note is drawn too.
+fn rename(w: &mut Walk) {
+    let ctx = themed_ctx();
+    let mut app = crate::test_app::for_test();
+    app.modal = crate::modals::Modal::Rename {
+        photos: vec![rustroom_app::batch_rename::Photo {
+            files: vec!["/nonexistent/a.JPG".into()],
+            ..Default::default()
+        }],
+        left_out: 1,
+        template: "T-{seq}".into(),
+        start: 1,
+        planned: None,
+    };
+    let nodes = open_all(&ctx, |_| crate::modals::rename::show(&mut app, &ctx));
+    w.check("Rename", &nodes);
+}
+
 #[test]
 fn every_clickable_control_says_what_it_does() {
     let mut w = Walk::default();
@@ -323,6 +341,7 @@ fn every_clickable_control_says_what_it_does() {
     settings(&mut w);
     export(&mut w);
     info(&mut w);
+    rename(&mut w);
     // ⚠ The sample first (standing lesson (b)): a walk that reached nothing would pass below.
     // ⚠ 537 on 2026-09-30; the floor sits below it so a surface that stops drawing fails here
     // rather than quietly shrinking the walk.

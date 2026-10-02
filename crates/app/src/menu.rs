@@ -42,6 +42,8 @@ pub enum Command {
     ZoomActual,
     ToggleBeforeAfter,
     ToggleFilmstrip,
+    /// Rename the selection's files from a template (M10.8d) — ⌘R.
+    RenamePhotos,
     /// Stack the selection by hand (M10.8c) — ⌘G.
     Stack,
     /// Take apart the hand stacks the selection touches — ⇧⌘G.
@@ -292,6 +294,9 @@ pub fn model_with(recent: &[PathBuf]) -> Vec<Section> {
                     Command::RotateRight,
                     Some(Shortcut::cmd(']')),
                 ),
+                Item::Separator,
+                // M10.8d. ⌘R is safe as a native accelerator — not a text chord.
+                action("Rename…", Command::RenamePhotos, Some(Shortcut::cmd('R'))),
                 Item::Separator,
                 // M10.8c: stacks by hand. ⌘G is safe as a native accelerator — not a text chord.
                 action("Stack", Command::Stack, Some(Shortcut::cmd('G'))),

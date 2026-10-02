@@ -35,6 +35,7 @@ pub mod export;
 pub mod import;
 pub mod info;
 pub mod presets;
+pub mod rename;
 pub mod rule_edit;
 pub mod settings;
 mod settings_layout;
@@ -51,6 +52,17 @@ pub use shell::{dialog, Footer};
 pub enum Modal {
     #[default]
     None,
+    /// Photo → Rename… (M10.8d): the photos (grid order, files and facts read when it opened), how
+    /// many were left out, and the template and start number being typed.
+    Rename {
+        photos: Vec<rustroom_app::batch_rename::Photo>,
+        left_out: usize,
+        template: String,
+        start: usize,
+        /// The plan for `(template, start)`, kept so it is made again only when either changes — a
+        /// plan asks the disk and the catalog about every name, and a dialog body runs every frame.
+        planned: Option<(String, usize, Vec<rustroom_app::photo_move::Planned>)>,
+    },
     /// Naming a new preset and choosing the groups it will carry.
     SavePreset {
         name: String,
@@ -173,6 +185,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
     // the call, which does not compile.
     enum Which {
         None,
+        Rename,
         Save,
         Paste,
         Sync,
@@ -194,6 +207,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
     }
     let which = match &app.modal {
         Modal::None => Which::None,
+        Modal::Rename { .. } => Which::Rename,
         Modal::SavePreset { .. } => Which::Save,
         Modal::PasteSettings => Which::Paste,
         Modal::SyncSettings => Which::Sync,
@@ -219,6 +233,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
     }
     match which {
         Which::None => {}
+        Which::Rename => rename::show(app, ctx),
         Which::Save => presets::save(app, ctx),
         Which::Paste => edits::paste(app, ctx),
         Which::Sync => edits::sync(app, ctx),

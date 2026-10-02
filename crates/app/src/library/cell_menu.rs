@@ -31,6 +31,9 @@ pub enum CellAction {
     DeleteVirtualCopies,
     /// Move the targets' files to a folder the system picker asks for.
     MoveToFolder,
+    /// Rename the targets' files from a template — the same entry as [`Self::Rename`], with two or
+    /// more targets (M10.8d).
+    RenameFiles,
     /// Stack the targets by hand, the clicked one on top (M10.8c).
     Stack,
     /// Take apart the hand stacks the targets touch.
@@ -107,19 +110,21 @@ pub fn cell_menu(
 ) -> Option<CellAction> {
     let mut action = None;
     let n = targets.len();
-    // ⚠ Rename and Information are single-photo by nature, so they are **disabled** above one
-    // rather than hidden: a menu that changes shape is harder to learn than one that greys out.
+    // ⚠ Information is single-photo by nature, so it is **disabled** above one rather than hidden:
+    // a menu that changes shape is harder to learn than one that greys out.
     let single = n == 1;
     if ui.button("Edit").clicked() {
         action = Some(CellAction::Edit);
         ui.close();
     }
-    if ui
-        .add_enabled(single, egui::Button::new("Rename"))
-        .on_disabled_hover_text("One photo at a time")
-        .clicked()
-    {
-        action = Some(CellAction::Rename);
+    // M10.8d: one photo is renamed in place (its caption, or a copy's label); two or more open the
+    // Rename dialog — one entry, never two that read alike.
+    if ui.button("Rename").clicked() {
+        action = Some(if single {
+            CellAction::Rename
+        } else {
+            CellAction::RenameFiles
+        });
         ui.close();
     }
     if ui
@@ -216,6 +221,7 @@ pub fn cell_menu(
         action = Some(CellAction::MoveToFolder);
         ui.close();
     }
+
     // M10.8c: stacks by hand. ⚠ Unstack and Make top only where they would do something.
     ui.separator();
     if ui
@@ -398,6 +404,14 @@ pub fn apply_cell_action(
             app.delete_copies(ctx, &targets);
         }
         CellAction::MoveToFolder => app.move_targets_to_folder(ctx, index),
+        CellAction::RenameFiles => {
+            let targets = app
+                .library
+                .as_ref()
+                .map(|l| menu_targets(l, index))
+                .unwrap_or_default();
+            app.open_rename(&targets);
+        }
         CellAction::Stack | CellAction::Unstack => {
             let mut targets = app
                 .library
@@ -428,6 +442,25 @@ pub fn apply_cell_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M10.8d: one Rename entry — in place for one photo, the Rename dialog for several.
+    #[test]
+    fn rename_is_in_place_for_one_and_the_dialog_for_several() {
+        let lib = crate::test_app::library_of(3);
+        let ids: Vec<PhotoId> = lib.entries.iter().map(|e| e.id.clone()).collect();
+        let chosen = |targets: &[PhotoId]| {
+            let ctx = crate::test_ui::ctx();
+            let mut got = None;
+            crate::test_ui::click(&ctx, "Rename", |ui| {
+                if let Some(a) = cell_menu(ui, None, &lib.source, &Default::default(), targets) {
+                    got = Some(a);
+                }
+            });
+            got
+        };
+        assert_eq!(chosen(&ids[..1]), Some(CellAction::Rename));
+        assert_eq!(chosen(&ids[..2]), Some(CellAction::RenameFiles));
+    }
 
     #[test]
     fn a_right_click_inside_the_selection_targets_the_whole_selection() {

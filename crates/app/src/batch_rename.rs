@@ -112,6 +112,28 @@ pub fn plan(
     out
 }
 
+/// The Rename dialog's preview of `plan`: the first `rows` photos as `old → new` of each photo's first
+/// file, and how many more photos it renames.
+pub fn preview(plan: &[Planned], rows: usize) -> (Vec<(String, String)>, usize) {
+    let froms: Vec<PathBuf> = plan.iter().map(|p| p.from.clone()).collect();
+    let photos = photos_of(&froms);
+    let own = |p: &Path| {
+        p.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    let lines = photos
+        .iter()
+        .take(rows)
+        .filter_map(|files| {
+            let first = files.first()?;
+            let to = &plan.iter().find(|p| p.from == *first)?.to;
+            Some((own(first), own(to)))
+        })
+        .collect();
+    (lines, photos.len().saturating_sub(rows))
+}
+
 /// A photo's files under the stem `base` (with `-n` when `n > 0`), each keeping its extension.
 fn named(p: &Photo, base: &str, n: usize) -> Vec<PathBuf> {
     let b = if n == 0 {
@@ -253,6 +275,21 @@ mod tests {
             pairs(&[("z.JPG", "Day-1.JPG")]),
             "Day stays, and z does not take its name"
         );
+    }
+
+    /// The preview names each photo once, by its first file, and counts the rest as photos.
+    #[test]
+    fn the_preview_shows_the_first_photos_and_counts_the_rest() {
+        let photos = [
+            photo(&["/a/x.RAF", "/a/x.JPG"]),
+            photo(&["/a/y.JPG"]),
+            photo(&["/a/z.JPG"]),
+        ];
+        let planned = plan(&photos, &t("T-{seq}"), 1, |_| false);
+        let (lines, more) = preview(&planned, 2);
+        assert_eq!(lines, pairs(&[("x.RAF", "T-1.RAF"), ("y.JPG", "T-2.JPG")]));
+        assert_eq!(more, 1, "z, as one photo");
+        assert_eq!(preview(&planned, 3).1, 0);
     }
 
     /// An absent `{date}` takes its separator with it.

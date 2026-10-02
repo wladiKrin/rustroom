@@ -47,7 +47,7 @@ impl RustroomApp {
     }
 
     /// The selection's ids, the active one first — the top of a new stack.
-    fn selection_ids(&self) -> Vec<PhotoId> {
+    pub(crate) fn selection_ids(&self) -> Vec<PhotoId> {
         let Some(lib) = &self.library else {
             return Vec::new();
         };

@@ -42,7 +42,7 @@ pub struct MetadataScanner {
 ///
 /// ⚠ A failure yields an **empty** `Capture` rather than being dropped: an unreadable file must
 /// still be marked as read, or it is retried on every folder open forever.
-fn read_capture(path: &Path) -> Capture {
+pub fn read_capture(path: &Path) -> Capture {
     if catalog::is_raw(path) {
         raw_decode::read_capture(path).unwrap_or_default()
     } else {
