@@ -242,6 +242,47 @@ impl Catalog {
                  COMMIT;",
             )?;
         }
+        if from < 11 {
+            // ⚠⚠ A **new gate**, never an edit to versions 1–10. M10.8c: stacks made by hand — see
+            // `db/stacks.rs`. One of `PER_FILE_TABLES`.
+            self.conn.execute_batch(
+                "BEGIN;
+                 CREATE TABLE photo_stacks (
+                     folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                     file_name TEXT NOT NULL,
+                     stack_id  INTEGER NOT NULL,
+                     top       INTEGER NOT NULL DEFAULT 0,
+                     PRIMARY KEY (folder_id, file_name)
+                 );
+                 PRAGMA user_version = 11;
+                 COMMIT;",
+            )?;
+        }
+        if from < 12 {
+            // ⚠⚠ A **new gate**, never an edit to version 11 — the author's catalog already holds it.
+            // M10.8c after use: a stack's members get an order (the lowest is the top) and a mark for
+            // the stacks *Stack by capture time* made. v11's `top` becomes order 0, the rest by name.
+            self.conn.execute_batch(
+                "BEGIN;
+                 CREATE TABLE photo_stacks_v12 (
+                     folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                     file_name TEXT NOT NULL,
+                     stack_id  INTEGER NOT NULL,
+                     ord       INTEGER NOT NULL,
+                     by_time   INTEGER NOT NULL DEFAULT 0,
+                     PRIMARY KEY (folder_id, file_name)
+                 );
+                 INSERT INTO photo_stacks_v12 (folder_id, file_name, stack_id, ord, by_time)
+                     SELECT folder_id, file_name, stack_id,
+                            ROW_NUMBER() OVER (PARTITION BY stack_id ORDER BY top DESC, file_name) - 1,
+                            0
+                     FROM photo_stacks;
+                 DROP TABLE photo_stacks;
+                 ALTER TABLE photo_stacks_v12 RENAME TO photo_stacks;
+                 PRAGMA user_version = 12;
+                 COMMIT;",
+            )?;
+        }
         Ok(())
     }
 }
@@ -275,6 +316,7 @@ mod tests {
                 .execute_batch(
                     "DROP TABLE photo_history;
                      DROP TABLE immich_names;
+                     DROP TABLE photo_stacks;
                      DROP TABLE photo_description;
                      DROP TABLE smart_collections;
                      DROP TABLE photo_capture;
@@ -328,6 +370,7 @@ mod tests {
                 .execute_batch(
                     "DROP TABLE photo_history;
                      DROP TABLE immich_names;
+                     DROP TABLE photo_stacks;
                      DROP TABLE photo_description;
                      DROP TABLE smart_collections;
                      DROP TABLE photo_capture;
@@ -378,6 +421,7 @@ mod tests {
                 .execute_batch(
                     "DROP TABLE photo_history;
                      DROP TABLE immich_names;
+                     DROP TABLE photo_stacks;
                      DROP TABLE photo_description;
                      ALTER TABLE photos DROP COLUMN xmp_mtime;
                      PRAGMA user_version = 5;",
@@ -424,6 +468,7 @@ mod tests {
                 .execute_batch(
                     "DROP TABLE photo_history;
                      DROP TABLE immich_names;
+                     DROP TABLE photo_stacks;
                      DROP TABLE photo_description;
                      PRAGMA user_version = 6;",
                 )
@@ -491,7 +536,7 @@ mod tests {
         // there (M9.7, Move to folder).
         cat.conn
             .execute_batch(
-                "DROP TABLE photo_history; DROP TABLE immich_names; PRAGMA user_version = 7;",
+                "DROP TABLE photo_history; DROP TABLE immich_names; DROP TABLE photo_stacks; PRAGMA user_version = 7;",
             )
             .unwrap();
         cat.migrate().unwrap();
@@ -508,6 +553,56 @@ mod tests {
                 .unwrap()
                 .and_then(|c| c.taken),
             Some(1_763_559_144)
+        );
+    }
+
+    /// ⚠⚠ v12 rebuilds `photo_stacks` — the author's catalog holds v11 stacks, and they must survive:
+    /// v11's top becomes order 0, the other member order 1, and neither is a time stack.
+    #[test]
+    fn a_version_eleven_catalog_keeps_its_stacks() {
+        let db = TempDb::new("v11v12");
+        {
+            let cat = Catalog::open(&db.0).unwrap();
+            cat.sync_folder(Path::new("/x"), &[entry("a.RAF"), entry("b.RAF")])
+                .unwrap();
+            cat.conn
+                .execute_batch(
+                    "DROP TABLE photo_stacks;
+                     CREATE TABLE photo_stacks (
+                         folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                         file_name TEXT NOT NULL,
+                         stack_id  INTEGER NOT NULL,
+                         top       INTEGER NOT NULL DEFAULT 0,
+                         PRIMARY KEY (folder_id, file_name)
+                     );
+                     INSERT INTO photo_stacks SELECT id, 'b.RAF', 3, 1 FROM folders;
+                     INSERT INTO photo_stacks SELECT id, 'a.RAF', 3, 0 FROM folders;
+                     PRAGMA user_version = 11;",
+                )
+                .unwrap();
+        }
+        let cat = Catalog::open(&db.0).expect("a v11 catalog must upgrade");
+        assert_eq!(cat.version().unwrap(), SCHEMA_VERSION);
+        let mut got = cat.hand_stacks_in(Path::new("/x")).unwrap();
+        got.sort_by(|a, b| a.0.cmp(&b.0));
+        let ords: Vec<(String, i64, i64, bool)> = got
+            .into_iter()
+            .map(|(p, m)| {
+                (
+                    p.file_name().unwrap().to_string_lossy().into_owned(),
+                    m.stack,
+                    m.ord,
+                    m.by_time,
+                )
+            })
+            .collect();
+        assert_eq!(
+            ords,
+            vec![
+                ("a.RAF".to_string(), 3, 1, false),
+                ("b.RAF".to_string(), 3, 0, false)
+            ],
+            "the top first"
         );
     }
 }

@@ -14,7 +14,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// The schema this build expects. Bump it whenever [`Catalog::migrate`] gains a step.
-pub const SCHEMA_VERSION: i64 = 10;
+pub const SCHEMA_VERSION: i64 = 12;
 
 /// What can go wrong talking to the catalog.
 ///
@@ -68,6 +68,8 @@ mod restore;
 mod schema;
 /// Smart collections.
 mod smart;
+/// Stacks made by hand (M10.8c).
+mod stacks;
 #[cfg(test)]
 mod test_support;
 pub use capture::Description;
@@ -78,6 +80,7 @@ pub use keywords::{Change as KeywordChange, DayCounts, KeywordMerge, KeywordRow}
 pub use marks::{Flag, Marks};
 pub use photos::{FolderRow, PhotoRow};
 pub use smart::SmartRow;
+pub use stacks::HandMember;
 
 pub struct Catalog {
     conn: Connection,

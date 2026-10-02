@@ -31,7 +31,56 @@ pub(super) struct CellInputs<'a, 'b> {
     pub(super) layout: rustroom_app::cell_layout::GridCell,
     pub(super) cell: f32,
     pub(super) name_size: f32,
+    /// Immich's asset → stack map — the badge keys as the grouping did.
+    pub(super) remote: &'a std::collections::HashMap<String, String>,
+    /// What reorders an unfurled stack (Settings → Input).
+    pub(super) stack_drag: rustroom_app::settings::StackDrag,
+    /// How a collapsed stack is drawn (Settings → Appearance).
+    pub(super) look: rustroom_app::stack::StackLook,
 }
+
+/// A drag that starts on a member of an **unfurled** stack moves it within the stack (M10.8c after
+/// use) — Settings → Input says whether ⌥ must be held — and dropping it on another member takes that
+/// member's place. From anywhere else a drag is the selection rectangle, which `interactions` starts.
+fn reorder_gesture(
+    ui: &mut egui::Ui,
+    resp: &egui::Response,
+    lib: &crate::Library,
+    i: usize,
+    stack_drag: rustroom_app::settings::StackDrag,
+    out: &mut GridOutcome,
+) {
+    let here = &lib.entries[i];
+    if !here.stack.is_some_and(|s| s.expanded) {
+        return;
+    }
+    if resp.drag_started_by(egui::PointerButton::Primary)
+        && stack_drag.reorders(ui.input(|inp| inp.modifiers.alt))
+    {
+        resp.dnd_set_drag_payload(StackMove(here.id.clone()));
+    }
+    if resp
+        .dnd_hover_payload::<StackMove>()
+        .is_some_and(|p| p.0 != here.id)
+    {
+        ui.painter().rect_stroke(
+            resp.rect,
+            3.0,
+            egui::Stroke::new(2.0, ui.visuals().selection.bg_fill),
+            egui::StrokeKind::Outside,
+        );
+    }
+    if let Some(p) = resp.dnd_release_payload::<StackMove>() {
+        if p.0 != here.id {
+            out.stack_move = Some((p.0.clone(), here.id.clone()));
+        }
+    }
+}
+
+/// The drag payload of a photo being moved within its unfurled stack. ⚠ Its own type, so no other
+/// drag in the app can be taken for one — `keyword_rows`' rule.
+#[derive(Clone)]
+struct StackMove(PhotoId);
 
 /// Draw cell `i` and collect what its interactions asked for.
 pub(super) fn draw(
@@ -50,6 +99,9 @@ pub(super) fn draw(
         layout,
         cell,
         name_size,
+        remote,
+        stack_drag,
+        look,
     } = c;
     // ⚠⚠ A stable id per photo, not egui's auto-id counter. Under
     // `show_rows` that counter shifts with the scroll position — it skips
@@ -82,6 +134,30 @@ pub(super) fn draw(
                         .get(&lib.entries[i].id)
                         .copied()
                         .unwrap_or_default();
+                    // M10.8c after use: a collapsed stack is drawn as a pile — the photos
+                    // below peeking out, plain cards, or none at all (Settings → Appearance).
+                    let pile: Vec<Option<&egui::TextureHandle>> = match lib.entries[i].stack {
+                        Some(st) if !st.expanded && look.draws_pile() => lib
+                            .below
+                            .get(&lib.entries[i].id)
+                            .into_iter()
+                            .flatten()
+                            .take(rustroom_app::cell_layout::PILE_LAYERS)
+                            .map(|m| {
+                                if !look.loads_below() {
+                                    return None;
+                                }
+                                let want = rustroom_app::thumb_loader::ThumbRequest {
+                                    id: m.id.clone(),
+                                    edits: m.edits.clone(),
+                                };
+                                lib.cache
+                                    .get(&want.key())
+                                    .or_else(|| lib.cache.get_stale(&m.id))
+                            })
+                            .collect(),
+                        _ => Vec::new(),
+                    };
                     // ⚠ The marks go in a row under the picture, not over
                     // it — see `thumb::marks_row`.
                     let cell_resp = thumb::cell_with(
@@ -100,9 +176,10 @@ pub(super) fn draw(
                             downloaded: downloaded.get(i).copied().unwrap_or(false),
                             sit_on_bottom: true,
                         },
+                        &pile,
                     );
                     let e = &lib.entries[i];
-                    stack_badge(ui, e, &cell_resp, out);
+                    stack_badge(ui, e, &cell_resp, out, remote, &lib.hand_stacks);
                     // ⚠ The selected cell's name is drawn in the strong
                     // text colour: the border says "selected" at the edge
                     // of the eye, the name says it where you read.
@@ -126,6 +203,8 @@ pub(super) fn draw(
             // begin a rubber band. A plain click still reports
             // `clicked()`; egui distinguishes the two.
             .interact(egui::Sense::click_and_drag());
+        // ⚠ Before `interactions`: a drag this starts is a reorder, and the band then stays down.
+        reorder_gesture(ui, &resp, lib, i, stack_drag, out);
         interactions(ui, &resp, lib, i, &caption, catalog, out);
     });
 }
@@ -136,6 +215,8 @@ fn stack_badge(
     e: &rustroom_app::entries::PhotoEntry,
     cell_resp: &egui::Response,
     out: &mut GridOutcome,
+    remote: &std::collections::HashMap<String, String>,
+    hand: &rustroom_app::stack::HandStacks,
 ) {
     // ⚠⚠ Drawn **here** rather than inside `cell_with`, and for
     // two reasons: the count badge must be **clickable** while
@@ -146,13 +227,22 @@ fn stack_badge(
     // top-right **of the picture**, not of the cell, or a
     // portrait's badge floated in the empty corner beside it.
     if let Some(st) = e.stack {
-        if let Some(k) = rustroom_app::stack::key_of(&e.id.path) {
+        // ⚠⚠ `key_for`, the grouping's own key — `key_of` (the name alone) never matched a hand
+        // stack's key nor an Immich server stack's, so their badges did nothing (M10.8c, after use).
+        if let Some(k) = rustroom_app::stack::key_for(&e.id.path, remote, hand) {
             let full = thumb::image_rect(ui).unwrap_or(cell_resp.rect);
             let pill = egui::Rect::from_min_size(
                 egui::pos2(full.right() - STACK_BADGE.x - 4.0, full.top() + 4.0),
                 STACK_BADGE,
             );
             let r = ui.interact(pill, ui.id().with("stack_badge"), egui::Sense::click());
+            // ⚠ A name for a screen reader and a test — the pill shows only a number.
+            let name = if st.expanded {
+                "Collapse the stack".to_string()
+            } else {
+                format!("Stack of {}", st.count)
+            };
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
             let v = ui.visuals();
             // ⚠ The thumbnail badge's colours (§7.10): white
             // on 55 % black at rest, the accent under the
@@ -358,7 +448,10 @@ fn interactions(
     // egui reports a drag for **every** button, so the pan binding
     // would otherwise rubber-band as it passed over the grid — the
     // trap the canvas-navigation work recorded.
-    if resp.drag_started_by(egui::PointerButton::Primary) {
+    // ⚠ Not when `reorder_gesture` has just made this drag a reorder (M10.8c after use).
+    if resp.drag_started_by(egui::PointerButton::Primary)
+        && !egui::DragAndDrop::has_any_payload(ui.ctx())
+    {
         out.band_started = resp.interact_pointer_pos();
     }
     // ⚠⚠ A secondary click does **not** fire `clicked()`, so the
@@ -370,7 +463,7 @@ fn interactions(
             out.menu_select = Some(i);
         }
         let targets = menu_targets(lib, i);
-        if let Some(a) = cell_menu(ui, catalog, &lib.source, &targets) {
+        if let Some(a) = cell_menu(ui, catalog, &lib.source, &lib.hand_stacks, &targets) {
             out.menu = Some((i, a));
         }
     });

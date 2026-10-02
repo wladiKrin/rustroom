@@ -43,6 +43,7 @@ pub struct SettingsDraft {
     pan_drag: PanDrag,
     erase_drag: EraseDrag,
     parametric_drag: ParametricDrag,
+    stack_drag: rustroom_app::settings::StackDrag,
     drag_quality: DragQuality,
     display_space: color::OutputSpace,
     stacking: rustroom_app::stack::Stacking,
@@ -110,6 +111,7 @@ impl SettingsDraft {
             pan_drag: s.pan_drag,
             erase_drag: s.erase_drag,
             parametric_drag: s.parametric_drag,
+            stack_drag: s.stack_drag,
             drag_quality: s.drag_quality,
             display_space: s.display_space,
             stacking: s.stacking.clone(),
@@ -164,6 +166,10 @@ impl SettingsDraft {
         }
         if self.parametric_drag != app.settings.parametric_drag {
             app.settings.parametric_drag = self.parametric_drag;
+            plain = true;
+        }
+        if self.stack_drag != app.settings.stack_drag {
+            app.settings.stack_drag = self.stack_drag;
             plain = true;
         }
         if self.drag_quality != app.settings.drag_quality {
@@ -438,6 +444,32 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                     // means "takes part". Reused for the jpg/jpeg aliasing.
                                     stack_format_chips(ui, &mut d.stacking);
                                 });
+                                // ⚠ Outside the switch above: the pile draws every stack, the ones
+                                // made by hand included (M10.8c after use).
+                                ui.horizontal(|ui| {
+                                    ui.label("Pile");
+                                    crate::segmented::segmented(
+                                        ui,
+                                        &mut d.stacking.look,
+                                        &[
+                                            (
+                                                rustroom_app::stack::StackLook::Peek,
+                                                "Photos below",
+                                                "Shows the photos below a stack's top one peeking out",
+                                            ),
+                                            (
+                                                rustroom_app::stack::StackLook::Cards,
+                                                "Cards",
+                                                "Draws plain cards below a stack's top photo, which loads no extra thumbnails",
+                                            ),
+                                            (
+                                                rustroom_app::stack::StackLook::Off,
+                                                "None",
+                                                "Draws no pile, so only the count on a stack's top photo says it is a stack",
+                                            ),
+                                        ],
+                                    );
+                                });
                             });
                             ui.end_row();
                             super::settings_layout::rows(ui, &mut d.layout);
@@ -651,6 +683,17 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         })
                         .response
                         .hover("Lets you drag on the curve to adjust a region in Parametric mode");
+
+                    theme::sub_label(ui, "Reorder a stack");
+                    egui::ComboBox::from_id_salt("stack_drag_pick")
+                        .selected_text(d.stack_drag.label())
+                        .show_ui(ui, |ui| {
+                            for b in rustroom_app::settings::StackDrag::ALL {
+                                ui.selectable_value(&mut d.stack_drag, b, b.label());
+                            }
+                        })
+                        .response
+                        .hover("Chooses the drag that moves a photo within an unfurled stack");
 
                     theme::sub_label(ui, "Preview while dragging");
                     egui::ComboBox::from_id_salt("drag_quality_pick")

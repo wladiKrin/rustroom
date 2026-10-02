@@ -869,7 +869,7 @@ mod tests {
         let source = LibrarySource::Folder(PathBuf::from("/x"));
         let labels = |targets: &[PhotoId]| -> Vec<String> {
             crate::test_ui::nodes(&crate::test_ui::ctx(), |ui| {
-                let _ = crate::library::cell_menu(ui, None, &source, targets);
+                let _ = crate::library::cell_menu(ui, None, &source, &Default::default(), targets);
             })
             .into_iter()
             .map(|n| n.label)

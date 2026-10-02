@@ -100,6 +100,49 @@ pub struct Stacking {
     /// general than just raw and jpeg".
     pub formats: FormatFilter,
     pub primary: StackPrimary,
+    /// How a collapsed stack is drawn (M10.8c after use).
+    pub look: StackLook,
+}
+
+/// How a collapsed stack is drawn: a pile behind its top photo — the photos below peeking out, or
+/// plain cards (the author's option: "for performance reasons").
+///
+/// ⚠⚠ **Append variants, never insert** — serialised into `Settings`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum StackLook {
+    /// The photos below peek out — their thumbnails are loaded too.
+    #[default]
+    Peek,
+    /// Plain cards — no extra thumbnails.
+    Cards,
+    /// No pile at all — the count badge alone (the author's option, after use).
+    Off,
+}
+
+impl StackLook {
+    pub fn label(self) -> &'static str {
+        match self {
+            StackLook::Peek => "Photos below",
+            StackLook::Cards => "Cards",
+            StackLook::Off => "None",
+        }
+    }
+
+    /// Whether a collapsed stack is drawn as a pile at all.
+    pub fn draws_pile(self) -> bool {
+        match self {
+            StackLook::Peek | StackLook::Cards => true,
+            StackLook::Off => false,
+        }
+    }
+
+    /// Whether the pile shows the photos below — the only look that loads their thumbnails.
+    pub fn loads_below(self) -> bool {
+        match self {
+            StackLook::Peek => true,
+            StackLook::Cards | StackLook::Off => false,
+        }
+    }
 }
 
 impl Stacking {
@@ -139,6 +182,36 @@ pub fn key_of_with(path: &Path, remote: &HashMap<String, String>) -> Option<Stac
     Some((dir, stem.to_uppercase()))
 }
 
+/// The hand stacks of the files on view (M10.8c): each file's stack, its place in it, and whether
+/// *Stack by capture time* made it.
+pub type HandStacks = HashMap<PathBuf, catalog::db::HandMember>;
+
+/// Whether `path` is the top of its hand stack — the lowest place in it.
+pub fn is_top(hand: &HandStacks, path: &Path) -> bool {
+    let Some(m) = hand.get(path) else {
+        return false;
+    };
+    hand.values()
+        .filter(|o| o.stack == m.stack)
+        .all(|o| o.ord >= m.ord)
+}
+
+/// The key a file stacks under: **a hand stack first**, then Immich's server stack, then its name.
+///
+/// ⚠ Prefixed `hand:` like the server's `stack:`, so a hand stack's id can never collide with a stem.
+/// The folder stays in the key — a hand stack never spans folders, Lightroom's rule.
+pub fn key_for(
+    path: &Path,
+    remote: &HashMap<String, String>,
+    hand: &HandStacks,
+) -> Option<StackKey> {
+    if let Some(m) = hand.get(path) {
+        let dir = path.parent().unwrap_or(Path::new("")).to_path_buf();
+        return Some((dir, format!("hand:{}", m.stack)));
+    }
+    key_of_with(path, remote)
+}
+
 /// Where a member sits in the running for primary. Lower wins.
 fn rank(path: &Path, primary: StackPrimary) -> u8 {
     let raw = catalog::is_raw(path);
@@ -174,17 +247,56 @@ pub fn group(
     // exactly as it did before Immich stacks existed. See [`key_of_with`].
     remote: &HashMap<String, String>,
 ) -> Vec<PhotoEntry> {
-    if !s.enabled {
-        return entries;
-    }
+    group_with(entries, s, expanded, remote, &HandStacks::new())
+}
+
+/// [`group`] with the hand stacks (M10.8c).
+///
+/// ⚠⚠ **A hand stack takes part whatever the name switch and the format list say** — it was made on
+/// purpose — and **its key comes first** ([`key_for`]), so a file in one never also pairs by name. A
+/// collapsed hand stack shows its **top** member when it has one, else the usual rule.
+pub fn group_with(
+    entries: Vec<PhotoEntry>,
+    s: &Stacking,
+    expanded: &HashSet<StackKey>,
+    remote: &HashMap<String, String>,
+    hand: &HandStacks,
+) -> Vec<PhotoEntry> {
+    group_with_below(entries, s, expanded, remote, hand).0
+}
+
+/// What a collapsed stack hides: each collapsed row's id → the members below it, in their order — what
+/// the pile draws (M10.8c after use).
+pub type Below = HashMap<crate::photo_id::PhotoId, Vec<PhotoEntry>>;
+
+/// [`group_with`], and what each collapsed row hides.
+///
+/// ⚠ A **hand** stack is in its own order — `ord`, the lowest on top — expanded or collapsed; a name or
+/// server stack keeps the sort order and its primary rule.
+pub fn group_with_below(
+    entries: Vec<PhotoEntry>,
+    s: &Stacking,
+    expanded: &HashSet<StackKey>,
+    remote: &HashMap<String, String>,
+    hand: &HandStacks,
+) -> (Vec<PhotoEntry>, Below) {
+    let key = |e: &PhotoEntry| -> Option<StackKey> {
+        if e.id.copy != 0 {
+            return None;
+        }
+        if hand.contains_key(&e.id.path) {
+            return key_for(&e.id.path, remote, hand);
+        }
+        if !s.enabled || !s.participates(&e.id.path) {
+            return None;
+        }
+        key_of_with(&e.id.path, remote)
+    };
 
     // Which rows are candidates, and how many share each key.
     let mut members: HashMap<StackKey, Vec<usize>> = HashMap::new();
     for (i, e) in entries.iter().enumerate() {
-        if e.id.copy != 0 || !s.participates(&e.id.path) {
-            continue;
-        }
-        if let Some(k) = key_of_with(&e.id.path, remote) {
+        if let Some(k) = key(e) {
             members.entry(k).or_default().push(i);
         }
     }
@@ -192,11 +304,9 @@ pub fn group(
 
     let mut emitted: HashSet<StackKey> = HashSet::new();
     let mut out: Vec<PhotoEntry> = Vec::with_capacity(entries.len());
+    let mut below = Below::new();
     for (i, e) in entries.iter().enumerate() {
-        let k = (e.id.copy == 0)
-            .then(|| key_of_with(&e.id.path, remote))
-            .flatten()
-            .filter(|k| members.contains_key(k));
+        let k = key(e).filter(|k| members.contains_key(k));
         let Some(k) = k else {
             // Not a stack member: a copy, an excluded format, or a file with no sibling.
             let mut e = e.clone();
@@ -207,10 +317,20 @@ pub fn group(
         if !emitted.insert(k.clone()) {
             continue; // already handled at the group's first member
         }
-        let idx = &members[&k];
+        let mut idx = members[&k].clone();
+        let is_hand = k.1.starts_with("hand:");
+        if is_hand {
+            idx.sort_by_key(|&j| {
+                let m = &entries[j];
+                (
+                    hand.get(&m.id.path).map_or(0, |h| h.ord),
+                    m.file_name.clone(),
+                )
+            });
+        }
         let count = idx.len();
         if expanded.contains(&k) {
-            for &j in idx {
+            for &j in &idx {
                 let mut m = entries[j].clone();
                 m.stack = Some(Stack {
                     count,
@@ -219,30 +339,41 @@ pub fn group(
                 out.push(m);
             }
         } else {
-            let best = *idx
-                .iter()
-                .min_by_key(|&&j| {
-                    let m = &entries[j];
-                    let edited = match s.primary {
-                        // ⚠ Edits only decide under `EditedElseRaw`; the other two say "always".
-                        StackPrimary::EditedElseRaw => {
-                            u8::from(m.edits == edit_model::Edits::default())
-                        }
-                        _ => 0,
-                    };
-                    // ⚠ `file_name` last, so the answer is deterministic when the rest ties.
-                    (edited, rank(&m.id.path, s.primary), m.file_name.clone())
-                })
-                .unwrap_or(&i);
+            // A hand stack's top is its first; a name or server stack's, the usual rule.
+            let best = if is_hand {
+                idx[0]
+            } else {
+                *idx.iter()
+                    .min_by_key(|&&j| {
+                        let m = &entries[j];
+                        let edited = match s.primary {
+                            // ⚠ Edits only decide under `EditedElseRaw`; the other two say "always".
+                            StackPrimary::EditedElseRaw => {
+                                u8::from(m.edits == edit_model::Edits::default())
+                            }
+                            _ => 0,
+                        };
+                        // ⚠ `file_name` last, so the answer is deterministic when the rest ties.
+                        (edited, rank(&m.id.path, s.primary), m.file_name.clone())
+                    })
+                    .unwrap_or(&i)
+            };
             let mut m = entries[best].clone();
             m.stack = Some(Stack {
                 count,
                 expanded: false,
             });
+            below.insert(
+                m.id.clone(),
+                idx.iter()
+                    .filter(|&&j| j != best)
+                    .map(|&j| entries[j].clone())
+                    .collect(),
+            );
             out.push(m);
         }
     }
-    out
+    (out, below)
 }
 
 /// Every stack key present in **already-grouped** rows, for "Expand all".
@@ -256,10 +387,19 @@ pub fn group(
 /// ⚠ Every member of a stack carries the same key, and a collapsed primary carries it too, so this
 /// is right whether the input is collapsed, expanded or mixed.
 pub fn stacked_keys(entries: &[PhotoEntry], remote: &HashMap<String, String>) -> HashSet<StackKey> {
+    stacked_keys_with(entries, remote, &HandStacks::new())
+}
+
+/// [`stacked_keys`] with the hand stacks, keyed as [`group_with`] keys them.
+pub fn stacked_keys_with(
+    entries: &[PhotoEntry],
+    remote: &HashMap<String, String>,
+    hand: &HandStacks,
+) -> HashSet<StackKey> {
     entries
         .iter()
         .filter(|e| e.stack.is_some())
-        .filter_map(|e| key_of_with(&e.id.path, remote))
+        .filter_map(|e| key_for(&e.id.path, remote, hand))
         .collect()
 }
 
@@ -267,6 +407,32 @@ pub fn stacked_keys(entries: &[PhotoEntry], remote: &HashMap<String, String>) ->
 mod tests {
     use super::*;
     use crate::photo_id::PhotoId;
+
+    /// Each look's pile: photos below draw a pile and load its thumbnails, cards draw one and load
+    /// none, and None draws no pile at all — the count badge alone.
+    #[test]
+    fn each_look_draws_and_loads_its_own_pile() {
+        let looks = [StackLook::Peek, StackLook::Cards, StackLook::Off];
+        let got: Vec<(bool, bool)> = looks
+            .iter()
+            .map(|l| (l.draws_pile(), l.loads_below()))
+            .collect();
+        assert_eq!(got, [(true, true), (true, false), (false, false)]);
+        assert_eq!(StackLook::Off.label(), "None");
+    }
+
+    /// A setting saved before None existed still reads, and None round-trips.
+    #[test]
+    fn the_look_round_trips_through_settings() {
+        for l in [StackLook::Peek, StackLook::Cards, StackLook::Off] {
+            let json = serde_json::to_string(&l).unwrap();
+            assert_eq!(serde_json::from_str::<StackLook>(&json).unwrap(), l);
+        }
+        assert_eq!(
+            serde_json::from_str::<StackLook>("\"Cards\"").unwrap(),
+            StackLook::Cards
+        );
+    }
 
     fn entry(path: &str, copy: u32, edited: bool) -> PhotoEntry {
         let p = PathBuf::from(path);
@@ -572,5 +738,92 @@ mod tests {
             key_of_with(Path::new("/c/in-a-stack.JPG"), &Default::default()),
             key_of(Path::new("/c/in-a-stack.JPG"))
         );
+    }
+
+    /// `(path, stack, ord)` — not made by capture time.
+    fn hand(of: &[(&str, i64, i64)]) -> HandStacks {
+        of.iter()
+            .map(|(p, stack, ord)| {
+                (
+                    PathBuf::from(p),
+                    catalog::db::HandMember {
+                        stack: *stack,
+                        ord: *ord,
+                        by_time: false,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// M10.8c: a hand stack collapses to its chosen top, **whatever the name switch says**.
+    #[test]
+    fn a_hand_stack_collapses_to_its_top_even_with_name_stacking_off() {
+        let input = vec![
+            entry("/f/a.RAF", 0, false),
+            entry("/f/b.RAF", 0, true),
+            entry("/f/c.RAF", 0, false),
+        ];
+        let h = hand(&[("/f/a.RAF", 7, 1), ("/f/c.RAF", 7, 0)]);
+        let off = Stacking::default();
+        let out = group_with(input, &off, &HashSet::new(), &Default::default(), &h);
+        let rows: Vec<&str> = out.iter().map(|e| e.file_name.as_str()).collect();
+        // The stack sits where its first member was; its top is c, not a.
+        assert_eq!(rows, ["c.RAF", "b.RAF"]);
+        assert_eq!(out[0].stack.map(|s| s.count), Some(2));
+        assert!(out[1].stack.is_none());
+    }
+
+    /// ⚠ The hand key comes first: a file in a hand stack does not also pair by name.
+    #[test]
+    fn a_hand_stack_comes_before_the_name() {
+        let input = vec![
+            entry("/f/a.RAF", 0, false),
+            entry("/f/a.JPG", 0, false),
+            entry("/f/b.RAF", 0, false),
+        ];
+        // ⚠ The sample: without the hand stack, a.RAF and a.JPG are a name pair.
+        let plain = group_with(
+            input.clone(),
+            &on(),
+            &HashSet::new(),
+            &Default::default(),
+            &HandStacks::new(),
+        );
+        assert_eq!(plain.len(), 2, "the pair collapses");
+        let h = hand(&[("/f/a.RAF", 3, 0), ("/f/b.RAF", 3, 1)]);
+        let out = group_with(input, &on(), &HashSet::new(), &Default::default(), &h);
+        let rows: Vec<&str> = out.iter().map(|e| e.file_name.as_str()).collect();
+        assert_eq!(
+            rows,
+            ["a.RAF", "a.JPG"],
+            "a.RAF heads its hand stack; a.JPG stands alone"
+        );
+        assert_eq!(out[0].stack.map(|s| s.count), Some(2));
+        let keys = stacked_keys_with(&out, &Default::default(), &h);
+        assert!(keys.contains(&(PathBuf::from("/f"), "hand:3".to_string())));
+    }
+
+    /// After use: an unfurled hand stack is in its own order, and a collapsed one says what it hides,
+    /// in that order — what the pile draws.
+    #[test]
+    fn a_hand_stack_keeps_its_order_and_says_what_it_hides() {
+        let input = vec![
+            entry("/f/a.RAF", 0, false),
+            entry("/f/b.RAF", 0, false),
+            entry("/f/c.RAF", 0, false),
+        ];
+        let h = hand(&[("/f/a.RAF", 1, 2), ("/f/b.RAF", 1, 0), ("/f/c.RAF", 1, 1)]);
+        let key = key_for(Path::new("/f/a.RAF"), &Default::default(), &h).unwrap();
+        let open: HashSet<StackKey> = [key].into_iter().collect();
+        let names =
+            |v: &[PhotoEntry]| -> Vec<String> { v.iter().map(|e| e.file_name.clone()).collect() };
+        let unfurled = group_with(input.clone(), &on(), &open, &Default::default(), &h);
+        assert_eq!(names(&unfurled), ["b.RAF", "c.RAF", "a.RAF"], "by ord");
+        let (rows, below) =
+            group_with_below(input, &on(), &HashSet::new(), &Default::default(), &h);
+        assert_eq!(names(&rows), ["b.RAF"]);
+        assert_eq!(names(&below[&rows[0].id]), ["c.RAF", "a.RAF"]);
+        assert!(is_top(&h, Path::new("/f/b.RAF")) && !is_top(&h, Path::new("/f/c.RAF")));
     }
 }

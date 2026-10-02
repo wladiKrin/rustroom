@@ -106,6 +106,24 @@ impl Catalog {
             .collect();
         drop(st);
 
+        let mut st = tx.prepare(
+            "SELECT file_name, stack_id, ord, by_time FROM photo_stacks WHERE folder_id = ?1",
+        )?;
+        let stacks: Vec<(String, crate::db::HandMember)> = st
+            .query_map([id], |r| {
+                Ok((
+                    r.get(0)?,
+                    crate::db::HandMember {
+                        stack: r.get(1)?,
+                        ord: r.get(2)?,
+                        by_time: r.get::<_, i64>(3)? != 0,
+                    },
+                ))
+            })?
+            .filter_map(Result::ok)
+            .collect();
+        drop(st);
+
         tx.execute("DELETE FROM folders WHERE id = ?1", [id])?;
         tx.commit()?;
         Ok(CatalogSnapshot::Folder {
@@ -115,6 +133,7 @@ impl Catalog {
             descriptions,
             memberships,
             keywords,
+            stacks,
         })
     }
 
@@ -194,6 +213,7 @@ impl Catalog {
                 descriptions,
                 memberships,
                 keywords,
+                stacks,
             } => {
                 let path = path.to_string_lossy().to_string();
                 let last_seen = photos.iter().map(|p| p.last_seen).max().unwrap_or(0);
@@ -289,6 +309,15 @@ impl Catalog {
                          SELECT ?1, ?2, ?3
                          WHERE EXISTS (SELECT 1 FROM keywords WHERE id = ?3)",
                         rusqlite::params![fid, file_name, keyword_id],
+                    )?;
+                }
+
+                for (file_name, m) in stacks {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO photo_stacks
+                             (folder_id, file_name, stack_id, ord, by_time)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![fid, file_name, m.stack, m.ord, m.by_time as i64],
                     )?;
                 }
             }

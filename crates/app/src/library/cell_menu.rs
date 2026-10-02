@@ -31,6 +31,14 @@ pub enum CellAction {
     DeleteVirtualCopies,
     /// Move the targets' files to a folder the system picker asks for.
     MoveToFolder,
+    /// Stack the targets by hand, the clicked one on top (M10.8c).
+    Stack,
+    /// Take apart the hand stacks the targets touch.
+    Unstack,
+    /// Make the clicked photo the top of its hand stack.
+    MakeTop,
+    /// Stack by capture time, within this many seconds — `None` takes the time stacks apart.
+    StackByTime(Option<u32>),
     /// Take every target out of the collection on screen.
     RemoveFromCollection(i64),
     /// Assign a keyword across the targets, or remove it from all of them.
@@ -94,6 +102,7 @@ pub fn cell_menu(
     ui: &mut egui::Ui,
     catalog: Option<&catalog::db::Catalog>,
     source: &crate::LibrarySource,
+    hand: &rustroom_app::stack::HandStacks,
     targets: &[PhotoId],
 ) -> Option<CellAction> {
     let mut action = None;
@@ -207,6 +216,35 @@ pub fn cell_menu(
         action = Some(CellAction::MoveToFolder);
         ui.close();
     }
+    // M10.8c: stacks by hand. ⚠ Unstack and Make top only where they would do something.
+    ui.separator();
+    if ui
+        .add_enabled(n >= 2, egui::Button::new("Stack"))
+        .on_disabled_hover_text("Select two or more photos")
+        .clicked()
+    {
+        action = Some(CellAction::Stack);
+        ui.close();
+    }
+    if targets.iter().any(|t| hand.contains_key(&t.path)) && ui.button("Unstack").clicked() {
+        action = Some(CellAction::Unstack);
+        ui.close();
+    }
+    let lower = single
+        && hand.contains_key(&targets[0].path)
+        && !rustroom_app::stack::is_top(hand, &targets[0].path);
+    if lower && ui.button("Make top of stack").clicked() {
+        action = Some(CellAction::MakeTop);
+        ui.close();
+    }
+    ui.menu_button("Stack by capture time", |ui| {
+        for (label, secs) in rustroom_app::menu::STACK_GAPS {
+            if ui.button(label).clicked() {
+                action = Some(CellAction::StackByTime(secs));
+                ui.close();
+            }
+        }
+    });
     let Some(cat) = catalog else {
         return action;
     };
@@ -360,6 +398,25 @@ pub fn apply_cell_action(
             app.delete_copies(ctx, &targets);
         }
         CellAction::MoveToFolder => app.move_targets_to_folder(ctx, index),
+        CellAction::Stack | CellAction::Unstack => {
+            let mut targets = app
+                .library
+                .as_ref()
+                .map(|l| menu_targets(l, index))
+                .unwrap_or_default();
+            // The clicked photo first: it is the top of the new stack.
+            if let Some(i) = targets.iter().position(|t| *t == id) {
+                let clicked = targets.remove(i);
+                targets.insert(0, clicked);
+            }
+            if matches!(action, CellAction::Stack) {
+                app.stack_ids(&targets);
+            } else {
+                app.unstack_ids(&targets);
+            }
+        }
+        CellAction::MakeTop => app.make_top_of_stack(&id),
+        CellAction::StackByTime(secs) => app.stack_by_capture_time(secs),
         CellAction::Reveal => {
             if let Err(e) = rustroom_app::reveal::in_file_manager(&id.path) {
                 app.status = format!("Could not show the file: {e}");
@@ -488,7 +545,7 @@ mod tests {
         let targets = vec![lib.entries[0].id.clone()];
         let labels = |source: &crate::LibrarySource| -> Vec<String> {
             crate::test_ui::nodes(&crate::test_ui::ctx(), |ui| {
-                let _ = cell_menu(ui, Some(&cat), source, &targets);
+                let _ = cell_menu(ui, Some(&cat), source, &Default::default(), &targets);
             })
             .into_iter()
             .map(|n| n.label)
@@ -509,5 +566,52 @@ mod tests {
             !folder.iter().any(|l| l.starts_with("Remove from")),
             "{folder:?}"
         );
+    }
+
+    /// M10.8c: Unstack only where a target is in a hand stack, Make top only on a member below the
+    /// top, Stack by capture time always.
+    #[test]
+    fn the_stack_entries_appear_only_where_they_act() {
+        let lib = crate::test_app::library_of(3);
+        let ids: Vec<PhotoId> = lib.entries.iter().map(|e| e.id.clone()).collect();
+        let labels = |hand: &rustroom_app::stack::HandStacks, targets: &[PhotoId]| -> Vec<String> {
+            crate::test_ui::nodes(&crate::test_ui::ctx(), |ui| {
+                let _ = cell_menu(ui, None, &lib.source, hand, targets);
+            })
+            .into_iter()
+            .map(|n| n.label)
+            .collect()
+        };
+        let none = rustroom_app::stack::HandStacks::new();
+        let plain = labels(&none, &ids[..1]);
+        assert!(
+            plain.iter().any(|l| l == "Stack by capture time"),
+            "the sample: {plain:?}"
+        );
+        assert!(
+            !plain
+                .iter()
+                .any(|l| l == "Unstack" || l == "Make top of stack"),
+            "{plain:?}"
+        );
+        let member = |ord| catalog::db::HandMember {
+            stack: 1,
+            ord,
+            by_time: false,
+        };
+        let hand: rustroom_app::stack::HandStacks = [
+            (ids[0].path.clone(), member(0)),
+            (ids[1].path.clone(), member(1)),
+        ]
+        .into_iter()
+        .collect();
+        let top = labels(&hand, &ids[..1]);
+        assert!(top.iter().any(|l| l == "Unstack"), "{top:?}");
+        assert!(
+            !top.iter().any(|l| l == "Make top of stack"),
+            "already the top: {top:?}"
+        );
+        let lower = labels(&hand, &ids[1..2]);
+        assert!(lower.iter().any(|l| l == "Make top of stack"), "{lower:?}");
     }
 }

@@ -532,7 +532,11 @@ fn stack_buttons(app: &mut RustroomApp, ui: &mut egui::Ui) {
     }
     // ⚠ The same map the grouping used, or the keys it derives would not match the ones the grid
     // carries — and "Expand all" would silently do nothing, which is the bug this shape already had.
-    let all_keys = rustroom_app::stack::stacked_keys(&lib.entries, &app.immich_stacks.of_asset);
+    let all_keys = rustroom_app::stack::stacked_keys_with(
+        &lib.entries,
+        &app.immich_stacks.of_asset,
+        &lib.hand_stacks,
+    );
     // ⚠ Symmetrical, so each button is lit exactly when it has something to do — a button that greys
     // out says "already done", where a live one that changes nothing says nothing at all.
     let state = |want: bool| {

@@ -166,6 +166,73 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-10-01 — M10.8c: stacks by hand, and stacking by capture time (branch `m10.8c-stacks`, merged 2026-10-02)
+
+**Input:** Phase 10's *"stack arbitrary photos by hand, and group by capture time rather than stem"*. The
+author's choices: right-click **and** the Photo menu (⌘G / ⇧⌘G); the active photo on top, changeable
+(*Make top of stack*); capture time as **a command that makes stacks** (Lightroom's Auto-Stack), not a
+live mode. Spec and plan `2026-10-01-m10.8c-stacks`.
+
+**Built:**
+- **Catalog:** schema **v11**, `photo_stacks (folder, file, stack_id, top)` — one of `PER_FILE_TABLES`,
+  so a move carries it, and in the folder snapshot, so undoing *Forget folder* restores it.
+- **Lib:** `stack::key_for` — **a hand stack first** (`(folder, "hand:<id>")`), then Immich's, then the
+  name — and `group_with`/`stacked_keys_with` (the old names call them with none, so the 15 existing
+  calls stayed). A hand stack takes part **whatever the name switch and the format list say**, and
+  collapses to its top. `stack_by_hand` (pure): `stack` (per folder; a file in a hand stack brings its
+  stack — the merge), `unstack`, `make_top`, `by_capture_time` (runs whose gaps are **at most** the
+  choice; the earliest on top; no time, no stack) and `tidy` (no stack of one survives any command).
+- **Bin `stack_ops`:** `files_of` (a collapsed row's every file — now shared with Move to folder), the
+  four commands over the selection or the right-click's targets, one `ActionKind::StackChange` (each
+  file's before and after) per command. The Photo menu's Stack ⌘G, Unstack ⇧⌘G, Make top of stack and
+  *Stack by capture time ▸ 1 s … 1 min*; the right-click offers Unstack and Make top only where they act.
+
+**Sabotages, each red** (against a 34-test control): the hand key not first (6); the top ignored (2);
+`tidy` off (1); the merge off (1); undo not restoring (1); `photo_stacks` missing from `PER_FILE_TABLES`
+(1); hand stacks under the name switch (1).
+
+⚠ **A grep of mine was blind for weeks:** `[1-9] (passed|failed)` cannot match a count ending in 0 —
+"20 passed" ends "0 passed" — so a run of 20 green tests printed nothing and looked like silence. Filter
+with `grep -v ' 0 passed'` instead. **3392 tests.**
+
+**After use** (the author: the badge should unfurl the new stacks; *None* for capture time; reorder by
+moving pictures within an unfurled stack; and a pile "where stacked photos are literally stacked"):
+- **The badge bug:** it keyed on the name alone (`stack::key_of`), so it never matched a hand stack —
+  **nor an Immich server stack**, broken since 2026-09-25 and never reported. It keys with `key_for`, and
+  has an accessible name now (*Stack of N* / *Collapse the stack*).
+- **Schema v12** rebuilds `photo_stacks` with `ord` (lowest on top; v11's `top` migrated to order 0 by
+  `ROW_NUMBER()`) and `by_time`. **Two kinds of hand stack:** the ones *Stack by capture time* made, which
+  its **None** takes apart and another gap **replaces**; the user's (⌘G, or any edit of a stack's order),
+  which that menu never touches and whose photos it leaves out.
+- **Drag to reorder** within an unfurled stack (`reorder_gesture`, a `StackMove` payload; the band starts
+  only when no payload was set; Settings → Input → *Reorder a stack*: drag or ⌥-drag). A RAW+JPEG pair or an
+  Immich stack reordered **becomes a hand stack**, kept unfurled under its new key.
+- **The pile** (Settings → Appearance → Stacking → *Pile*: Photos below (default) or Cards): one layer per
+  photo below the top, up to seven, stepped up-right within a tenth of the box, darker with depth; the top
+  photo gives up the room inside the same box. Peeking requests the hidden members' thumbnails
+  (`group_with_below`, kept on the Library); cards request none.
+
+**Sabotages, each red** (against a 61-test control): the badge keyed on the name (1); None taking nothing
+apart (2); time-stacking touching the user's (1); a reorder keeping `by_time` (6); the hand order ignored
+(3); the v12 order inverted (1); the drag never reordering (1); the pile not drawn (1); peeking ignored (1).
+⚠ My first run of "the hand order ignored" **matched nothing** — fmt had wrapped the line — and reported 61
+green; re-run against the real text, red. ⚠ Two test slips: a cell and its caption share an AccessKit name
+(take the larger rect), and the pile moved the badge off the cell's corner (click it by name).
+**3404 tests.** Then *"a bit more pronounced"*: steps up to **10 pt** within about **a fifth** of the box
+(was 6 pt and a tenth), a lighter scrim (20 + 18·depth), and a dark rim around the top photo. Then: the
+rim **light on the dark theme** (a dark one vanished there; `the_rim_contrasts_with_the_theme`, sabotaged
+red), and the step **back to 6 pt** within the wider reach. Then the same rim on **every** layer, not
+only the top — the layers had the theme's `line`, invisible on the dark panel (`pile_rim`, one colour for
+all; the test now checks each layer's outline). **3405 tests.** Then a third pile, **None** — *"not
+showing the pile at all, just sticking to the number"*: `StackLook::Off` (appended — it is serialised),
+asked through `draws_pile` and `loads_below` so the cell and the grid's thumbnail requests no longer
+match on variants. Tests: each look's two answers; None asks for no photo below (2 requests, peek 4);
+the drawn grid outlines two layers on cards and **none** on None, the "Stack of 3" badge on both.
+Sabotages, each red: the cell ignoring `draws_pile`; the grid loading below for None; None drawing a
+pile. ⚠ **My first sabotage run restored with `git checkout` on an UNCOMMITTED tree and threw the
+feature away** — the later runs then printed nothing because the build broke, which reads like green.
+Commit first, then sabotage. **3408 tests.**
+
 ### 2026-10-01 — M10.8b: movable panels and a vertical filmstrip (branch `m10.8b-layout`, merged 2026-10-01)
 
 **Input:** Phase 10's *"a vertical filmstrip"*, widened when the brainstorm opened: *"all sidecars, i.e.
