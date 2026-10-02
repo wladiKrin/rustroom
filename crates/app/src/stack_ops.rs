@@ -244,14 +244,7 @@ impl RustroomApp {
                 }
             }
         }
-        let hand = self
-            .library
-            .as_ref()
-            .map(|l| crate::library_state::hand_stacks_of(self.catalog.as_ref(), &l.scan))
-            .unwrap_or_default();
-        if let Some(lib) = self.library.as_mut() {
-            lib.hand_stacks = hand;
-        }
+        self.reload_hand_stacks();
         self.rebuild_entries(None);
     }
 }

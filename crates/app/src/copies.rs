@@ -243,15 +243,16 @@ impl RustroomApp {
         // the old path afterwards and orphaned.
         self.persist_current_session();
 
-        if let Err(e) = std::fs::rename(from, to) {
+        // ⚠ Through Move to folder's `move_file`: the JSON sidecar carries every edit ever made to
+        // this photo and its copies, and a RAW's `stem.xmp` its marks — both go with it, or the
+        // photo goes back (M10.8d; the XMP used to stay behind under the old name).
+        let planned = rustroom_app::photo_move::Planned {
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+        };
+        if let Err(e) = rustroom_app::photo_move::move_file(&planned) {
             self.status = format!("Could not rename: {e}");
             return false;
-        }
-        // ⚠ The sidecar carries every edit ever made to this photo and all its copies. Leaving
-        // it behind would make the file reopen neutral, with the old sidecar lingering as litter.
-        let (sc_from, sc_to) = (file_rename::sidecar_of(from), file_rename::sidecar_of(to));
-        if sc_from.exists() {
-            let _ = std::fs::rename(&sc_from, &sc_to);
         }
 
         // ⚠⚠ In the same operation as the file move. A catalog row and the file it names are two
@@ -289,6 +290,8 @@ impl RustroomApp {
             .and_then(|s| (s.path == from).then(|| PhotoId::new(to.to_path_buf(), s.copy)));
         self.rename_draft = None;
         self.snapshot_rename = None;
+        // ⚠ The catalog moved the stack row with the file; the view's map must follow it.
+        self.reload_hand_stacks();
         self.rebuild_entries(reopen.as_ref());
         if let Some(id) = reopen {
             self.open_path(ctx, id);
@@ -507,6 +510,51 @@ mod tests {
             std::fs::write(d.0.join(format!("shot{i}.jpg")), b"not an image").unwrap();
         }
         d
+    }
+
+    /// ⚠⚠ M10.8d: renaming a RAW takes its XMP along — it used to stay behind under the old name —
+    /// and a photo in a hand stack stays in it, in the view as well as in the catalog.
+    #[test]
+    fn a_renamed_raw_takes_its_xmp_and_keeps_its_stack() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        let d = crate::test_app::TestDir::new("rename_xmp");
+        for n in ["a.RAF", "b.RAF"] {
+            std::fs::write(d.0.join(n), b"not a raw").unwrap();
+        }
+        std::fs::write(d.0.join("a.xmp"), b"<xmp/>").unwrap();
+        let scan = catalog::scan_folder(&d.0).unwrap();
+        // ⚠ What opening a folder does through `scan_and_relink`: the stack table keys on its row.
+        app.catalog
+            .as_ref()
+            .unwrap()
+            .sync_folder(&d.0, &scan)
+            .unwrap();
+        app.open_scan(&ctx, LibrarySource::Folder(d.0.clone()), scan);
+        let lib = app.library.as_mut().unwrap();
+        lib.selection.click(0);
+        lib.selection.toggle(1);
+        crate::commands::execute(&mut app, &ctx, rustroom_app::menu::Command::Stack);
+        assert_eq!(
+            app.library.as_ref().unwrap().entries.len(),
+            1,
+            "the sample: one stack — {}",
+            app.status
+        );
+
+        let (from, to) = (d.0.join("a.RAF"), d.0.join("c.RAF"));
+        assert!(app.rename_file(&ctx, &from, &to), "{}", app.status);
+
+        assert!(
+            d.0.join("c.xmp").exists() && !d.0.join("a.xmp").exists(),
+            "the XMP followed"
+        );
+        let lib = app.library.as_ref().unwrap();
+        assert!(
+            lib.hand_stacks.contains_key(&to),
+            "the view's stacks know the new name"
+        );
+        assert_eq!(lib.entries.len(), 1, "still one stack");
     }
 
     fn edited(v: f32) -> Edits {
