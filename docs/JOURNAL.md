@@ -166,7 +166,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-10-02 — M10.8d: batch rename (branch `m10.8d-batch-rename`, awaiting use)
+### 2026-10-02 — M10.8d: batch rename (branch `m10.8d-batch-rename`, merged 2026-10-02)
 
 **Input:** Phase 10's *"Batch rename — today one photo at a time; the import filename template
 exists"*. The author's answers: **the template field** (Import's and Export's) with a live preview;
