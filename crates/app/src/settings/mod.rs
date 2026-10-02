@@ -52,6 +52,9 @@ pub struct Settings {
     /// The options the last **import** actually used (M9.12) — written only when an import starts,
     /// `export`'s rule, so a cancelled dialog leaves them alone.
     pub import: crate::ingest::options::ImportOptions,
+    /// The template the last **rename** used (M10.8d) — written only when a rename runs, so a
+    /// cancelled dialog leaves it alone.
+    pub rename_template: String,
     /// Which network *Select Subject* uses (M9.13) — IS-Net (fast, the default) or BiRefNet_lite
     /// (high quality). The preview and the export both read it, so they pick the same cached map.
     pub ai_subject_model: ai_mask::SubjectModel,
@@ -433,6 +436,10 @@ impl Settings {
     }
 }
 
+/// The rename template before one was ever used: the capture date and a three-digit number, which
+/// sorts by name in shooting order.
+pub const DEFAULT_RENAME_TEMPLATE: &str = "{date}-{seq:3}";
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -453,6 +460,7 @@ impl Default for Settings {
             confirm_preset_delete: true,
             export: ExportOptions::default(),
             import: Default::default(),
+            rename_template: DEFAULT_RENAME_TEMPLATE.to_string(),
             ai_subject_model: Default::default(),
             confirm_export_preset_delete: true,
             view_demosaic: Demosaic::default(),

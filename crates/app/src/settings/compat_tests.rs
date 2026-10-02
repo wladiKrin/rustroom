@@ -385,6 +385,8 @@ fn settings_round_trip_carries_the_export_options() {
             ..ExportOptions::default()
         },
         // Every field non-default, so a re-defaulted one cannot pass.
+        // Non-default, so a re-defaulted field cannot pass.
+        rename_template: "Trip-{seq:4}".into(),
         import: crate::ingest::options::ImportOptions {
             destination: std::path::PathBuf::from("/photos"),
             layout: crate::ingest::options::Layout::YearMonthDay,

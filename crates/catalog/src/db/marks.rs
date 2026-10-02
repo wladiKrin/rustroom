@@ -235,7 +235,7 @@ mod tests {
         };
         cat.set_marks(Path::new("/x/a.RAF"), 3, want).unwrap();
 
-        cat.rename_photo(Path::new("/x/a.RAF"), Path::new("/x/b.RAF"))
+        cat.move_photo(Path::new("/x/a.RAF"), Path::new("/x/b.RAF"))
             .unwrap();
         cat.renumber_copy(Path::new("/x/b.RAF"), 3, 1).unwrap();
 

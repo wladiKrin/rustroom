@@ -129,6 +129,69 @@ pub fn move_file_with(
     Ok(())
 }
 
+/// Move every plan's file with its sidecars, and report each one's result, in order (M10.8d).
+///
+/// ⚠⚠ **Names may chain.** A rename that swaps two names, or shifts a numbered run up by one, moves a
+/// file onto a name another plan's file still holds — which [`move_file`] rightly refuses. Then every
+/// file goes to a temporary name in its own folder first (`.rustroom-move-<i>.<ext>`: the extension
+/// kept, so a RAW still takes its XMP) and only then to its destination.
+///
+/// ⚠ A file whose second step fails is put back under its own name; if even that fails, the error
+/// says where it is. A file whose first step fails never left.
+pub fn move_all(plans: &[Planned]) -> Vec<io::Result<()>> {
+    move_all_with(plans, |a, b| std::fs::rename(a, b))
+}
+
+/// [`move_all`] with the rename injected, so a test can make one step fail.
+pub fn move_all_with(
+    plans: &[Planned],
+    rename: impl Fn(&Path, &Path) -> io::Result<()>,
+) -> Vec<io::Result<()>> {
+    let chained = plans.iter().any(|p| plans.iter().any(|q| q.from == p.to));
+    if !chained {
+        return plans.iter().map(|p| move_file_with(p, &rename)).collect();
+    }
+    let temps: Vec<Planned> = plans
+        .iter()
+        .enumerate()
+        .map(|(i, p)| Planned {
+            from: p.from.clone(),
+            to: temp_for(&p.from, i),
+        })
+        .collect();
+    let mut out: Vec<io::Result<()>> = temps.iter().map(|t| move_file_with(t, &rename)).collect();
+    for (i, p) in plans.iter().enumerate() {
+        if out[i].is_err() {
+            continue;
+        }
+        let temp = &temps[i].to;
+        let last = Planned {
+            from: temp.clone(),
+            to: p.to.clone(),
+        };
+        if let Err(e) = move_file_with(&last, &rename) {
+            let back = Planned {
+                from: temp.clone(),
+                to: p.from.clone(),
+            };
+            out[i] = Err(match move_file_with(&back, &rename) {
+                Ok(()) => e,
+                Err(_) => io::Error::new(e.kind(), format!("{e} — left as {}", temp.display())),
+            });
+        }
+    }
+    out
+}
+
+/// Where a file waits between its two steps: hidden, in its own folder, with its own extension.
+fn temp_for(from: &Path, i: usize) -> PathBuf {
+    let name = match from.extension() {
+        Some(e) => format!(".rustroom-move-{i}.{}", e.to_string_lossy()),
+        None => format!(".rustroom-move-{i}"),
+    };
+    from.with_file_name(name)
+}
+
 /// Rename `from` to `to`; across volumes, copy (size-checked, `ingest::copy`) and then delete.
 fn relocate(
     from: &Path,
@@ -269,6 +332,109 @@ mod tests {
         assert_eq!(std::fs::read(&to).unwrap(), b"bytes");
         assert!(!raw.exists(), "the original is deleted after the copy");
         assert!(crate::sidecar::path(&to).exists() && !crate::sidecar::path(&raw).exists());
+    }
+
+    /// `a/<name>.RAF` with its own bytes, JSON and XMP, each saying `name`.
+    fn raw_named(d: &Path, name: &str) -> PathBuf {
+        let f = d.join(format!("a/{name}.RAF"));
+        std::fs::write(&f, name).unwrap();
+        std::fs::write(crate::sidecar::path(&f), name).unwrap();
+        std::fs::write(crate::xmp_sync::sidecar_path(&f), name).unwrap();
+        f
+    }
+
+    /// What the file, its JSON and its XMP at `f` say.
+    fn says(f: &Path) -> [String; 3] {
+        [
+            f.to_path_buf(),
+            crate::sidecar::path(f),
+            crate::xmp_sync::sidecar_path(f),
+        ]
+        .map(|p| std::fs::read_to_string(p).unwrap_or_default())
+    }
+
+    /// ⚠⚠ M10.8d: two files swap names, each with its JSON and its XMP — the chained case a plain
+    /// `move_file` per file refuses.
+    #[test]
+    fn two_files_swap_names_with_their_sidecars() {
+        let d = test_dir::TempDir::new("photo_move-swap");
+        std::fs::create_dir_all(d.join("a")).unwrap();
+        let (a, b) = (raw_named(d.path(), "a"), raw_named(d.path(), "b"));
+        let plans = [
+            Planned {
+                from: a.clone(),
+                to: b.clone(),
+            },
+            Planned {
+                from: b.clone(),
+                to: a.clone(),
+            },
+        ];
+        let out = move_all(&plans);
+        assert!(out.iter().all(|r| r.is_ok()), "{out:?}");
+        assert_eq!(says(&b), ["a", "a", "a"].map(String::from));
+        assert_eq!(says(&a), ["b", "b", "b"].map(String::from));
+        let left: Vec<_> = std::fs::read_dir(d.join("a")).unwrap().collect();
+        assert_eq!(left.len(), 6, "no temporary file left behind");
+    }
+
+    /// A shifted run: a→b and b→c, where b is still held when a arrives.
+    #[test]
+    fn a_shifted_run_moves_up_by_one() {
+        let d = test_dir::TempDir::new("photo_move-shift");
+        std::fs::create_dir_all(d.join("a")).unwrap();
+        let (a, b) = (raw_named(d.path(), "a"), raw_named(d.path(), "b"));
+        let c = d.join("a/c.RAF");
+        let out = move_all(&[
+            Planned {
+                from: a.clone(),
+                to: b.clone(),
+            },
+            Planned {
+                from: b.clone(),
+                to: c.clone(),
+            },
+        ]);
+        assert!(out.iter().all(|r| r.is_ok()), "{out:?}");
+        assert_eq!(says(&b)[0], "a");
+        assert_eq!(says(&c)[0], "b");
+        assert!(!a.exists());
+    }
+
+    /// ⚠ A second step that fails puts the file back under its own name, with its sidecars — and the
+    /// swap's other half, which then finds its destination taken, goes back too.
+    #[test]
+    fn a_failed_second_step_puts_the_file_back() {
+        let d = test_dir::TempDir::new("photo_move-back");
+        std::fs::create_dir_all(d.join("a")).unwrap();
+        let (a, b) = (raw_named(d.path(), "a"), raw_named(d.path(), "b"));
+        let b_raw = b.clone();
+        // The first step from a temporary name onto b.RAF fails — once, so the way back is open;
+        // everything else is a real rename.
+        let failed = std::cell::Cell::new(false);
+        let flaky = move |from: &Path, to: &Path| -> io::Result<()> {
+            let from_temp = own(from).starts_with(".rustroom-move-");
+            if from_temp && to == b_raw && !failed.replace(true) {
+                return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+            }
+            std::fs::rename(from, to)
+        };
+        let out = move_all_with(
+            &[
+                Planned {
+                    from: a.clone(),
+                    to: b.clone(),
+                },
+                Planned {
+                    from: b.clone(),
+                    to: a.clone(),
+                },
+            ],
+            flaky,
+        );
+        assert!(out.iter().all(|r| r.is_err()), "both failed: {out:?}");
+        assert_eq!(says(&a), ["a", "a", "a"].map(String::from), "a is back");
+        assert_eq!(says(&b), ["b", "b", "b"].map(String::from), "b is back");
     }
 
     /// Never overwrite — a destination that appeared after the plan is refused.

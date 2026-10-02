@@ -68,6 +68,7 @@ mod name_edit;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod preview_flow;
+mod rename_flow;
 mod segmented;
 mod session;
 mod session_flow;

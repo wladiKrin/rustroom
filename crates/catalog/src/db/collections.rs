@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn a_renamed_file_stays_in_its_collections() {
-        // ⚠⚠ The integration plan 1 built `rename_photo` for, asserted end to end. Membership is
+        // ⚠⚠ The integration plan 1 built `move_photo` for, asserted end to end. Membership is
         // by row id, so moving the row carries the membership — which is the reason a rename must
         // update the catalog in the same operation as the file move.
         let cat = Catalog::open_in_memory().unwrap();
@@ -270,7 +270,7 @@ mod tests {
         let c = cat.create_collection("Portfolio").unwrap();
         cat.add_to_collection(c, Path::new("/x/a.RAF"), 0).unwrap();
 
-        cat.rename_photo(Path::new("/x/a.RAF"), Path::new("/x/b.RAF"))
+        cat.move_photo(Path::new("/x/a.RAF"), Path::new("/x/b.RAF"))
             .unwrap();
 
         assert_eq!(

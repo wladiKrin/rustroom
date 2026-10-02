@@ -71,30 +71,10 @@ impl RustroomApp {
                 &present,
                 dest,
                 |p| wanted_name(p, immich_root, cat),
-                |p| {
-                    p.exists()
-                        || sidecar::path(p).exists()
-                        || cat.is_some_and(|c| c.knows(p).unwrap_or(false))
-                },
+                |p| path_taken(cat, p),
             )
         };
-        let mut done: Vec<(PathBuf, PathBuf)> = Vec::new();
-        let mut failed: Option<String> = None;
-        for p in &plan {
-            match photo_move::move_file(p) {
-                Ok(()) => {
-                    if let Some(cat) = &self.catalog {
-                        if let Err(e) = cat.move_photo(&p.from, &p.to) {
-                            eprintln!("catalog: {e}");
-                        }
-                    }
-                    done.push((p.from.clone(), p.to.clone()));
-                }
-                Err(e) => {
-                    failed.get_or_insert_with(|| format!("{}: {e}", shown(&p.from)));
-                }
-            }
-        }
+        let (done, failed) = self.move_planned(&plan);
         if !done.is_empty() {
             self.actions.push(
                 ActionKind::PhotoMove {
@@ -109,9 +89,36 @@ impl RustroomApp {
         n
     }
 
+    /// Move the planned files — two passes when names chain (`photo_move::move_all`) — and the
+    /// catalog's rows of those that moved, in one transaction. Returns the moves made and the first
+    /// failure, said for the status row.
+    ///
+    /// ⚠ Shared by Move to folder, Rename and the undo of both (M10.8d), so a swap undoes too.
+    pub(crate) fn move_planned(
+        &self,
+        plan: &[Planned],
+    ) -> (Vec<(PathBuf, PathBuf)>, Option<String>) {
+        let mut done: Vec<(PathBuf, PathBuf)> = Vec::new();
+        let mut failed: Option<String> = None;
+        for (p, r) in plan.iter().zip(photo_move::move_all(plan)) {
+            match r {
+                Ok(()) => done.push((p.from.clone(), p.to.clone())),
+                Err(e) => {
+                    failed.get_or_insert_with(|| format!("{}: {e}", shown(&p.from)));
+                }
+            }
+        }
+        if let Some(cat) = &self.catalog {
+            if let Err(e) = cat.move_photos(&done) {
+                eprintln!("catalog: {e}");
+            }
+        }
+        (done, failed)
+    }
+
     /// Everything a move leaves stale, put right: the decode cache, the undo state of the old paths,
     /// the Library and the open photo.
-    fn after_move(&mut self, ctx: &egui::Context, moves: &[(PathBuf, PathBuf)]) {
+    pub(crate) fn after_move(&mut self, ctx: &egui::Context, moves: &[(PathBuf, PathBuf)]) {
         if moves.is_empty() {
             return;
         }
@@ -134,6 +141,13 @@ impl RustroomApp {
         }
         let moved_to = |p: &Path| moves.iter().find(|(f, _)| f == p).map(|(_, t)| t.clone());
         if let Some(lib) = self.library.as_mut() {
+            // ⚠ The rows first, in every view: the rebuild below restores the selection BY ID, so
+            // a renamed photo stays selected only if its row already carries the new path (M10.8d).
+            for e in lib.entries.iter_mut() {
+                if let Some(to) = moved_to(&e.id.path) {
+                    e.id.path = to;
+                }
+            }
             match lib.source.clone() {
                 // ⚠ A folder is its directory: what left it goes, what an undo brings back comes.
                 LibrarySource::Folder(dir) => {
@@ -161,11 +175,6 @@ impl RustroomApp {
                             e.path = to;
                         }
                     }
-                    for e in lib.entries.iter_mut() {
-                        if let Some(to) = moved_to(&e.id.path) {
-                            e.id.path = to;
-                        }
-                    }
                     if let Some(copies) = lib.copies.as_mut() {
                         *copies = copies
                             .drain()
@@ -179,6 +188,8 @@ impl RustroomApp {
             }
         }
         self.rename_draft = None;
+        // ⚠ The catalog moved the stack rows with the files; the view's map is keyed by path.
+        self.reload_hand_stacks();
         if let Some(open) = self.open_photo() {
             if let Some(to) = moved_to(&open.path) {
                 // Saved before the move; reopened where it is now, and only where it is being looked at.
@@ -203,26 +214,18 @@ impl RustroomApp {
             return;
         };
         self.persist_current_session();
-        let mut done: Vec<(PathBuf, PathBuf)> = Vec::new();
-        let mut stuck = 0;
-        for (a, b) in moves {
-            let (from, to) = if forward { (a, b) } else { (b, a) };
-            let p = Planned {
-                from: from.clone(),
-                to: to.clone(),
-            };
-            match photo_move::move_file(&p) {
-                Ok(()) => {
-                    if let Some(cat) = &self.catalog {
-                        if let Err(e) = cat.move_photo(from, to) {
-                            eprintln!("catalog: {e}");
-                        }
-                    }
-                    done.push((from.clone(), to.clone()));
+        let plan: Vec<Planned> = moves
+            .iter()
+            .map(|(a, b)| {
+                let (from, to) = if forward { (a, b) } else { (b, a) };
+                Planned {
+                    from: from.clone(),
+                    to: to.clone(),
                 }
-                Err(_) => stuck += 1,
-            }
-        }
+            })
+            .collect();
+        let (done, _) = self.move_planned(&plan);
+        let stuck = plan.len() - done.len();
         self.after_move(ctx, &done);
         self.status = match (stuck, forward) {
             (0, true) => "Redone".to_string(),
@@ -230,6 +233,18 @@ impl RustroomApp {
             (n, _) => format!("{n} could not be moved — the place is taken"),
         };
     }
+}
+
+/// Whether a photo may not move onto `p`: a file is there, or its JSON sidecar, or — for a RAW — its
+/// XMP (the move would refuse it and put the photo back), or a catalog row of a vanished file.
+///
+/// ⚠ Shared by Move to folder and Rename (M10.8d), so the two cannot disagree about what is free.
+pub(crate) fn path_taken(cat: Option<&catalog::db::Catalog>, p: &Path) -> bool {
+    p.exists()
+        || sidecar::path(p).exists()
+        || (rustroom_app::xmp_sync::takes_sidecar(p)
+            && rustroom_app::xmp_sync::sidecar_path(p).exists())
+        || cat.is_some_and(|c| c.knows(p).unwrap_or(false))
 }
 
 /// The name a file wants in its new folder: an Immich download's original, else its own.

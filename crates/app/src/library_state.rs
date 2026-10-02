@@ -344,6 +344,20 @@ pub(crate) fn hand_stacks_of(
 }
 
 impl RustroomApp {
+    /// Re-read the open view's hand stacks from the catalog — after the stacks changed, or after a
+    /// rename or a move re-keyed them under new paths (M10.8d; the map is keyed by path, so a stale
+    /// one silently takes a renamed photo out of its stack).
+    pub(crate) fn reload_hand_stacks(&mut self) {
+        let hand = self
+            .library
+            .as_ref()
+            .map(|l| hand_stacks_of(self.catalog.as_ref(), &l.scan))
+            .unwrap_or_default();
+        if let Some(lib) = self.library.as_mut() {
+            lib.hand_stacks = hand;
+        }
+    }
+
     /// Change how the browser orders a folder, keeping the photo you were looking at selected.
     ///
     /// ⚠ Guarded on an actual change, because the combo's body runs every frame — the
