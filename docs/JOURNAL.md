@@ -223,7 +223,15 @@ green; re-run against the real text, red. ⚠ Two test slips: a cell and its cap
 rim **light on the dark theme** (a dark one vanished there; `the_rim_contrasts_with_the_theme`, sabotaged
 red), and the step **back to 6 pt** within the wider reach. Then the same rim on **every** layer, not
 only the top — the layers had the theme's `line`, invisible on the dark panel (`pile_rim`, one colour for
-all; the test now checks each layer's outline). **3405 tests.**
+all; the test now checks each layer's outline). **3405 tests.** Then a third pile, **None** — *"not
+showing the pile at all, just sticking to the number"*: `StackLook::Off` (appended — it is serialised),
+asked through `draws_pile` and `loads_below` so the cell and the grid's thumbnail requests no longer
+match on variants. Tests: each look's two answers; None asks for no photo below (2 requests, peek 4);
+the drawn grid outlines two layers on cards and **none** on None, the "Stack of 3" badge on both.
+Sabotages, each red: the cell ignoring `draws_pile`; the grid loading below for None; None drawing a
+pile. ⚠ **My first sabotage run restored with `git checkout` on an UNCOMMITTED tree and threw the
+feature away** — the later runs then printed nothing because the build broke, which reads like green.
+Commit first, then sabotage. **3408 tests.**
 
 ### 2026-10-01 — M10.8b: movable panels and a vertical filmstrip (branch `m10.8b-layout`, merged 2026-10-01)
 
