@@ -559,10 +559,58 @@ mod tests {
         };
         let peek = wanted(rustroom_app::stack::StackLook::Peek);
         let cards = wanted(rustroom_app::stack::StackLook::Cards);
+        let none = wanted(rustroom_app::stack::StackLook::Off);
         assert_eq!(
             cards, 2,
             "two rows on screen: the stack and the fourth photo"
         );
         assert_eq!(peek, 4, "and the stack's two photos below");
+        assert_eq!(none, 2, "None asks for no photo below either");
+    }
+
+    /// The drawn grid: cards outline one layer per photo below a collapsed stack; None draws no
+    /// pile — the count badge alone.
+    #[test]
+    fn none_draws_no_pile() {
+        let layers = |look| {
+            let mut app = four();
+            app.view = crate::AppView::Library;
+            app.settings.stacking.look = look;
+            run(&mut app, Command::Stack);
+            let ctx = crate::test_ui::ctx();
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(crate::test_ui::screen()),
+                    ..Default::default()
+                },
+                |ui| {
+                    let c = ui.ctx().clone();
+                    crate::library::show(&mut app, ui, &c);
+                },
+            );
+            // ⚠ A pile's layer is the one rect with the pile's 1.5-pt rim as its outline.
+            let outlined = out
+                .shapes
+                .iter()
+                .filter(|c| matches!(&c.shape, egui::Shape::Rect(r) if r.stroke.width == 1.5))
+                .count();
+            let badge = crate::test_ui::nodes(&ctx, |ui| {
+                let c = ui.ctx().clone();
+                crate::library::show(&mut app, ui, &c);
+            })
+            .iter()
+            .any(|n| n.label == "Stack of 3");
+            (outlined, badge)
+        };
+        assert_eq!(
+            layers(rustroom_app::stack::StackLook::Cards),
+            (2, true),
+            "the sample: two layers below the top photo, and the count"
+        );
+        assert_eq!(
+            layers(rustroom_app::stack::StackLook::Off),
+            (0, true),
+            "no layer, the count still there"
+        );
     }
 }

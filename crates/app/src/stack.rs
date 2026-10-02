@@ -115,6 +115,8 @@ pub enum StackLook {
     Peek,
     /// Plain cards — no extra thumbnails.
     Cards,
+    /// No pile at all — the count badge alone (the author's option, after use).
+    Off,
 }
 
 impl StackLook {
@@ -122,6 +124,23 @@ impl StackLook {
         match self {
             StackLook::Peek => "Photos below",
             StackLook::Cards => "Cards",
+            StackLook::Off => "None",
+        }
+    }
+
+    /// Whether a collapsed stack is drawn as a pile at all.
+    pub fn draws_pile(self) -> bool {
+        match self {
+            StackLook::Peek | StackLook::Cards => true,
+            StackLook::Off => false,
+        }
+    }
+
+    /// Whether the pile shows the photos below — the only look that loads their thumbnails.
+    pub fn loads_below(self) -> bool {
+        match self {
+            StackLook::Peek => true,
+            StackLook::Cards | StackLook::Off => false,
         }
     }
 }
@@ -388,6 +407,32 @@ pub fn stacked_keys_with(
 mod tests {
     use super::*;
     use crate::photo_id::PhotoId;
+
+    /// Each look's pile: photos below draw a pile and load its thumbnails, cards draw one and load
+    /// none, and None draws no pile at all — the count badge alone.
+    #[test]
+    fn each_look_draws_and_loads_its_own_pile() {
+        let looks = [StackLook::Peek, StackLook::Cards, StackLook::Off];
+        let got: Vec<(bool, bool)> = looks
+            .iter()
+            .map(|l| (l.draws_pile(), l.loads_below()))
+            .collect();
+        assert_eq!(got, [(true, true), (true, false), (false, false)]);
+        assert_eq!(StackLook::Off.label(), "None");
+    }
+
+    /// A setting saved before None existed still reads, and None round-trips.
+    #[test]
+    fn the_look_round_trips_through_settings() {
+        for l in [StackLook::Peek, StackLook::Cards, StackLook::Off] {
+            let json = serde_json::to_string(&l).unwrap();
+            assert_eq!(serde_json::from_str::<StackLook>(&json).unwrap(), l);
+        }
+        assert_eq!(
+            serde_json::from_str::<StackLook>("\"Cards\"").unwrap(),
+            StackLook::Cards
+        );
+    }
 
     fn entry(path: &str, copy: u32, edited: bool) -> PhotoEntry {
         let p = PathBuf::from(path);

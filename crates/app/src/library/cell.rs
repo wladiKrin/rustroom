@@ -135,25 +135,25 @@ pub(super) fn draw(
                         .copied()
                         .unwrap_or_default();
                     // M10.8c after use: a collapsed stack is drawn as a pile — the photos
-                    // below peeking out, or plain cards (Settings → Appearance).
+                    // below peeking out, plain cards, or none at all (Settings → Appearance).
                     let pile: Vec<Option<&egui::TextureHandle>> = match lib.entries[i].stack {
-                        Some(st) if !st.expanded => lib
+                        Some(st) if !st.expanded && look.draws_pile() => lib
                             .below
                             .get(&lib.entries[i].id)
                             .into_iter()
                             .flatten()
                             .take(rustroom_app::cell_layout::PILE_LAYERS)
-                            .map(|m| match look {
-                                rustroom_app::stack::StackLook::Peek => {
-                                    let want = rustroom_app::thumb_loader::ThumbRequest {
-                                        id: m.id.clone(),
-                                        edits: m.edits.clone(),
-                                    };
-                                    lib.cache
-                                        .get(&want.key())
-                                        .or_else(|| lib.cache.get_stale(&m.id))
+                            .map(|m| {
+                                if !look.loads_below() {
+                                    return None;
                                 }
-                                rustroom_app::stack::StackLook::Cards => None,
+                                let want = rustroom_app::thumb_loader::ThumbRequest {
+                                    id: m.id.clone(),
+                                    edits: m.edits.clone(),
+                                };
+                                lib.cache
+                                    .get(&want.key())
+                                    .or_else(|| lib.cache.get_stale(&m.id))
                             })
                             .collect(),
                         _ => Vec::new(),

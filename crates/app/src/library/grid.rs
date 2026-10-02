@@ -187,8 +187,9 @@ pub(super) fn panel(
             // renders its own edits, so each is its own request.
             window.push(lib.thumb_request(visible[pos], live.as_ref()));
             // ⚠ M10.8c after use: a collapsed stack's pile shows the photos below it — their
-            // thumbnails too, up to the pile's depth, but only when peeking: cards need none.
-            if look == rustroom_app::stack::StackLook::Peek {
+            // thumbnails too, up to the pile's depth, but only when peeking: cards and None need
+            // none.
+            if look.loads_below() {
                 let e = &lib.entries[visible[pos]];
                 if e.stack.is_some_and(|s| !s.expanded) {
                     for m in lib

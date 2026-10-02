@@ -462,6 +462,11 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                                 "Cards",
                                                 "Draws plain cards below a stack's top photo, which loads no extra thumbnails",
                                             ),
+                                            (
+                                                rustroom_app::stack::StackLook::Off,
+                                                "None",
+                                                "Draws no pile, so only the count on a stack's top photo says it is a stack",
+                                            ),
                                         ],
                                     );
                                 });
