@@ -228,6 +228,7 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
             app.modal = Modal::SavePreset {
                 name: String::new(),
                 groups: EditGroups::default(),
+                folder: None,
             }
         }
         // ⚠ Guarded on an actual change, then re-rendered. A menu body runs every frame it is

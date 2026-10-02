@@ -67,6 +67,8 @@ pub enum Modal {
     SavePreset {
         name: String,
         groups: EditGroups,
+        /// The folder it goes into, `None` for none (M10.9a).
+        folder: Option<String>,
     },
     /// Choosing which groups a paste applies.
     PasteSettings,
@@ -146,6 +148,12 @@ pub enum Modal {
         into_name: String,
         photos: usize,
     },
+    /// Confirming a preset folder's deletion, with how many presets go to the trash with it
+    /// (M10.9a).
+    ConfirmDeletePresetFolder {
+        name: String,
+        count: usize,
+    },
     /// Confirming a preset deletion. `dont_ask_again` is scratch state — it is committed to
     /// `Settings` only on the Delete path, never on Cancel.
     ConfirmDeletePreset {
@@ -196,6 +204,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         SaveExport,
         ConfirmDeleteExport,
         ConfirmDelete,
+        ConfirmDeleteFolder,
         ConfirmForget,
         ConfirmDeleteKeyword,
         ConfirmMergeKeyword,
@@ -219,6 +228,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::SaveExportPreset { .. } => Which::SaveExport,
         Modal::ConfirmDeleteExportPreset { .. } => Which::ConfirmDeleteExport,
         Modal::ConfirmDeletePreset { .. } => Which::ConfirmDelete,
+        Modal::ConfirmDeletePresetFolder { .. } => Which::ConfirmDeleteFolder,
         Modal::ConfirmForgetFolder { .. } => Which::ConfirmForget,
         Modal::ConfirmDeleteKeyword { .. } => Which::ConfirmDeleteKeyword,
         Modal::ConfirmMergeKeyword { .. } => Which::ConfirmMergeKeyword,
@@ -244,6 +254,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::SaveExport => export::save_preset(app, ctx),
         Which::ConfirmDeleteExport => export::confirm_delete(app, ctx),
         Which::ConfirmDelete => presets::confirm_delete(app, ctx),
+        Which::ConfirmDeleteFolder => presets::confirm_delete_folder(app, ctx),
         Which::ConfirmForget => confirm_forget_folder(app, ctx),
         Which::ConfirmDeleteKeyword => confirm_delete_keyword(app, ctx),
         Which::ConfirmMergeKeyword => confirm_merge_keyword(app, ctx),

@@ -11,6 +11,7 @@ pub mod mask_components;
 pub mod mask_glyph;
 pub mod masks;
 pub mod parametric_curve;
+pub mod preset_rows;
 pub mod presets;
 pub mod profile;
 pub mod retouch;

@@ -80,6 +80,9 @@ pub struct Header<'a> {
     pub draggable: bool,
     /// The Library rail's form: the name in capitals, in the caption face and the secondary grey.
     pub rail: bool,
+    /// Paint the name exactly as given — a name the user typed (a preset folder, M10.9a), which
+    /// sentence case would rewrite: "Film Looks" is theirs, not "Film looks".
+    pub verbatim: bool,
 }
 
 impl<'a> Header<'a> {
@@ -91,7 +94,12 @@ impl<'a> Header<'a> {
             trailing: None,
             draggable: false,
             rail: false,
+            verbatim: false,
         }
+    }
+    pub fn verbatim(mut self, on: bool) -> Self {
+        self.verbatim = on;
+        self
     }
     pub fn rail(mut self, on: bool) -> Self {
         self.rail = on;
@@ -288,7 +296,11 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
         let text_rect = painter.text(
             egui::pos2(rect.left() + CHEVRON_W + 2.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            header_text(h.name, h.rail),
+            if h.verbatim {
+                h.name.to_string()
+            } else {
+                header_text(h.name, h.rail)
+            },
             font,
             if h.rail {
                 v.weak_text_color()
@@ -437,6 +449,7 @@ mod tests {
             trailing,
             draggable,
             rail,
+            verbatim,
         } = h;
         crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             let _ = header(
@@ -450,6 +463,7 @@ mod tests {
                     trailing,
                     draggable,
                     rail,
+                    verbatim,
                 },
             );
         })

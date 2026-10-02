@@ -298,6 +298,12 @@ impl PresetStore {
         Ok(presets)
     }
 
+    /// Make sure a folder's directory exists — an undo putting a folder back.
+    pub fn ensure_folder(&self, name: &str) -> Result<(), PresetError> {
+        std::fs::create_dir_all(self.dir.join(name))?;
+        Ok(())
+    }
+
     /// Remove a folder's directory if nothing is left in it — never a folder that still holds a file.
     pub fn remove_empty_folder(&self, name: &str) {
         let _ = std::fs::remove_dir(self.dir.join(name));

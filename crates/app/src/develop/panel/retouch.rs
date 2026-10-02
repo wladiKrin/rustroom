@@ -101,6 +101,7 @@ fn list(ui: &mut egui::Ui, s: &mut Session, tool: &SpotTool, ed: &mut Edited) {
             selected: false,
             current: selected.is_none(),
             deletable: false,
+            delete_hover: "",
             indent: 0.0,
             eye: None,
             hold: None,
@@ -128,6 +129,7 @@ fn list(ui: &mut egui::Ui, s: &mut Session, tool: &SpotTool, ed: &mut Edited) {
                 selected: selected == Some(i),
                 current: false,
                 deletable: true,
+                delete_hover: "Deletes this patch",
                 indent: 0.0,
                 eye: Some(s.spot_shown.get(i).copied().unwrap_or(true)),
                 hold: Some((

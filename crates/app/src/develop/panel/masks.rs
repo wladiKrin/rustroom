@@ -293,6 +293,7 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
                 selected: picked,
                 current: false,
                 deletable: true,
+                delete_hover: "Deletes this mask",
                 indent: 0.0,
                 eye: Some(s.mask_shown.get(i).copied().unwrap_or(false)),
                 hold: Some((

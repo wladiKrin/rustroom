@@ -312,6 +312,7 @@ impl RustroomApp {
     /// Re-read the presets directory. Called after a save or a delete, not every frame.
     pub(crate) fn reload_presets(&mut self) {
         self.preset_list = self.preset_store.list();
+        self.preset_folders = self.preset_store.folders();
     }
 
     /// Move a preset to the trash and refresh the cached list.

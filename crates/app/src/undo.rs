@@ -104,6 +104,7 @@ impl RustroomApp {
             ActionKind::CollectionChange { .. } => self.replay_collection_change(&kind, false),
             ActionKind::PhotoMove { .. } => self.replay_photo_move(ctx, &kind, false),
             ActionKind::StackChange { .. } => self.replay_stack_change(&kind, false),
+            ActionKind::PresetEdit { .. } => self.replay_preset_edit(&kind, false),
             ActionKind::PresetDelete { folder, name } => {
                 match self.preset_store.restore(folder.as_deref(), &name) {
                     Ok(Some(p)) => self.status = format!("Restored preset “{}”", p.name),
@@ -204,6 +205,7 @@ impl RustroomApp {
             ActionKind::CollectionChange { .. } => self.replay_collection_change(&kind, true),
             ActionKind::PhotoMove { .. } => self.replay_photo_move(ctx, &kind, true),
             ActionKind::StackChange { .. } => self.replay_stack_change(&kind, true),
+            ActionKind::PresetEdit { .. } => self.replay_preset_edit(&kind, true),
             ActionKind::PresetDelete { folder, name } => {
                 match self.preset_store.delete(folder.as_deref(), &name) {
                     Ok(()) => self.status = format!("Deleted preset “{name}”"),

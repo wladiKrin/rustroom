@@ -39,6 +39,7 @@ impl RustroomApp {
         let ctx2 = ctx.clone();
         let preset_store = PresetStore::user_default();
         let preset_list = preset_store.list();
+        let preset_folders = preset_store.folders();
         let export_preset_store = ExportPresetStore::user_default();
         let export_preset_list = export_preset_store.list();
         let settings_store = SettingsStore::user_default();
@@ -201,6 +202,8 @@ impl RustroomApp {
             selected_export_preset: None,
             preset_store,
             preset_list,
+            preset_folders,
+            preset_rename: None,
             settings_store,
             // ⚠⚠ The worker is built from the settings **before** the `settings` field moves into
             // the struct, which is why the fetcher is constructed here rather than after. A key

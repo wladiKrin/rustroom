@@ -335,6 +335,10 @@ pub(crate) struct RustroomApp {
     pub(crate) preset_store: PresetStore,
     /// Cached `preset_store.list()`, refreshed on save and delete rather than every frame.
     pub(crate) preset_list: Vec<Preset>,
+    /// Cached `preset_store.folders()`, refreshed with `preset_list` (M10.9a).
+    pub(crate) preset_folders: Vec<String>,
+    /// The preset or folder being renamed in place, with what has been typed (M10.9a).
+    pub(crate) preset_rename: Option<crate::preset_ops::PresetRename>,
     pub(crate) settings_store: SettingsStore,
     pub(crate) settings: Settings,
     /// The one worker for everything the UI needs from an Immich server.

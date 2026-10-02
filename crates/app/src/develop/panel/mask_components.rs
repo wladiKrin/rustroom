@@ -83,6 +83,9 @@ pub struct RowSpec<'a> {
     /// The weak fill: the component being edited.
     pub current: bool,
     pub deletable: bool,
+    /// What the `×` does, in one sentence — the row's own kind (M10.9a: every row's said "Deletes
+    /// this mask", a preset's and a patch's included).
+    pub delete_hover: &'a str,
     pub indent: f32,
     /// The eye: `Some(on)` draws it left of the `×`; a mask row has one, a component row none.
     pub eye: Option<bool>,
@@ -108,6 +111,9 @@ pub struct RowOut {
     pub dragging: bool,
     /// A drag of this row ended this frame.
     pub released: bool,
+    /// The row's own response — a right-click menu, a double-click and a drag are read from it
+    /// (M10.9a, the presets).
+    pub response: egui::Response,
 }
 
 /// Draw one row.
@@ -146,7 +152,7 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         let name = format!("Delete {}", spec.accessible);
         let r = ui
             .interact(cell, resp.id.with("delete"), egui::Sense::click())
-            .hover("Deletes this mask");
+            .hover(spec.delete_hover);
         r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
         delete = r.clicked();
         if r.hovered() {
@@ -301,6 +307,7 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         rect,
         dragging: resp.dragged(),
         released: resp.drag_stopped(),
+        response: resp,
     }
 }
 
@@ -369,6 +376,7 @@ pub fn rows(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
                 selected: false,
                 current: selected == j,
                 deletable: j > 0,
+                delete_hover: "Deletes this part of the mask",
                 indent: INDENT,
                 eye: None,
                 hold: None,
