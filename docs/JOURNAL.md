@@ -209,6 +209,19 @@ update changing the groups (1); the same-file check always true (1).
 ⚠ Known and accepted: **the first click of a double-click applies the preset**, as a click does — egui
 cannot know a second click is coming; Ctrl+Z takes it back. ⚠ My unquoted heredoc ran a doc comment's
 backticks as commands (the two file names vanished) — caught on read-back. **3454 tests.**
+**After use:** *"the items listing the contents of a preset… are colliding with the X"*, and a drag should
+go by area. (1) `mask_components::row` lays its text out **before** painting: the room ends at the
+first action cell; the name is elided with "…" (shown in full by `hover_titled`) and keeps at least
+55% when the meta wants more; the meta gets what is left, **clipped there and scrolled sideways**
+under the pointer (`ScrollSource::MOUSE_WHEEL` — a trackpad swipe, Shift and the wheel; never a drag,
+which is the row's). Every row of that kind gains it — masks, patches, eyes. (2) **A drop goes by
+area**: `preset_rows::drop` reads the pointer on release against each folder's whole region (header
+and presets) — inside one, into it; anywhere else in *Yours*, out of its folder; the target is
+outlined while dragging. `the_text_stops_before_the_delete_cell` reproduces the report when the old
+painting is put back (*"reaches 220 past the × at 190"*); ⚠ my first sabotage of it (widening the
+child's rect) left the scroll area's own `max_width` clipping, so it stayed green — a sabotage must
+restore the OLD code, not merely loosen the new. `a_drop_goes_by_area` (5 cases) is red with "outside
+a folder" off and with a folder's region cut to its header. **3455 tests.**
 
 ### 2026-10-02 — M10.8d: batch rename (branch `m10.8d-batch-rename`, merged 2026-10-02)
 
