@@ -881,14 +881,14 @@ mod tests {
 
     #[test]
     fn a_renamed_file_keeps_its_keywords() {
-        // ⚠⚠ `photo_keywords` is keyed by **file name**, so `rename_photo` must update it in the
+        // ⚠⚠ `photo_keywords` is keyed by **file name**, so `move_photo` must update it in the
         // same operation — the third instance of that integration.
         let cat = Catalog::open_in_memory().unwrap();
         cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
         let k = cat.create_keyword("Paris", None).unwrap();
         cat.assign_keyword(k, Path::new("/x/a.RAF")).unwrap();
 
-        cat.rename_photo(Path::new("/x/a.RAF"), Path::new("/x/b.RAF"))
+        cat.move_photo(Path::new("/x/a.RAF"), Path::new("/x/b.RAF"))
             .unwrap();
 
         assert_eq!(

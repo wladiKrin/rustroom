@@ -127,43 +127,6 @@ impl Catalog {
         })
     }
 
-    /// Follow a file rename.
-    ///
-    /// ⚠⚠ **Every copy moves**, because copies share the file. Moving only copy 0 would strand
-    /// the rest under a name that no longer exists — and their collection memberships with them.
-    ///
-    /// ⚠ A photo the catalog has never seen is not an error. The catalog is not authoritative and
-    /// must never be a reason a rename fails.
-    ///
-    /// ⚠ Restricted to renames **within one folder**, which is all `file_rename::target` can
-    /// produce — it builds the new path with `with_file_name`. A cross-folder move is a different
-    /// operation and is not supported here.
-    pub fn rename_photo(&self, from: &Path, to: &Path) -> Result<(), CatalogError> {
-        let (Some((from_folder, from_name)), Some((to_folder, to_name))) = (split(from), split(to))
-        else {
-            return Ok(());
-        };
-        if from_folder != to_folder {
-            return Ok(());
-        }
-        self.conn.execute(
-            "UPDATE photos SET file_name = ?3
-             WHERE file_name = ?2
-               AND folder_id = (SELECT id FROM folders WHERE path = ?1)",
-            rusqlite::params![&from_folder, &from_name, &to_name],
-        )?;
-        // ⚠⚠ `photo_keywords` is keyed by file name, so it must move in the same operation — the
-        // third instance of this integration, after `photos` itself and collection membership via
-        // row id. A rename that forgot would silently strip a file's keywords.
-        self.conn.execute(
-            "UPDATE photo_keywords SET file_name = ?3
-             WHERE file_name = ?2
-               AND folder_id = (SELECT id FROM folders WHERE path = ?1)",
-            rusqlite::params![&from_folder, &from_name, &to_name],
-        )?;
-        Ok(())
-    }
-
     /// Every photo the catalog knows, from every folder ever opened.
     ///
     /// ⚠ Ordered by folder then name so the result is stable; the Library re-sorts it by the
@@ -303,7 +266,7 @@ mod tests {
         cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
         let id = cat.photo_id(Path::new("/x/a.RAF"), 0).unwrap().unwrap();
 
-        cat.rename_photo(Path::new("/x/a.RAF"), Path::new("/x/b.RAF"))
+        cat.move_photo(Path::new("/x/a.RAF"), Path::new("/x/b.RAF"))
             .unwrap();
 
         assert_eq!(cat.photo_count().unwrap(), 1, "no second row");
@@ -324,7 +287,7 @@ mod tests {
         cat.add_copy(Path::new("/x/a.RAF"), 1).unwrap();
         cat.add_copy(Path::new("/x/a.RAF"), 2).unwrap();
 
-        cat.rename_photo(Path::new("/x/a.RAF"), Path::new("/x/b.RAF"))
+        cat.move_photo(Path::new("/x/a.RAF"), Path::new("/x/b.RAF"))
             .unwrap();
 
         for copy in [0, 1, 2] {
@@ -357,7 +320,7 @@ mod tests {
         // ⚠ The catalog is not authoritative and must never be a reason a rename fails. A photo
         // in a folder that was never opened simply has no row to move.
         let cat = Catalog::open_in_memory().unwrap();
-        cat.rename_photo(Path::new("/x/ghost.RAF"), Path::new("/x/other.RAF"))
+        cat.move_photo(Path::new("/x/ghost.RAF"), Path::new("/x/other.RAF"))
             .expect("must not error");
         assert_eq!(cat.photo_count().unwrap(), 0);
     }

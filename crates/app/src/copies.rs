@@ -258,7 +258,7 @@ impl RustroomApp {
         // facts that must move as one — the rule the history stash and the action log needed
         // twice. A failure is reported, never fatal: the file has already moved.
         if let Some(cat) = &self.catalog {
-            if let Err(e) = cat.rename_photo(from, to) {
+            if let Err(e) = cat.move_photo(from, to) {
                 eprintln!("catalog: {e}");
             }
         }

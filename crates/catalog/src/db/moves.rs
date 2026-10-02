@@ -73,25 +73,57 @@ impl Catalog {
     }
 
     /// Follow a move Rustroom made itself: `from` is now `to`, in another folder and perhaps under
-    /// another name (2026-10-01, Move to folder). Every copy's rows and every per-file table follow;
-    /// collection membership rides the photo row's id. A photo the catalog does not know is not an
-    /// error — the catalog is not authoritative.
+    /// another name (2026-10-01, Move to folder; a rename is the same with the folder kept). Every
+    /// copy's rows and every per-file table follow; collection membership rides the photo row's id.
+    /// A photo the catalog does not know is not an error — the catalog is not authoritative.
     pub fn move_photo(&self, from: &Path, to: &Path) -> Result<(), CatalogError> {
-        let (Some((from_dir, from_name)), Some((to_dir, to_name))) =
-            (super::split(from), super::split(to))
-        else {
-            return Ok(());
-        };
-        let old: Option<i64> = self
-            .conn
-            .query_row("SELECT id FROM folders WHERE path = ?1", [&from_dir], |r| {
-                r.get(0)
-            })
-            .ok();
-        match old {
-            Some(old) => self.move_rows(old, &from_name, &to_dir, &to_name),
-            None => Ok(()),
+        self.move_photos(&[(from.to_path_buf(), to.to_path_buf())])
+    }
+
+    /// [`Self::move_photo`] for many at once, in **one transaction** (M10.8d, batch rename).
+    ///
+    /// ⚠⚠ **Names may chain** — a rename that swaps two names, or shifts a numbered run up by one,
+    /// moves a photo onto a name another photo of the same call still holds. Then every row goes to
+    /// a temporary name first (`/rustroom-move-<i>` — a `/` no file name can hold) and only then to
+    /// its destination, so no `UPDATE` ever meets a key that is still in use.
+    pub fn move_photos(&self, moves: &[(PathBuf, PathBuf)]) -> Result<(), CatalogError> {
+        let mut rows: Vec<(i64, String, String, String)> = Vec::new();
+        for (from, to) in moves {
+            let (Some((from_dir, from_name)), Some((to_dir, to_name))) =
+                (super::split(from), super::split(to))
+            else {
+                continue;
+            };
+            let old: Option<i64> = self
+                .conn
+                .query_row("SELECT id FROM folders WHERE path = ?1", [&from_dir], |r| {
+                    r.get(0)
+                })
+                .ok();
+            if let Some(old) = old {
+                rows.push((old, from_name, to_dir, to_name));
+            }
         }
+        let chained = moves
+            .iter()
+            .any(|(_, to)| moves.iter().any(|(from, _)| from == to));
+        let tx = self.conn.unchecked_transaction()?;
+        if chained {
+            for (i, (old, name, _, _)) in rows.iter().enumerate() {
+                rekey(&tx, *old, name, *old, &temp_name(i))?;
+            }
+            for (i, (old, _, dir, name)) in rows.iter().enumerate() {
+                let new = folder_for(&tx, dir)?;
+                rekey(&tx, *old, &temp_name(i), new, name)?;
+            }
+        } else {
+            for (old, name, dir, new_name) in &rows {
+                let new = folder_for(&tx, dir)?;
+                rekey(&tx, *old, name, new, new_name)?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Whether the catalog has a photo row at `path` — a destination name a move must not take even
@@ -118,26 +150,49 @@ impl Catalog {
         new_name: &str,
     ) -> Result<(), CatalogError> {
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "INSERT INTO folders (path, last_seen) VALUES (?1, 0) ON CONFLICT(path) DO NOTHING",
-            [new_path],
-        )?;
-        let new_folder: i64 =
-            tx.query_row("SELECT id FROM folders WHERE path = ?1", [new_path], |r| {
-                r.get(0)
-            })?;
-        for table in PER_FILE_TABLES {
-            tx.execute(
-                &format!(
-                    "UPDATE {table} SET folder_id = ?1, file_name = ?4
-                     WHERE folder_id = ?2 AND file_name = ?3"
-                ),
-                rusqlite::params![new_folder, old_folder, old_name, new_name],
-            )?;
-        }
+        let new_folder = folder_for(&tx, new_path)?;
+        rekey(&tx, old_folder, old_name, new_folder, new_name)?;
         tx.commit()?;
         Ok(())
     }
+}
+
+/// The folder row at `path`, created if it is new.
+fn folder_for(conn: &rusqlite::Connection, path: &str) -> Result<i64, CatalogError> {
+    conn.execute(
+        "INSERT INTO folders (path, last_seen) VALUES (?1, 0) ON CONFLICT(path) DO NOTHING",
+        [path],
+    )?;
+    Ok(
+        conn.query_row("SELECT id FROM folders WHERE path = ?1", [path], |r| {
+            r.get(0)
+        })?,
+    )
+}
+
+/// Re-key every per-file row from `(old_folder, old_name)` to `(new_folder, new_name)`.
+fn rekey(
+    conn: &rusqlite::Connection,
+    old_folder: i64,
+    old_name: &str,
+    new_folder: i64,
+    new_name: &str,
+) -> Result<(), CatalogError> {
+    for table in PER_FILE_TABLES {
+        conn.execute(
+            &format!(
+                "UPDATE {table} SET folder_id = ?1, file_name = ?4
+                 WHERE folder_id = ?2 AND file_name = ?3"
+            ),
+            rusqlite::params![new_folder, old_folder, old_name, new_name],
+        )?;
+    }
+    Ok(())
+}
+
+/// A file name no file can have — it holds a `/` — for a row between two names.
+fn temp_name(i: usize) -> String {
+    format!("/rustroom-move-{i}")
 }
 
 /// ⚠⚠ **Every table keyed on `(folder_id, file_name)`** — a new one must be added here, or a move
@@ -219,6 +274,110 @@ mod tests {
         )
         .unwrap();
         World { root, cat }
+    }
+
+    /// Everything `world` gave `x.RAF`, read at `at`: rating, copy, history, description title,
+    /// capture ISO, keyword, hand stack.
+    fn facts_at(
+        w: &World,
+        at: &Path,
+    ) -> (
+        u8,
+        bool,
+        Option<String>,
+        Option<String>,
+        Option<u32>,
+        bool,
+        bool,
+    ) {
+        let kw = w.cat.keywords().unwrap()[0].id;
+        let dir = at.parent().unwrap();
+        (
+            w.cat.marks(at, 0).unwrap().rating,
+            w.cat.photo_id(at, 1).unwrap().is_some(),
+            w.cat.load_history(at, 0).unwrap(),
+            w.cat.description_of(at).unwrap().map(|d| d.title),
+            w.cat.capture_of(at).unwrap().and_then(|c| c.iso),
+            w.cat.file_has_keyword(kw, at).unwrap(),
+            w.cat
+                .hand_stacks_in(dir)
+                .unwrap()
+                .iter()
+                .any(|(p, _)| p == at),
+        )
+    }
+
+    fn stacked(w: &World, p: &Path) {
+        w.cat
+            .set_hand_stack(
+                p,
+                Some(crate::db::HandMember {
+                    stack: 7,
+                    ord: 0,
+                    by_time: false,
+                }),
+            )
+            .unwrap();
+    }
+
+    /// ⚠⚠ A rename within the folder carries EVERY per-file table — it used to move only `photos`
+    /// and `photo_keywords`, so a renamed photo lost its description, history, capture and stack.
+    #[test]
+    fn a_rename_carries_every_per_file_table() {
+        let w = world("rename_all");
+        let (x, y) = (w.root.join("a/x.RAF"), w.root.join("a/y.RAF"));
+        stacked(&w, &x);
+        let before = facts_at(&w, &x);
+        assert_eq!(
+            before,
+            (
+                4,
+                true,
+                Some("history".into()),
+                Some("Eiffel".into()),
+                Some(3200),
+                true,
+                true
+            ),
+            "the sample"
+        );
+        w.cat.move_photo(&x, &y).unwrap();
+        assert_eq!(facts_at(&w, &y), before, "every table followed");
+        assert!(
+            w.cat.photo_id(&x, 0).unwrap().is_none(),
+            "no row left behind"
+        );
+    }
+
+    /// ⚠⚠ Two photos swap names in one call — the chained case, which a plain `UPDATE` per photo
+    /// would refuse on the second photo's key.
+    #[test]
+    fn two_photos_swap_names_with_every_table() {
+        let w = world("swap");
+        let (x, y) = (w.root.join("a/x.RAF"), w.root.join("a/y.RAF"));
+        std::fs::write(&y, b"other raw bytes").unwrap();
+        w.cat
+            .sync_folder(&w.root.join("a"), &[entry(&x), entry(&y)])
+            .unwrap();
+        w.cat
+            .set_marks(
+                &y,
+                0,
+                Marks {
+                    rating: 1,
+                    ..Marks::default()
+                },
+            )
+            .unwrap();
+        stacked(&w, &x);
+        let x_before = facts_at(&w, &x);
+        assert_eq!(w.cat.marks(&y, 0).unwrap().rating, 1, "the sample");
+        assert_ne!(facts_at(&w, &y), x_before, "the sample: they differ");
+        w.cat
+            .move_photos(&[(x.clone(), y.clone()), (y.clone(), x.clone())])
+            .unwrap();
+        assert_eq!(facts_at(&w, &y), x_before, "x's rows are at y now");
+        assert_eq!(w.cat.marks(&x, 0).unwrap().rating, 1, "y's rows are at x");
     }
 
     fn move_file(w: &World) -> PathBuf {
