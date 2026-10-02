@@ -67,6 +67,7 @@ mod multi;
 mod name_edit;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod preset_ops;
 mod preview_flow;
 mod rename_flow;
 mod segmented;

@@ -312,16 +312,18 @@ impl RustroomApp {
     /// Re-read the presets directory. Called after a save or a delete, not every frame.
     pub(crate) fn reload_presets(&mut self) {
         self.preset_list = self.preset_store.list();
+        self.preset_folders = self.preset_store.folders();
     }
 
     /// Move a preset to the trash and refresh the cached list.
-    pub(crate) fn delete_preset(&mut self, name: &str) {
-        match self.preset_store.delete(name) {
+    pub(crate) fn delete_preset(&mut self, folder: Option<&str>, name: &str) {
+        match self.preset_store.delete(folder, name) {
             Ok(()) => {
                 self.status = format!("Deleted preset “{name}” — Ctrl+Z to restore");
                 let open = self.open_photo();
                 self.actions.push(
                     ActionKind::PresetDelete {
+                        folder: folder.map(str::to_string),
                         name: name.to_string(),
                     },
                     open.as_ref(),

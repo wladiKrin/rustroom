@@ -2,6 +2,7 @@
 
 use super::{dialog, Footer};
 use crate::develop::panel::section::{header, Header};
+use crate::theme::Hover as _;
 use crate::transfer::edit_group_checkboxes;
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
@@ -10,11 +11,18 @@ use rustroom_app::settings::ConfirmOutcome;
 
 /// The "Save current as preset…" dialog.
 pub fn save(app: &mut RustroomApp, ctx: &egui::Context) {
-    let Modal::SavePreset { name, groups } = &mut app.modal else {
+    let Modal::SavePreset {
+        name,
+        groups,
+        folder,
+    } = &mut app.modal
+    else {
         return;
     };
     let mut name = std::mem::take(name);
     let mut groups = *groups;
+    let mut folder = folder.take();
+    let folders = app.preset_folders.clone();
     let mut close = false;
     let mut save = false;
 
@@ -37,6 +45,22 @@ pub fn save(app: &mut RustroomApp, ctx: &egui::Context) {
                 ui.label("Name");
                 ui.text_edit_singleline(&mut name);
             });
+            // M10.9a: the folder it goes into — none unless chosen.
+            if !folders.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label("Folder");
+                    egui::ComboBox::from_id_salt("save_preset_folder")
+                        .selected_text(folder.as_deref().unwrap_or("None"))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut folder, None, "None");
+                            for f in &folders {
+                                ui.selectable_value(&mut folder, Some(f.clone()), f);
+                            }
+                        })
+                        .response
+                        .hover("Chooses the folder the preset is saved in");
+                });
+            }
             let summary = rustroom_app::presets::groups_summary(groups);
             let mut h = header(
                 ui,
@@ -59,6 +83,7 @@ pub fn save(app: &mut RustroomApp, ctx: &egui::Context) {
                 name: name.trim().to_string(),
                 groups,
                 edits,
+                folder: folder.clone(),
             };
             match app.preset_store.save(&preset) {
                 Ok(()) => app.status = format!("Saved preset “{}”", preset.name),
@@ -72,7 +97,11 @@ pub fn save(app: &mut RustroomApp, ctx: &egui::Context) {
     if close {
         app.modal = Modal::None;
     } else {
-        app.modal = Modal::SavePreset { name, groups };
+        app.modal = Modal::SavePreset {
+            name,
+            groups,
+            folder,
+        };
     }
 }
 
@@ -84,12 +113,14 @@ pub fn save(app: &mut RustroomApp, ctx: &egui::Context) {
 /// is actually tested.
 pub fn confirm_delete(app: &mut RustroomApp, ctx: &egui::Context) {
     let Modal::ConfirmDeletePreset {
+        folder,
         name,
         dont_ask_again,
     } = &mut app.modal
     else {
         return;
     };
+    let folder = folder.take();
     let name = std::mem::take(name);
     let mut dont_ask = *dont_ask_again;
     let mut outcome: Option<ConfirmOutcome> = None;
@@ -118,6 +149,7 @@ pub fn confirm_delete(app: &mut RustroomApp, ctx: &egui::Context) {
         None => {
             // Still open — carry the scratch state to the next frame.
             app.modal = Modal::ConfirmDeletePreset {
+                folder,
                 name,
                 dont_ask_again: dont_ask,
             };
@@ -125,12 +157,48 @@ pub fn confirm_delete(app: &mut RustroomApp, ctx: &egui::Context) {
         Some(o) => {
             let confirm_before = app.settings.confirm_preset_delete;
             if app.settings.apply_delete_confirm(o) {
-                app.delete_preset(&name);
+                app.delete_preset(folder.as_deref(), &name);
             }
             if app.settings.confirm_preset_delete != confirm_before {
                 app.save_settings();
             }
             app.modal = Modal::None;
         }
+    }
+}
+
+/// Deleting a preset folder (M10.9a): asks first, since its presets go with it — to the trash, and
+/// one Ctrl+Z brings the folder back whole.
+pub fn confirm_delete_folder(app: &mut RustroomApp, ctx: &egui::Context) {
+    let Modal::ConfirmDeletePresetFolder { name, count } = &app.modal else {
+        return;
+    };
+    let (name, count) = (name.clone(), *count);
+    let says = match count {
+        0 => format!("Delete the folder “{name}”?"),
+        1 => format!("Delete the folder “{name}” and its preset?"),
+        n => format!("Delete the folder “{name}” and its {n} presets?"),
+    };
+    let out = dialog(
+        ctx,
+        &mut app.settings,
+        "confirm_delete_preset_folder",
+        "Delete folder?",
+        theme::DialogSize::Compact,
+        Footer::confirm(
+            "Delete",
+            "Deletes this folder and moves its presets to the trash",
+            true,
+            "Cancel",
+        ),
+        |ui| {
+            ui.label(&says);
+        },
+    );
+    if out.primary {
+        app.modal = Modal::None;
+        app.delete_preset_folder(&name);
+    } else if out.dismissed {
+        app.modal = Modal::None;
     }
 }

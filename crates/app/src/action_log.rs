@@ -12,6 +12,14 @@ use crate::photo_id::PhotoId;
 use edit_model::{EditGroups, Edits};
 use std::path::PathBuf;
 
+/// The presets and folders a [`ActionKind::PresetEdit`] touched, on one side of it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PresetState {
+    /// Each with its `folder`.
+    pub presets: Vec<crate::presets::Preset>,
+    pub folders: Vec<String>,
+}
+
 /// A single undoable action, in the order it happened.
 ///
 /// ⚠ Not `Eq`: `Edits` holds `f32`s, so it is `PartialEq` only. That is all the tests need.
@@ -92,7 +100,20 @@ pub enum ActionKind {
     },
     /// A preset was moved to the trash. Named so a redo can delete the same one again, and
     /// so an undo restores *that* preset rather than whatever happens to be newest.
-    PresetDelete { name: String },
+    PresetDelete {
+        /// The folder it was deleted from — a restore puts it back there (M10.9a).
+        folder: Option<String>,
+        name: String,
+    },
+    /// Presets or their folders changed (M10.9a): a rename, a move, an update, an import, a folder
+    /// made, renamed or deleted. Undo takes `after` away and puts `before` back; redo the reverse.
+    ///
+    /// ⚠ Snapshots of only what the change touched — a whole preset is a few KB, and the store is
+    /// files, so there is no id to key a smaller record on.
+    PresetEdit {
+        before: PresetState,
+        after: PresetState,
+    },
     /// One photo's settings were applied to several others' sidecars.
     ///
     /// **Boxed on purpose:** the payload is a few hundred bytes, and an unboxed variant
@@ -203,6 +224,7 @@ fn reachable(kind: &ActionKind, open: Option<&PhotoId>) -> bool {
         // ⚠ A deleted copy has no `PhotoId` left to be reachable *from*, so it is global like a
         // preset deletion rather than scoped like an edit.
         ActionKind::PresetDelete { .. }
+        | ActionKind::PresetEdit { .. }
         | ActionKind::Sync(_)
         | ActionKind::CopyDelete { .. }
         | ActionKind::CatalogDelete { .. }
@@ -337,6 +359,7 @@ mod tests {
 
     fn del(name: &str) -> ActionKind {
         ActionKind::PresetDelete {
+            folder: None,
             name: name.to_string(),
         }
     }

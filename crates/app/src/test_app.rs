@@ -202,6 +202,8 @@ pub fn for_test() -> RustroomApp {
         selected_export_preset: None,
         preset_store: PresetStore::new(dir.0.join("presets"), dir.0.join("trash")),
         preset_list: Vec::new(),
+        preset_folders: Vec::new(),
+        preset_rename: None,
         settings_store: SettingsStore::new(dir.0.join("settings.json")),
         settings: Settings::default(),
         // ⚠ In memory, so tests never touch the user's real catalog.

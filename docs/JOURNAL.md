@@ -166,6 +166,63 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-10-02 — M10.9a: preset folders, rename, import and export (branch `m10.9a-presets`, merged 2026-10-02)
+
+**Input:** Phase 10's *"Develop presets: import/export, folders, rename"*. The author's answers:
+**Rustroom's own JSON** in and out (Lightroom `.xmp` presets are a later item); **one level of
+folders**, Lightroom's groups; **the full right-click set**. Spec
+`docs/superpowers/specs/2026-10-02-m10.9a-presets-design.md`, plan beside it.
+
+**Built:**
+- **The store** moved to `preset_store.rs` (lib) — `presets.rs` keeps `Preset`, the built-ins and the
+  summary, and re-exports the store. A **folder is a subdirectory**; the file format is unchanged
+  (`Preset::folder` is `#[serde(skip)]`, filled by `list`), so an exported preset is the stored file.
+  A preset is its folder and its name; `Preset::key()` (`folder/name`) is what Import's preset choice
+  stores, a bare name still finding a top-level one. **The trash remembers the folder**
+  (`{folder, preset}`; an old bare entry reads as no folder). `rename`, `move_to`, `create_folder`,
+  `rename_folder`, `remove_folder` (into the trash) **refuse a taken name**; a case-only rename is the
+  same file only when **the inode says so** — on a case-sensitive disk `warm.json` beside `Warm.json`
+  is another preset. `unique_name` ("Warm 2") for imports, `export_path` (`-1`) for exports.
+- **`preset_ops.rs`** (bin): rename, move, move to a new folder (named next), update with the open
+  photo's settings (**the groups stay**), import (junk counted), new folder, folder rename and delete,
+  export; each one step — **`ActionKind::PresetEdit { before, after }`**, snapshots of the touched
+  presets and folders (the log is in memory, so a new kind costs nothing). `PresetDelete` carries the
+  folder.
+- **The panel** (`develop/panel/preset_rows.rs`, drawn from plain data, one `Act` back): folder headers
+  with counts (`section::Header::verbatim` — sentence case would have rewritten *"Film Looks"*), a
+  preset's right-click (Rename, Update with current settings, Move to ▸, Export…, Show in Finder,
+  Delete), a folder's (Rename, Import presets here…, Export folder…, Delete folder… — which asks),
+  double-click to rename in place, **drag onto a folder or onto *Yours***; the ⋯ menu (Import presets…,
+  New folder, Show presets folder); Save current… has a **Folder** choice.
+- **Fixed in passing:** every row's `×` said *"Deletes this mask"* — presets, patches and eye
+  corrections included; `RowSpec::delete_hover` now says each one's own. A stale doc fragment
+  (*"Filename-safe form of a preset name…"*) fused into `TRASH_CAP`'s doc is gone.
+
+**Two tests that could not fail, found on the way:** `a_malformed_preset_is_skipped_not_fatal` wrote its
+junk **beside** `presets/`, where `list` never looks; and
+`applying_a_preset_with_nothing_selected_says_so` clicked **"Warm" — a built-in's name too**, so since
+the built-ins arrived it tested the starters' path only. Both fixed; the panel fixture now writes real
+presets to the store.
+**Sabotages, each red** (against an 82-test control): rename overwriting (1); move overwriting (1); the
+trash dropping the folder (2); import overwriting (1); undo not restoring (6); the drag ignored (1);
+update changing the groups (1); the same-file check always true (1).
+⚠ Known and accepted: **the first click of a double-click applies the preset**, as a click does — egui
+cannot know a second click is coming; Ctrl+Z takes it back. ⚠ My unquoted heredoc ran a doc comment's
+backticks as commands (the two file names vanished) — caught on read-back. **3454 tests.**
+**After use:** *"the items listing the contents of a preset… are colliding with the X"*, and a drag should
+go by area. (1) `mask_components::row` lays its text out **before** painting: the room ends at the
+first action cell; the name is elided with "…" (shown in full by `hover_titled`) and keeps at least
+55% when the meta wants more; the meta gets what is left, **clipped there and scrolled sideways**
+under the pointer (`ScrollSource::MOUSE_WHEEL` — a trackpad swipe, Shift and the wheel; never a drag,
+which is the row's). Every row of that kind gains it — masks, patches, eyes. (2) **A drop goes by
+area**: `preset_rows::drop` reads the pointer on release against each folder's whole region (header
+and presets) — inside one, into it; anywhere else in *Yours*, out of its folder; the target is
+outlined while dragging. `the_text_stops_before_the_delete_cell` reproduces the report when the old
+painting is put back (*"reaches 220 past the × at 190"*); ⚠ my first sabotage of it (widening the
+child's rect) left the scroll area's own `max_width` clipping, so it stayed green — a sabotage must
+restore the OLD code, not merely loosen the new. `a_drop_goes_by_area` (5 cases) is red with "outside
+a folder" off and with a folder's region cut to its header. **3455 tests.**
+
 ### 2026-10-02 — M10.8d: batch rename (branch `m10.8d-batch-rename`, merged 2026-10-02)
 
 **Input:** Phase 10's *"Batch rename — today one photo at a time; the import filename template

@@ -67,6 +67,7 @@ pub mod photo_id;
 pub mod photo_info;
 pub mod photo_move;
 pub mod prefix_cache;
+pub mod preset_store;
 pub mod presets;
 pub mod preview_build;
 pub mod preview_key;

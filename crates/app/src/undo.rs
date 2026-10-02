@@ -104,8 +104,9 @@ impl RustroomApp {
             ActionKind::CollectionChange { .. } => self.replay_collection_change(&kind, false),
             ActionKind::PhotoMove { .. } => self.replay_photo_move(ctx, &kind, false),
             ActionKind::StackChange { .. } => self.replay_stack_change(&kind, false),
-            ActionKind::PresetDelete { name } => {
-                match self.preset_store.restore(&name) {
+            ActionKind::PresetEdit { .. } => self.replay_preset_edit(&kind, false),
+            ActionKind::PresetDelete { folder, name } => {
+                match self.preset_store.restore(folder.as_deref(), &name) {
                     Ok(Some(p)) => self.status = format!("Restored preset “{}”", p.name),
                     // Evicted past the trash cap, or removed by hand.
                     Ok(None) => self.status = format!("“{name}” is no longer in the trash"),
@@ -204,8 +205,9 @@ impl RustroomApp {
             ActionKind::CollectionChange { .. } => self.replay_collection_change(&kind, true),
             ActionKind::PhotoMove { .. } => self.replay_photo_move(ctx, &kind, true),
             ActionKind::StackChange { .. } => self.replay_stack_change(&kind, true),
-            ActionKind::PresetDelete { name } => {
-                match self.preset_store.delete(&name) {
+            ActionKind::PresetEdit { .. } => self.replay_preset_edit(&kind, true),
+            ActionKind::PresetDelete { folder, name } => {
+                match self.preset_store.delete(folder.as_deref(), &name) {
                     Ok(()) => self.status = format!("Deleted preset “{name}”"),
                     Err(e) => self.status = format!("Could not delete preset: {e}"),
                 }

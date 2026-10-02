@@ -130,6 +130,7 @@ pub(super) fn list(ui: &mut egui::Ui, s: &mut Session, eyes: &mut EyeTool, ed: &
                     selected: selected == Some(i),
                     current: false,
                     deletable: true,
+                    delete_hover: "Deletes this correction",
                     indent: 0.0,
                     eye: None,
                     hold: None,

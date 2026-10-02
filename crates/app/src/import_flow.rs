@@ -127,7 +127,9 @@ impl RustroomApp {
                 .preset_store
                 .list()
                 .into_iter()
-                .map(|p| p.name)
+                // ⚠ The key — `folder/name` for a preset in a folder (M10.9a); a top-level preset's
+                // key is its bare name, so a choice saved before folders existed still finds it.
+                .map(|p| p.key())
                 .collect(),
         });
         if let Some(dir) = first {
@@ -339,7 +341,7 @@ impl RustroomApp {
             .draft
             .preset
             .as_ref()
-            .and_then(|n| self.preset_store.list().into_iter().find(|p| &p.name == n));
+            .and_then(|n| self.preset_store.list().into_iter().find(|p| p.key() == *n));
         if let Some(cat) = &self.catalog {
             for (path, capture) in &st.copied {
                 rustroom_app::ingest::entry::apply(cat, path, capture, &st.draft, preset.as_ref());

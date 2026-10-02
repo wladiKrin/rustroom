@@ -11,27 +11,30 @@
 //! through `app.apply_to_selection`. That is why it needs `&mut RustroomApp` and cannot sit
 //! inside the tool `match` with the others.
 
-use crate::develop::panel::{mask_components, section};
+use crate::develop::panel::{preset_rows, section};
 use crate::theme::Hover as _;
 use crate::{Modal, RustroomApp};
 use edit_model::EditGroups;
 use eframe::egui;
+use preset_rows::Act;
 use rustroom_app::action_log::ActionKind;
 use rustroom_app::thumb_loader::ThumbRequest;
 
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     enum Action {
         None,
-        Apply(usize),
         ApplyBuiltin(usize),
-        Delete(String),
+        Rows(preset_rows::Act),
         Save,
         UndoDelete,
+        Import,
+        NewFolder,
+        RevealAll,
     }
     let mut action = Action::None;
     let open = app.open_photo();
     let undo_name = match app.actions.peek_undo(open.as_ref()) {
-        Some(ActionKind::PresetDelete { name }) => Some(name.clone()),
+        Some(ActionKind::PresetDelete { name, .. }) => Some(name.clone()),
         _ => None,
     };
 
@@ -71,6 +74,26 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 if r.clicked() {
                     action = Action::Save;
                 }
+                // M10.9a: the rest of the presets' own actions, out of the way.
+                let m = egui::containers::menu::MenuButton::new(
+                    egui::RichText::new(rustroom_app::icons::MORE.to_string())
+                        .size(crate::theme::tokens::ICON),
+                )
+                .ui(ui, |ui| {
+                    if ui.button("Import presets…").clicked() {
+                        action = Action::Import;
+                        ui.close();
+                    }
+                    if ui.button("New folder").clicked() {
+                        action = Action::NewFolder;
+                        ui.close();
+                    }
+                    if ui.button("Show presets folder").clicked() {
+                        action = Action::RevealAll;
+                        ui.close();
+                    }
+                });
+                m.0.hover("Shows more preset actions — import, a new folder, the presets folder");
             },
         );
 
@@ -123,38 +146,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             }
         }
         ui.add_space(4.0);
-        ui.label(egui::RichText::new("Yours").small().weak());
-        if n == 0 {
-            ui.label(
-                egui::RichText::new("None yet. Save current… keeps this photo's settings.").weak(),
-            );
-        }
-        for (i, p) in app.preset_list.iter().enumerate() {
-            let meta = rustroom_app::presets::groups_summary(p.groups);
-            let has = current.as_ref().is_some_and(|e| p.matches(e));
-            let out = mask_components::row(
-                ui,
-                mask_components::RowSpec {
-                    glyph: mask_components::RowGlyph::Preset,
-                    op: None,
-                    name: &p.name,
-                    meta: &meta,
-                    accessible: &p.name,
-                    selected: has,
-                    current: false,
-                    deletable: true,
-                    indent: 0.0,
-                    eye: None,
-                    hold: None,
-                    hover: "Applies this preset to the photo",
-                    draggable: false,
-                },
-            );
-            if out.delete {
-                action = Action::Delete(p.name.clone());
-            } else if out.clicked {
-                action = Action::Apply(i);
-            }
+        // M10.9a: *Yours* — folders, menus, rename in place, drag — drawn from plain data.
+        let ctx_rows = preset_rows::Ctx {
+            presets: &app.preset_list,
+            folders: &app.preset_folders,
+            current: current.as_ref(),
+        };
+        if let Some(a) = preset_rows::yours(ui, &ctx_rows, &mut app.preset_rename) {
+            action = Action::Rows(a);
         }
         if let Some(name) = &undo_name {
             ui.allocate_ui_with_layout(
@@ -175,6 +174,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             app.modal = Modal::SavePreset {
                 name: String::new(),
                 groups: EditGroups::default(),
+                folder: None,
             };
         }
         Action::ApplyBuiltin(i) => {
@@ -188,8 +188,19 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 };
             }
         }
-        Action::Apply(i) => {
-            if let Some(p) = app.preset_list.get(i).cloned() {
+        Action::UndoDelete => app.undo_action(ctx),
+        Action::Import => app.import_presets_picked(None),
+        Action::NewFolder => app.new_preset_folder(),
+        Action::RevealAll => app.reveal_preset(None, None),
+        Action::Rows(a) => apply_row_act(app, a),
+    }
+}
+
+/// Perform what *Yours* asked for (M10.9a).
+fn apply_row_act(app: &mut RustroomApp, a: Act) {
+    match a {
+        Act::Apply(folder, name) => {
+            if let Some(p) = app.preset_store.get(folder.as_deref(), &name) {
                 let (n, failed) = app.apply_to_selection(&p.edits, p.groups);
                 app.status = match (n, failed) {
                     (0, _) => "Nothing selected".to_string(),
@@ -199,16 +210,35 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 };
             }
         }
-        Action::UndoDelete => app.undo_action(ctx),
-        Action::Delete(name) => {
+        Act::Delete(folder, name) => {
             if app.settings.confirm_preset_delete {
                 app.modal = Modal::ConfirmDeletePreset {
+                    folder,
                     name,
                     dont_ask_again: false,
                 };
             } else {
-                app.delete_preset(&name);
+                app.delete_preset(folder.as_deref(), &name);
             }
+        }
+        Act::Rename(folder, name, typed) => app.rename_preset(folder.as_deref(), &name, &typed),
+        Act::Update(folder, name) => app.update_preset(folder.as_deref(), &name),
+        Act::Move(folder, name, to) => app.move_preset(folder.as_deref(), &name, to.as_deref()),
+        Act::MoveToNewFolder(folder, name) => {
+            app.move_preset_to_new_folder(folder.as_deref(), &name)
+        }
+        Act::Export(folder, name) => app.export_preset_picked(folder, name),
+        Act::Reveal(folder, name) => app.reveal_preset(folder.as_deref(), Some(&name)),
+        Act::RenameFolder(old, typed) => app.rename_preset_folder(&old, &typed),
+        Act::ImportInto(folder) => app.import_presets_picked(Some(folder)),
+        Act::ExportFolder(folder) => app.export_preset_folder_picked(folder),
+        Act::DeleteFolder(name) => {
+            let count = app
+                .preset_list
+                .iter()
+                .filter(|p| p.folder.as_deref() == Some(name.as_str()))
+                .count();
+            app.modal = Modal::ConfirmDeletePresetFolder { name, count };
         }
     }
 }
@@ -253,16 +283,21 @@ mod tests {
     use super::*;
     use crate::test_ui;
 
+    /// ⚠ Written to the store, as a saved preset is — the rows act on the store since M10.9a, so a
+    /// list set by hand would draw rows whose clicks find nothing.
     fn app_with(presets: &[&str]) -> RustroomApp {
         let mut app = crate::test_app::for_test();
-        app.preset_list = presets
-            .iter()
-            .map(|n| rustroom_app::presets::Preset {
-                name: n.to_string(),
-                groups: EditGroups::default(),
-                edits: edit_model::Edits::default(),
-            })
-            .collect();
+        for n in presets {
+            app.preset_store
+                .save(&rustroom_app::presets::Preset {
+                    name: n.to_string(),
+                    groups: EditGroups::default(),
+                    edits: edit_model::Edits::default(),
+                    folder: None,
+                })
+                .unwrap();
+        }
+        app.reload_presets();
         app
     }
 
@@ -337,8 +372,16 @@ mod tests {
     fn applying_a_preset_with_nothing_selected_says_so() {
         // ⚠ A preset applies to the *selection*, exactly as a paste does. With nothing selected
         // the honest outcome is a status line, not a silent no-op.
-        let mut app = app_with(&["Warm"]);
-        click_in_panel("Warm", &mut app);
+        // ⚠⚠ Not "Warm": a built-in has that name, and the click found the built-in's row instead
+        // of the user's — so this checked the starters' path only (found M10.9a).
+        let mut app = app_with(&["Mine"]);
+        assert!(
+            rustroom_app::presets::builtin()
+                .iter()
+                .all(|p| p.name != "Mine"),
+            "the sample: no built-in shares the name"
+        );
+        click_in_panel("Mine", &mut app);
         assert_eq!(app.status, "Nothing selected");
     }
 
@@ -384,6 +427,7 @@ mod tests {
 
         app.actions.push(
             ActionKind::PresetDelete {
+                folder: None,
                 name: "Warm".to_string(),
             },
             None,
@@ -402,8 +446,10 @@ mod tests {
         let mut app = app_with(&["Same", "Other"]);
         crate::test_app::open_test_photo(&mut app, &ctx, 40, 20);
         app.session.as_mut().unwrap().edits.exposure = 1.0;
-        app.preset_list[0].edits.exposure = 1.0;
-        app.preset_list[1].edits.exposure = 2.0;
+        // ⚠ By name: the store lists them sorted, so "Other" comes first.
+        for p in app.preset_list.iter_mut() {
+            p.edits.exposure = if p.name == "Same" { 1.0 } else { 2.0 };
+        }
         let c = ctx.clone();
         let out = ctx.run_ui(
             egui::RawInput {
