@@ -233,6 +233,15 @@ mod tests {
     #[test]
     fn the_selection_is_renamed_in_grid_order_and_undone_in_one_step() {
         let (d, mut app) = folder("rename_order");
+        // ⚠ The active photo LAST, so the selection's own order (active first) is not the grid's —
+        // with it first the two coincide and a missing sort passes.
+        let lib = app.library.as_mut().unwrap();
+        assert!(lib.selection.focus(2), "the sample: c is selected");
+        assert_eq!(
+            app.selection_ids()[0].path,
+            d.0.join("c.JPG"),
+            "the sample: the selection starts at c"
+        );
         let cat = app.catalog.as_ref().unwrap();
         assert!(
             cat.description_of(&d.0.join("a.RAF")).unwrap().is_some(),
@@ -339,7 +348,9 @@ mod tests {
             *template = t.to_string();
         };
 
-        set(&mut app, "{name}-{copy}");
+        // ⚠ A template that WOULD rename if `{copy}` were taken (`{name}-{copy}` gives each photo its
+        // own name, so Rename is dark for that reason and the check would prove nothing).
+        set(&mut app, "X-{copy}");
         crate::test_ui::click(&ctx, "Rename", |_| {
             crate::modals::rename::show(&mut app, &ctx)
         });
