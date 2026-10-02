@@ -351,6 +351,9 @@ mod tests {
         // ⚠ A template that WOULD rename if `{copy}` were taken (`{name}-{copy}` gives each photo its
         // own name, so Rename is dark for that reason and the check would prove nothing).
         set(&mut app, "X-{copy}");
+        // ⚠ One frame first: a window's first frame only sizes it, so a click placed from that frame
+        // lands where the button is not yet — the miss that made this check pass whatever it said.
+        let _ = crate::test_ui::nodes(&ctx, |_| crate::modals::rename::show(&mut app, &ctx));
         crate::test_ui::click(&ctx, "Rename", |_| {
             crate::modals::rename::show(&mut app, &ctx)
         });
