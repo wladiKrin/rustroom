@@ -48,7 +48,7 @@ impl RustroomApp {
             settings.preview_budget_mb as u64 * 1024 * 1024,
         );
         #[cfg(target_os = "macos")]
-        native_menu::install(ctx, &settings.recent_folders);
+        native_menu::install(ctx, &settings.recent_folders, &settings.shortcuts, true);
         // ⚠ Before any UI runs: `add_font` rebuilds the glyph atlas, so installing later would
         // throw away the first frame's cache for nothing. Unlike `apply`, this does not depend
         // on the settings, so it does not have to wait for the load.

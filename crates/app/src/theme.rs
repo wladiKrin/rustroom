@@ -710,7 +710,7 @@ mod tests {
         let id = egui::FontId::proportional(14.0);
         let mut strings: Vec<String> = vec![
             crate::library::EMPTY_LIBRARY_TEXT.to_owned(),
-            crate::develop::canvas::EMPTY_DEVELOP_TEXT.to_owned(),
+            crate::develop::canvas::empty_develop_text(&[]),
         ];
         strings.extend(
             rustroom_app::library_filter::EmptyGrid::ALL
@@ -1500,6 +1500,61 @@ mod tests {
     /// ⚠⚠ Every hover goes through `Hover`, or the description — and the coverage walk — is
     /// bypassed. Swept over the non-test code of every source; a positive control first: this file's
     /// own call must be found, or the sweep is reading nothing.
+    /// The lines of `code` with a chord written into a string — `"Zooms in (⌘=)"` — outside comments.
+    fn chorded(code: &str) -> Vec<String> {
+        code.lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter(|l| {
+                ["(⌘", "(⇧⌘", "(⌥"]
+                    .iter()
+                    .any(|p| l.find(p).is_some_and(|i| l[..i].contains('"')))
+            })
+            .map(|l| l.trim().to_string())
+            .collect()
+    }
+
+    /// ⚠⚠ M10.9b: no hover or hint writes a chord into its text — it reads `shortcuts::hint`, so a
+    /// rebinding cannot leave a sentence naming keys that no longer do it.
+    #[test]
+    fn no_text_writes_a_chord_in() {
+        assert_eq!(
+            chorded("let s = \"Zooms in (⌘=)\";").len(),
+            1,
+            "the sample: the check sees one"
+        );
+        assert!(
+            chorded("// Zooms in (⌘=)").is_empty(),
+            "a comment is not text"
+        );
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![root.clone()];
+        let (mut files, mut found) = (0, Vec::new());
+        while let Some(dir) = stack.pop() {
+            for e in std::fs::read_dir(&dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                if p.extension().is_none_or(|x| x != "rs") {
+                    continue;
+                }
+                files += 1;
+                let src = std::fs::read_to_string(&p).unwrap();
+                let rel = p.strip_prefix(&root).unwrap().display().to_string();
+                for l in chorded(&production_code(&src)) {
+                    found.push(format!("{rel}: {l}"));
+                }
+            }
+        }
+        assert!(files > 100, "the sample: {files} files");
+        assert!(
+            found.is_empty(),
+            "a chord written into text:\n{}",
+            found.join("\n")
+        );
+    }
+
     #[test]
     fn no_bare_on_hover_text_outside_theme() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

@@ -30,6 +30,9 @@ struct Installed {
     checks: Vec<(Command, CheckMenuItem)>,
     /// The state the marks were last set from; `None` until the first [`sync`].
     synced: Option<menu::MenuState>,
+    /// What it was built with — [`set_accelerators`] rebuilds only on a change.
+    accelerators: bool,
+    overrides: Vec<rustroom_app::shortcuts::Rebinding>,
 }
 
 /// Our own channel, fed by the event handler.
@@ -87,7 +90,16 @@ fn suppress_injected_edit_items() {
 }
 
 /// Build and install the menu. Call once, from the app's constructor.
-pub fn install(ctx: &egui::Context, recent: &[std::path::PathBuf]) {
+///
+/// `overrides` are the user's own shortcuts (M10.9b); with `accelerators` off no item takes a key —
+/// what recording a chord in Settings → Keyboard needs, since a native accelerator is consumed before
+/// the window sees the key.
+pub fn install(
+    ctx: &egui::Context,
+    recent: &[std::path::PathBuf],
+    overrides: &[rustroom_app::shortcuts::Rebinding],
+    accelerators: bool,
+) {
     suppress_injected_edit_items();
     forbid_window_tabbing();
     let menu = Menu::new();
@@ -105,7 +117,10 @@ pub fn install(ctx: &egui::Context, recent: &[std::path::PathBuf]) {
     // ⚠ Settings belongs in the application menu on macOS, with ⌘, — that is where every Mac
     // user looks for it. The model keeps it under File for the in-window bar, which has no
     // application menu, and the File rendering below skips it.
-    let settings = MenuItem::new("Settings…", true, accelerator(menu::Shortcut::cmd(',')));
+    let settings_key = rustroom_app::shortcuts::shortcut_of(Command::Settings, overrides)
+        .filter(|_| accelerators)
+        .and_then(accelerator);
+    let settings = MenuItem::new("Settings…", true, settings_key);
     by_id.insert(settings.id().clone(), Command::Settings);
     let _ = app_menu.append(&settings);
     let _ = app_menu.append(&PredefinedMenuItem::separator());
@@ -117,9 +132,9 @@ pub fn install(ctx: &egui::Context, recent: &[std::path::PathBuf]) {
     let _ = menu.append(&app_menu);
 
     let mut checks = Vec::new();
-    for section in menu::model_with(recent) {
+    for section in menu::model_for(recent, overrides) {
         let sub = Submenu::new(section.title, true);
-        append_items(&sub, section.items, &mut by_id, &mut checks);
+        append_items(&sub, section.items, &mut by_id, &mut checks, accelerators);
         let _ = menu.append(&sub);
     }
 
@@ -153,6 +168,8 @@ pub fn install(ctx: &egui::Context, recent: &[std::path::PathBuf]) {
             by_id,
             checks,
             synced: None,
+            accelerators,
+            overrides: overrides.to_vec(),
         })
     });
 }
@@ -160,11 +177,35 @@ pub fn install(ctx: &egui::Context, recent: &[std::path::PathBuf]) {
 /// Drain any menu activations since the last frame.
 /// Rebuild the menu with a new "Open recent" list — a no-op until [`install`] has run, which is
 /// what keeps the headless tests (and any second window) away from AppKit.
-pub fn refresh(ctx: &egui::Context, recent: &[std::path::PathBuf]) {
+pub fn refresh(
+    ctx: &egui::Context,
+    recent: &[std::path::PathBuf],
+    overrides: &[rustroom_app::shortcuts::Rebinding],
+    accelerators: bool,
+) {
     if MENU.with(|m| m.borrow().is_none()) {
         return;
     }
-    install(ctx, recent);
+    install(ctx, recent, overrides, accelerators);
+}
+
+/// Turn the menu's accelerators off while a chord is recorded, and back on — rebuilding with the
+/// current bindings — after (M10.9b). ⚠ Called every frame the Settings dialog is open, so it rebuilds
+/// only when the switch or the bindings changed.
+pub fn set_accelerators(
+    ctx: &egui::Context,
+    recent: &[std::path::PathBuf],
+    overrides: &[rustroom_app::shortcuts::Rebinding],
+    on: bool,
+) {
+    let same = MENU.with(|m| {
+        m.borrow()
+            .as_ref()
+            .is_none_or(|i| i.accelerators == on && i.overrides == overrides)
+    });
+    if !same {
+        install(ctx, recent, overrides, on);
+    }
 }
 
 /// Set the check marks from `state` (M10.8b). ⚠ Called every frame and cheap: AppKit is touched only
@@ -213,22 +254,90 @@ pub fn poll() -> Vec<Command> {
     out
 }
 
-fn accelerator(sc: menu::Shortcut) -> Option<muda::accelerator::Accelerator> {
-    use muda::accelerator::{Accelerator, Code, Modifiers, CMD_OR_CTRL};
-    let code = match sc.key {
-        'O' => Code::KeyO,
-        'I' => Code::KeyI,
-        'E' => Code::KeyE,
+/// The physical key a model key character names — every key a chord can name (M10.9b: it held ten,
+/// so most chords, ⌘G and ⌘R among them, were never shown in the menu at all).
+fn code(c: char) -> Option<muda::accelerator::Code> {
+    use muda::accelerator::Code;
+    if let Some(n) = menu::fn_number(c) {
+        return Some(
+            [
+                Code::F1,
+                Code::F2,
+                Code::F3,
+                Code::F4,
+                Code::F5,
+                Code::F6,
+                Code::F7,
+                Code::F8,
+                Code::F9,
+                Code::F10,
+                Code::F11,
+                Code::F12,
+            ][n as usize - 1],
+        );
+    }
+    const LETTERS: [Code; 26] = [
+        Code::KeyA,
+        Code::KeyB,
+        Code::KeyC,
+        Code::KeyD,
+        Code::KeyE,
+        Code::KeyF,
+        Code::KeyG,
+        Code::KeyH,
+        Code::KeyI,
+        Code::KeyJ,
+        Code::KeyK,
+        Code::KeyL,
+        Code::KeyM,
+        Code::KeyN,
+        Code::KeyO,
+        Code::KeyP,
+        Code::KeyQ,
+        Code::KeyR,
+        Code::KeyS,
+        Code::KeyT,
+        Code::KeyU,
+        Code::KeyV,
+        Code::KeyW,
+        Code::KeyX,
+        Code::KeyY,
+        Code::KeyZ,
+    ];
+    const DIGITS: [Code; 10] = [
+        Code::Digit0,
+        Code::Digit1,
+        Code::Digit2,
+        Code::Digit3,
+        Code::Digit4,
+        Code::Digit5,
+        Code::Digit6,
+        Code::Digit7,
+        Code::Digit8,
+        Code::Digit9,
+    ];
+    Some(match c {
+        'A'..='Z' => LETTERS[(c as u8 - b'A') as usize],
+        '0'..='9' => DIGITS[(c as u8 - b'0') as usize],
         ',' => Code::Comma,
+        '.' => Code::Period,
+        '/' => Code::Slash,
+        ';' => Code::Semicolon,
+        '\'' => Code::Quote,
         '[' => Code::BracketLeft,
         ']' => Code::BracketRight,
-        '0' => Code::Digit0,
-        '1' => Code::Digit1,
+        '\\' => Code::Backslash,
+        '`' => Code::Backquote,
         // ⚠ `+` sits on the `=` key; its physical code is Equal.
-        '+' => Code::Equal,
+        '+' | '=' => Code::Equal,
         '-' => Code::Minus,
         _ => return None,
-    };
+    })
+}
+
+fn accelerator(sc: menu::Shortcut) -> Option<muda::accelerator::Accelerator> {
+    use muda::accelerator::{Accelerator, Modifiers, CMD_OR_CTRL};
+    let code = code(sc.key)?;
     let mut mods = Modifiers::empty();
     if sc.cmd {
         // ⚠ `CMD_OR_CTRL` is a **free const in `accelerator`**, not a `Modifiers` associated
@@ -238,6 +347,9 @@ fn accelerator(sc: menu::Shortcut) -> Option<muda::accelerator::Accelerator> {
     }
     if sc.shift {
         mods |= Modifiers::SHIFT;
+    }
+    if sc.alt {
+        mods |= Modifiers::ALT;
     }
     Some(Accelerator::new(Some(mods), code))
 }
@@ -330,6 +442,7 @@ fn append_items(
     items: Vec<Item>,
     by_id: &mut HashMap<MenuId, Command>,
     checks: &mut Vec<(Command, CheckMenuItem)>,
+    accelerators: bool,
 ) {
     for item in items {
         match item {
@@ -338,7 +451,7 @@ fn append_items(
             }
             Item::Submenu { label, items } => {
                 let nested = Submenu::new(native_label(&label), true);
-                append_items(&nested, items, by_id, checks);
+                append_items(&nested, items, by_id, checks, accelerators);
                 let _ = sub.append(&nested);
             }
             Item::Action {
@@ -353,12 +466,16 @@ fn append_items(
                 // ⚠ The chord is part of the label for the unsafe ones — see
                 // `Shortcut::safe_as_native_accelerator`: a bare key or a text-editing chord as a
                 // real accelerator would fire while typing in a field.
-                let (text, accel) = match shortcut {
-                    Some(sc) if sc.safe_as_native_accelerator() => {
-                        (label.to_string(), accelerator(sc))
-                    }
-                    Some(sc) => (format!("{label}   {}", sc.label()), None),
-                    None => (label.to_string(), None),
+                //
+                // ⚠ With accelerators off (recording a chord, M10.9b) every chord goes in the label,
+                // so the menu still says what it is.
+                let native = shortcut
+                    .filter(|sc| accelerators && sc.safe_as_native_accelerator())
+                    .and_then(accelerator);
+                let (text, accel) = match (shortcut, native) {
+                    (_, Some(a)) => (label.to_string(), Some(a)),
+                    (Some(sc), None) => (format!("{label}   {}", sc.label()), None),
+                    (None, None) => (label.to_string(), None),
                 };
                 // M10.8b: a command with a mark is a checkable item, set by `sync` — not here, since
                 // the state is not known at install.
@@ -399,6 +516,18 @@ mod tests {
                     assert!(!label.contains("&&"), "{label:?}");
                 }
             }
+        }
+    }
+
+    /// M10.9b: every key a chord can be recorded with has a native key — a user's ⌘G or ⌥⌘F5 shows in
+    /// the menu.
+    #[test]
+    fn every_recordable_key_has_a_native_code() {
+        let mut keys: Vec<char> = ('A'..='Z').chain('0'..='9').collect();
+        keys.extend([',', '.', '/', ';', '\'', '[', ']', '\\', '`', '+', '=', '-']);
+        keys.extend((1..=12).filter_map(menu::fn_key));
+        for c in keys {
+            assert!(code(c).is_some(), "{c:?} has no native key");
         }
     }
 }

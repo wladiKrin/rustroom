@@ -5,7 +5,7 @@
 
 mod centre_info;
 mod filter;
-mod keys;
+pub(crate) mod keys;
 mod landing;
 mod top_bar;
 
@@ -141,7 +141,7 @@ impl RustroomApp {
         // ⚠ Not while a dialog is open: ⌘1 zoomed the canvas and `\` toggled Before/After behind
         // the Export dialog (P-04). The dialog owns the keyboard until it closes.
         if matches!(self.modal, crate::modals::Modal::None) {
-            if let Some(cmd) = pressed_command(ctx) {
+            if let Some(cmd) = pressed_command(ctx, &self.settings.shortcuts) {
                 commands::execute(self, ctx, cmd);
             }
         }
@@ -175,7 +175,12 @@ impl RustroomApp {
             // redundant row under a nearly-empty system menu.
             if !cfg!(target_os = "macos") {
                 let state = self.menu_state();
-                if let Some(cmd) = menu_bar::show(ui, &self.settings.recent_folders, &state) {
+                if let Some(cmd) = menu_bar::show(
+                    ui,
+                    &self.settings.recent_folders,
+                    &self.settings.shortcuts,
+                    &state,
+                ) {
                     pending_command = Some(cmd);
                 }
             }

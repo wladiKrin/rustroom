@@ -109,7 +109,12 @@ impl RustroomApp {
         self.settings.remember_folder(&dir);
         self.save_settings();
         #[cfg(target_os = "macos")]
-        crate::native_menu::refresh(ctx, &self.settings.recent_folders);
+        crate::native_menu::refresh(
+            ctx,
+            &self.settings.recent_folders,
+            &self.settings.shortcuts,
+            true,
+        );
     }
 
     /// Show every photo the catalog knows, from every folder ever opened.

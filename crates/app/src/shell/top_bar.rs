@@ -72,7 +72,7 @@ impl RustroomApp {
                 let gap_right = ui
                     .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if view == AppView::Develop && self.session.is_some() {
-                            if export_button(ui).clicked() {
+                            if export_button(ui, &self.settings.shortcuts).clicked() {
                                 command = Some(Command::Export);
                             }
                             ui.separator();
@@ -265,13 +265,16 @@ fn plan_library_bar(app: &RustroomApp, ui: &egui::Ui) -> LibraryBarPlan {
 }
 
 /// The Develop toolbar's Export button: the bar's one accent-filled control.
-fn export_button(ui: &mut egui::Ui) -> egui::Response {
+fn export_button(ui: &mut egui::Ui, keys: &[rustroom_app::shortcuts::Rebinding]) -> egui::Response {
     ui.scope(|ui| {
         ui.style_mut().spacing.button_padding.y = (MODE_PILL - 14.0) / 2.0;
         theme::primary_button(ui, &format!("{} Export…", icons::EXPORT), true)
     })
     .inner
-    .hover("Exports the selected photos (⌘E)")
+    .hover(format!(
+        "Exports the selected photos{}",
+        rustroom_app::shortcuts::hint(Command::Export, keys)
+    ))
 }
 
 #[cfg(test)]

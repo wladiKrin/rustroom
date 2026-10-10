@@ -56,6 +56,8 @@ pub struct SettingsDraft {
     immich_thumb_budget_mb: u32,
     preview_demosaic: Option<raw_decode::Demosaic>,
     preview_budget_mb: u32,
+    /// Settings → Keyboard (M10.9b).
+    keyboard: super::settings_keyboard::KeyboardDraft,
 }
 
 /// Which formats take part in stacking, as chips.
@@ -124,6 +126,7 @@ impl SettingsDraft {
             immich_thumb_budget_mb: s.immich_thumb_budget_mb,
             preview_demosaic: s.preview_demosaic,
             preview_budget_mb: s.preview_budget_mb,
+            keyboard: super::settings_keyboard::KeyboardDraft::from(&s.shortcuts),
         }
     }
 
@@ -272,6 +275,11 @@ impl SettingsDraft {
             }
             plain = true;
         }
+        // M10.9b: the shortcuts, and the macOS menu that shows them.
+        if self.keyboard.overrides != app.settings.shortcuts {
+            app.settings.shortcuts = self.keyboard.overrides.clone();
+            plain = true;
+        }
         if plain {
             app.save_settings();
         }
@@ -305,6 +313,9 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         .take()
         .unwrap_or_else(|| SettingsDraft::from_settings(&app.settings));
     let os_manages_colour = app.os_manages_colour;
+    // ⚠ Before the dialog: it closes on an Escape it sees first, and here Escape stops a recording.
+    d.keyboard.take_escape(ctx);
+    let recent = app.settings.recent_folders.clone();
 
     let out = dialog(
         ctx,
@@ -328,6 +339,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                     ("Display", "Shows the colour space the photo is shown in"),
                     ("Performance", "Shows preview quality, the caches, the GPU and how many photos export at once"),
                     ("Input", "Shows which mouse buttons pan, erase and draw"),
+                    ("Keyboard", "Shows every command's keyboard shortcut, to change"),
                     ("Immich", "Shows the connection to your Immich server"),
                 ],
             );
@@ -708,6 +720,8 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             "Renders at a lower resolution while you drag, for a smoother response",
                         );
                 }
+                // M10.9b.
+                5 => super::settings_keyboard::show(ui, &mut d.keyboard, &recent),
                 _ => {
                     // ⚠⚠ **The master toggle, above everything and outside the grid.** This tab is the
                     // one place Immich is named when the integration is off — hiding the tab too would
@@ -853,6 +867,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         },
     );
 
+    let recording = d.keyboard.recording.is_some() && !(out.primary || out.dismissed);
     if out.primary {
         d.apply(app, ctx);
         app.modal = Modal::None;
@@ -861,6 +876,18 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     } else {
         app.settings_draft = Some(d);
     }
+    // ⚠⚠ While a chord is being recorded the macOS menu takes no keys — a native accelerator is
+    // consumed before the window sees it, so ⌘O would open a file instead of being recorded. Back on
+    // with the (possibly new) bindings once recording ends or the dialog closes. A no-op when unchanged.
+    #[cfg(target_os = "macos")]
+    crate::native_menu::set_accelerators(
+        ctx,
+        &app.settings.recent_folders,
+        &app.settings.shortcuts,
+        !recording,
+    );
+    #[cfg(not(target_os = "macos"))]
+    let _ = recording;
 }
 
 #[cfg(test)]
@@ -936,6 +963,28 @@ mod tests {
     ///
     /// ⚠ It also pins that the upload key does **not** ride on the browse connection: applying it
     /// alone must leave `immich_key` untouched.
+    /// M10.9b: the Keyboard tab's shortcuts land on Apply, and not before.
+    #[test]
+    fn shortcuts_land_on_apply() {
+        use rustroom_app::menu::{Command, Shortcut};
+        let (ctx, mut app) = open_settings();
+        settle(&ctx, &mut app);
+        let mut o = Vec::new();
+        rustroom_app::shortcuts::assign(
+            &mut o,
+            Command::TakeSnapshot,
+            Some(Shortcut::cmd('S').with_alt()),
+        );
+        app.settings_draft
+            .as_mut()
+            .expect("the draft exists once the dialog has been shown")
+            .keyboard
+            .overrides = o.clone();
+        assert!(app.settings.shortcuts.is_empty(), "not before Apply");
+        test_ui::click(&ctx, "Apply", |_| show(&mut app, &ctx));
+        assert_eq!(app.settings.shortcuts, o, "Apply dropped the shortcuts");
+    }
+
     #[test]
     fn the_upload_key_survives_apply_and_leaves_the_browse_key_alone() {
         let (ctx, mut app) = open_settings();

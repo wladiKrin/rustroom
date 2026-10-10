@@ -120,6 +120,14 @@ pub fn label_of(c: Command) -> String {
         .unwrap_or_else(|| command_key(c))
 }
 
+/// A command's chord for a hover sentence — `" (⌘1)"`, or nothing when it has none (M10.9b: these
+/// were written into the sentences, and a rebinding would have left them wrong).
+pub fn hint(c: Command, overrides: &[Rebinding]) -> String {
+    shortcut_of(c, overrides)
+        .map(|sc| format!(" ({})", sc.label()))
+        .unwrap_or_default()
+}
+
 /// Why `sc` cannot be chosen, or `None` when it can.
 pub fn refusal(sc: Shortcut) -> Option<&'static str> {
     let plain_cmd = sc.cmd && !sc.alt && !sc.shift;
