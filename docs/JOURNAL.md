@@ -166,7 +166,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-10-10 — M10.9b: user-defined keyboard shortcuts (branch `m10.9b-shortcuts`, awaiting use)
+### 2026-10-10 — M10.9b: user-defined keyboard shortcuts (branch `m10.9b-shortcuts`, merged 2026-10-10)
 
 **Input:** Phase 10's *"User-defined keyboard shortcuts — the Settings bindings so far are closed enums
 by design (`PanDrag`); this is the general version"*. The author's answers: **every menu command**
