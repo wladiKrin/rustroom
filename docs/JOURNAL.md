@@ -166,6 +166,58 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-10-10 — M10.9c: import Lightroom presets (branch `m10.9c-lightroom-presets`, awaiting use)
+
+**Input:** Phase 10's M10.9c (split from M10.9a): *"Import Lightroom / Camera Raw `.xmp` develop presets"*.
+The author's answers: **all three formats** (`.xmp`, `.lrtemplate`, `.zip` packs); **each preset into a
+folder named after its own Lightroom group**; **real files for the tests, downloaded**. Spec
+`docs/superpowers/specs/2026-10-10-m10.9c-lightroom-presets-design.md`, plan beside it.
+
+**Built — a new crate, `lr-preset` (no GUI, 18th in the workspace):**
+- `xmp.rs` — the **top** description's `crs:` attributes only (a Look's and a mask's own descriptions
+  carry `crs:Name` and amounts that must not overwrite the preset's), `crs:Name`/`crs:Group`, the curve
+  sequences flattened, a `crs:Look` recorded; a profile (`PresetType="Look"`) or a sidecar → not a
+  preset; a file that ends early → malformed.
+- `lrtemplate.rs` — a tokenizer and a recursive reader for the Lua table (`["key"]`, escapes, `--`
+  comments), UTF-8 with the BOM dropped or else Latin-1.
+- `zip.rs` — hand-rolled on **`flate2`, already in the build — no new crate fetched** (the lock adds only
+  `lr-preset`): central directory, stored and deflate, encrypted/other methods counted, zip64 refused,
+  macOS `__MACOSX/` and `._` forks skipped silently, and an archive whose **comment** is cut short is
+  truncated (GitHub writes the commit id there).
+- `map.rs` — groups **exactly as the file carries them** (Lightroom writes every setting of an included
+  group, zeros too); curves 0–255 → 0–1 (the identity as none); colour grading's hue through
+  `lr_hue_to_oklab` (HSV → sRGB → linear → Oklab, the colour wheel's own convention; red 0° → 29.2°) —
+  ⚠ the shadow and highlight wheels' hue and saturation live under the **old split-toning names**, only
+  their luminance under `ColorGrade…`; white balance (Kelvin, tint ×100/150, "As Shot" none); black &
+  white → saturation −100; sharpening capped at 100; defringe ×5. **Left out and named, only when set**:
+  grain, masks, crop, the profile, the camera calibration, Auto tone, Auto/relative white balance, the
+  B&W mix, perspective, manual lens corrections, spot removal, pre-2012 settings.
+- `read(file_name, bytes) -> Report` over all three; a zip's preset with no group takes **its folder**.
+
+**The app:** `preset_ops::import_presets` takes `.json` and the three; from ⋯ a Lightroom preset goes into
+its group's folder (made, and in the one undo step), a taken name numbered per folder; a preset carrying
+**nothing** Rustroom can apply (a mask alone) is **not imported but counted**. Status, measured on the real
+pack: *"Imported 57 presets into “Presets” · left out: the profile in 45, the camera calibration in 24,
+grain in 4, … · 3 carried only what Rustroom cannot apply"*.
+
+**Test files — real, sourced, licensed** (`crates/lr-preset/tests/fixtures/README.md`): five presets and
+GitHub's archive of **Questtion/Lightroom-Presets** (MIT, written by Camera Raw 17.5); the GPL-3.0 sample
+`.lrtemplate` from **yuzukumo/LRtemplate2XMPPresets**; and **80 Lightroom-written templates** from
+**xsynaptic/synaptic-lightroom-presets** — no licence file, so **not committed** — read and mapped locally by
+the `#[ignore]`d `real_lightroom_templates` (`LR_PRESET_SAMPLES=…`): all 80 read; left out {Auto tone: 68,
+the camera calibration: 68, Auto white balance: 5, the profile: 2} — which is why those names joined the list.
+⚠ No file in the fixtures was written here.
+
+**Sabotages, each red** (52-test control): the zip folder ignored as a group (2); a curve not scaled (1);
+the hue not converted (1); a zero grain reported (1); a resource fork read (1); a profile read as a
+preset (1). ⚠ **The pack holds three mask-only presets, not the one my first test assumed** — measured
+(Darken Background, Skin Smoothing, Teeth Whitening), not lowered. ⚠⚠ **Three slips of mine, all recorded:**
+`ls` (eza) put colour codes into a path; the gate's exit code was **masked by `| head`** so a clippy-red
+commit went in (amended; the gate's output now goes to a file and its own code decides); and a `git
+checkout` meant to undo a debug print **reverted an uncommitted `lib.rs`** — rewritten, re-tested, and
+committed before any further experiment. **Final review: my own pass** (no subagent unasked); two minors
+deferred — an `.lrtemplate` Look is not named, and an `.xmp` with a BOM is untested. **3505 tests.**
+
 ### 2026-10-10 — M10.9b: user-defined keyboard shortcuts (branch `m10.9b-shortcuts`, merged 2026-10-10)
 
 **Input:** Phase 10's *"User-defined keyboard shortcuts — the Settings bindings so far are closed enums
