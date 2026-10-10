@@ -16,6 +16,7 @@ members = [
     "crates/image-decode",
     "crates/immich",
     "crates/lens-profile",
+    "crates/lr-preset",
     "crates/test-dir",
     "crates/xmp",
 ]
