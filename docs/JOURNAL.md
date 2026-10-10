@@ -208,6 +208,19 @@ disabled button's hover is not its AccessKit description (`theme::describe` by h
 `hover_coverage`); and *Reset all* sat below 1,400 pt, off the click harness's screen (the test narrows
 the list first). ⚠ The scratchpad's `gate.sh` was gone after the break — recreated, still non-zero
 unless all three pass. **3477 tests.**
+**After use:** *"there are several options for open recent… there should be just one"*, *"Shift A for one of
+the open recent options… did nothing"*, *"I am able to assign the shift A command to several options"*,
+and a hover for each command. ⚠⚠ **The second and third were one bug, mine:** the key handler and
+`assign`'s take-over both read `model_for(&[], …)` — a menu built **without the recent folders**, which
+has no *Open recent* entries — while the tab listed them from the menu **with** them. So a chord on one
+fired nothing, and was invisible to take-over. Now **`shortcuts::entries(overrides)` is the one list**
+(no recent parameter), with a single **"Open most recent folder"** (`MOST_RECENT` = `OpenRecent(0)`)
+always in it after *Open folder…*; the key handler, take-over, the tab and the reference all read it;
+`bindable` keeps the older recent folders out (and the draft drops any old override on them). Both
+regressions written red first (`left: None`). **`command_help::describe`** — one sentence per command,
+exhaustive over `Command`, held to the hover rule — on each name in the tab. Sabotages, each red: Open
+most recent missing from the list (2); the handler skipping it (1); a two-sentence description (1).
+**3480 tests.**
 
 ### 2026-10-02 — M10.9a: preset folders, rename, import and export (branch `m10.9a-presets`, merged 2026-10-02)
 
