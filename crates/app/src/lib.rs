@@ -80,6 +80,7 @@ pub mod rule_form;
 pub mod safe_name;
 pub mod selection;
 pub mod settings;
+pub mod shortcuts;
 pub mod sidecar;
 pub mod slider_help;
 pub mod slider_map;

@@ -387,6 +387,17 @@ fn settings_round_trip_carries_the_export_options() {
         // Every field non-default, so a re-defaulted one cannot pass.
         // Non-default, so a re-defaulted field cannot pass.
         rename_template: "Trip-{seq:4}".into(),
+        // Non-default, with ⌥ and a removal, so a re-defaulted field cannot pass.
+        shortcuts: vec![
+            crate::shortcuts::Rebinding {
+                command: "Stack".into(),
+                shortcut: Some(crate::menu::Shortcut::cmd('J').with_alt()),
+            },
+            crate::shortcuts::Rebinding {
+                command: "Export".into(),
+                shortcut: None,
+            },
+        ],
         import: crate::ingest::options::ImportOptions {
             destination: std::path::PathBuf::from("/photos"),
             layout: crate::ingest::options::Layout::YearMonthDay,
