@@ -6,6 +6,7 @@
 //! counterpart here is named, never silently dropped.
 
 pub mod lrtemplate;
+pub mod map;
 mod value;
 pub mod xmp;
 pub mod zip;

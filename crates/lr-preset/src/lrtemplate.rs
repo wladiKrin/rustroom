@@ -342,6 +342,7 @@ mod tests {
         let dir = std::env::var("LR_PRESET_SAMPLES").expect("LR_PRESET_SAMPLES names a folder");
         let mut stack = vec![std::path::PathBuf::from(dir)];
         let mut n = 0;
+        let mut left = std::collections::BTreeMap::<&str, usize>::new();
         while let Some(d) = stack.pop() {
             for e in std::fs::read_dir(&d).unwrap().flatten() {
                 let p = e.path();
@@ -352,11 +353,14 @@ mod tests {
                         .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
                     assert!(r.name.is_some(), "{} has no name", p.display());
                     assert!(!r.settings.is_empty(), "{} has no settings", p.display());
+                    for l in crate::map::to_edits(&r.settings).left_out {
+                        *left.entry(l).or_insert(0) += 1;
+                    }
                     n += 1;
                 }
             }
         }
         assert!(n > 0, "the sample: no templates under LR_PRESET_SAMPLES");
-        eprintln!("read {n} Lightroom-written templates");
+        eprintln!("read and mapped {n} Lightroom-written templates; left out: {left:?}");
     }
 }
