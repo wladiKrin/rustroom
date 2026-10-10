@@ -166,6 +166,49 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-10-10 — M10.9b: user-defined keyboard shortcuts (branch `m10.9b-shortcuts`, awaiting use)
+
+**Input:** Phase 10's *"User-defined keyboard shortcuts — the Settings bindings so far are closed enums
+by design (`PanDrag`); this is the general version"*. The author's answers: **every menu command**
+(culling and navigation stay); **Settings → Keyboard**; **a taken chord is taken over**. Spec
+`docs/superpowers/specs/2026-10-10-m10.9b-shortcuts-design.md`, plan beside it.
+
+**Built:**
+- **The chord model** (`menu.rs`): `Shortcut` gains **`alt`** (⌥, `#[serde(default)]` so an older
+  chord reads) and **F1–F12**, encoded as `char`s in Apple's own range (U+F704 = F1), which kept
+  `Shortcut` `Copy` and every `match` on `key` unchanged; labels in macOS's order, `⌥⇧⌘S`.
+- **`shortcuts.rs`** (lib): `Settings::shortcuts` stores **only the changes**, keyed by
+  `command_key` (the `Debug` form); an entry naming no command is ignored. **`menu::model_for(recent,
+  overrides)` is the one bound model** — the key handler, both menu bars, Help → Keyboard shortcuts.
+  `assign` takes a chord over and returns the loser; an override equal to the default drops out;
+  `refusal` names the culling keys, ⌘A/⌘X, macOS's ⌘Q/⌘H/⌘M/⌘W/⌥⌘H and the four **fixed** rows (Undo,
+  Redo, Copy settings, Paste settings — the system's edit keys; ⌘C/⌘V arrive as `Copy`/`Paste`
+  events, never keys). `hint(command)` is `" (⌘1)"` or nothing.
+- **Every reader follows**: `pressed_command(ctx, overrides)` over **one key table read both ways**
+  (`egui_key`/`key_char`, 60 recordable keys) and ⌥ compared; `menu_bar`; `native_menu` with a
+  **full** key map — it held ten, so ⌘G, ⌘R, ⌘', ⇧⌘I and most others were **never shown in the macOS
+  menu at all** — ⌥, and Settings… from the binding. **Ten hover and hint texts** had the chord written
+  in (*"Zooms to 100 % (⌘1)"*); they read `shortcuts::hint` now, and `no_text_writes_a_chord_in`
+  sweeps production strings for `(⌘` / `(⇧⌘` / `(⌥` (checking itself on a sample first).
+- **Settings → Keyboard** (`modals/settings_keyboard.rs`, in the draft): search; per menu, each command
+  with its chord button (*"Shortcut for …"*); click, press — Delete clears, a refused chord says why in
+  red, a taken one says *"Taken from Stack"*; **Reset** per changed row (a word, not the planned ↺ —
+  a glyph is a cmap gamble here), **Reset all**. ⚠ Esc is taken **before** `dialog` reads it
+  (`take_escape`), or it would close Settings. ⚠⚠ **While recording, the macOS menu takes no keys**
+  (`native_menu::set_accelerators`, rebuilt only on a change) — a native accelerator is consumed before
+  the window sees it, so ⌘O could not otherwise be recorded.
+
+**Sabotages, each red** (25-test control): the key handler on the defaults (2); take-over off (1);
+refusal off in the tab (1); Escape not taken (1); a chord written into a hover (1); the alias consulted
+after a bound match (1). ⚠ My first alias sabotage — dropping a `bare_y_bound` guard — **stayed
+green, because the guard was dead**: the alias is consulted only when no bound shortcut matched, so a
+bound `Y` already won. The guard is gone; the test now goes red on the real failure, the alias checked
+regardless. ⚠ Three harness slips: the key table holds exactly **60** keys (I asserted `> 60`); a
+disabled button's hover is not its AccessKit description (`theme::describe` by hand, caught by
+`hover_coverage`); and *Reset all* sat below 1,400 pt, off the click harness's screen (the test narrows
+the list first). ⚠ The scratchpad's `gate.sh` was gone after the break — recreated, still non-zero
+unless all three pass. **3477 tests.**
+
 ### 2026-10-02 — M10.9a: preset folders, rename, import and export (branch `m10.9a-presets`, merged 2026-10-02)
 
 **Input:** Phase 10's *"Develop presets: import/export, folders, rename"*. The author's answers:
