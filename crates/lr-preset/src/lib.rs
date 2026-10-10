@@ -5,6 +5,7 @@
 //! table. The look will not match Lightroom exactly — the processing differs — and what has no
 //! counterpart here is named, never silently dropped.
 
+pub mod lrtemplate;
 mod value;
 pub mod xmp;
 
