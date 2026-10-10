@@ -23,9 +23,19 @@ pub struct KeyboardDraft {
 }
 
 impl KeyboardDraft {
+    /// The draft of `overrides` — minus any for a command that can no longer carry one (an older
+    /// recent folder, bound before there was one entry), so Apply cleans them out.
     pub fn from(overrides: &[Rebinding]) -> Self {
+        let live: Vec<String> = shortcuts::entries(&[])
+            .iter()
+            .map(|e| shortcuts::command_key(e.command))
+            .collect();
         Self {
-            overrides: overrides.to_vec(),
+            overrides: overrides
+                .iter()
+                .filter(|r| live.contains(&r.command))
+                .cloned()
+                .collect(),
             ..Self::default()
         }
     }
@@ -43,7 +53,7 @@ impl KeyboardDraft {
 }
 
 /// The tab's body.
-pub fn show(ui: &mut egui::Ui, d: &mut KeyboardDraft, recent: &[std::path::PathBuf]) {
+pub fn show(ui: &mut egui::Ui, d: &mut KeyboardDraft) {
     if let Some(c) = d.recording {
         record(ui, d, c);
     }
@@ -54,7 +64,7 @@ pub fn show(ui: &mut egui::Ui, d: &mut KeyboardDraft, recent: &[std::path::PathB
     )
     .hover("Narrows the list to the commands whose name or keys contain this");
     let want = d.filter.trim().to_lowercase();
-    let entries = shortcuts::entries(recent, &d.overrides);
+    let entries = shortcuts::entries(&d.overrides);
     let mut menu = "";
     for e in &entries {
         let chord = e.shortcut.map(|s| s.label()).unwrap_or_default();
@@ -96,7 +106,9 @@ fn row(ui: &mut egui::Ui, d: &mut KeyboardDraft, e: &shortcuts::Entry) {
         egui::vec2(ui.available_width(), ui.spacing().interact_size.y + 2.0),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            ui.label(&e.label);
+            // After use: what the command does, since a name like "Make top of stack" does not say.
+            ui.label(&e.label)
+                .hover(rustroom_app::command_help::describe(e.command));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let text = if d.recording == Some(e.command) {
                     "Press keys…".to_string()
@@ -236,14 +248,14 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| show(ui, d, &[]));
+                    egui::ScrollArea::vertical().show(ui, |ui| show(ui, d));
                 },
             );
         }
 
         fn click(&mut self, label: &str) {
             let d = &mut self.d;
-            test_ui::click(&self.ctx, label, |ui| show(ui, d, &[]));
+            test_ui::click(&self.ctx, label, |ui| show(ui, d));
         }
 
         fn press(&mut self, key: egui::Key, modifiers: egui::Modifiers) {
@@ -370,7 +382,7 @@ mod tests {
     fn the_search_narrows_the_list() {
         let mut h = Harness::new();
         h.d.filter = "stack".into();
-        let labels: Vec<String> = test_ui::nodes(&h.ctx, |ui| show(ui, &mut h.d, &[]))
+        let labels: Vec<String> = test_ui::nodes(&h.ctx, |ui| show(ui, &mut h.d))
             .into_iter()
             .map(|n| n.label)
             .collect();

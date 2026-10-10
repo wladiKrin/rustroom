@@ -315,7 +315,6 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let os_manages_colour = app.os_manages_colour;
     // ⚠ Before the dialog: it closes on an Escape it sees first, and here Escape stops a recording.
     d.keyboard.take_escape(ctx);
-    let recent = app.settings.recent_folders.clone();
 
     let out = dialog(
         ctx,
@@ -721,7 +720,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         );
                 }
                 // M10.9b.
-                5 => super::settings_keyboard::show(ui, &mut d.keyboard, &recent),
+                5 => super::settings_keyboard::show(ui, &mut d.keyboard),
                 _ => {
                     // ⚠⚠ **The master toggle, above everything and outside the grid.** This tab is the
                     // one place Immich is named when the integration is off — hiding the tab too would

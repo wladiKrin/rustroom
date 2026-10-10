@@ -22,34 +22,27 @@ pub(crate) fn pressed_command(
         return None;
     }
     let mut hit = None;
-    // ⚠⚠ The **bound** model (M10.9b): a user's own chord fires its command, and the default it
-    // replaced does not.
-    for section in menu::model_for(&[], overrides) {
-        menu::walk(&section.items, &mut |item| {
-            let menu::Item::Action {
-                command,
-                shortcut: Some(sc),
-                ..
-            } = item
-            else {
-                return;
-            };
-            if hit.is_some() || (sc.cmd && matches!(sc.key, 'C' | 'V')) {
-                return;
-            }
-            let Some(key) = egui_key(sc.key) else {
-                return;
-            };
-            let pressed = ctx.input(|i| {
-                i.key_pressed(key)
-                    && i.modifiers.command == sc.cmd
-                    && i.modifiers.shift == sc.shift
-                    && i.modifiers.alt == sc.alt
-            });
-            if pressed {
-                hit = Some(*command);
-            }
+    // ⚠⚠ The **bound** list (M10.9b): a user's own chord fires its command, and the default it
+    // replaced does not. ⚠ `shortcuts::entries`, never a menu walk: the menu without the recent
+    // folders has no "Open recent" entry, so a chord on it fired nothing (found by use).
+    for e in rustroom_app::shortcuts::entries(overrides) {
+        let Some(sc) = e.shortcut else { continue };
+        if sc.cmd && matches!(sc.key, 'C' | 'V') {
+            continue;
+        }
+        let Some(key) = egui_key(sc.key) else {
+            continue;
+        };
+        let pressed = ctx.input(|i| {
+            i.key_pressed(key)
+                && i.modifiers.command == sc.cmd
+                && i.modifiers.shift == sc.shift
+                && i.modifiers.alt == sc.alt
         });
+        if pressed {
+            hit = Some(e.command);
+            break;
+        }
     }
     // ⚠ An alias is consulted only when no bound shortcut matched — so a user who gave `Y` to
     // something else gets that, not Compare (`the_alias_yields_to_a_bound_y`).
@@ -376,5 +369,22 @@ mod tests {
         }
         // 26 letters, 10 digits, 12 F-keys, 12 punctuation keys.
         assert_eq!(n, 60, "the sample");
+    }
+
+    /// ⚠⚠ After use: a chord given to "Open most recent folder" fires it — ⇧A did nothing, since the
+    /// key handler read a menu without the recent folders.
+    #[test]
+    fn a_chord_on_the_most_recent_folder_fires_it() {
+        use rustroom_app::menu::{Command, Shortcut};
+        let shift_a = Shortcut {
+            shift: true,
+            ..Shortcut::bare('A')
+        };
+        let mut o = Vec::new();
+        rustroom_app::shortcuts::assign(&mut o, Command::OpenRecent(0), Some(shift_a));
+        assert_eq!(
+            chord(egui::Key::A, egui::Modifiers::SHIFT, &o),
+            Some(Command::OpenRecent(0))
+        );
     }
 }

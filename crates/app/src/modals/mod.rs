@@ -499,27 +499,31 @@ fn shortcuts(app: &mut RustroomApp, ctx: &egui::Context) {
             // One section per menu section, under the panels' header. ⚠ The inner
             // `ScrollArea` is gone: `dialog` provides one, and nesting two vertical scroll
             // areas makes them fight over the wheel.
-            for section in rustroom_app::menu::model_for(&[], &overrides) {
+            // ⚠ From `shortcuts::entries`, the list the key handler reads — so "Open most recent
+            // folder" is here when it has a chord, and nothing listed here can fail to fire.
+            let entries = rustroom_app::shortcuts::entries(&overrides);
+            let mut menus: Vec<&str> = Vec::new();
+            for e in &entries {
+                if !menus.contains(&e.menu) {
+                    menus.push(e.menu);
+                }
+            }
+            for title in menus {
                 let mut h = header(
                     ui,
-                    egui::Id::new(("shortcuts", section.title)),
+                    egui::Id::new(("shortcuts", title)),
                     true,
-                    Header::new(section.title),
+                    Header::new(title),
                 );
                 h.state.show_body_unindented(ui, |ui| {
-                    rustroom_app::menu::walk(&section.items, &mut |item| {
-                        if let rustroom_app::menu::Item::Action {
-                            label,
-                            shortcut: Some(sc),
-                            ..
-                        } = item
-                        {
+                    for e in entries.iter().filter(|e| e.menu == title) {
+                        if let Some(sc) = e.shortcut {
                             ui.horizontal(|ui| {
-                                ui.label(label);
+                                ui.label(&e.label);
                                 theme::hint(ui, &sc.label());
                             });
                         }
-                    });
+                    }
                 });
             }
             for (title, lines) in EXTRA_KEYS {

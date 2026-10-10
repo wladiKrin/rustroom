@@ -7,7 +7,6 @@
 
 use crate::menu::{self, Command, Item, Section, Shortcut};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 /// One changed binding: the command, by [`command_key`], and its chord — `None` for none at all.
 ///
@@ -28,6 +27,15 @@ pub const FIXED: [Command; 4] = [
     Command::PasteSettings,
 ];
 
+/// The one "Open recent" command a shortcut can name: the most recent folder (the author, after use —
+/// one entry per remembered folder was a list that changed under the bindings).
+pub const MOST_RECENT: Command = Command::OpenRecent(0);
+
+/// Whether a command can carry a shortcut — every one but the older recent folders.
+pub fn bindable(c: Command) -> bool {
+    !matches!(c, Command::OpenRecent(n) if n > 0)
+}
+
 /// A command's stable name in `Settings` — its `Debug` form: `SelectTool(Crop)`,
 /// `StackByTime(Some(5))`.
 pub fn command_key(c: Command) -> String {
@@ -41,12 +49,13 @@ pub fn apply(mut sections: Vec<Section>, overrides: &[Rebinding]) -> Vec<Section
             match item {
                 Item::Action {
                     command, shortcut, ..
-                } => {
+                } if bindable(*command) => {
                     let key = command_key(*command);
                     if let Some(r) = overrides.iter().find(|r| r.command == key) {
                         *shortcut = r.shortcut;
                     }
                 }
+                Item::Action { .. } => {}
                 Item::Submenu { items, .. } => walk(items, overrides),
                 Item::Separator => {}
             }
@@ -69,8 +78,13 @@ pub struct Entry {
     pub shortcut: Option<Shortcut>,
 }
 
-/// Every command in menu order, with its bound shortcut.
-pub fn entries(recent: &[PathBuf], overrides: &[Rebinding]) -> Vec<Entry> {
+/// Every command that can carry a shortcut, in menu order, with its bound shortcut.
+///
+/// ⚠⚠ **The one list** the key handler, take-over, the Keyboard tab and the reference all read — and
+/// it does not depend on the recent folders: "Open most recent folder" ([`MOST_RECENT`]) is always in
+/// it, after *Open folder…*. Reading a menu built without the recent folders is what left a chord on an
+/// "Open recent" entry firing nothing and held by two commands at once (found by use).
+pub fn entries(overrides: &[Rebinding]) -> Vec<Entry> {
     fn walk(menu: &'static str, prefix: &str, items: &[Item], out: &mut Vec<Entry>) {
         for item in items {
             match item {
@@ -92,15 +106,30 @@ pub fn entries(recent: &[PathBuf], overrides: &[Rebinding]) -> Vec<Entry> {
         }
     }
     let mut out = Vec::new();
-    for s in menu::model_for(recent, overrides) {
+    for s in menu::model_for(&[], overrides) {
         walk(s.title, "", &s.items, &mut out);
     }
+    let key = command_key(MOST_RECENT);
+    let most_recent = Entry {
+        menu: "File",
+        label: "Open most recent folder".to_string(),
+        command: MOST_RECENT,
+        shortcut: overrides
+            .iter()
+            .find(|r| r.command == key)
+            .and_then(|r| r.shortcut),
+    };
+    let at = out
+        .iter()
+        .position(|e| e.command == Command::OpenFolder)
+        .map_or(0, |i| i + 1);
+    out.insert(at, most_recent);
     out
 }
 
 /// A command's shortcut under these overrides.
 pub fn shortcut_of(c: Command, overrides: &[Rebinding]) -> Option<Shortcut> {
-    entries(&[], overrides)
+    entries(overrides)
         .into_iter()
         .find(|e| e.command == c)
         .and_then(|e| e.shortcut)
@@ -113,7 +142,7 @@ pub fn default_of(c: Command) -> Option<Shortcut> {
 
 /// A command's label, for a note — "Stack", "Stack by capture time ▸ 5 s".
 pub fn label_of(c: Command) -> String {
-    entries(&[], &[])
+    entries(&[])
         .into_iter()
         .find(|e| e.command == c)
         .map(|e| e.label)
@@ -161,7 +190,7 @@ pub fn refusal(sc: Shortcut) -> Option<&'static str> {
 pub fn assign(overrides: &mut Vec<Rebinding>, c: Command, sc: Option<Shortcut>) -> Option<Command> {
     let mut loser = None;
     if let Some(sc) = sc {
-        let holder = entries(&[], overrides)
+        let holder = entries(overrides)
             .into_iter()
             .find(|e| e.shortcut == Some(sc) && e.command != c)
             .map(|e| e.command);
@@ -233,6 +262,26 @@ mod tests {
         assert_eq!(free, None, "a free chord takes from nobody");
     }
 
+    /// ⚠⚠ After use: "Open most recent folder" takes part in take-over like any command — a chord it
+    /// holds moves, and a second command cannot hold the same one too.
+    #[test]
+    fn the_most_recent_folder_takes_part_in_take_over() {
+        let shift_a = Shortcut {
+            shift: true,
+            ..Shortcut::bare('A')
+        };
+        let mut o = Vec::new();
+        assign(&mut o, Command::OpenRecent(0), Some(shift_a));
+        assert_eq!(of(Command::OpenRecent(0), &o), Some(shift_a));
+        let loser = assign(&mut o, Command::Stack, Some(shift_a));
+        assert_eq!(loser, Some(Command::OpenRecent(0)));
+        assert_eq!(
+            of(Command::OpenRecent(0), &o),
+            None,
+            "one chord, one command"
+        );
+    }
+
     /// A binding back to the default leaves no override.
     #[test]
     fn a_default_equal_override_drops_out() {
@@ -281,14 +330,14 @@ mod tests {
             command: "NoSuchCommand".into(),
             shortcut: Some(Shortcut::cmd('B')),
         }];
-        let bound = entries(&[], &o);
-        assert_eq!(bound, entries(&[], &[]));
+        let bound = entries(&o);
+        assert_eq!(bound, entries(&[]));
     }
 
     /// Every command has its own key, and the key names it back.
     #[test]
     fn every_command_key_is_unique() {
-        let all = entries(&[], &[]);
+        let all = entries(&[]);
         assert!(all.len() > 50, "the sample: {}", all.len());
         let mut keys: Vec<String> = all.iter().map(|e| command_key(e.command)).collect();
         keys.sort();
@@ -303,7 +352,7 @@ mod tests {
 
     #[test]
     fn a_submenu_item_names_its_submenu() {
-        let e = entries(&[], &[]);
+        let e = entries(&[]);
         assert!(
             e.iter()
                 .any(|e| e.label.starts_with("Stack by capture time ▸ ")),

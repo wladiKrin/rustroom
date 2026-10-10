@@ -15,6 +15,7 @@ pub mod cell_layout;
 pub mod clipping;
 pub mod collections;
 pub mod color_readout;
+pub mod command_help;
 pub mod compare_pair;
 pub mod composition_guides;
 pub mod crop_tool;
