@@ -22,7 +22,6 @@ pub(crate) fn pressed_command(
         return None;
     }
     let mut hit = None;
-    let mut bare_y_bound = false;
     // ⚠⚠ The **bound** model (M10.9b): a user's own chord fires its command, and the default it
     // replaced does not.
     for section in menu::model_for(&[], overrides) {
@@ -35,7 +34,6 @@ pub(crate) fn pressed_command(
             else {
                 return;
             };
-            bare_y_bound |= !sc.cmd && !sc.alt && sc.key == 'Y';
             if hit.is_some() || (sc.cmd && matches!(sc.key, 'C' | 'V')) {
                 return;
             }
@@ -53,13 +51,10 @@ pub(crate) fn pressed_command(
             }
         });
     }
-    // ⚠ An alias yields to a bound shortcut on its key — a user who gave `Y` to something else
-    // meant that, not Compare.
+    // ⚠ An alias is consulted only when no bound shortcut matched — so a user who gave `Y` to
+    // something else gets that, not Compare (`the_alias_yields_to_a_bound_y`).
     if hit.is_none() {
         for (key, cmd) in menu::ALIASES {
-            if *key == 'Y' && bare_y_bound {
-                continue;
-            }
             let Some(k) = egui_key(*key) else { continue };
             let pressed = ctx.input(|i| {
                 i.key_pressed(k) && !i.modifiers.command && !i.modifiers.shift && !i.modifiers.alt
