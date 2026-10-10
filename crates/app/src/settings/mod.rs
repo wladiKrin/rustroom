@@ -55,6 +55,8 @@ pub struct Settings {
     /// The template the last **rename** used (M10.8d) — written only when a rename runs, so a
     /// cancelled dialog leaves it alone.
     pub rename_template: String,
+    /// The keyboard shortcuts the user changed, over the menu's defaults (M10.9b) — only the changes.
+    pub shortcuts: Vec<crate::shortcuts::Rebinding>,
     /// Which network *Select Subject* uses (M9.13) — IS-Net (fast, the default) or BiRefNet_lite
     /// (high quality). The preview and the export both read it, so they pick the same cached map.
     pub ai_subject_model: ai_mask::SubjectModel,
@@ -461,6 +463,7 @@ impl Default for Settings {
             export: ExportOptions::default(),
             import: Default::default(),
             rename_template: DEFAULT_RENAME_TEMPLATE.to_string(),
+            shortcuts: Vec::new(),
             ai_subject_model: Default::default(),
             confirm_export_preset_delete: true,
             view_demosaic: Demosaic::default(),

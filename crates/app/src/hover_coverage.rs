@@ -211,7 +211,7 @@ fn menu_bar(w: &mut Walk) {
         let state = rustroom_app::menu::MenuState {
             filmstrip_shown: true,
         };
-        let _ = crate::menu_bar::show(ui, &[], &state);
+        let _ = crate::menu_bar::show(ui, &[], &[], &state);
     });
     assert!(
         nodes.iter().any(|n| n.role == Role::MenuItem),
@@ -250,6 +250,7 @@ fn settings(w: &mut Walk) {
         "Display",
         "Performance",
         "Input",
+        "Keyboard",
         "Immich",
     ] {
         test_ui::click(&ctx, tab, &mut body);

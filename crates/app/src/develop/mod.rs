@@ -147,7 +147,13 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ It named the configured pan binding until 2026-09-29; a hover now says what the control
     // does in one sentence (`docs/DESIGN.md` §8), and panning is in the shortcuts dialog.
-    let zoom_actual_hint = "Zooms to 100 %, one photo pixel per screen pixel (⌘1)";
+    // ⚠ Each chord from the user's bindings (M10.9b), never written into the sentence.
+    let keys = app.settings.shortcuts.clone();
+    let hint = |c: Command| rustroom_app::shortcuts::hint(c, &keys);
+    let zoom_actual_hint = format!(
+        "Zooms to 100 %, one photo pixel per screen pixel{}",
+        hint(Command::ZoomActual)
+    );
     // Undo/Redo drive the unified `ActionLog`, so one control walks back through photo edits
     // and preset deletions in the order they actually happened. ⚠ The *tooltip* says which,
     // so an icon button never silently does the surprising one — that wording used to be the
@@ -155,10 +161,14 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let open = app.open_photo();
     let undo_hint = match app.actions.peek_undo(open.as_ref()) {
         Some(ActionKind::PresetDelete { name, .. }) => {
-            format!("Brings back the deleted preset “{name}” (⌘Z)")
+            format!(
+                "Brings back the deleted preset “{name}”{}",
+                hint(Command::Undo)
+            )
         }
-        _ => "Undoes the last change (⌘Z)".to_string(),
+        _ => format!("Undoes the last change{}", hint(Command::Undo)),
     };
+    let redo_hint = format!("Redoes the last undone change{}", hint(Command::Redo));
     let undo_click = icon(
         ui,
         icons::UNDO,
@@ -168,7 +178,7 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let redo_click = icon(
         ui,
         icons::REDO,
-        "Redoes the last undone change (⇧⌘Z)",
+        &redo_hint,
         app.actions.can_redo(open.as_ref()),
     );
     ui.separator();
@@ -188,17 +198,15 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // ⚠ The four abut in one dark well, in the order a zoom reads: out, fit, 1:1, in. They
         // are momentary actions, so none is ever lit — a `pill` would claim one of them is
         // the current state, and "fit" stops being true the moment you scroll.
+        let zoom_out_hint = format!("Zooms out{}", hint(Command::ZoomOut));
+        let fit_hint = format!("Fits the whole photo in the view{}", hint(Command::FitView));
+        let zoom_in_hint = format!("Zooms in{}", hint(Command::ZoomIn));
         let (zoom_out, zoom_fit, zoom_actual, zoom_in) = well(ui, |ui| {
             (
-                icon(ui, icons::ZOOM_OUT, "Zooms out (⌘−)", true),
-                icon(
-                    ui,
-                    icons::ZOOM_FIT,
-                    "Fits the whole photo in the view (⌘0)",
-                    true,
-                ),
-                icon(ui, icons::ZOOM_ACTUAL, zoom_actual_hint, true),
-                icon(ui, icons::ZOOM_IN, "Zooms in (⌘=)", true),
+                icon(ui, icons::ZOOM_OUT, &zoom_out_hint, true),
+                icon(ui, icons::ZOOM_FIT, &fit_hint, true),
+                icon(ui, icons::ZOOM_ACTUAL, &zoom_actual_hint, true),
+                icon(ui, icons::ZOOM_IN, &zoom_in_hint, true),
             )
         });
         if zoom_out {

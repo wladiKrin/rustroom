@@ -87,13 +87,35 @@ pub enum Command {
 /// A keyboard chord, in the model's own terms so neither renderer's types leak in here.
 ///
 /// `key` is the uppercase character or digit as printed on the key: `'O'`, `'Z'`, `'1'`,
-/// `'\\'`, `'['`, `','`, `'0'`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// `'\\'`, `'['`, `','`, `'0'` — or an F-key, [`fn_key`].
+///
+/// ⚠ Stored in `Settings` since M10.9b (a user's own bindings), so `alt` defaults: a chord saved
+/// before it existed reads as one without ⌥.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Shortcut {
     /// Cmd on macOS, Ctrl elsewhere.
     pub cmd: bool,
     pub shift: bool,
+    /// Option on macOS, Alt elsewhere (M10.9b).
+    #[serde(default)]
+    pub alt: bool,
     pub key: char,
+}
+
+/// F1–F12 as `key` characters, in Apple's own range (`NSF1FunctionKey` = U+F704): it keeps
+/// `Shortcut` `Copy` and every `match` on `key` a `char` match. `None` outside 1–12.
+pub const fn fn_key(n: u32) -> Option<char> {
+    if n >= 1 && n <= 12 {
+        char::from_u32(0xF703 + n)
+    } else {
+        None
+    }
+}
+
+/// Which F-key `c` is, if it is one.
+pub fn fn_number(c: char) -> Option<u32> {
+    let n = (c as u32).checked_sub(0xF703)?;
+    (1..=12).contains(&n).then_some(n)
 }
 
 impl Shortcut {
@@ -101,6 +123,7 @@ impl Shortcut {
         Self {
             cmd: true,
             shift: false,
+            alt: false,
             key,
         }
     }
@@ -108,6 +131,7 @@ impl Shortcut {
         Self {
             cmd: true,
             shift: true,
+            alt: false,
             key,
         }
     }
@@ -115,8 +139,13 @@ impl Shortcut {
         Self {
             cmd: false,
             shift: false,
+            alt: false,
             key,
         }
+    }
+    /// The same chord with ⌥ held as well.
+    pub const fn with_alt(self) -> Self {
+        Self { alt: true, ..self }
     }
 
     /// Whether this chord may be registered as a **native** menu accelerator.
@@ -134,11 +163,13 @@ impl Shortcut {
         self.cmd && !matches!(self.key, 'Z' | 'C' | 'V' | 'X' | 'A')
     }
 
-    /// How the chord is written for a human, e.g. `⌘O` on macOS, `Ctrl+O` elsewhere.
+    /// How the chord is written for a human, e.g. `⌥⇧⌘S` on macOS (its own order: ⌥ ⇧ ⌘),
+    /// `Ctrl+Alt+Shift+S` elsewhere.
     pub fn label(self) -> String {
         if cfg!(target_os = "macos") {
             format!(
-                "{}{}{}",
+                "{}{}{}{}",
+                if self.alt { "⌥" } else { "" },
                 if self.shift { "⇧" } else { "" },
                 if self.cmd { "⌘" } else { "" },
                 key_name(self.key)
@@ -147,6 +178,9 @@ impl Shortcut {
             let mut s = String::new();
             if self.cmd {
                 s.push_str("Ctrl+");
+            }
+            if self.alt {
+                s.push_str("Alt+");
             }
             if self.shift {
                 s.push_str("Shift+");
@@ -157,16 +191,17 @@ impl Shortcut {
     }
 }
 
-/// One entry in a menu.
-/// How a key character reads in a chord label: itself, except the one control character the
-/// model uses, which has a name.
+/// How a key character reads in a chord label: itself, except the control character and the F-keys,
+/// which have names.
 fn key_name(c: char) -> String {
-    match c {
-        '\t' => "Tab".to_owned(),
-        c => c.to_string(),
+    match (c, fn_number(c)) {
+        ('\t', _) => "Tab".to_owned(),
+        (_, Some(n)) => format!("F{n}"),
+        (c, None) => c.to_string(),
     }
 }
 
+/// One entry in a menu.
 #[derive(Clone, Debug)]
 pub enum Item {
     Action {
@@ -209,6 +244,14 @@ fn action(label: impl Into<String>, command: Command, shortcut: Option<Shortcut>
 /// accelerators — see [`Shortcut::safe_as_native_accelerator`].
 pub fn model() -> Vec<Section> {
     model_with(&[])
+}
+
+/// The model a user sees: "Open recent" filled, and their own shortcuts over the defaults (M10.9b).
+///
+/// ⚠⚠ **The one bound model** — the key handler, both menu bars and the shortcuts reference read
+/// it, so a rebinding cannot reach one and miss another. `model_with` is the defaults.
+pub fn model_for(recent: &[PathBuf], overrides: &[crate::shortcuts::Rebinding]) -> Vec<Section> {
+    crate::shortcuts::apply(model_with(recent), overrides)
 }
 
 /// The model with "Open recent" filled from the remembered folders, most recent first.

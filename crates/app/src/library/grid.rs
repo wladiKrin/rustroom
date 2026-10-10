@@ -51,12 +51,13 @@ pub(super) fn panel(
         remote,
         stack_drag,
         look,
+        keys,
     } = inp;
     // ⚠ The grid's own gap, 12 each way (`docs/DESIGN.md` §5) — scoped to this panel, because
     // `item_spacing` is also every control row's air and 12 there would double the panel.
     ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
     let Some(lib) = library else {
-        out.empty_pick = empty_library(ui);
+        out.empty_pick = empty_library(ui, keys);
         return;
     };
     // A folder can be reloaded with fewer photos than the selection remembers. This

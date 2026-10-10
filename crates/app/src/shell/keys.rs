@@ -14,46 +14,44 @@ use rustroom_app::menu::Command;
 /// `Event::Copy` / `Event::Paste` *instead of* a `Key` event, so `key_pressed(Key::C)` can
 /// never fire — a trap this codebase has already paid for once. Those stay in
 /// `handle_clipboard_keys`, which reads the semantic events.
-pub(super) fn pressed_command(ctx: &egui::Context) -> Option<Command> {
+pub(crate) fn pressed_command(
+    ctx: &egui::Context,
+    overrides: &[rustroom_app::shortcuts::Rebinding],
+) -> Option<Command> {
     if ctx.memory(|m| m.focused()).is_some() {
         return None;
     }
     let mut hit = None;
-    for section in menu::model() {
-        menu::walk(&section.items, &mut |item| {
-            if hit.is_some() {
-                return;
-            }
-            let menu::Item::Action {
-                command,
-                shortcut: Some(sc),
-                ..
-            } = item
-            else {
-                return;
-            };
-            if sc.cmd && matches!(sc.key, 'C' | 'V') {
-                return;
-            }
-            let Some(key) = egui_key(sc.key) else {
-                return;
-            };
-            let pressed = ctx.input(|i| {
-                i.key_pressed(key) && i.modifiers.command == sc.cmd && i.modifiers.shift == sc.shift
-            });
-            if pressed {
-                hit = Some(*command);
-            }
+    // ⚠⚠ The **bound** list (M10.9b): a user's own chord fires its command, and the default it
+    // replaced does not. ⚠ `shortcuts::entries`, never a menu walk: the menu without the recent
+    // folders has no "Open recent" entry, so a chord on it fired nothing (found by use).
+    for e in rustroom_app::shortcuts::entries(overrides) {
+        let Some(sc) = e.shortcut else { continue };
+        if sc.cmd && matches!(sc.key, 'C' | 'V') {
+            continue;
+        }
+        let Some(key) = egui_key(sc.key) else {
+            continue;
+        };
+        let pressed = ctx.input(|i| {
+            i.key_pressed(key)
+                && i.modifiers.command == sc.cmd
+                && i.modifiers.shift == sc.shift
+                && i.modifiers.alt == sc.alt
         });
-        if hit.is_some() {
+        if pressed {
+            hit = Some(e.command);
             break;
         }
     }
+    // ⚠ An alias is consulted only when no bound shortcut matched — so a user who gave `Y` to
+    // something else gets that, not Compare (`the_alias_yields_to_a_bound_y`).
     if hit.is_none() {
         for (key, cmd) in menu::ALIASES {
             let Some(k) = egui_key(*key) else { continue };
-            let pressed =
-                ctx.input(|i| i.key_pressed(k) && !i.modifiers.command && !i.modifiers.shift);
+            let pressed = ctx.input(|i| {
+                i.key_pressed(k) && !i.modifiers.command && !i.modifiers.shift && !i.modifiers.alt
+            });
             if pressed {
                 hit = Some(*cmd);
                 break;
@@ -63,49 +61,88 @@ pub(super) fn pressed_command(ctx: &egui::Context) -> Option<Command> {
     hit
 }
 
+/// Every key a chord can name, as the model writes it and as egui reports it (M10.9b: every letter,
+/// digit, punctuation key and F1–F12). ⚠ One table, read both ways — [`egui_key`] and [`key_char`]
+/// — so recording a chord and pressing it cannot disagree about a key.
+const KEYS: &[(char, egui::Key)] = &[
+    ('A', egui::Key::A),
+    ('B', egui::Key::B),
+    ('C', egui::Key::C),
+    ('D', egui::Key::D),
+    ('E', egui::Key::E),
+    ('F', egui::Key::F),
+    ('G', egui::Key::G),
+    ('H', egui::Key::H),
+    ('I', egui::Key::I),
+    ('J', egui::Key::J),
+    ('K', egui::Key::K),
+    ('L', egui::Key::L),
+    ('M', egui::Key::M),
+    ('N', egui::Key::N),
+    ('O', egui::Key::O),
+    ('P', egui::Key::P),
+    ('Q', egui::Key::Q),
+    ('R', egui::Key::R),
+    ('S', egui::Key::S),
+    ('T', egui::Key::T),
+    ('U', egui::Key::U),
+    ('V', egui::Key::V),
+    ('W', egui::Key::W),
+    ('X', egui::Key::X),
+    ('Y', egui::Key::Y),
+    ('Z', egui::Key::Z),
+    ('0', egui::Key::Num0),
+    ('1', egui::Key::Num1),
+    ('2', egui::Key::Num2),
+    ('3', egui::Key::Num3),
+    ('4', egui::Key::Num4),
+    ('5', egui::Key::Num5),
+    ('6', egui::Key::Num6),
+    ('7', egui::Key::Num7),
+    ('8', egui::Key::Num8),
+    ('9', egui::Key::Num9),
+    ('\u{F704}', egui::Key::F1),
+    ('\u{F705}', egui::Key::F2),
+    ('\u{F706}', egui::Key::F3),
+    ('\u{F707}', egui::Key::F4),
+    ('\u{F708}', egui::Key::F5),
+    ('\u{F709}', egui::Key::F6),
+    ('\u{F70A}', egui::Key::F7),
+    ('\u{F70B}', egui::Key::F8),
+    ('\u{F70C}', egui::Key::F9),
+    ('\u{F70D}', egui::Key::F10),
+    ('\u{F70E}', egui::Key::F11),
+    ('\u{F70F}', egui::Key::F12),
+    (',', egui::Key::Comma),
+    ('.', egui::Key::Period),
+    ('/', egui::Key::Slash),
+    (';', egui::Key::Semicolon),
+    ('\'', egui::Key::Quote),
+    ('[', egui::Key::OpenBracket),
+    (']', egui::Key::CloseBracket),
+    ('\\', egui::Key::Backslash),
+    ('-', egui::Key::Minus),
+    ('+', egui::Key::Plus),
+    ('=', egui::Key::Equals),
+    ('`', egui::Key::Backtick),
+    ('\t', egui::Key::Tab),
+];
+
 /// The model's key character as an egui key.
 ///
 /// ⚠ Returns `Option` rather than panicking: an unmappable chord should make its menu item
 /// mouse-only, not take the app down. `every_shortcut_maps_to_an_egui_key` makes sure none of
 /// the shipped ones actually do that.
 fn egui_key(c: char) -> Option<egui::Key> {
-    Some(match c {
-        'O' => egui::Key::O,
-        'I' => egui::Key::I,
-        'E' => egui::Key::E,
-        'Z' => egui::Key::Z,
-        // ⚠ Mapped even though `pressed_command` skips ⌘C / ⌘V. This table is a *total*
-        // mapping from the model's key characters to egui keys; whether a given chord is
-        // consulted is a separate decision, made there and documented there. A hole here
-        // would make the completeness test unable to say what it means.
-        'C' => egui::Key::C,
-        'V' => egui::Key::V,
-        'G' => egui::Key::G,
-        'D' => egui::Key::D,
-        'N' => egui::Key::N,
-        'R' => egui::Key::R,
-        'K' => egui::Key::K,
-        'Q' => egui::Key::Q,
-        'T' => egui::Key::T,
-        'L' => egui::Key::L,
-        'J' => egui::Key::J,
-        'Y' => egui::Key::Y,
-        '\t' => egui::Key::Tab,
-        '+' => egui::Key::Plus,
-        '-' => egui::Key::Minus,
-        '0' => egui::Key::Num0,
-        '1' => egui::Key::Num1,
-        '2' => egui::Key::Num2,
-        '3' => egui::Key::Num3,
-        '4' => egui::Key::Num4,
-        '5' => egui::Key::Num5,
-        ',' => egui::Key::Comma,
-        '[' => egui::Key::OpenBracket,
-        ']' => egui::Key::CloseBracket,
-        '\'' => egui::Key::Quote,
-        '\\' => egui::Key::Backslash,
-        _ => return None,
-    })
+    KEYS.iter().find(|(k, _)| *k == c).map(|(_, e)| *e)
+}
+
+/// The model's key character for an egui key — what recording a chord reads (M10.9b). ⚠ `Tab` is
+/// not offered: in a dialog it moves the focus.
+pub(crate) fn key_char(k: egui::Key) -> Option<char> {
+    KEYS.iter()
+        .find(|(c, e)| *e == k && *c != '\t')
+        .map(|(c, _)| *c)
 }
 
 #[cfg(test)]
@@ -138,7 +175,7 @@ mod tests {
                 events: vec![bare_key(egui::Key::O)],
                 ..Default::default()
             },
-            |_ui| unfocused = pressed_command(&ctx),
+            |_ui| unfocused = pressed_command(&ctx, &[]),
         );
         assert_eq!(
             unfocused,
@@ -163,7 +200,7 @@ mod tests {
                 // key events it handles, so reading afterwards would pass even with the focus
                 // gate deleted — it would be testing egui's consumption, not our guard. The
                 // field is still added, so egui does not drop its focus at the end of the pass.
-                focused = pressed_command(&ctx);
+                focused = pressed_command(&ctx, &[]);
                 ui.add(egui::TextEdit::singleline(&mut text));
             },
         );
@@ -211,7 +248,7 @@ mod tests {
         };
         let mut got = None;
         let _ = ctx.run_ui(input, |ui| {
-            got = pressed_command(ui.ctx());
+            got = pressed_command(ui.ctx(), &[]);
         });
         got
     }
@@ -248,8 +285,106 @@ mod tests {
         };
         let mut got = None;
         let _ = ctx.run_ui(input, |ui| {
-            got = pressed_command(ui.ctx());
+            got = pressed_command(ui.ctx(), &[]);
         });
         assert_eq!(got, None, "a bare C typed into a field switched view");
+    }
+
+    /// Press `k` with these modifiers under `overrides`, and return the command it fired.
+    fn chord(
+        k: egui::Key,
+        modifiers: egui::Modifiers,
+        overrides: &[rustroom_app::shortcuts::Rebinding],
+    ) -> Option<menu::Command> {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            modifiers,
+            events: vec![egui::Event::Key {
+                key: k,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }],
+            ..Default::default()
+        };
+        let mut got = None;
+        let _ = ctx.run_ui(input, |ui| got = pressed_command(ui.ctx(), overrides));
+        got
+    }
+
+    /// ⚠⚠ M10.9b: a rebound chord fires its new command, and the default it replaced no longer
+    /// fires anything.
+    #[test]
+    fn a_rebound_chord_fires_its_new_command_and_the_old_one_does_not() {
+        use rustroom_app::menu::{Command, Shortcut};
+        let cmd = egui::Modifiers::COMMAND;
+        let cmd_alt = egui::Modifiers {
+            alt: true,
+            ..egui::Modifiers::COMMAND
+        };
+        assert_eq!(
+            chord(egui::Key::G, cmd, &[]),
+            Some(Command::Stack),
+            "the sample"
+        );
+        let mut o = Vec::new();
+        rustroom_app::shortcuts::assign(
+            &mut o,
+            Command::Stack,
+            Some(Shortcut::cmd('S').with_alt()),
+        );
+        assert_eq!(chord(egui::Key::S, cmd_alt, &o), Some(Command::Stack));
+        assert_eq!(chord(egui::Key::G, cmd, &o), None, "⌘G is free now");
+        assert_eq!(chord(egui::Key::S, cmd, &o), None, "⌥ is part of the chord");
+    }
+
+    /// The `Y` alias for Compare yields to a user's own bare `Y`.
+    #[test]
+    fn the_alias_yields_to_a_bound_y() {
+        use rustroom_app::menu::{Command, Shortcut};
+        let none = egui::Modifiers::NONE;
+        assert_eq!(
+            chord(egui::Key::Y, none, &[]),
+            Some(Command::ShowCompare),
+            "the sample"
+        );
+        let mut o = Vec::new();
+        rustroom_app::shortcuts::assign(&mut o, Command::TakeSnapshot, Some(Shortcut::bare('Y')));
+        assert_eq!(chord(egui::Key::Y, none, &o), Some(Command::TakeSnapshot));
+    }
+
+    /// Recording reads the same table pressing does: every key that can be recorded maps back.
+    #[test]
+    fn every_recordable_key_maps_both_ways() {
+        let mut n = 0;
+        for (c, k) in KEYS {
+            if *c == '\t' {
+                assert_eq!(key_char(*k), None, "Tab is not recorded");
+                continue;
+            }
+            assert_eq!(key_char(*k), Some(*c));
+            assert_eq!(egui_key(*c), Some(*k));
+            n += 1;
+        }
+        // 26 letters, 10 digits, 12 F-keys, 12 punctuation keys.
+        assert_eq!(n, 60, "the sample");
+    }
+
+    /// ⚠⚠ After use: a chord given to "Open most recent folder" fires it — ⇧A did nothing, since the
+    /// key handler read a menu without the recent folders.
+    #[test]
+    fn a_chord_on_the_most_recent_folder_fires_it() {
+        use rustroom_app::menu::{Command, Shortcut};
+        let shift_a = Shortcut {
+            shift: true,
+            ..Shortcut::bare('A')
+        };
+        let mut o = Vec::new();
+        rustroom_app::shortcuts::assign(&mut o, Command::OpenRecent(0), Some(shift_a));
+        assert_eq!(
+            chord(egui::Key::A, egui::Modifiers::SHIFT, &o),
+            Some(Command::OpenRecent(0))
+        );
     }
 }

@@ -19,7 +19,11 @@ pub(crate) const EMPTY_LIBRARY_TEXT: &str =
 
 /// The empty Library: two real buttons and one sentence, where the first-use review found a
 /// footnote in a void (A-08).
-fn empty_library(ui: &mut egui::Ui) -> Option<rustroom_app::menu::Command> {
+fn empty_library(
+    ui: &mut egui::Ui,
+    keys: &[rustroom_app::shortcuts::Rebinding],
+) -> Option<rustroom_app::menu::Command> {
+    let hint = |c| rustroom_app::shortcuts::hint(c, keys);
     let mut picked: Option<rustroom_app::menu::Command> = None;
     ui.vertical_centered(|ui| {
         ui.add_space((ui.available_height() * 0.35).max(24.0));
@@ -31,7 +35,10 @@ fn empty_library(ui: &mut egui::Ui) -> Option<rustroom_app::menu::Command> {
         };
         if ui
             .add(big("Open a folder…"))
-            .hover("Opens a folder of photos (⇧⌘O)")
+            .hover(format!(
+                "Opens a folder of photos{}",
+                hint(rustroom_app::menu::Command::OpenFolder)
+            ))
             .clicked()
         {
             picked = Some(rustroom_app::menu::Command::OpenFolder);
@@ -39,7 +46,10 @@ fn empty_library(ui: &mut egui::Ui) -> Option<rustroom_app::menu::Command> {
         ui.add_space(6.0);
         if ui
             .add(big("Import from a card…"))
-            .hover("Copies new photos from a memory card into dated folders (⇧⌘I)")
+            .hover(format!(
+                "Copies new photos from a memory card into dated folders{}",
+                hint(rustroom_app::menu::Command::Import)
+            ))
             .clicked()
         {
             picked = Some(rustroom_app::menu::Command::Import);
@@ -117,6 +127,8 @@ struct GridInputs<'a> {
     stack_drag: rustroom_app::settings::StackDrag,
     /// How a collapsed stack is drawn (Settings → Appearance).
     look: rustroom_app::stack::StackLook,
+    /// The user's shortcuts (M10.9b) — the empty Library's hovers name them.
+    keys: &'a [rustroom_app::shortcuts::Rebinding],
 }
 
 /// Pinch, or ctrl/cmd+scroll, resizes the grid; the size is saved once the gesture settles.
@@ -182,6 +194,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         remote: &app.immich_stacks.of_asset,
         stack_drag: app.settings.stack_drag,
         look: app.settings.stacking.look,
+        keys: &app.settings.shortcuts,
     };
     egui::CentralPanel::default().show(ui, |ui| grid::panel(ui, &mut app.library, inp, &mut out));
 

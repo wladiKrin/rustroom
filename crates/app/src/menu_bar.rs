@@ -12,11 +12,12 @@ use rustroom_app::menu::{self, Command, Item};
 pub fn show(
     ui: &mut egui::Ui,
     recent: &[std::path::PathBuf],
+    overrides: &[rustroom_app::shortcuts::Rebinding],
     state: &menu::MenuState,
 ) -> Option<Command> {
     let mut picked = None;
     egui::containers::menu::MenuBar::new().ui(ui, |ui| {
-        for section in menu::model_with(recent) {
+        for section in menu::model_for(recent, overrides) {
             let r = ui.menu_button(section.title, |ui| {
                 items(ui, &section.items, &mut picked, state)
             });
@@ -86,7 +87,7 @@ mod tests {
                 filmstrip_shown: shown,
             };
             let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-                let picked = show(ui, &[], &state);
+                let picked = show(ui, &[], &[], &state);
                 assert!(picked.is_none(), "nothing was clicked");
             });
         }

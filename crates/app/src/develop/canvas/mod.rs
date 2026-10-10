@@ -34,8 +34,14 @@ use view::rungs_to_drop;
 /// What an empty Develop says. ⚠ There has been no "Open file… button" since the menus took the
 /// toolbar's place; the old text still named one. Also swept by
 /// `theme::every_menu_string_is_renderable`.
-pub(crate) const EMPTY_DEVELOP_TEXT: &str =
-    "Open a photo from the Library, or File → Open file… (⌘O).";
+///
+/// ⚠ The chord comes from the user's bindings (M10.9b).
+pub(crate) fn empty_develop_text(keys: &[rustroom_app::shortcuts::Rebinding]) -> String {
+    format!(
+        "Open a photo from the Library, or File → Open file…{}.",
+        rustroom_app::shortcuts::hint(rustroom_app::menu::Command::OpenFile, keys)
+    )
+}
 
 /// What drawing the canvas changed, written back to `app` once the session borrow ends.
 struct CanvasOutcome {
@@ -181,6 +187,7 @@ fn hoist(app: &RustroomApp, ui: &egui::Ui) -> CanvasInputs {
 /// thing here that changes `Edits`. The caller ORs this with the panel's answer and records a
 /// single action-log entry, so one gesture stays one Ctrl+Z.
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> bool {
+    let empty_text = empty_develop_text(&app.settings.shortcuts);
     let inp = hoist(app, ui);
     let mut out = CanvasOutcome {
         photo_edited: false,
@@ -242,7 +249,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                 ),
                 None => {
                     ui.centered_and_justified(|ui| {
-                        crate::theme::empty_state(ui, EMPTY_DEVELOP_TEXT);
+                        crate::theme::empty_state(ui, &empty_text);
                     });
                 }
             }
