@@ -28,6 +28,7 @@ lens-profile = { path = "../lens-profile" }
 export = { path = "../export" }
 catalog = { path = "../catalog" }
 xmp = { path = "../xmp" }
+lr-preset = { path = "../lr-preset" }
 image-decode = { path = "../image-decode" }
 immich = { path = "../immich" }
 ai-mask = { path = "../ai-mask" }

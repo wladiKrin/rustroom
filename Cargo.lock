@@ -295,6 +295,7 @@ dependencies = [
  "image-decode",
  "immich",
  "lens-profile",
+ "lr-preset",
  "muda",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",

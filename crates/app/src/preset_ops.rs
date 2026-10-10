@@ -152,47 +152,149 @@ impl RustroomApp {
         self.preset_edited(Self::one(before), Self::one(after), said);
     }
 
-    /// Import preset files into `into` (`None`: no folder). A file that is not a preset is skipped;
-    /// a name the folder already has is numbered. Returns how many were imported.
+    /// Import preset files: Rustroom's own `.json`, and Lightroom's `.xmp`, `.lrtemplate` and `.zip`
+    /// packs (M10.9c). Into `into` when it names a folder; else a Lightroom preset goes into a folder
+    /// named after its own group (made if needed), and the rest to the top level. A name a folder
+    /// already has is numbered. One undo step, the made folders in it. Returns how many were imported.
     pub(crate) fn import_presets(&mut self, files: &[PathBuf], into: Option<&str>) -> usize {
-        let mut taken: Vec<String> = self
-            .preset_store
-            .list()
-            .into_iter()
-            .filter(|p| p.folder.as_deref() == into)
-            .map(|p| p.name)
-            .collect();
-        let mut made: Vec<Preset> = Vec::new();
-        let mut skipped = 0;
+        // Every preset the files hold: name, Lightroom group, groups carried, edits, what was left out.
+        type Candidate = (
+            String,
+            Option<String>,
+            edit_model::EditGroups,
+            edit_model::Edits,
+            Vec<&'static str>,
+        );
+        let mut candidates: Vec<Candidate> = Vec::new();
+        let (mut not_presets, mut unreadable, mut nothing) = (0, 0, 0);
         for f in files {
-            let Some(mut p) = read_preset_file(f) else {
-                skipped += 1;
+            let ext = f
+                .extension()
+                .map(|e| e.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default();
+            if ext == "json" {
+                match read_preset_file(f) {
+                    Some(p) => candidates.push((p.name, None, p.groups, p.edits, Vec::new())),
+                    None => not_presets += 1,
+                }
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(f) else {
+                unreadable += 1;
                 continue;
             };
-            p.name = unique_name(&taken, &p.name);
-            p.folder = into.map(str::to_string);
-            match self.preset_store.save(&p) {
-                Ok(()) => {
-                    taken.push(p.name.clone());
-                    made.push(p);
-                }
-                Err(_) => skipped += 1,
+            let name = f
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let r = lr_preset::read(&name, &bytes);
+            not_presets += r.not_presets;
+            unreadable += r.unreadable;
+            nothing += r.carried_nothing.len();
+            for imp in r.presets {
+                let m = imp.mapped;
+                candidates.push((imp.name, imp.group, m.groups, m.edits, m.left_out));
             }
         }
+
+        let existing = self.preset_store.list();
+        let folders_before = self.preset_store.folders();
+        let mut new_folders: Vec<String> = Vec::new();
+        let mut taken: std::collections::HashMap<Option<String>, Vec<String>> =
+            std::collections::HashMap::new();
+        let mut left: std::collections::BTreeMap<&'static str, usize> = Default::default();
+        let mut made: Vec<Preset> = Vec::new();
+        for (name, group, groups, edits, left_out) in candidates {
+            let folder = match into {
+                Some(f) => Some(f.to_string()),
+                None => group
+                    .map(|g| rustroom_app::safe_name::folder_name(&g))
+                    .filter(|g| !g.is_empty() && !g.starts_with('.'))
+                    // ⚠ An existing folder whose name differs only in case is that folder — a
+                    // case-insensitive disk would make one of the two anyway.
+                    .map(|g| {
+                        folders_before
+                            .iter()
+                            .chain(&new_folders)
+                            .find(|f| f.eq_ignore_ascii_case(&g))
+                            .cloned()
+                            .unwrap_or(g)
+                    }),
+            };
+            if let Some(f) = &folder {
+                if !folders_before.contains(f) && !new_folders.contains(f) {
+                    if self.preset_store.ensure_folder(f).is_err() {
+                        unreadable += 1;
+                        continue;
+                    }
+                    new_folders.push(f.clone());
+                }
+            }
+            let names = taken.entry(folder.clone()).or_insert_with(|| {
+                existing
+                    .iter()
+                    .filter(|p| p.folder == folder)
+                    .map(|p| p.name.clone())
+                    .collect()
+            });
+            let p = Preset {
+                name: unique_name(names, &name),
+                groups,
+                edits,
+                folder,
+            };
+            match self.preset_store.save(&p) {
+                Ok(()) => {
+                    names.push(p.name.clone());
+                    made.push(p);
+                    for l in left_out {
+                        *left.entry(l).or_insert(0) += 1;
+                    }
+                }
+                Err(_) => unreadable += 1,
+            }
+        }
+
         let n = made.len();
-        let skipped_said = match skipped {
-            0 => String::new(),
-            1 => " · 1 file was not a preset".to_string(),
-            k => format!(" · {k} files were not presets"),
-        };
+        let mut tail = String::new();
+        if !left.is_empty() {
+            let mut by_count: Vec<(&str, usize)> = left.into_iter().collect();
+            by_count.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+            let parts: Vec<String> = by_count
+                .iter()
+                .map(|(what, k)| format!("{what} in {k}"))
+                .collect();
+            tail.push_str(&format!(" · left out: {}", parts.join(", ")));
+        }
+        if nothing > 0 {
+            tail.push_str(&format!(
+                " · {nothing} carried only what Rustroom cannot apply"
+            ));
+        }
+        match not_presets {
+            0 => {}
+            1 => tail.push_str(" · 1 file was not a preset"),
+            k => tail.push_str(&format!(" · {k} files were not presets")),
+        }
+        if unreadable > 0 {
+            tail.push_str(&format!(" · {unreadable} could not be read"));
+        }
         if n == 0 {
-            self.status = format!("Nothing imported{skipped_said}");
+            self.status = format!("Nothing imported{tail}");
             return 0;
         }
-        let said = format!("Imported {}{skipped_said}", presets_n(n));
+        let mut into_folders: Vec<&str> = made.iter().filter_map(|p| p.folder.as_deref()).collect();
+        into_folders.sort_unstable();
+        into_folders.dedup();
+        let place = match into_folders.as_slice() {
+            [] => String::new(),
+            [one] => format!(" into “{one}”"),
+            many => format!(" into {} folders", many.len()),
+        };
+        let said = format!("Imported {}{place}{tail}", presets_n(n));
         let after = PresetState {
             presets: made,
-            folders: Vec::new(),
+            folders: new_folders,
         };
         self.preset_edited(PresetState::default(), after, said);
         n
@@ -353,7 +455,8 @@ impl RustroomApp {
     pub(crate) fn import_presets_picked(&mut self, into: Option<String>) {
         let Some(files) = rfd::FileDialog::new()
             .set_title("Import presets")
-            .add_filter("Rustroom preset", &["json"])
+            // M10.9c: Lightroom's own formats beside Rustroom's.
+            .add_filter("Presets", &["json", "xmp", "lrtemplate", "zip"])
             .pick_files()
         else {
             return;
@@ -635,5 +738,72 @@ mod tests {
         assert!(folder.join("Warm.json").exists());
         let again = app.export_preset_folder("Film", d.path()).unwrap();
         assert_eq!(again, d.join("Film-1"));
+    }
+
+    /// The Lightroom fixtures, real files with their sources (`crates/lr-preset/tests/fixtures`).
+    fn lr_fixture(rel: &str) -> PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../lr-preset/tests/fixtures")
+            .join(rel)
+    }
+
+    /// M10.9c: a real Lightroom preset imports with the groups it carries, and the status names what
+    /// was left out.
+    #[test]
+    fn a_real_lightroom_preset_imports() {
+        let mut app = app();
+        assert_eq!(
+            app.import_presets(&[lr_fixture("questtion/Preset 4.xmp")], None),
+            1,
+            "{}",
+            app.status
+        );
+        let p = app.preset_store.get(None, "Preset 4").expect("imported");
+        assert!(p.groups.tone && p.groups.color && !p.groups.white_balance);
+        assert!(
+            app.status.contains("left out: the profile"),
+            "{}",
+            app.status
+        );
+    }
+
+    /// ⚠⚠ The real pack: every preset under the folder it sits in, the mask-only one counted — and
+    /// one Ctrl+Z takes back the presets and the folder made for them.
+    #[test]
+    fn a_real_pack_imports_into_its_folder_as_one_undo_step() {
+        let mut app = app();
+        let n = app.import_presets(&[lr_fixture("questtion.zip")], None);
+        assert!(n > 50, "{n}: {}", app.status);
+        assert!(app.preset_folders.contains(&"Presets".to_string()));
+        assert_eq!(
+            app.preset_list
+                .iter()
+                .filter(|p| p.folder.as_deref() == Some("Presets"))
+                .count(),
+            n
+        );
+        // Measured on the real pack: three presets are masks alone.
+        assert!(app.status.contains("3 carried only"), "{}", app.status);
+        run(&mut app, Command::Undo);
+        assert!(
+            !app.preset_folders.contains(&"Presets".to_string()),
+            "the made folder went"
+        );
+        assert_eq!(shown(&app), (keys(&["A", "Film/Warm"]), keys(&["Film"])));
+    }
+
+    /// The same name twice in one folder is numbered; in two folders it is not.
+    #[test]
+    fn names_are_numbered_within_a_folder_only() {
+        let mut app = app();
+        let f = lr_fixture("questtion/Preset 4.xmp");
+        app.import_presets(&[f.clone(), f.clone()], None);
+        assert!(app.preset_store.exists(None, "Preset 4"));
+        assert!(app.preset_store.exists(None, "Preset 4 2"));
+        app.import_presets(&[f], Some("Film"));
+        assert!(
+            app.preset_store.exists(Some("Film"), "Preset 4"),
+            "not numbered in Film"
+        );
     }
 }
