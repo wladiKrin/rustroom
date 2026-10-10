@@ -8,5 +8,6 @@
 pub mod lrtemplate;
 mod value;
 pub mod xmp;
+pub mod zip;
 
 pub use value::{Error, Raw, Settings, Value};
