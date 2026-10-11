@@ -11,7 +11,6 @@ use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
 use rustroom_app::batch_export::{banding_warning, can_export, Collision, Decision, ExportOptions};
 use rustroom_app::batch_export::{Destination, UploadTarget};
-use rustroom_app::batch_export::{Watermark, WatermarkCorner};
 use rustroom_app::export_presets::ExportPreset;
 use rustroom_app::export_summary;
 use rustroom_app::filename_template::{NameFacts, Template};
@@ -77,31 +76,6 @@ fn metadata_body(ui: &mut egui::Ui, opts: &mut ExportOptions) {
             });
             ui.end_row();
         });
-}
-
-/// The Watermark section's body.
-fn watermark_body(ui: &mut egui::Ui, opts: &mut ExportOptions) {
-    egui::Grid::new("export_watermark_grid")
-        .num_columns(2)
-        .spacing([12.0, 4.0])
-        .show(ui, |ui| {
-            ui.label("Text");
-            ui.text_edit_singleline(&mut opts.watermark.text)
-                .hover("Sets the watermark text, which scales with the exported image");
-            ui.end_row();
-            ui.label("Corner");
-            egui::ComboBox::from_id_salt("watermark_corner")
-                .selected_text(opts.watermark.corner.label())
-                .show_ui(ui, |ui| {
-                    for c in WatermarkCorner::ALL {
-                        ui.selectable_value(&mut opts.watermark.corner, c, c.label());
-                    }
-                });
-            ui.end_row();
-        });
-    let (lo, hi) = Watermark::SIZE_RANGE;
-    ui.add(egui::Slider::new(&mut opts.watermark.size, lo..=hi).text("Size (% of long edge)"));
-    ui.add(egui::Slider::new(&mut opts.watermark.opacity, 0..=100).text("Opacity"));
 }
 
 /// The destination-folder row: a Choose button and the path.
@@ -171,6 +145,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut start = false;
     // egui has no folder field, so the picker writes into a local and the label shows it.
     let mut pick_dir = false;
+    let mut pick_logo = false;
     let mut picked: Option<(String, ExportOptions)> = None;
     let mut save_as = false;
     let mut delete_selected = false;
@@ -545,7 +520,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                         "Watermark",
                         &export_summary::watermark(&opts),
                         false,
-                        |ui| watermark_body(ui, &mut opts),
+                        |ui| super::export_watermark::body(ui, &mut opts, &mut pick_logo),
                     );
                 });
             });
@@ -561,6 +536,21 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
     if pick_dir {
         if let Some(dir) = rfd::FileDialog::new().pick_folder() {
             opts.dest_dir = dir;
+        }
+    }
+    if pick_logo {
+        use rustroom_app::watermark_store::{WatermarkStore, IMAGE_EXTENSIONS};
+        if let Some(file) = rfd::FileDialog::new()
+            .add_filter("Image", &IMAGE_EXTENSIONS[..])
+            .pick_file()
+        {
+            // ⚠ Kept as a copy at once, so the options never name a file outside the store.
+            let store = WatermarkStore::user_default(
+                &dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from(".")),
+            );
+            if let Err(e) = store.adopt(&file, &mut opts.watermark) {
+                app.status = format!("Could not keep a copy of {}: {e}", file.display());
+            }
         }
     }
     if let Some((name, o)) = picked {
