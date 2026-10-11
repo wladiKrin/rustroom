@@ -116,7 +116,7 @@ pub struct ExportOptions {
 // anything to do with the batch loop, and putting them there would have left the CLI unable to
 // reach any of it. Re-exported rather than written `export::…` at every use site, because they
 // are `ExportOptions` fields first.
-pub use export::{ExportMetadata, OutputSharpening, Watermark, WatermarkCorner};
+pub use export::{ExportMetadata, OutputSharpening, Watermark, WatermarkCorner, WatermarkKind};
 
 /// Where the files land inside the destination, and what happens once the run finishes.
 ///
@@ -391,6 +391,10 @@ mod tests {
                 corner: WatermarkCorner::TopLeft,
                 size: 7,
                 opacity: 40,
+                // ⚠ Not the defaults, so the round trip can see a field dropped (M10.10a).
+                kind: WatermarkKind::Image,
+                image: "logo.png".into(),
+                image_width: 22,
             },
             output_sharpening: OutputSharpening { amount: 40 },
             delivery: Delivery {

@@ -12,14 +12,17 @@
 //! free: `save` quantizes whatever it is handed, so an 8-bit JPEG and a 16-bit TIFF get the
 //! same mark from the same code, with no per-format branch to keep in step.
 //!
-//! ⚠ **Text only.** An image watermark — a PNG logo with alpha — is a contained follow-up: it
-//! needs a path field, a file picker, a decode, and an answer to "what happens when the file has
-//! moved", which is the same class of problem an export preset's destination already has. The
-//! compositing below would serve it unchanged.
+//! **Text or an image, one or the other** (M10.10a), sharing the corner and the opacity. The image
+//! half — a logo with alpha, decoded once per export — is [`Logo`], in `watermark/logo.rs`. Its
+//! file is a copy the app keeps, named here by its bare file name; finding it is the app's
+//! business, which is what keeps this crate free of any idea of where settings live.
 
 use ab_glyph::{point, Font, FontRef, PxScale, ScaleFont};
 use core_image::ImageBuf;
 use serde::{Deserialize, Serialize};
+
+mod logo;
+pub use logo::Logo;
 
 /// Which corner the mark sits in.
 ///
@@ -56,10 +59,34 @@ impl WatermarkCorner {
     }
 }
 
+/// What the mark is made of (M10.10a).
+///
+/// ⚠ One or the other, by the author's choice: a text credit and a logo in the same corner would
+/// have to be laid out against each other, and nobody asked for both.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WatermarkKind {
+    #[default]
+    Text,
+    Image,
+}
+
+impl WatermarkKind {
+    /// The order the dialog draws — beside the variants, `WatermarkCorner::ALL`'s rule.
+    pub const ALL: [WatermarkKind; 2] = [WatermarkKind::Text, WatermarkKind::Image];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            WatermarkKind::Text => "Text",
+            WatermarkKind::Image => "Image",
+        }
+    }
+}
+
 /// A visible mark laid over the exported image.
 ///
 /// ⚠ Empty text means no watermark, which is what makes the default inert — the same rule
-/// `Vignette`, `Sharpening` and `NoiseReduction` follow with an amount of zero.
+/// `Vignette`, `Sharpening` and `NoiseReduction` follow with an amount of zero. An image mark
+/// with no file chosen is inert the same way.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Watermark {
@@ -74,6 +101,18 @@ pub struct Watermark {
     /// 0..=100. ⚠ `0` is fully transparent, which is a legitimate way to switch the mark off
     /// without losing the text you typed.
     pub opacity: u8,
+    /// Text or an image (M10.10a). ⚠ Appended, defaulting to Text, so every options file and
+    /// export preset written before it reads exactly as it did.
+    pub kind: WatermarkKind,
+    /// The kept copy's **file name** in the app's watermark store; empty for none.
+    ///
+    /// ⚠⚠ **A bare name, never a path.** An export preset can travel to another machine, and a
+    /// path would carry this one's layout with it; a name either is in that machine's store or
+    /// is reported missing. The app refuses any name that is not a single path component.
+    pub image: String,
+    /// The image's width as a percentage of the image's **long edge**, 2..=50 — the text's `size`
+    /// rule, so one preset marks an 800 px and a 6000 px export alike.
+    pub image_width: u8,
 }
 
 impl Default for Watermark {
@@ -88,19 +127,28 @@ impl Default for Watermark {
             corner: WatermarkCorner::default(),
             size: 3,
             opacity: 70,
+            kind: WatermarkKind::default(),
+            image: String::new(),
+            image_width: 15,
         }
     }
 }
 
 impl Watermark {
     pub const SIZE_RANGE: (u8, u8) = (1, 20);
+    pub const IMAGE_WIDTH_RANGE: (u8, u8) = (2, 50);
 
     /// Whether anything would be drawn.
     ///
     /// ⚠ Trimmed: a mark made of spaces draws nothing but would still cost a rasterization pass
-    /// and a full traversal of the buffer.
+    /// and a full traversal of the buffer. ⚠ Each kind reads only its own field — text typed
+    /// before switching to Image must not make an image mark with no file look active.
     pub fn is_active(&self) -> bool {
-        !self.text.trim().is_empty() && self.opacity > 0
+        let made_of = match self.kind {
+            WatermarkKind::Text => &self.text,
+            WatermarkKind::Image => &self.image,
+        };
+        !made_of.trim().is_empty() && self.opacity > 0
     }
 }
 
@@ -183,11 +231,48 @@ pub fn rasterize(text: &str, px: f32) -> Option<TextMask> {
 
 /// Draw `mark` onto a **display-encoded** image, in place.
 ///
-/// A no-op when the mark is inactive or does not fit, so a caller never has to ask first.
-pub fn apply(image: &mut ImageBuf, mark: &Watermark) {
+/// A no-op when the mark is inactive or does not fit, so a caller never has to ask first. `logo`
+/// is the decoded image an Image mark draws; `None` — its copy could not be read — draws nothing,
+/// and the caller is the one that says so.
+pub fn apply(image: &mut ImageBuf, mark: &Watermark, logo: Option<&Logo>) {
     if !mark.is_active() {
         return;
     }
+    match mark.kind {
+        WatermarkKind::Text => draw_text(image, mark),
+        WatermarkKind::Image => {
+            if let Some(logo) = logo {
+                logo::draw(image, logo, mark);
+            }
+        }
+    }
+}
+
+/// Where a `bw`×`bh` box sits in `corner`, `margin` in from the edges — `None` when it does not
+/// fit inside them.
+///
+/// ⚠ `None` is a skip, not a clip, for both kinds: a mark half off the edge looks like a bug in
+/// the export; an absent one on a thumbnail-sized file looks like the size slider being too
+/// large, which is true and is one drag from fixed.
+fn place(
+    corner: WatermarkCorner,
+    (w, h): (usize, usize),
+    margin: usize,
+    (bw, bh): (usize, usize),
+) -> Option<(usize, usize)> {
+    if bw + 2 * margin > w || bh + 2 * margin > h {
+        return None;
+    }
+    Some(match corner {
+        WatermarkCorner::TopLeft => (margin, margin),
+        WatermarkCorner::TopRight => (w - margin - bw, margin),
+        WatermarkCorner::BottomLeft => (margin, h - margin - bh),
+        WatermarkCorner::BottomRight => (w - margin - bw, h - margin - bh),
+    })
+}
+
+/// The text mark: a light line over its shadow.
+fn draw_text(image: &mut ImageBuf, mark: &Watermark) {
     let (w, h) = (image.width(), image.height());
     let long = w.max(h) as f32;
     let px =
@@ -201,19 +286,9 @@ pub fn apply(image: &mut ImageBuf, mark: &Watermark) {
     let shadow = (px * SHADOW).round().max(1.0) as usize;
     let margin = (long * MARGIN).round() as usize;
     // The whole mark, shadow included, has to fit inside the margins.
-    let total_w = mask.width + shadow;
-    let total_h = mask.height + shadow;
-    if total_w + 2 * margin > w || total_h + 2 * margin > h {
-        // ⚠ Silently skipped rather than clipped or shrunk. A watermark half off the edge looks
-        // like a bug in the export; an absent one on a thumbnail-sized file looks like the size
-        // slider being too large, which is true and is one drag from fixed.
+    let total = (mask.width + shadow, mask.height + shadow);
+    let Some((ox, oy)) = place(mark.corner, (w, h), margin, total) else {
         return;
-    }
-    let (ox, oy) = match mark.corner {
-        WatermarkCorner::TopLeft => (margin, margin),
-        WatermarkCorner::TopRight => (w - margin - total_w, margin),
-        WatermarkCorner::BottomLeft => (margin, h - margin - total_h),
-        WatermarkCorner::BottomRight => (w - margin - total_w, h - margin - total_h),
     };
     let alpha = f32::from(mark.opacity.min(100)) / 100.0;
 
@@ -307,7 +382,7 @@ mod tests {
             },
         ] {
             let mut img = base.clone();
-            apply(&mut img, &m);
+            apply(&mut img, &m, None);
             assert_eq!(img.data(), base.data(), "{m:?}");
         }
     }
@@ -325,6 +400,7 @@ mod tests {
                     corner,
                     ..marked("Rustroom")
                 },
+                None,
             );
             assert!(
                 total_ink(&img, &base) > 0.0,
@@ -360,6 +436,7 @@ mod tests {
                     opacity: o,
                     ..marked("Rustroom")
                 },
+                None,
             );
             total_ink(&img, &base)
         };
@@ -397,6 +474,7 @@ mod tests {
                     size: 6,
                     ..marked("Rustroom")
                 },
+                None,
             );
             let rows: Vec<usize> = (0..h)
                 .filter(|&y| (0..w).any(|x| img.pixel(x, y) != base.pixel(x, y)))
@@ -423,6 +501,7 @@ mod tests {
                 size: 20,
                 ..marked("a very long piece of credit text indeed")
             },
+            None,
         );
         assert_eq!(img.data(), base.data());
     }
@@ -433,7 +512,7 @@ mod tests {
         // a bright sky, black alone on a dark subject.
         let base = grey(400, 300, 0.5);
         let mut img = base.clone();
-        apply(&mut img, &marked("Rustroom"));
+        apply(&mut img, &marked("Rustroom"), None);
         let mut lighter = false;
         let mut darker = false;
         for (a, b) in img.data().iter().zip(base.data()) {
@@ -446,6 +525,36 @@ mod tests {
         }
         assert!(lighter, "no light ink");
         assert!(darker, "no shadow");
+    }
+
+    #[test]
+    fn old_settings_read_as_text() {
+        // ⚠ The exact shape every options file and export preset written before M10.10a holds.
+        let m: Watermark =
+            serde_json::from_str(r#"{"text":"© me","corner":"TopLeft","size":5,"opacity":40}"#)
+                .expect("an older mark loads");
+        assert_eq!(m.text, "© me");
+        assert_eq!((m.size, m.opacity), (5, 40));
+        assert_eq!(m.kind, WatermarkKind::Text);
+        assert!(m.image.is_empty());
+        assert_eq!(m.image_width, 15, "a derived Default would give 0");
+    }
+
+    #[test]
+    fn image_is_active_only_with_a_file_and_opacity() {
+        // ⚠ Text typed while Image is chosen is not the image mark's business.
+        let m = Watermark {
+            kind: WatermarkKind::Image,
+            text: "typed earlier".into(),
+            ..Watermark::default()
+        };
+        assert!(!m.is_active(), "no file chosen");
+        let m = Watermark {
+            image: "logo.png".into(),
+            ..m
+        };
+        assert!(m.is_active());
+        assert!(!Watermark { opacity: 0, ..m }.is_active());
     }
 
     #[test]

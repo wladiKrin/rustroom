@@ -281,7 +281,7 @@ pub fn export_one(
     // The metadata goes **last**, after the encode, because it is surgery on the container
     // rather than on the pixels. It cannot change what the photograph looks like.
     export::output_sharpen::apply(&mut rendered, &opts.output_sharpening);
-    export::watermark::apply(&mut rendered, &opts.watermark);
+    export::watermark::apply(&mut rendered, &opts.watermark, None);
     export::save(&rendered, dest, opts.format, opts.quality, opts.space)
         .map_err(|e| e.to_string())?;
     export::metadata::embed(dest, opts.format, meta).map_err(|e| e.to_string())
