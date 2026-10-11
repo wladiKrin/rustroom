@@ -166,7 +166,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-10-11 — M10.10a: an image watermark (branch `m10.10a-image-watermark`)
+### 2026-10-11 — M10.10a: an image watermark (branch `m10.10a-image-watermark`, merged 2026-10-11)
 
 **Input:** Phase 10's M10.10a: *"An image watermark (a PNG with alpha) beside the text one"*. The author's
 answers: **one or the other** (Text · Image, sharing the corner and the opacity); **a copy** of the chosen
