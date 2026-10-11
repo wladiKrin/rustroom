@@ -166,7 +166,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-10-11 — M10.11a: film negative inversion (branch `m10.11a-film-negative`)
+### 2026-10-11 — M10.11a: film negative inversion (branch `m10.11a-film-negative`, merged 2026-10-11)
 
 **Input:** Phase 10's M10.11a: *"Film negative inversion — invert, white balance from the film base, a
 tone curve"*, recorded in `docs/BACKLOG.md` as **a stage plus an eyedropper**, not a plugin system. The
