@@ -166,6 +166,59 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-10-11 — M10.10b: export sizing in cm/in with a PPI, and a file-size limit (branch `m10.10b-export-sizing`)
+
+**Input:** Phase 10's M10.10b: *"Export sizing in cm/in with a PPI, and a file-size target"*. The author's
+answers: **Lightroom's set of modes**; a **Don't enlarge** tick (on by default); with it on, a print size the
+pixels cannot fill **lowers the PPI** so the file still opens at the asked size; a limit lowers the
+**quality to 40, then the pixels**. Spec `docs/superpowers/specs/2026-10-11-m10.10b-export-sizing-design.md`,
+plan beside it.
+
+**Found first, and fixed:** *Fit within a long edge* was applied to the **uncropped** decode, so a cropped
+photo came out smaller than asked — `a_cropped_photo_meets_its_long_edge`, written against the old API before
+any change, exported a half-cropped 400 × 200 at long edge 100 as **50 × 50**.
+
+**Built:**
+- **`export::sizing`** — `OutputSize` (Original · Width & height · Dimensions · Long edge · Short edge ·
+  Megapixels · Percentage; px · cm · in; a PPI, default 300; Don't enlarge), each mode keeping its number,
+  `set_unit` converting through the PPI; `plan(final_w, final_h)` → exact pixels, the PPI to write and
+  `below_ppi`; `size_or_max_edge` reads an older file's `"max_edge": N` as a long edge of N px;
+  `resample_encoded` resizes **in linear light** (decode → Lanczos3 → encode).
+- **`export::density`** — the PPI in the file: JPEG's JFIF density through the encoder, a PNG `pHYs` after
+  `IHDR`, the TIFF's XResolution/YResolution/ResolutionUnit **patched in place** (the `tiff` encoder always
+  writes them as 1/1, none). DNG none. **`export::encode`** writes the raster formats in memory (`save` is it
+  plus a write); `metadata::with_xmp` is `embed`'s in-memory half.
+- **`export::size_limit`** — `FileSizeLimit { on, kb }` (KB = 1000 bytes), `encode_within` bisects the
+  quality 40..=100 on the whole file, XMP included.
+- **The app** — `pipeline::prefix_output_dims` predicts the cropped size from the prefix steps' own
+  `output_dims`; `batch_export::sizing::for_photo` picks the smallest decode whose output covers the target,
+  `fit` trims ≤ 2 px from the middle or enlarges; `finish::write` sharpens, marks, encodes with the PPI and
+  the XMP, and under a limit shrinks **from the render before sharpening and the watermark**, both redone;
+  the report counts `below_ppi` and `shrunk` into notes (*"2 photos below 300 PPI"*, *"1 photo made smaller to
+  fit 500 KB"*). `ImageBuf::downscaled_dims` is the one formula the downscale and the prediction share.
+- **The dialog** — Size (`modals/export_size.rs`): *Resize to fit*, the value boxes, *Unit*, *Resolution*,
+  *Don't enlarge*, and a line in the other measure; File: *Limit file size* with a KB box replacing the
+  quality slider while on. Summaries: *30 × 20 cm, 300 PPI*, *2048 px long edge*, *12 MP*, *JPEG · ≤ 500 KB*.
+
+**Sabotages — twelve, run with `--no-fail-fast` on the whole suite, one green at first:**
+- Red at once: the prediction ignoring the crop (4 tests), the trim off (2), the PPI not written in a JPEG
+  (3), a PNG (1), a TIFF (1), resizing in code values (1 — the black-white averaging test alone cannot
+  see a missing *decode*, since 0 and 1 survive it; the flat-colour test does), Don't enlarge ignored (4),
+  the old `max_edge` dropped (3), the shrink skipped (1), the unit switch converting nothing (1), the limit
+  ignored (2).
+- ⚠⚠ **The limit measured without the XMP stayed green.** The "metadata bigger than the limit" test used
+  **1 KB — which the colour profile alone is over**, so the photo failed whatever the XMP did; and no test
+  looked for the metadata in a limited file. Now the limit is measured (a tiny JPEG of the photo plus 2 KB,
+  which the picture alone meets) and the caption is checked in every limited file; both the sabotage and
+  its subtler form (measured without, written with) are red.
+- ⚠ The first limit test passed **before the limit existed**: the default quality 90 happened to fit. It now
+  asks for quality 100, whose file is over by construction.
+
+**Final review: my own pass** (no subagent unasked). Deferred minors: the size line shows the size in the
+other measure rather than the first photo's own result (its pixels are unknown before its decode); KB only,
+no MB. ⚠ Over the 600-line marker: `modals/export.rs` 796 lines of code (the Size body moved out, the limit
+control in), `batch_export/worker.rs` 696.
+
 ### 2026-10-11 — M10.10a: an image watermark (branch `m10.10a-image-watermark`, merged 2026-10-11)
 
 **Input:** Phase 10's M10.10a: *"An image watermark (a PNG with alpha) beside the text one"*. The author's
