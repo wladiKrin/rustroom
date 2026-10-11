@@ -87,8 +87,9 @@ pub(crate) fn run_export(
 ) -> (ExportReport, Vec<ExportEvent>) {
     // ⚠ Width 1 by default here, so every pre-existing test keeps its exact meaning; the
     // carrier below drives the wide path explicitly.
-    // ⚠ `None` looks directory: these tests exercise naming, collisions and cancellation, none of
-    // which involve a `.cube`. The camera-rendering tests build their own worker.
+    // ⚠ No looks directory and no watermark store: these tests exercise naming, collisions and
+    // cancellation, none of which involve a `.cube` or a logo. The camera-rendering and watermark
+    // tests build their own worker.
     let worker = ExportWorker::spawn(
         jobs,
         opts,

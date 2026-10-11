@@ -478,7 +478,7 @@ impl Uploader {
 }
 
 // ⚠ Mirrors `spawn`'s parameter list, which carries the same allow. ⚠⚠ Ten arguments is past the
-// point where a `RunConfig { render, width, looks, upload }` would read better — noted rather than
+// point where a `RunConfig { render, width, batch, upload }` would read better — noted rather than
 // done here, because changing this signature churns the concurrency carrier tests and belongs in its
 // own change.
 #[allow(clippy::too_many_arguments)]

@@ -166,6 +166,53 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-10-11 — M10.10a: an image watermark (branch `m10.10a-image-watermark`)
+
+**Input:** Phase 10's M10.10a: *"An image watermark (a PNG with alpha) beside the text one"*. The author's
+answers: **one or the other** (Text · Image, sharing the corner and the opacity); **a copy** of the chosen
+file kept by Rustroom; **width as a share of the long edge**. Spec
+`docs/superpowers/specs/2026-10-11-m10.10a-image-watermark-design.md`, plan beside it.
+
+**Built:**
+- **`export::watermark`** — `WatermarkKind` and `image`/`image_width` appended to `Watermark` (an older
+  options file or preset reads as Text, width 15); `is_active` reads only its own kind's field; one
+  `place` for both kinds (skip, never clip). **`watermark/logo.rs`** — `Logo::decode(bytes, space)`: the
+  file taken as sRGB and turned into the export's space (`srgb_to_linear` → `from_srgb` → `encode`)
+  because the buffer it lands on is already encoded there; stored **premultiplied** (no fringe from the
+  transparent pixels' colour); over 4096 px shrunk once. Per photo: Lanczos3 to `image_width` % of the
+  long edge, `dst·(1 − a·op) + c·op`, no shadow.
+- **`watermark_store`** (lib) — copies into `<config>/rustroom/watermarks/`; the same bytes again reuse
+  their copy, a different file of the same name becomes `logo-1.png`; `path_of` accepts only one plain
+  file name, so a hand-edited `../x.png` reads nothing.
+- **`batch_export/batch.rs`** (new) — `ExportDirs { looks, watermarks }` replaces `spawn`'s `looks_dir`;
+  `Batch::read` on the worker thread holds the looks (`resolve_looks`, moved here with its tests) and the
+  logo; `resolve_logo` decodes in `fixed_space` before the dialog's space (a DNG's logo is ProPhoto); a
+  miss is **one note** — the run exports every photo and the status ends *"the watermark image logo.png
+  could not be read"* (`ExportReport::{notes, summary}`).
+- **The dialog** — the Watermark body moved to `modals/export_watermark.rs`: *Style* Text · Image; Text
+  keeps its field and Size; Image has *Choose image…* (PNG, JPEG, TIFF, WebP), the name and Width; Corner
+  and Opacity shared. The summary reads *Text · © Me*, *Image · logo.png* or *off*. Previews never carry a
+  mark (`ExportDirs` with no store).
+
+**Sabotages — ten planned, two stayed green at first:**
+- Red at once: the colour not converted (P3 and DNG tests), the copy overwriting, the store's guard off,
+  the note not made, the note dropped in `run`, the logo loaded but not drawn, an image mark active by
+  its text, the dialog showing Size for both.
+- ⚠⚠ **The alpha ignored (`k = op`) stayed green.** A fully clear pixel is skipped before `k` is read and
+  an opaque one has `a = 1`, so only an alpha strictly between can tell — a 50 %-alpha logo would have
+  drawn at full strength. `a_half_transparent_logo_blends_by_its_alpha` added, red under it.
+- ⚠ **My straight-alpha sabotage was a hybrid** (stored straight, composited as premultiplied) whose
+  clamp to `[0, a]` hid the very fringe it meant to cause. Redone as a real straight-alpha path (straight
+  through the resize, multiplied after) — the hole test goes red. ⚠ A sabotage that cannot happen proves
+  nothing either way.
+- ⚠ **`cargo test --workspace` stops at the first failing test binary**, so a sabotage's list of failed
+  tests is only the first binary's. The exit code is the verdict; `--no-fail-fast` for the full list.
+
+**Final review: my own pass** (no subagent unasked). Deferred minors: a huge logo is decoded at full size
+once before the shrink; an embedded ICC profile is ignored (the file is taken as sRGB). ⚠ Over the
+600-line marker: `batch_export/worker.rs` 674 lines of code (accepted in its own header; `resolve_looks`
+moved out), `modals/export.rs` 787 (the watermark body moved out). **3531 tests.**
+
 ### 2026-10-10 — M10.9c: import Lightroom presets (branch `m10.9c-lightroom-presets`, merged 2026-10-11)
 
 **Input:** Phase 10's M10.9c (split from M10.9a): *"Import Lightroom / Camera Raw `.xmp` develop presets"*.
