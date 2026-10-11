@@ -18,6 +18,18 @@ pub const HIGH: f32 = 0.995;
 /// The patch the pick averages: 5 × 5, the white-balance eyedropper's.
 pub const PATCH_R: usize = 2;
 
+/// The densities film can have, above its base. ⚠⚠ **What lies outside is not film and is left out of
+/// the measurement** (found in use, 2026-10-11): the bare backlight through a sprocket hole is brighter
+/// than the base (below 0), and the holder around the film is opaque — measured at 3.1 to 4.8 on a
+/// camera scan, where the densest negative reaches about 2.5.
+pub const FILM_DENSITY: (f32, f32) = (-0.05, 3.0);
+
+/// The share of each edge left out of the measurement: wide on an **uncropped** frame, whose edges are
+/// the scan's surroundings — holder, rebate, the next frame — and narrow once the crop says where the
+/// picture is. Negative Lab Pro's *border buffer*.
+pub const BORDER_UNCROPPED: f32 = 0.15;
+pub const BORDER_CROPPED: f32 = 0.02;
+
 /// The mean of the `(2r + 1)²` patch of `buffer` centred at `at` (normalised `[u, v]`), or `None` off
 /// the photo.
 pub fn patch_mean(buffer: &ImageBuf, at: [f32; 2], r: usize) -> Option<[f32; 3]> {
@@ -43,8 +55,9 @@ pub fn patch_mean(buffer: &ImageBuf, at: [f32; 2], r: usize) -> Option<[f32; 3]>
 /// The frame's shadow and highlight densities per channel — the [`LOW`] and [`HIGH`] percentiles of
 /// `log10(base / pixel)` over a 512 px analysis inside the crop — for the base `edits` holds.
 ///
-/// ⚠ Inside the crop, `auto_tone_tool::source_crop`'s frame: cropping out the rebate and the scanner's
-/// border first is what keeps them from becoming the black.
+/// ⚠ Inside the crop, `auto_tone_tool::source_crop`'s frame, less a border ([`BORDER_UNCROPPED`],
+/// [`BORDER_CROPPED`]), and only densities film can have ([`FILM_DENSITY`]) — so the scan's holder,
+/// its sprocket holes and the next frame's edge do not become the white or the black.
 pub fn measure(buffer: &ImageBuf, edits: &Edits) -> Option<([f32; 3], [f32; 3])> {
     let n = &edits.negative;
     if !n.base.iter().all(|&b| b > 0.0) {
@@ -53,20 +66,31 @@ pub fn measure(buffer: &ImageBuf, edits: &Edits) -> Option<([f32; 3], [f32; 3])>
     let small = buffer.downscale_to(crate::auto_tone_tool::ANALYSIS_DIM);
     let (w, h) = (small.width(), small.height());
     let crop = crate::auto_tone_tool::source_crop(edits.geometry.crop, edits.geometry.orientation);
+    let border = if edits.geometry.crop == edit_model::CropRect::default() {
+        BORDER_UNCROPPED
+    } else {
+        BORDER_CROPPED
+    };
+    let (cw, ch) = (crop.right - crop.left, crop.bottom - crop.top);
+    let (left, right) = (crop.left + border * cw, crop.right - border * cw);
+    let (top, bottom) = (crop.top + border * ch, crop.bottom - border * ch);
     let (x0, x1) = (
-        (crop.left * w as f32) as usize,
-        (crop.right * w as f32).ceil() as usize,
+        (left * w as f32) as usize,
+        (right * w as f32).ceil() as usize,
     );
     let (y0, y1) = (
-        (crop.top * h as f32) as usize,
-        (crop.bottom * h as f32).ceil() as usize,
+        (top * h as f32) as usize,
+        (bottom * h as f32).ceil() as usize,
     );
+    let (lo, hi) = FILM_DENSITY;
     let mut d: [Vec<f32>; 3] = Default::default();
     for y in y0..y1.min(h) {
         for x in x0..x1.min(w) {
             let px = pipeline::negative::density(small.pixel(x, y), n);
-            for c in 0..3 {
-                d[c].push(px[c]);
+            if px.iter().all(|v| (lo..=hi).contains(v)) {
+                for c in 0..3 {
+                    d[c].push(px[c]);
+                }
             }
         }
     }
@@ -168,6 +192,12 @@ mod tests {
         (a - b).abs() <= tol
     }
 
+    /// The density [`strip`]'s ramp has at `u` across the frame — where an uncropped frame's border
+    /// ([`BORDER_UNCROPPED`]) stops the measurement, its densest is read, not the very edge.
+    fn ramp_at(u: f32, d0: f32, d1: f32) -> f32 {
+        d0 + (d1 - d0) * (u - 0.1) / 0.9
+    }
+
     #[test]
     fn a_pick_on_the_film_base_sets_it_and_measures_the_frame() {
         let buf = strip(100, 40, 0.2, 1.6);
@@ -177,12 +207,55 @@ mod tests {
         assert!(n.on && n.is_active());
         for (c, want) in BASE.iter().enumerate() {
             assert!(close(n.base[c], *want, 0.01 * want), "{:?}", n.base);
+            // ⚠ Not the strip itself: an uncropped frame's border is left out of the measurement.
+            assert!((0.0..0.35).contains(&n.low[c]), "the thin end: {:?}", n.low);
+            let want = ramp_at(1.0 - BORDER_UNCROPPED, 0.2, 1.6);
             assert!(
-                close(n.low[c], 0.0, 0.01),
-                "the strip is the black: {:?}",
-                n.low
+                close(n.high[c], want, 0.03),
+                "the densest measured: {:?}",
+                n.high
             );
-            assert!(close(n.high[c], 1.6, 0.03), "the densest end: {:?}", n.high);
+        }
+    }
+
+    /// ⚠⚠ Found in use (2026-10-11, an Ilford HP5 camera scan): the uncropped frame held the black
+    /// holder around the film — a quarter of it, densities 3.1 to 4.8 — so the 99.5th percentile
+    /// landed there and the picture, at most 1.55, came out black. A scan's surroundings are not film:
+    /// what is brighter than the base or denser than film gets is left out, and so is the border of
+    /// an uncropped frame.
+    #[test]
+    fn a_scan_with_its_holder_and_sprocket_holes_measures_the_picture() {
+        let (w, h) = (200usize, 300usize);
+        let mut img = ImageBuf::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+                let px = if !(0.12..0.95).contains(&u) || !(0.12..0.85).contains(&v) {
+                    BASE.map(|b| b * 1e-4) // the holder: opaque
+                } else if (0.15..0.2).contains(&u) && (v * 20.0).fract() < 0.4 {
+                    BASE.map(|b| (b * 1.4).min(1.0)) // a sprocket hole: the bare backlight
+                } else if (0.3..0.8).contains(&u) && (0.2..0.7).contains(&v) {
+                    let d = 0.25 + 1.25 * (u - 0.3) / 0.5; // the picture
+                    BASE.map(|b| b * 10f32.powf(-d))
+                } else {
+                    BASE // the rebate
+                };
+                img.set_pixel(x, y, px);
+            }
+        }
+        let mut e = Edits::default();
+        assert!(pick(&mut e, &img, [0.25, 0.78]), "the rebate is film base");
+        for c in 0..3 {
+            assert!(
+                close(e.negative.high[c], 1.5, 0.05),
+                "the picture's densest, not the holder: {:?}",
+                e.negative.high
+            );
+            assert!(
+                e.negative.low[c] >= -0.05,
+                "not a sprocket hole: {:?}",
+                e.negative.low
+            );
         }
     }
 
@@ -232,8 +305,9 @@ mod tests {
         pick(&mut e, &strip(100, 40, 0.2, 1.6), [0.05, 0.5]);
         let thin = strip(100, 40, 0.1, 0.9);
         assert!(rebalance(&mut e, &thin));
+        let want = ramp_at(1.0 - BORDER_UNCROPPED, 0.1, 0.9);
         assert!(
-            e.negative.high.iter().all(|&d| close(d, 0.9, 0.03)),
+            e.negative.high.iter().all(|&d| close(d, want, 0.03)),
             "{:?}",
             e.negative.high
         );
