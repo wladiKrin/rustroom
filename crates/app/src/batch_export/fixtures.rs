@@ -152,3 +152,19 @@ pub(crate) fn write_png(path: &Path, w: u32, h: u32, rgba: [u8; 4]) {
         .save(path)
         .expect("write a test PNG");
 }
+
+/// A gradient with fine grain — compresses like a photograph, so a JPEG's size follows its quality
+/// (M10.10b). Deterministic: a fixed linear congruential sequence.
+pub(crate) fn grainy(w: usize, h: usize) -> ImageBuf {
+    let mut img = ImageBuf::new(w, h);
+    let mut s = 0x2545_F491u32;
+    for y in 0..h {
+        for x in 0..w {
+            s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let n = ((s >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.08;
+            let v = 0.1 + 0.6 * x as f32 / w as f32;
+            img.set_pixel(x, y, [v + n, 0.3 + n, 0.7 - v * 0.5 + n]);
+        }
+    }
+    img
+}

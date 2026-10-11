@@ -280,7 +280,7 @@ pub fn export_one(
     // rather than on the pixels. It cannot change what the photograph looks like.
     //
     // ⚠ All three live in `finish::write`, in that order (M10.10b), with the PPI and the size limit.
-    super::finish::write(rendered, dest, opts, logo, meta, &sizing.plan)
+    super::finish::write(rendered, dest, opts, logo, meta, &sizing.plan, render_space)
 }
 
 /// The brush side channel carrying `edits`' AI masks for a frame the size of `frame`, or `None`
