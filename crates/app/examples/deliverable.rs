@@ -98,7 +98,7 @@ fn main() {
             None,
             None,
         ) {
-            Ok(()) => println!("wrote {}", dest.display()),
+            Ok(_) => println!("wrote {}", dest.display()),
             Err(e) => println!("FAILED {}: {e}", dest.display()),
         }
     }

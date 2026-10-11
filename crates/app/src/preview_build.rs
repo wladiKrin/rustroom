@@ -58,7 +58,6 @@ pub fn build_options(store_dir: std::path::PathBuf, tier: Demosaic) -> ExportOpt
     ExportOptions {
         dest_dir: store_dir,
         quality: PREVIEW_QUALITY,
-        max_edge: None,
         demosaic: tier,
         format: ExportFormat::Jpeg,
         space: color::OutputSpace::Srgb,
@@ -134,7 +133,7 @@ mod tests {
         let o = build_options(d.0.clone(), Demosaic::Fast);
         assert_eq!(o.format, ExportFormat::Jpeg);
         assert_eq!(o.quality, PREVIEW_QUALITY);
-        assert_eq!(o.max_edge, None);
+        assert_eq!(o.size, crate::batch_export::OutputSize::default());
         assert_eq!(o.space, color::OutputSpace::Srgb);
         assert_eq!(o.demosaic, Demosaic::Fast);
         assert_eq!(o.dest_dir, d.0);

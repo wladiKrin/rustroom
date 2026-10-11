@@ -63,6 +63,10 @@ pub struct ExportReport {
     /// What the run could not do that every photo was meant to have — today, an image watermark
     /// whose copy could not be read (M10.10a). Each is a phrase the status line ends with.
     pub notes: Vec<String>,
+    /// Photos whose print size their pixels could not fill, so their files carry a lower PPI.
+    pub below_ppi: usize,
+    /// Photos made smaller than asked to fit the file-size limit.
+    pub shrunk: usize,
 }
 
 impl ExportReport {
@@ -634,7 +638,7 @@ fn run(
                 // ⚠⚠ Only after a successful write, and it can never turn a success into a
                 // failure. The exported file is the deliverable; the upload is delivery.
                 let upload = match (&outcome, uploader) {
-                    (Ok(()), Some(u)) => Some(u.send(
+                    (Ok(_), Some(u)) => Some(u.send(
                         &p.dest,
                         &p.capture,
                         &p.source,
@@ -649,7 +653,11 @@ fn run(
                     // test comparing it must sort or compare as a set.
                     let mut r = shared.lock().expect("export report");
                     match outcome {
-                        Ok(()) => r.exported += 1,
+                        Ok(w) => {
+                            r.exported += 1;
+                            r.below_ppi += usize::from(w.below_ppi);
+                            r.shrunk += usize::from(w.shrunk);
+                        }
                         Err(e) => r.failed.push((p.source.clone(), e)),
                     }
                     match upload {
@@ -696,7 +704,21 @@ fn run(
             });
         }
     });
-    let report = shared.into_inner().expect("export report");
+    let mut report = shared.into_inner().expect("export report");
+    // ⚠ Said once for the run, after the counts, with the numbers the photos were held to (M10.10b).
+    let photos = |n: usize| format!("{n} photo{}", if n == 1 { "" } else { "s" });
+    if report.below_ppi > 0 {
+        let note = format!("{} below {} PPI", photos(report.below_ppi), opts.size.ppi);
+        report.notes.push(note);
+    }
+    if report.shrunk > 0 {
+        let note = format!(
+            "{} made smaller to fit {} KB",
+            photos(report.shrunk),
+            opts.limit.kb
+        );
+        report.notes.push(note);
+    }
 
     // ⚠ Only when empty. A staging directory still holding files is **not** an error — it means
     // something did not confirm and could not be rescued, and `unconfirmed` already names each one.
@@ -1773,5 +1795,158 @@ mod tests {
             r.summary(),
             "Exported 2, 1 failed, cancelled, the watermark image x.png could not be read"
         );
+    }
+
+    /// Export one `grainy` 600 × 400 photo as a JPEG with `o`: the report, the file's bytes, its size.
+    fn exported_jpeg(
+        d: &TempDir,
+        name: &str,
+        o: ExportOptions,
+    ) -> (ExportReport, Vec<u8>, (u32, u32)) {
+        let worker = ExportWorker::spawn(
+            jobs(d, &[name]),
+            o,
+            |_: &Path| Ok(source(grainy(600, 400))),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            ExportDirs::default(),
+            None,
+        );
+        let r = finished(&worker);
+        let stem = Path::new(name).file_stem().unwrap().to_string_lossy();
+        let Ok(bytes) = std::fs::read(d.0.join(format!("{stem}.jpg"))) else {
+            return (r, Vec::new(), (0, 0));
+        };
+        let img = image::load_from_memory(&bytes).expect("a JPEG");
+        (r, bytes.clone(), (img.width(), img.height()))
+    }
+
+    /// M10.10b: a limit the quality can meet is met by the quality alone; one it cannot is met by
+    /// fewer pixels, and the report says so.
+    #[test]
+    fn a_file_size_limit_is_met_by_the_quality_then_by_the_pixels() {
+        let d = TempDir::new("limit_met");
+        let mut o = opts(&d, None);
+        // ⚠ A caption, so the XMP is part of what each limited file must hold — and is checked to
+        // be there. Found by sabotage: a search measuring and writing without it stayed green.
+        o.metadata.caption = "kept under the limit".into();
+        // ⚠ The bounds are measured on this very photo, not invented: the limit sits between the
+        // file at the floor and the file at 100.
+        let at = |q: u8, name: &str| {
+            let (_, bytes, _) = exported_jpeg(
+                &d,
+                name,
+                ExportOptions {
+                    quality: q,
+                    ..o.clone()
+                },
+            );
+            bytes.len()
+        };
+        let (floor, best) = (at(40, "q40.RAF"), at(100, "q100.RAF"));
+        assert!(best > floor * 2, "the sample: {floor} at 40, {best} at 100");
+        let between = (floor + best) / 2;
+        let kb = (between / 1000) as u32;
+        // ⚠ Quality 100 asked, whose file is over the limit by construction: the limit, not the
+        // slider, must decide. With the default 90 this half passed before the limit existed.
+        let limited = ExportOptions {
+            quality: 100,
+            limit: FileSizeLimit { on: true, kb },
+            ..o.clone()
+        };
+        let (r, bytes, dims) = exported_jpeg(&d, "fits.RAF", limited);
+        assert!(
+            bytes.len() <= kb as usize * 1000,
+            "{} over {kb} KB",
+            bytes.len()
+        );
+        assert!(bytes.len() > floor, "the quality was not simply floored");
+        assert!(has_caption(&bytes), "the limited file lost its metadata");
+        assert_eq!(dims, (600, 400), "the quality alone met it");
+        assert!(r.notes.is_empty(), "{:?}", r.notes);
+
+        let kb = ((floor / 3) / 1000).max(1) as u32;
+        let tight = ExportOptions {
+            limit: FileSizeLimit { on: true, kb },
+            ..o
+        };
+        let (r, bytes, dims) = exported_jpeg(&d, "shrunk.RAF", tight);
+        assert!(
+            bytes.len() <= kb as usize * 1000,
+            "{} over {kb} KB",
+            bytes.len()
+        );
+        assert!(dims.0 < 600 && dims.1 < 400, "{dims:?}");
+        assert!(has_caption(&bytes), "the shrunk file lost its metadata");
+        assert!(
+            (dims.0 as f32 / dims.1 as f32 - 1.5).abs() < 0.05,
+            "the shape kept: {dims:?}"
+        );
+        assert_eq!(r.exported, 1);
+        assert_eq!(r.notes, [format!("1 photo made smaller to fit {kb} KB")]);
+    }
+
+    fn has_caption(bytes: &[u8]) -> bool {
+        bytes.windows(20).any(|w| w == b"kept under the limit")
+    }
+
+    /// M10.10b: metadata bigger than the limit cannot be met by any picture — that photo fails with
+    /// a reason, and nothing over the limit is written.
+    ///
+    /// ⚠⚠ **The limit is one the PICTURE alone could meet**, measured: a tiny JPEG of this photo,
+    /// colour profile and all, plus 2 KB. The first version used 1 KB, which the colour profile alone
+    /// is over — so the photo failed whatever the XMP did, and a search that ignored the XMP passed.
+    #[test]
+    fn a_limit_smaller_than_the_metadata_fails_that_photo() {
+        let d = TempDir::new("limit_meta");
+        let small = export::encode(
+            &grainy(24, 16),
+            export::ExportFormat::Jpeg,
+            40,
+            color::OutputSpace::Srgb,
+            Some(300.0),
+        )
+        .unwrap()
+        .len();
+        let kb = (small / 1000 + 2) as u32;
+        let mut o = opts(&d, None);
+        o.metadata.caption = "a long caption ".repeat(kb as usize * 1000 / 15 + 100);
+        o.limit = FileSizeLimit { on: true, kb };
+        let (r, bytes, _) = exported_jpeg(&d, "a.RAF", o);
+        assert_eq!(r.exported, 0);
+        assert_eq!(r.failed.len(), 1, "{r:?}");
+        assert!(
+            r.failed[0].1.contains(&format!("{kb} KB")),
+            "{}",
+            r.failed[0].1
+        );
+        assert!(bytes.is_empty(), "nothing written");
+    }
+
+    /// M10.10b: a print size its pixels cannot fill is named once for the run.
+    #[test]
+    fn photos_below_the_asked_ppi_are_named() {
+        let d = TempDir::new("below_ppi");
+        let o = ExportOptions {
+            size: OutputSize {
+                fit: FitMode::LongEdge,
+                unit: LengthUnit::Cm,
+                long_edge: 100.0,
+                ppi: 300,
+                ..OutputSize::default()
+            },
+            ..opts(&d, None)
+        };
+        let (r, _, dims) = exported_jpeg(&d, "a.RAF", o);
+        assert_eq!(dims, (600, 400), "its own pixels");
+        assert_eq!(r.notes, ["1 photo below 300 PPI"]);
+        let r = ExportReport {
+            exported: 3,
+            below_ppi: 2,
+            notes: vec!["2 photos below 300 PPI".into()],
+            ..ExportReport::default()
+        };
+        assert_eq!(r.summary(), "Exported 3, 2 photos below 300 PPI");
     }
 }

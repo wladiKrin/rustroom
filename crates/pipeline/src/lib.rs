@@ -118,7 +118,7 @@ pub use build::{
 };
 pub use coverage::{BrushCoverage, CoverageRasterizer};
 pub use pipeline_stage::{Pipeline, PipelineStage, RenderScale, SubStageAccelerator};
-pub use prefix::{build_prefix_steps, PrefixKey, PrefixStep, PrefixStepKey};
+pub use prefix::{build_prefix_steps, prefix_output_dims, PrefixKey, PrefixStep, PrefixStepKey};
 pub use prefix_airlight::{prefix_airlight, prefix_airlight_key, AirlightKey};
 pub use region::{region_plan, run_region_plan, Rect, Region, RegionPlan, RegionSrc};
 pub use tail_rendering::{effective_profile_curve, TailRendering};

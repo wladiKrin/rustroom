@@ -32,6 +32,7 @@
 pub mod ai_download;
 pub mod edits;
 pub mod export;
+mod export_size;
 mod export_watermark;
 pub mod import;
 pub mod info;

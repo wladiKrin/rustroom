@@ -19,14 +19,17 @@
 
 mod batch;
 mod destination;
+mod finish;
 mod options;
 mod render;
+mod sizing;
 mod worker;
 
 // ⚠⚠ Glob re-exports, so every existing caller keeps working unchanged — this is a **move**, and a
 // move that forces its callers to edit their imports is not one.
 pub use batch::*;
 pub use destination::*;
+pub use finish::Written;
 pub use options::*;
 pub use render::*;
 pub use worker::*;

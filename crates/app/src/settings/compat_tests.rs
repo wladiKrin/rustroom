@@ -271,7 +271,19 @@ fn the_export_options_default_to_unset() {
     let s = Settings::default();
     assert!(s.export.dest_dir.as_os_str().is_empty());
     assert_eq!(s.export.quality, 92);
-    assert_eq!(s.export.max_edge, None);
+    assert_eq!(s.export.size, crate::batch_export::OutputSize::default());
+}
+
+/// M10.10b: `max_edge` became `size`, and a settings file holding the old field sizes as it did.
+#[test]
+fn a_settings_file_with_the_old_max_edge_keeps_its_long_edge() {
+    let f = TempFile::new("max_edge_old");
+    std::fs::write(&f.0, r#"{"export":{"dest_dir":"/tmp/x","max_edge":1600}}"#).unwrap();
+    let loaded = SettingsStore::new(f.0.clone()).load();
+    assert_eq!(
+        loaded.export.size,
+        crate::batch_export::OutputSize::long_edge_px(1600)
+    );
 }
 
 #[test]
@@ -381,7 +393,7 @@ fn settings_round_trip_carries_the_export_options() {
         export: ExportOptions {
             dest_dir: std::path::PathBuf::from("/tmp/rustroom_out"),
             quality: 71,
-            max_edge: Some(2048),
+            size: crate::batch_export::OutputSize::long_edge_px(2048),
             ..ExportOptions::default()
         },
         // Every field non-default, so a re-defaulted one cannot pass.

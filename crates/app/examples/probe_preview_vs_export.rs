@@ -75,7 +75,7 @@ fn main() {
         None => (None, None),
     };
     let mut o = rustroom_app::batch_export::ExportOptions {
-        max_edge: Some(4000),
+        size: rustroom_app::batch_export::OutputSize::long_edge_px(4000),
         format: export::ExportFormat::Png8,
         ..Default::default()
     };
