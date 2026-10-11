@@ -10,7 +10,7 @@ pub const EDIT_GROUP_NAMES: [&str; 11] = [
     "Color",
     "Detail",
     "Lens",
-    "Vignette",
+    "Effects",
     "Geometry",
     "Masks",
     "Retouch",
@@ -300,8 +300,9 @@ mod tests {
 
     #[test]
     fn the_vignette_group_is_named_for_what_it_carries() {
-        // It holds exactly one thing, and calling it "Effects" said otherwise.
-        assert_eq!(EDIT_GROUP_NAMES[5], "Vignette");
+        // ⚠ M10.11b: it holds the vignette AND grain now, so it is "Effects" again — Lightroom's name.
+        // It was renamed "Vignette" when it held exactly one thing; the name follows the contents.
+        assert_eq!(EDIT_GROUP_NAMES[5], "Effects");
     }
 
     #[test]

@@ -76,6 +76,45 @@ impl NoiseReduction {
     }
 }
 
+/// Film grain (M10.11b) — Lightroom's Effects → Grain: brightness only, strongest in the midtones.
+///
+/// ⚠ In the vignette's group, which the panel and Copy/Paste/Sync show as **Effects** — Lightroom's
+/// arrangement. The group's *field* is still `vignette`, so every stored selection reads as before.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Grain {
+    /// 0..100. 0 = off.
+    pub amount: f32,
+    /// How large each grain is, 0..100.
+    pub size: f32,
+    /// How uneven the grain is, 0..100.
+    pub roughness: f32,
+}
+
+impl Default for Grain {
+    /// ⚠ Hand-written: Lightroom's 25 and 50, which a derived `Default` would make 0 for every file
+    /// written before grain existed.
+    fn default() -> Self {
+        Self {
+            amount: 0.0,
+            size: 25.0,
+            roughness: 50.0,
+        }
+    }
+}
+
+impl Grain {
+    /// Grain only when there is an amount — Size and Roughness only shape it.
+    pub fn is_active(&self) -> bool {
+        self.amount > 0.0
+    }
+
+    /// Exactly the default — what `Edits` leaves out of its serialization.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// Post-crop vignette: darken or brighten the frame's edges. `amount` 0 = off; the other
 /// three only shape the falloff.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -200,6 +239,20 @@ impl Dehaze {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M10.11b: grain is off by default with Lightroom's Size and Roughness — a derived `Default`
+    /// would give both 0 to every file written before it.
+    #[test]
+    fn grain_is_off_by_default_with_lightrooms_size_and_roughness() {
+        let g = Grain::default();
+        assert!(!g.is_active() && g.is_default());
+        assert_eq!((g.amount, g.size, g.roughness), (0.0, 25.0, 50.0));
+        assert!(Grain { amount: 10.0, ..g }.is_active());
+        assert!(
+            !Grain { size: 80.0, ..g }.is_active(),
+            "size alone draws no grain"
+        );
+    }
     use crate::{EditGroups, Edits, EDIT_GROUP_NAMES};
 
     #[test]

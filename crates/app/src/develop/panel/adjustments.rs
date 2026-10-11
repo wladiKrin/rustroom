@@ -1232,7 +1232,7 @@ mod tests {
             });
             *seen.borrow_mut() = edits.clone();
         };
-        for h in ["Color", "Detail", "Lens", "Vignette"] {
+        for h in ["Color", "Detail", "Lens", "Effects"] {
             crate::test_ui::click(&ctx, h, &mut body);
         }
         crate::test_ui::click(&ctx, "Advanced color", &mut body);
@@ -1319,7 +1319,7 @@ mod tests {
                 );
             });
         };
-        for h in ["Color", "Detail", "Lens", "Vignette"] {
+        for h in ["Color", "Detail", "Lens", "Effects"] {
             crate::test_ui::click(&ctx, h, &mut body);
         }
         crate::test_ui::click(&ctx, "Advanced color", &mut body);
@@ -1756,7 +1756,8 @@ mod tests {
                 "Color",
                 "Detail",
                 "Lens",
-                "Vignette"
+                // ⚠ M10.11b: shown as Effects — the vignette and grain, Lightroom's panel.
+                "Effects"
             ]
         );
     }
