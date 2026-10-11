@@ -14,6 +14,7 @@ mod mask_ops;
 mod mask_ranges;
 mod mask_shapes;
 mod masks;
+mod negative;
 mod retouch;
 mod tone;
 pub use colour::{
@@ -23,13 +24,15 @@ pub use detail::{Defringe, Dehaze, LocalContrast, NoiseReduction, Sharpening, Vi
 pub use geo_group::GeoGroup;
 pub use geometry::{CropRect, Geometry, LensCorrection, Orientation, Perspective, Quarter};
 pub use groups::{
-    EditGroups, EDIT_GROUP_NAMES, GEOMETRY_GROUP, MASKS_GROUP, RENDERING_GROUP, RETOUCH_GROUP,
+    EditGroups, EDIT_GROUP_NAMES, GEOMETRY_GROUP, MASKS_GROUP, NEGATIVE_GROUP, RENDERING_GROUP,
+    RETOUCH_GROUP,
 };
 pub use local_group::LocalGroup;
 pub use mask_ops::{MaskOp, Refinement};
 pub use mask_ranges::{ColourRange, LuminanceRange};
 pub use mask_shapes::{Brush, BrushStroke, LinearGradient, RadialGradient};
 pub use masks::{AiMask, AiPrompt, LocalAdjustments, Mask, MaskedAdjustment};
+pub use negative::Negative;
 pub use retouch::{Eye, EyeKind, Spot, SpotMode};
 pub use tone::{ParametricCurve, ToneCurve, WhiteBalance};
 
@@ -127,6 +130,15 @@ pub struct Edits {
     /// Red- and pet-eye corrections (M9.11), applied right after spot removal on the
     /// pre-geometry frame. Empty = no stage. Rides the Retouch group with `spots`.
     pub eyes: Vec<Eye>,
+    /// A scanned film negative's inversion (M10.11a), applied right after lens correction. Its own
+    /// group, [`NEGATIVE_GROUP`], off by default.
+    ///
+    /// ⚠⚠ **Not written at all while it is the default.** Every sidecar and every rendered preview's
+    /// key is a serialization of `Edits`; writing a default block would change the key of every
+    /// preview on disk — `the_fingerprint_is_stable_across_calls_and_pinned` caught it — and grow
+    /// every digital photo's sidecar with a film setting it has nothing to do with.
+    #[serde(default, skip_serializing_if = "Negative::is_default")]
+    pub negative: Negative,
 }
 
 impl Edits {
@@ -200,6 +212,7 @@ impl Edits {
             rendering,
             look,
             eyes,
+            negative,
         } = src;
 
         if groups.white_balance {
@@ -260,6 +273,9 @@ impl Edits {
             // let a paste carry a linear look while leaving `rendering` behind, which is the
             // half-applied state this partition exists to prevent.
             self.look = look.clone();
+        }
+        if groups.negative {
+            self.negative = *negative;
         }
     }
 
@@ -519,6 +535,26 @@ mod tests {
 
     /// ⚠ A list counts **one per differing element**, deliberately not recursed into: adding a mask is
     /// one change, not the twenty fields that mask happens to contain.
+    /// M10.11a: a negative travels only with its own group, which is off by default — pasting a
+    /// digital photo's settings must never switch a negative's inversion off.
+    #[test]
+    fn a_negative_is_carried_only_with_its_group() {
+        let src = Edits {
+            negative: Negative {
+                on: true,
+                base: [0.8, 0.5, 0.3],
+                ..Negative::default()
+            },
+            ..Edits::default()
+        };
+        let mut a = Edits::default();
+        a.merge_from(&src, EditGroups::default());
+        assert_eq!(a.negative, Negative::default(), "not by default");
+        let mut b = Edits::default();
+        b.merge_from(&src, EditGroups::only(NEGATIVE_GROUP));
+        assert_eq!(b.negative, src.negative);
+    }
+
     #[test]
     fn adding_one_list_element_is_one_change() {
         let a = Edits::default();
@@ -840,6 +876,14 @@ mod tests {
                 file: Some("velvia.cube".into()),
                 space: LutSpace::Rec709,
                 strength: 65.0,
+            },
+            negative: Negative {
+                on: true,
+                base: [0.7, 0.45, 0.25],
+                gamma: 0.7,
+                low: [0.05, 0.06, 0.07],
+                high: [1.8, 1.9, 2.1],
+                mono: true,
             },
         }
     }

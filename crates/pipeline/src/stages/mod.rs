@@ -12,6 +12,7 @@ pub mod lens_correction;
 pub mod local_contrast;
 pub mod mask;
 pub(crate) mod mask_coverage;
+pub mod negative;
 pub mod noise_reduction;
 pub mod output_transform;
 pub mod red_eye;

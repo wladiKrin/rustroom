@@ -464,10 +464,12 @@ pub(super) fn sampler_for(s: &Session) -> impl Fn([f32; 2]) -> [f32; 3] {
             },
         )
     });
+    // ⚠ M10.11a: what the patches and eyes see is the positive — a red eye on a negative is cyan.
+    let edits = s.edits.clone();
     move |p: [f32; 2]| {
         // stage input, `[0, 1]` normalised → pixels
         let (x, y) = (p[0] * w as f32, p[1] * h as f32);
-        match &corr {
+        let raw = match &corr {
             // → lens-correction input, in pixels, **per channel** because TCA displaces them
             // differently. Reading each channel at its own coordinate costs nothing and is more
             // faithful than picking green for all three.
@@ -480,7 +482,8 @@ pub(super) fn sampler_for(s: &Session) -> impl Fn([f32; 2]) -> [f32; 3] {
                 out
             }
             None => read(&buf, x, y),
-        }
+        };
+        rustroom_app::negative_tool::view(raw, &edits)
     }
 }
 
@@ -496,6 +499,37 @@ fn read(buf: &core_image::ImageBuf, x: f32, y: f32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M10.11a: the patches and the red-eye detection sample the positive of a scanned negative.
+    #[test]
+    fn the_sampler_reads_the_positive_of_a_negative() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let s = app.session.as_mut().expect("a session");
+        let px = [0.85f32 * 0.1, 0.55 * 0.1, 0.30 * 0.1];
+        let (w, h) = (s.buffer.width(), s.buffer.height());
+        let mut img = core_image::ImageBuf::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                img.set_pixel(x, y, px);
+            }
+        }
+        s.buffer = std::sync::Arc::new(img);
+        assert_eq!(
+            sampler_for(s)([0.5, 0.5]),
+            px,
+            "the control: no negative, the decode"
+        );
+        s.edits.negative = edit_model::Negative {
+            on: true,
+            base: [0.85, 0.55, 0.30],
+            ..edit_model::Negative::default()
+        };
+        let want = rustroom_app::negative_tool::view(px, &s.edits);
+        assert_ne!(want, px);
+        assert_eq!(sampler_for(s)([0.5, 0.5]), want);
+    }
     use crate::develop::canvas::test_support::{retouch_app, spots};
 
     /// ⚠ A click places exactly one spot, and the auto-source must put the source somewhere else:

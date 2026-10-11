@@ -35,8 +35,12 @@ pub(crate) struct AiState {
     /// The missing models the dialog was already offered for this run — it opens once, not every
     /// frame, and a Cancel is respected until something asks again.
     offered: HashSet<ModelId>,
-    /// The last photo's model input, so a second click does not re-render it.
-    input: Option<(PathBuf, u8, Arc<image::RgbImage>)>,
+    /// The last photo's model input, so a second click does not re-render it — keyed on the film
+    /// negative too (M10.11a), since the model is shown the positive.
+    input: Option<(PathBuf, u8, edit_model::Negative, Arc<image::RgbImage>)>,
+    /// The photo and film negative the session's maps were found for (M10.11a). A pick or a
+    /// re-measure on the same photo makes them another positive's, and they are dropped.
+    maps_for: Option<(PathBuf, edit_model::Negative)>,
     pub download: Option<Download>,
     /// The models the download dialog proposes.
     pub proposed: Vec<ModelId>,
@@ -89,7 +93,18 @@ impl RustroomApp {
                         AiPrompt::Click { .. } => "Selection found".to_string(),
                     };
                     if let Some(s) = &self.session {
-                        if s.path == photo {
+                        // ⚠ M10.11a: and only if it was found for the negative the photo has now —
+                        // a pick while the model ran makes it another positive's map.
+                        let current = rustroom_app::ai_cache::key(
+                            &photo,
+                            rustroom_app::ai_coverage::model_for(
+                                &prompt,
+                                self.settings.ai_subject_model,
+                            ),
+                            &prompt,
+                            &s.edits.negative,
+                        );
+                        if s.path == photo && r.key == current {
                             s.engine
                                 .ai_maps()
                                 .write()
@@ -122,6 +137,14 @@ impl RustroomApp {
         let Some((cache, models)) = self.ai.dirs() else {
             return;
         };
+        // ⚠⚠ M10.11a: maps found for this photo under another film negative are another positive's.
+        let now = (s.path.clone(), s.edits.negative);
+        if self.ai.maps_for.as_ref() != Some(&now) {
+            if self.ai.maps_for.as_ref().is_some_and(|(p, _)| *p == now.0) {
+                s.engine.ai_maps().write().expect("ai maps").clear();
+            }
+            self.ai.maps_for = Some(now);
+        }
         let subject = self.settings.ai_subject_model;
         let photo = s.path.clone();
         let store = s.engine.ai_maps();
@@ -136,6 +159,7 @@ impl RustroomApp {
                 &photo,
                 rustroom_app::ai_coverage::model_for(&p, subject),
                 &p,
+                &s.edits.negative,
             );
             if self.ai.pending.contains_key(&key) || self.ai.failed.contains(&key) {
                 continue;
@@ -183,10 +207,16 @@ impl RustroomApp {
         }
         let turns = s.edits.geometry.orientation.rotate.turns();
         let input = match &self.ai.input {
-            Some((p, t, img)) if *p == photo && *t == turns => Arc::clone(img),
+            Some((p, t, n, img)) if *p == photo && *t == turns && *n == s.edits.negative => {
+                Arc::clone(img)
+            }
             _ => {
-                let img = Arc::new(rustroom_app::ai_worker::model_input(&s.buffer, turns));
-                self.ai.input = Some((photo.clone(), turns, Arc::clone(&img)));
+                let img = Arc::new(rustroom_app::ai_worker::model_input(
+                    &s.buffer,
+                    turns,
+                    &s.edits.negative,
+                ));
+                self.ai.input = Some((photo.clone(), turns, s.edits.negative, Arc::clone(&img)));
                 img
             }
         };
@@ -302,6 +332,67 @@ mod tests {
         (app, ctx, cache)
     }
 
+    /// M10.11a: a map cached for the photo as a negative is not loaded onto its positive.
+    #[test]
+    fn a_map_found_on_the_negative_is_not_the_positives() {
+        let (mut app, ctx, cache) = app_with_subject("negative_key");
+        let photo = app.session.as_ref().unwrap().path.clone();
+        let off = edit_model::Negative::default();
+        let key = rustroom_app::ai_cache::key(&photo, ModelId::IsNet, &AiPrompt::Subject, &off);
+        let map = ai_mask::ProbMap::from_fn(4, 2, |x, _| x as f32 / 3.0);
+        rustroom_app::ai_cache::store(&cache, &key, &map).unwrap();
+        app.session.as_mut().unwrap().edits.negative = edit_model::Negative {
+            on: true,
+            base: [0.85, 0.55, 0.3],
+            ..off
+        };
+        app.pump_ai(&ctx);
+        let s = app.session.as_ref().unwrap();
+        let got = s
+            .engine
+            .ai_maps()
+            .read()
+            .unwrap()
+            .get(&AiPrompt::Subject)
+            .cloned();
+        assert!(
+            got.is_none(),
+            "the negative's map was shown on the positive"
+        );
+    }
+
+    /// M10.11a: a map the session already holds, found before the base was picked, is dropped when
+    /// the photo becomes a positive — it outlines the negative's subject.
+    #[test]
+    fn picking_the_film_base_drops_the_maps_found_on_the_negative() {
+        let (mut app, ctx, _) = app_with_subject("negative_store");
+        let map = std::sync::Arc::new(ai_mask::ProbMap::from_fn(4, 2, |x, _| x as f32 / 3.0));
+        app.pump_ai(&ctx);
+        app.session
+            .as_ref()
+            .unwrap()
+            .engine
+            .ai_maps()
+            .write()
+            .unwrap()
+            .insert(AiPrompt::Subject, map);
+        app.pump_ai(&ctx);
+        let held = |app: &RustroomApp| {
+            let s = app.session.as_ref().unwrap();
+            let maps = s.engine.ai_maps();
+            let got = maps.read().unwrap().get(&AiPrompt::Subject).is_some();
+            got
+        };
+        assert!(held(&app), "the control: an unchanged photo keeps its map");
+        app.session.as_mut().unwrap().edits.negative = edit_model::Negative {
+            on: true,
+            base: [0.85, 0.55, 0.3],
+            ..edit_model::Negative::default()
+        };
+        app.pump_ai(&ctx);
+        assert!(!held(&app), "the negative's map was kept on the positive");
+    }
+
     #[test]
     fn a_missing_model_offers_the_download_once() {
         let (mut app, ctx, _) = app_with_subject("offer");
@@ -319,7 +410,12 @@ mod tests {
     fn a_cached_map_is_loaded_without_a_model_or_a_worker() {
         let (mut app, ctx, cache) = app_with_subject("cached");
         let photo = app.session.as_ref().unwrap().path.clone();
-        let key = rustroom_app::ai_cache::key(&photo, ModelId::IsNet, &AiPrompt::Subject);
+        let key = rustroom_app::ai_cache::key(
+            &photo,
+            ModelId::IsNet,
+            &AiPrompt::Subject,
+            &edit_model::Negative::default(),
+        );
         let map = ai_mask::ProbMap::from_fn(4, 2, |x, _| x as f32 / 3.0);
         rustroom_app::ai_cache::store(&cache, &key, &map).unwrap();
         app.pump_ai(&ctx);

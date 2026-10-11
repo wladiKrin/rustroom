@@ -120,8 +120,15 @@ pub fn turn_point(p: [f32; 2], turns: u8) -> [f32; 2] {
 /// ⚠ Networks are trained on ordinary photographs, not linear sensor data — a linear RAW decode
 /// is dark and flat to them. So: ProPhoto → sRGB, scaled until the mean luminance is 0.18
 /// (bounded, so a black frame is not amplified into noise), encoded, clipped.
-pub fn model_input(buffer: &ImageBuf, turns: u8) -> RgbImage {
+pub fn model_input(buffer: &ImageBuf, turns: u8, negative: &edit_model::Negative) -> RgbImage {
     let small = buffer.downscale_to(1024);
+    // ⚠ M10.11a: a film negative is shown to the model as its positive — a subject found on the
+    // negative's inverted tones is not the subject of the photograph.
+    let small = if negative.is_active() {
+        small.map_pixels(|p| pipeline::negative::positive(p, negative))
+    } else {
+        small
+    };
     let (w, h) = (small.width(), small.height());
     let n = (w * h).max(1) as f32;
     let mean: f32 = (0..h)
@@ -197,6 +204,36 @@ impl AiWorker {
 mod tests {
     use super::*;
 
+    /// A strip of film: densities 0.2..1.6 above an orange base (M10.11a).
+    fn film_strip(w: usize, h: usize) -> (core_image::ImageBuf, edit_model::Negative) {
+        let base = [0.85f32, 0.55, 0.30];
+        let mut img = core_image::ImageBuf::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let d = 0.2 + 1.4 * (x + y) as f32 / (w + h) as f32;
+                img.set_pixel(x, y, base.map(|b| b * 10f32.powf(-d)));
+            }
+        }
+        let n = edit_model::Negative {
+            on: true,
+            base,
+            low: [0.2; 3],
+            high: [1.6; 3],
+            ..edit_model::Negative::default()
+        };
+        (img, n)
+    }
+
+    /// M10.11a: the AI masks look at the positive, not the negative.
+    #[test]
+    fn the_model_sees_the_positive_of_a_negative() {
+        let (neg, n) = film_strip(120, 60);
+        let pos = neg.map_pixels(|p| pipeline::negative::positive(p, &n));
+        let none = edit_model::Negative::default();
+        assert_ne!(model_input(&neg, 0, &none), model_input(&pos, 0, &none));
+        assert_eq!(model_input(&neg, 0, &n), model_input(&pos, 0, &none));
+    }
+
     /// A network that answers "the point it was given" as a single hot pixel on a 4×2 map, and
     /// records what it saw.
     /// What the fake network was asked: the point, and the input's size.
@@ -263,7 +300,7 @@ mod tests {
             }
         }
         b.set_pixel(3, 0, [0.9; 3]);
-        let img = model_input(&b, 1);
+        let img = model_input(&b, 1, &edit_model::Negative::default());
         assert_eq!(
             (img.width(), img.height()),
             (2, 4),

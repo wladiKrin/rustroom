@@ -34,6 +34,7 @@ fn main() {
     let (p, auto) = rustroom_app::auto_tone_tool::analyse(
         &buf,
         &neutral.geometry,
+        &neutral.negative,
         pipeline::auto_tone::MEDIAN_TARGET,
     );
 

@@ -244,6 +244,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         buffer: buf,
         picking_wb: false,
         picking_fringe: false,
+        picking_negative: false,
         path: std::path::PathBuf::from("/test/a.RAF"),
         copy: 0,
         name: None,

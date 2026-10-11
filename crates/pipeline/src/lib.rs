@@ -36,6 +36,8 @@ mod stages;
 /// wholesale — which would make every stage public API for the sake of one benchmark. `bench_hsl`
 /// needs the table and the small-angle pair to sweep table sizes against real pixels.
 pub use stages::hue_table;
+/// M10.11a: the film negative's per-pixel inversion, for every reader of the undeveloped decode.
+pub use stages::negative;
 
 /// The dehaze airlight of an image, as [`stages::dehaze`] estimates it.
 ///

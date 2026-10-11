@@ -10,6 +10,7 @@ pub mod mask_adjust;
 pub mod mask_components;
 pub mod mask_glyph;
 pub mod masks;
+pub mod negative;
 pub mod parametric_curve;
 pub mod preset_rows;
 pub mod presets;
@@ -275,6 +276,23 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                 // `presets::show` is: it needs `&mut app` for the settings and the re-decode,
                 // which is not disjoint from `&mut app.session`.
                 if tool == Tool::Edit {
+                    // ⚠⚠ M10.11a: the Negative block, above Profile — a scanned negative becomes a
+                    // positive before anything decides how it is rendered. Collapsed by default,
+                    // its header saying whether it is on; not a section, so never reset.
+                    if let Some(s) = &mut app.session {
+                        let state = if s.edits.negative.is_active() {
+                            "on"
+                        } else {
+                            "off"
+                        };
+                        let mut out = section::header(
+                            ui,
+                            ui.make_persistent_id("negative-block"),
+                            false,
+                            section::Header::new("Negative").trailing(state),
+                        );
+                        out.show_body(ui, |ui| negative::block(ui, s, &mut ed));
+                    }
                     // ⚠⚠ **The Profile block: the three controls that decide how the raw data
                     // becomes a picture**, gathered above every adjustment because they establish
                     // the starting picture and everything below adjusts it. Not a `Section`, and

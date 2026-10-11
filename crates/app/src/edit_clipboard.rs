@@ -210,6 +210,14 @@ mod tests {
                 space: edit_model::LutSpace::Linear,
                 strength: 80.0,
             },
+            negative: edit_model::Negative {
+                on: true,
+                base: [0.8, 0.5, 0.3],
+                gamma: 0.65,
+                low: [0.1, 0.1, 0.1],
+                high: [1.9, 2.0, 2.2],
+                mono: false,
+            },
         };
         assert_eq!(decode(&encode(&rich)), Some(rich));
     }

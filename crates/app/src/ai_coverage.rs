@@ -82,7 +82,7 @@ pub fn maps_for(
 ) -> AiMaps {
     let mut maps = AiMaps::default();
     for p in prompts(edits) {
-        let key = crate::ai_cache::key(photo, model_for(&p, subject), &p);
+        let key = crate::ai_cache::key(photo, model_for(&p, subject), &p, &edits.negative);
         if let Some(m) = crate::ai_cache::load(cache, &key) {
             maps.insert(p, std::sync::Arc::new(m));
         }

@@ -2699,3 +2699,41 @@ fn golden_parametric_curve() {
         },
     );
 }
+
+/// ⚠ M10.11a: a film negative of the chart — its linear values as exposure 1..1000 through a film of
+/// contrast 0.6 on an orange base — inverted back. The stage's own tests prove the inversion; this
+/// pins the whole render, so a change anywhere between the step and the encode is seen.
+#[test]
+fn golden_film_negative() {
+    const BASE: [f32; 3] = [0.85, 0.55, 0.30];
+    let src = chart();
+    let mut neg = ImageBuf::new(src.width(), src.height());
+    for y in 0..src.height() {
+        for x in 0..src.width() {
+            let p = src.pixel(x, y);
+            neg.set_pixel(
+                x,
+                y,
+                std::array::from_fn(|c| {
+                    let exposure = 1.0 + 999.0 * p[c].clamp(0.0, 1.0);
+                    BASE[c] * 10f32.powf(-0.6 * exposure.log10())
+                }),
+            );
+        }
+    }
+    check_golden_with(
+        "film_negative",
+        &Edits {
+            negative: edit_model::Negative {
+                on: true,
+                base: BASE,
+                gamma: 0.6,
+                low: [0.0; 3],
+                high: [1.8; 3],
+                mono: false,
+            },
+            ..Edits::default()
+        },
+        neg,
+    );
+}
