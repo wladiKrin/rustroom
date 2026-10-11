@@ -84,7 +84,7 @@ pub fn build_job(id: PhotoId, edits: Edits, tier: Demosaic) -> ExportJob {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::batch_export::{ExportEvent, ExportRender, ExportWorker};
+    use crate::batch_export::{ExportDirs, ExportEvent, ExportRender, ExportWorker};
 
     struct TempDir(std::path::PathBuf);
 
@@ -162,7 +162,7 @@ mod tests {
                 ai_subject: Default::default(),
             },
             1,
-            None,
+            ExportDirs::default(),
             None,
         );
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);

@@ -87,8 +87,9 @@ pub(crate) fn run_export(
 ) -> (ExportReport, Vec<ExportEvent>) {
     // ⚠ Width 1 by default here, so every pre-existing test keeps its exact meaning; the
     // carrier below drives the wide path explicitly.
-    // ⚠ `None` looks directory: these tests exercise naming, collisions and cancellation, none of
-    // which involve a `.cube`. The camera-rendering tests build their own worker.
+    // ⚠ No looks directory and no watermark store: these tests exercise naming, collisions and
+    // cancellation, none of which involve a `.cube` or a logo. The camera-rendering and watermark
+    // tests build their own worker.
     let worker = ExportWorker::spawn(
         jobs,
         opts,
@@ -96,7 +97,7 @@ pub(crate) fn run_export(
         Arc::new(AtomicBool::new(false)),
         CPU,
         1,
-        None,
+        ExportDirs::default(),
         // ⚠ No upload: this helper exercises naming, collisions and cancellation, and an export
         // that uploads is its own test with its own connection.
         None,
@@ -142,4 +143,11 @@ pub(crate) fn jobs(dir: &TempDir, names: &[&str]) -> Vec<ExportJob> {
 
 pub(crate) fn ok_decode() -> impl Fn(&Path) -> Result<ExportSource, String> + Send + 'static {
     |_: &Path| Ok(source(flat(8, 4)))
+}
+
+/// A `w`×`h` PNG of one colour at `path` — an image watermark's file (M10.10a).
+pub(crate) fn write_png(path: &Path, w: u32, h: u32, rgba: [u8; 4]) {
+    image::RgbaImage::from_pixel(w, h, image::Rgba(rgba))
+        .save(path)
+        .expect("write a test PNG");
 }

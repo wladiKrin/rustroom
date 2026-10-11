@@ -87,19 +87,24 @@ pub fn metadata(o: &ExportOptions) -> String {
     o.metadata.scope.label().to_lowercase()
 }
 
-/// The watermark's text, elided past 24 characters, or `off` when empty.
+/// What the mark is made of — `Text · © Me`, `Image · logo.png` — its text or name elided past 24
+/// characters, or `off` when it would draw nothing.
 pub fn watermark(o: &ExportOptions) -> String {
-    let t = o.watermark.text.trim();
-    if t.is_empty() {
+    let m = &o.watermark;
+    if !m.is_active() {
         return "off".to_string();
     }
-    let n = t.chars().count();
-    if n > 24 {
+    let t = match m.kind {
+        export::WatermarkKind::Text => m.text.trim(),
+        export::WatermarkKind::Image => m.image.trim(),
+    };
+    let shown = if t.chars().count() > 24 {
         let head: String = t.chars().take(23).collect();
         format!("{head}…")
     } else {
         t.to_string()
-    }
+    };
+    format!("{} · {shown}", m.kind.label())
 }
 
 /// The preset whose options equal `o`, if any.
@@ -162,9 +167,20 @@ mod tests {
         o.watermark.text = "  ".into();
         assert_eq!(watermark(&o), "off");
         o.watermark.text = "© Wladi".into();
-        assert_eq!(watermark(&o), "© Wladi");
+        assert_eq!(watermark(&o), "Text · © Wladi");
         o.watermark.text = "a".repeat(40);
-        assert_eq!(watermark(&o).chars().count(), 24);
+        assert_eq!(
+            watermark(&o).chars().count(),
+            "Text · ".chars().count() + 24
+        );
+        o.watermark.opacity = 0;
+        assert_eq!(watermark(&o), "off", "a transparent mark draws nothing");
+        o.watermark.opacity = 70;
+        // An image mark reads its own field only — the text above is not its business.
+        o.watermark.kind = export::WatermarkKind::Image;
+        assert_eq!(watermark(&o), "off", "no image chosen");
+        o.watermark.image = "logo.png".into();
+        assert_eq!(watermark(&o), "Image · logo.png");
 
         assert!(file(&o).contains(" · "));
         assert!(colour(&o).contains(" · "), "{}", colour(&o));

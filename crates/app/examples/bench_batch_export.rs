@@ -140,7 +140,7 @@ fn one_run(files: &[PathBuf], dest: &Path, width: usize, demosaic: raw_decode::D
         Arc::new(AtomicBool::new(false)),
         render,
         width,
-        None,
+        rustroom_app::batch_export::ExportDirs::default(),
         // ⚠ No upload: this benchmark times decode, render and write. A network call in the loop
         // would make the numbers meaningless.
         None,

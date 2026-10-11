@@ -8,7 +8,7 @@ pub mod watermark;
 
 pub use metadata::{ExportMetadata, FileMetadata, MetadataScope};
 pub use output_sharpen::OutputSharpening;
-pub use watermark::{Watermark, WatermarkCorner};
+pub use watermark::{Logo, Watermark, WatermarkCorner, WatermarkKind};
 
 use core_image::ImageBuf;
 use image::{ExtendedColorType, ImageEncoder};

@@ -64,6 +64,7 @@ fn main() {
             corner: WatermarkCorner::BottomRight,
             size: 4,
             opacity: 70,
+            ..Watermark::default()
         },
         output_sharpening: OutputSharpening { amount: 60 },
         ..ExportOptions::default()
@@ -94,6 +95,7 @@ fn main() {
                 gpu_tail: false,
             },
             &export::FileMetadata::resolve(&o.metadata, described()),
+            None,
             None,
         ) {
             Ok(()) => println!("wrote {}", dest.display()),

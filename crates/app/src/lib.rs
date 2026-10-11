@@ -103,6 +103,7 @@ pub mod tone_curve_tool;
 pub mod tool;
 pub mod view_region;
 pub mod visualize;
+pub mod watermark_store;
 pub mod wb_tool;
 pub mod when;
 pub mod xmp_sync;
