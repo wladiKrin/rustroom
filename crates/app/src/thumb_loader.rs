@@ -112,7 +112,43 @@ fn load_thumbnail(
     store: Option<&crate::thumb_store::ThumbStore>,
     looks: Option<(&crate::looks::LookStore, &LookCache)>,
 ) -> Option<Thumbnail> {
+    if let Some(t) = negative_thumbnail(req, resampler, looks, &decode_preview) {
+        return Some(t);
+    }
     load_with(req, resampler, store, looks, &extract_preview)
+}
+
+/// The long edge a RAW negative's thumbnail is rendered at.
+const NEGATIVE_EDGE: usize = 512;
+
+/// A RAW with an active film negative, thumbnailed from its half-size raw decode (M10.11a) — `None`
+/// for anything else, which takes the embedded preview as before.
+///
+/// ⚠⚠ **Why not the embedded JPEG:** it has been through the camera's own tone curve, and the film
+/// base and densities were measured on the raw data; inverting the JPEG with them gives a badly
+/// balanced positive in the grid. ⚠ The cost, accepted for negatives only: a half-size decode, about
+/// a second, and **no disk cache** — the store holds 8-bit previews, and an 8-bit negative bands in
+/// exactly the dense areas the inversion turns into highlights. Rendered from the float decode with
+/// the photo's **own** rendering, since this source has not been rendered.
+fn negative_thumbnail(
+    req: &ThumbRequest,
+    resampler: pipeline::Resampler,
+    looks: Option<(&crate::looks::LookStore, &LookCache)>,
+    decode: &dyn Fn(&std::path::Path) -> Option<core_image::ImageBuf>,
+) -> Option<Thumbnail> {
+    if !(catalog::is_raw(&req.id.path) && req.edits.negative.is_active()) {
+        return None;
+    }
+    let buf = decode(&req.id.path)?.downscale_to(NEGATIVE_EDGE);
+    let look = look_for(&req.edits, looks.map(|l| l.0), looks.map(|l| l.1));
+    Some(render_buf(buf, &req.edits, resampler, look.as_ref()))
+}
+
+/// A half-size raw decode — the linear working-space buffer the negative was measured on.
+fn decode_preview(path: &std::path::Path) -> Option<core_image::ImageBuf> {
+    raw_decode::decode_raw(path, &raw_decode::DecodeOptions::preview())
+        .ok()
+        .map(|d| d.image)
 }
 
 /// Pull the source's own preview out of it, with no cache in sight.
@@ -226,7 +262,17 @@ fn render_edits(
     resampler: pipeline::Resampler,
     look: Option<&Arc<pipeline::lut::Cube>>,
 ) -> Thumbnail {
-    let buf = linear_prophoto_from_srgb8(&thumb);
+    render_buf(linear_prophoto_from_srgb8(&thumb), edits, resampler, look)
+}
+
+/// Run the pipeline over a linear working-space buffer — the thumbnail's renderer, whichever source
+/// it came from.
+fn render_buf(
+    buf: core_image::ImageBuf,
+    edits: &Edits,
+    resampler: pipeline::Resampler,
+    look: Option<&Arc<pipeline::lut::Cube>>,
+) -> Thumbnail {
     // ⚠⚠ **The look, and its absence was reported by use**: *"the look is not reflected or shown in
     // any way in the thumbnail picture"*. `build_pipeline_with` takes no `TailRendering` at all,
     // so every thumbnail rendered every edit **except** the user's `.cube` — the third path to lose
@@ -504,6 +550,74 @@ mod tests {
         assert_eq!(t.exposure, 0.5, "it dropped the other edits too");
     }
     use super::*;
+
+    /// M10.11a: a RAW whose negative is active is thumbnailed from its raw decode, rendered with its
+    /// own rendering — the base was measured on the raw data, not on the camera's JPEG.
+    #[test]
+    fn a_raw_negative_is_thumbnailed_from_its_decode() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DECODES: AtomicUsize = AtomicUsize::new(0);
+        fn decode(_p: &std::path::Path) -> Option<core_image::ImageBuf> {
+            DECODES.fetch_add(1, Ordering::SeqCst);
+            let mut img = core_image::ImageBuf::new(64, 32);
+            for y in 0..32 {
+                for x in 0..64 {
+                    let d = 0.2 + 1.4 * x as f32 / 63.0;
+                    img.set_pixel(x, y, [0.85, 0.55, 0.3].map(|b: f32| b * 10f32.powf(-d)));
+                }
+            }
+            Some(img)
+        }
+        let negative = edit_model::Negative {
+            on: true,
+            base: [0.85, 0.55, 0.3],
+            low: [0.2; 3],
+            high: [1.6; 3],
+            ..edit_model::Negative::default()
+        };
+        let req = |file: &str, n: edit_model::Negative| ThumbRequest {
+            id: crate::photo_id::PhotoId::original(std::path::PathBuf::from(file)),
+            edits: Edits {
+                negative: n,
+                rendering: Some(edit_model::Rendering::Camera),
+                ..Edits::default()
+            },
+        };
+        DECODES.store(0, Ordering::SeqCst);
+        let r = pipeline::Resampler::default();
+        let got = negative_thumbnail(&req("/scan/a.RAF", negative), r, None, &decode)
+            .expect("a RAW negative takes the decode path");
+        assert_eq!(DECODES.load(Ordering::SeqCst), 1);
+        let edits = req("/scan/a.RAF", negative).edits;
+        let rendered = render_buf(decode(std::path::Path::new("")).unwrap(), &edits, r, None);
+        let stripped = render_buf(
+            decode(std::path::Path::new("")).unwrap(),
+            &thumbnail_edits(&edits),
+            r,
+            None,
+        );
+        assert_ne!(
+            rendered.rgba, stripped.rgba,
+            "the two must differ for this to mean anything"
+        );
+        assert_eq!(
+            got.rgba, rendered.rgba,
+            "rendered with the photo's own rendering"
+        );
+        DECODES.store(0, Ordering::SeqCst);
+        assert!(negative_thumbnail(
+            &req("/scan/a.RAF", edit_model::Negative::default()),
+            r,
+            None,
+            &decode
+        )
+        .is_none());
+        assert!(
+            negative_thumbnail(&req("/scan/a.tif", negative), r, None, &decode).is_none(),
+            "a scan's own pixels"
+        );
+        assert_eq!(DECODES.load(Ordering::SeqCst), 0);
+    }
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
