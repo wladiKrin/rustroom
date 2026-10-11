@@ -166,7 +166,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-10-10 — M10.9c: import Lightroom presets (branch `m10.9c-lightroom-presets`, awaiting use)
+### 2026-10-10 — M10.9c: import Lightroom presets (branch `m10.9c-lightroom-presets`, merged 2026-10-11)
 
 **Input:** Phase 10's M10.9c (split from M10.9a): *"Import Lightroom / Camera Raw `.xmp` develop presets"*.
 The author's answers: **all three formats** (`.xmp`, `.lrtemplate`, `.zip` packs); **each preset into a
