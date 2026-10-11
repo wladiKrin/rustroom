@@ -4,6 +4,7 @@ pub mod dng;
 pub mod lj92;
 pub mod metadata;
 pub mod output_sharpen;
+pub mod sizing;
 pub mod watermark;
 
 pub use metadata::{ExportMetadata, FileMetadata, MetadataScope};
