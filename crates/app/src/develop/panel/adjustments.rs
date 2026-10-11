@@ -773,26 +773,9 @@ pub fn show(
         super::defringe::show(ui, &mut edits.defringe, picking_fringe, ed);
     });
 
+    // ⚠ M10.11b: shown as Effects — the post-crop vignette and grain, in `effects.rs`.
     section(ui, SECTIONS[5], false, fresh, edits, ed, |ui, edits, ed| {
-        let v = &mut edits.vignette;
-        ed.help_scope = rustroom_app::slider_help::Scope::Vignette;
-        ed.slider(ui, &mut v.amount, -100.0..=100.0, "Amount", 0.0);
-        ed.slider(
-            ui,
-            &mut v.midpoint,
-            0.0..=100.0,
-            "Midpoint",
-            edit_model::Vignette::default().midpoint,
-        );
-        ed.slider(ui, &mut v.roundness, -100.0..=100.0, "Roundness", 0.0);
-        ed.slider(
-            ui,
-            &mut v.feather,
-            0.0..=100.0,
-            "Feather",
-            edit_model::Vignette::default().feather,
-        );
-        ed.help_scope = rustroom_app::slider_help::Scope::Global;
+        super::effects::body(ui, edits, ed);
     });
 }
 

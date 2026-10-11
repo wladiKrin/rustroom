@@ -29,6 +29,8 @@ pub enum Scope {
     NoiseReduction,
     Sharpening,
     Vignette,
+    /// Effects → Grain (M10.11b).
+    Grain,
     /// The Lens section's own scale.
     Lens,
     /// A brush mask's tool settings.
@@ -142,6 +144,12 @@ const SHARPENING: &[(&str, &str)] = &[
     ),
 ];
 
+const GRAIN: &[(&str, &str)] = &[
+    ("Amount", "Adds film grain, more as it rises"),
+    ("Size", "Sets how large each grain is"),
+    ("Roughness", "Makes the grain less even as it rises"),
+];
+
 const VIGNETTE: &[(&str, &str)] = &[
     (
         "Amount",
@@ -228,6 +236,7 @@ fn table(scope: Scope) -> &'static [(&'static str, &'static str)] {
         Scope::NoiseReduction => NOISE_REDUCTION,
         Scope::Sharpening => SHARPENING,
         Scope::Vignette => VIGNETTE,
+        Scope::Grain => GRAIN,
         Scope::Lens => LENS,
         Scope::Brush => BRUSH,
         Scope::Radial => RADIAL,

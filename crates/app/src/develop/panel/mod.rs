@@ -3,6 +3,7 @@
 pub mod adjustments;
 pub mod color_wheel;
 pub mod defringe;
+pub mod effects;
 pub mod geometry;
 pub mod hsl_bands;
 pub mod look;
