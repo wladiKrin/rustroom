@@ -112,10 +112,29 @@ fn load_thumbnail(
     store: Option<&crate::thumb_store::ThumbStore>,
     looks: Option<(&crate::looks::LookStore, &LookCache)>,
 ) -> Option<Thumbnail> {
-    if let Some(t) = negative_thumbnail(req, resampler, looks, &decode_preview) {
+    load_any(
+        req,
+        resampler,
+        store,
+        looks,
+        &extract_preview,
+        &decode_preview,
+    )
+}
+
+/// [`load_thumbnail`] with both sources injected — so a test can see which one a request takes.
+fn load_any(
+    req: &ThumbRequest,
+    resampler: pipeline::Resampler,
+    store: Option<&crate::thumb_store::ThumbStore>,
+    looks: Option<(&crate::looks::LookStore, &LookCache)>,
+    extract: &dyn Fn(&std::path::Path) -> Option<Thumbnail>,
+    decode: &dyn Fn(&std::path::Path) -> Option<core_image::ImageBuf>,
+) -> Option<Thumbnail> {
+    if let Some(t) = negative_thumbnail(req, resampler, looks, decode) {
         return Some(t);
     }
-    load_with(req, resampler, store, looks, &extract_preview)
+    load_with(req, resampler, store, looks, extract)
 }
 
 /// The long edge a RAW negative's thumbnail is rendered at.
@@ -550,6 +569,66 @@ mod tests {
         assert_eq!(t.exposure, 0.5, "it dropped the other edits too");
     }
     use super::*;
+
+    /// M10.11a: the loader itself sends a RAW negative to the decode, and anything else to the
+    /// embedded preview — the dispatch, not just the helper.
+    #[test]
+    fn the_loader_sends_a_raw_negative_to_the_decode() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static EXTRACTS: AtomicUsize = AtomicUsize::new(0);
+        static DECODES: AtomicUsize = AtomicUsize::new(0);
+        fn extract(_p: &std::path::Path) -> Option<Thumbnail> {
+            EXTRACTS.fetch_add(1, Ordering::SeqCst);
+            Some(Thumbnail {
+                width: 2,
+                height: 1,
+                rgba: vec![128; 8],
+            })
+        }
+        fn decode(_p: &std::path::Path) -> Option<core_image::ImageBuf> {
+            DECODES.fetch_add(1, Ordering::SeqCst);
+            Some(core_image::ImageBuf::new(4, 2))
+        }
+        let req = |n: edit_model::Negative| ThumbRequest {
+            id: crate::photo_id::PhotoId::original(std::path::PathBuf::from("/scan/a.RAF")),
+            edits: Edits {
+                negative: n,
+                ..Edits::default()
+            },
+        };
+        let on = edit_model::Negative {
+            on: true,
+            base: [0.85, 0.55, 0.3],
+            ..edit_model::Negative::default()
+        };
+        let r = pipeline::Resampler::default();
+        EXTRACTS.store(0, Ordering::SeqCst);
+        DECODES.store(0, Ordering::SeqCst);
+        load_any(&req(on), r, None, None, &extract, &decode).expect("a thumbnail");
+        assert_eq!(
+            (
+                EXTRACTS.load(Ordering::SeqCst),
+                DECODES.load(Ordering::SeqCst)
+            ),
+            (0, 1)
+        );
+        load_any(
+            &req(edit_model::Negative::default()),
+            r,
+            None,
+            None,
+            &extract,
+            &decode,
+        )
+        .expect("a thumbnail");
+        assert_eq!(
+            (
+                EXTRACTS.load(Ordering::SeqCst),
+                DECODES.load(Ordering::SeqCst)
+            ),
+            (1, 1)
+        );
+    }
 
     /// M10.11a: a RAW whose negative is active is thumbnailed from its raw decode, rendered with its
     /// own rendering — the base was measured on the raw data, not on the camera's JPEG.
