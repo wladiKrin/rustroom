@@ -372,17 +372,34 @@ pub fn embed(path: &Path, format: ExportFormat, meta: &FileMetadata) -> Result<(
         return Ok(());
     };
     let bytes = std::fs::read(path).map_err(image::ImageError::IoError)?;
-    let out = match format {
-        ExportFormat::Jpeg => jpeg_with_xmp(&bytes, packet.as_bytes())?,
-        ExportFormat::Png8 | ExportFormat::Png16 => png_with_xmp(&bytes, packet.as_bytes())?,
+    let out = with_packet(&bytes, format, packet.as_bytes())?;
+    std::fs::write(path, out).map_err(image::ImageError::IoError)?;
+    Ok(())
+}
+
+/// [`embed`]'s in-memory half: `bytes`, an encoded file, carrying `meta` (M10.10b) — so a
+/// file-size limit measures the file as it will be written, and the export writes once.
+pub fn with_xmp(
+    bytes: Vec<u8>,
+    format: ExportFormat,
+    meta: &FileMetadata,
+) -> Result<Vec<u8>, ExportError> {
+    match xmp_packet(meta) {
+        None => Ok(bytes),
+        Some(packet) => with_packet(&bytes, format, packet.as_bytes()),
+    }
+}
+
+fn with_packet(bytes: &[u8], format: ExportFormat, packet: &[u8]) -> Result<Vec<u8>, ExportError> {
+    match format {
+        ExportFormat::Jpeg => jpeg_with_xmp(bytes, packet),
+        ExportFormat::Png8 | ExportFormat::Png16 => png_with_xmp(bytes, packet),
         // ⚠ A DNG is a TIFF, and the post-pass rewrites only IFD0's XMP tag — the SubIFD holding
         // the image is reached by offset and left exactly where it was.
         ExportFormat::Tiff8 | ExportFormat::Tiff16 | ExportFormat::Dng => {
-            tiff_with_xmp(&bytes, packet.as_bytes())?
+            tiff_with_xmp(bytes, packet)
         }
-    };
-    std::fs::write(path, out).map_err(image::ImageError::IoError)?;
-    Ok(())
+    }
 }
 
 // ─── JPEG ──────────────────────────────────────────────────────────────────────────────────
@@ -937,6 +954,28 @@ mod tests {
             assert_eq!(before, after, "{fmt:?}");
             let _ = std::fs::remove_file(&path);
         }
+    }
+
+    /// M10.10b: the in-memory half is exactly what `embed` writes, for each container.
+    #[test]
+    fn with_xmp_in_memory_is_what_embed_writes() {
+        let img = ramp(9, 5);
+        let m = meta("© 2026", "W", "a caption");
+        for format in [ExportFormat::Jpeg, ExportFormat::Png8, ExportFormat::Tiff8] {
+            let path = tmp(&format!("in_memory.{}", format.extension()));
+            crate::save(&img, &path, format, 90, color::OutputSpace::Srgb).unwrap();
+            let raw = std::fs::read(&path).unwrap();
+            embed(&path, format, &m).unwrap();
+            let on_disk = std::fs::read(&path).unwrap();
+            assert_ne!(on_disk, raw, "the control: embed changed the file");
+            assert_eq!(with_xmp(raw, format, &m).unwrap(), on_disk, "{format:?}");
+        }
+        // Nothing to say → the bytes as they were.
+        let raw = vec![1u8, 2, 3];
+        assert_eq!(
+            with_xmp(raw.clone(), ExportFormat::Jpeg, &FileMetadata::default()).unwrap(),
+            raw
+        );
     }
 
     /// An IFD reader written **independently of the writer above**, so it can witness a bug in

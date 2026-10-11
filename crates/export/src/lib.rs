@@ -1,9 +1,11 @@
 //! Encode a display-referred (sRGB, 0..=1) `ImageBuf` to an image file.
 
+pub mod density;
 pub mod dng;
 pub mod lj92;
 pub mod metadata;
 pub mod output_sharpen;
+pub mod size_limit;
 pub mod sizing;
 pub mod watermark;
 
@@ -255,7 +257,7 @@ fn pin_created(mut icc: Vec<u8>) -> Vec<u8> {
 /// Encode a display-referred image. `quality` is ignored unless the format is lossy.
 ///
 /// One entry point rather than a function per format, so no caller can branch on format by
-/// accident.
+/// accident. The raster formats go through [`encode`]; a DNG is written here.
 pub fn save(
     image: &ImageBuf,
     path: &Path,
@@ -263,50 +265,78 @@ pub fn save(
     quality: u8,
     space: color::OutputSpace,
 ) -> Result<(), ExportError> {
-    let (w, h) = (image.width() as u32, image.height() as u32);
-    let file =
-        std::io::BufWriter::new(std::fs::File::create(path).map_err(image::ImageError::IoError)?);
+    if format == ExportFormat::Dng {
+        // ⚠ The render arrives display-ENCODED in `space` (ProPhoto, when it came through the
+        // export render — `fixed_space`); a DNG stores LINEAR data, so the encoding is undone
+        // and, for any other space, its primaries converted back to the working space.
+        return dng::save(&dng::linear_working(image, space), path);
+    }
+    let bytes = encode(image, format, quality, space, None)?;
+    std::fs::write(path, bytes).map_err(image::ImageError::IoError)?;
+    Ok(())
+}
 
+/// Encode a display-referred image into the bytes of a raster file, carrying `ppi` when given
+/// (M10.10b).
+///
+/// ⚠ In memory rather than to a path, so a file-size limit can measure an encode before anything
+/// is written, and the PPI and the XMP can be added without reading the file back. `None` writes
+/// exactly what `save` always wrote. ⚠ A DNG is `Err` — it is written by [`save`], and carries no PPI.
+pub fn encode(
+    image: &ImageBuf,
+    format: ExportFormat,
+    quality: u8,
+    space: color::OutputSpace,
+    ppi: Option<f32>,
+) -> Result<Vec<u8>, ExportError> {
+    let (w, h) = (image.width() as u32, image.height() as u32);
+    let mut out = std::io::Cursor::new(Vec::new());
     match format {
         ExportFormat::Jpeg => {
-            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(file, quality);
+            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality);
             enc.set_icc_profile(icc_for(space).to_vec())
                 .map_err(image::ImageError::Unsupported)?;
+            if let Some(ppi) = ppi {
+                enc.set_pixel_density(density::jpeg_density(ppi));
+            }
             enc.write_image(&to_rgb8(image), w, h, ExtendedColorType::Rgb8)?;
         }
-        ExportFormat::Png8 => {
-            let mut enc = image::codecs::png::PngEncoder::new(file);
+        ExportFormat::Png8 | ExportFormat::Png16 => {
+            let mut enc = image::codecs::png::PngEncoder::new(&mut out);
             enc.set_icc_profile(icc_for(space).to_vec())
                 .map_err(image::ImageError::Unsupported)?;
-            enc.write_image(&to_rgb8(image), w, h, ExtendedColorType::Rgb8)?;
+            if format == ExportFormat::Png8 {
+                enc.write_image(&to_rgb8(image), w, h, ExtendedColorType::Rgb8)?;
+            } else {
+                enc.write_image(&rgb16_ne_bytes(image), w, h, ExtendedColorType::Rgb16)?;
+            }
         }
-        ExportFormat::Png16 => {
-            let mut enc = image::codecs::png::PngEncoder::new(file);
+        ExportFormat::Tiff8 | ExportFormat::Tiff16 => {
+            let mut enc = image::codecs::tiff::TiffEncoder::new(&mut out);
             enc.set_icc_profile(icc_for(space).to_vec())
                 .map_err(image::ImageError::Unsupported)?;
-            enc.write_image(&rgb16_ne_bytes(image), w, h, ExtendedColorType::Rgb16)?;
-        }
-        ExportFormat::Tiff8 => {
-            let mut enc = image::codecs::tiff::TiffEncoder::new(file);
-            enc.set_icc_profile(icc_for(space).to_vec())
-                .map_err(image::ImageError::Unsupported)?;
-            enc.write_image(&to_rgb8(image), w, h, ExtendedColorType::Rgb8)?;
-        }
-        ExportFormat::Tiff16 => {
-            let mut enc = image::codecs::tiff::TiffEncoder::new(file);
-            enc.set_icc_profile(icc_for(space).to_vec())
-                .map_err(image::ImageError::Unsupported)?;
-            enc.write_image(&rgb16_ne_bytes(image), w, h, ExtendedColorType::Rgb16)?;
+            if format == ExportFormat::Tiff8 {
+                enc.write_image(&to_rgb8(image), w, h, ExtendedColorType::Rgb8)?;
+            } else {
+                enc.write_image(&rgb16_ne_bytes(image), w, h, ExtendedColorType::Rgb16)?;
+            }
         }
         ExportFormat::Dng => {
-            drop(file);
-            // ⚠ The render arrives display-ENCODED in `space` (ProPhoto, when it came through the
-            // export render — `fixed_space`); a DNG stores LINEAR data, so the encoding is undone
-            // and, for any other space, its primaries converted back to the working space.
-            dng::save(&dng::linear_working(image, space), path)?;
+            return Err(ExportError::Metadata(
+                "a DNG is written by `save`, not encoded in memory".into(),
+            ))
         }
     }
-    Ok(())
+    let bytes = out.into_inner();
+    // ⚠ PNG and TIFF take the PPI after the encode — `image` offers no hook for either; the JPEG
+    // took it above, in its JFIF header.
+    match (format, ppi) {
+        (ExportFormat::Png8 | ExportFormat::Png16, Some(ppi)) => density::png_with_ppi(&bytes, ppi),
+        (ExportFormat::Tiff8 | ExportFormat::Tiff16, Some(ppi)) => {
+            density::tiff_with_ppi(&bytes, ppi)
+        }
+        _ => Ok(bytes),
+    }
 }
 
 #[cfg(test)]

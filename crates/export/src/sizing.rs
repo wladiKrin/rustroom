@@ -241,6 +241,30 @@ pub fn size_or_max_edge<'de, D: Deserializer<'de>>(d: D) -> Result<OutputSize, D
     })
 }
 
+/// `image` — display-encoded in `space` — resized to `w` × `h` **in linear light**: the encoding
+/// undone, Lanczos3, encoded again (M10.10b).
+///
+/// ⚠⚠ Resizing the code values would darken every edge and fine texture, since averaging encoded
+/// values is not averaging light. For enlarging past the photo's pixels and for shrinking a file
+/// under its size limit — both after the render, where the buffer is already encoded.
+pub fn resample_encoded(
+    image: &core_image::ImageBuf,
+    space: color::OutputSpace,
+    w: usize,
+    h: usize,
+) -> core_image::ImageBuf {
+    use image::imageops::{resize, FilterType};
+    let (iw, ih) = (image.width() as u32, image.height() as u32);
+    let linear: Vec<f32> = image.data().iter().map(|&v| space.decode(v)).collect();
+    let buf = image::Rgb32FImage::from_raw(iw, ih, linear).expect("an RGB buffer of its own size");
+    let out = resize(&buf, w.max(1) as u32, h.max(1) as u32, FilterType::Lanczos3);
+    let mut img = core_image::ImageBuf::new(w.max(1), h.max(1));
+    for (d, s) in img.data_mut().iter_mut().zip(out.into_raw()) {
+        *d = space.encode(s);
+    }
+    img
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,5 +445,43 @@ mod tests {
         let json = format!(r#"{{"size":{}}}"#, serde_json::to_string(&new).unwrap());
         let h: Holder = serde_json::from_str(&json).expect("new");
         assert_eq!(h.size, new);
+    }
+}
+
+#[cfg(test)]
+mod resample_tests {
+    use super::*;
+    use color::OutputSpace;
+    use core_image::ImageBuf;
+
+    #[test]
+    fn resizing_averages_light_not_code_values() {
+        let mut img = ImageBuf::new(2, 1);
+        img.set_pixel(0, 0, [0.0; 3]);
+        img.set_pixel(1, 0, [1.0; 3]);
+        let one = resample_encoded(&img, OutputSpace::Srgb, 1, 1);
+        let v = one.pixel(0, 0)[0];
+        // Half the light is sRGB 0.735; averaging the code values would give 0.5.
+        let want = OutputSpace::Srgb.encode(0.5);
+        assert!((v - want).abs() < 0.01, "{v}, want {want}");
+        assert_eq!((one.width(), one.height()), (1, 1));
+    }
+
+    #[test]
+    fn enlarging_a_flat_colour_keeps_it() {
+        let mut img = ImageBuf::new(4, 2);
+        for y in 0..2 {
+            for x in 0..4 {
+                img.set_pixel(x, y, [0.25, 0.5, 0.75]);
+            }
+        }
+        let big = resample_encoded(&img, OutputSpace::DisplayP3, 12, 6);
+        assert_eq!((big.width(), big.height()), (12, 6));
+        for v in big.data().as_chunks::<3>().0 {
+            assert!(
+                (v[0] - 0.25).abs() < 1e-3 && (v[2] - 0.75).abs() < 1e-3,
+                "{v:?}"
+            );
+        }
     }
 }
