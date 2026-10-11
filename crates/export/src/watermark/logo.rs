@@ -23,7 +23,8 @@ use image::Rgba32FImage;
 ///
 /// ⚠ A logo is held as f32 RGBA for the whole run — 16 bytes a pixel — so a 10,000 px file would
 /// hold over a gigabyte. Shrunk **once** at decode; no export needs more, since the widest mark is
-/// half the long edge.
+/// half the long edge. ⚠ The decode itself still passes through the full size once, on the worker
+/// thread, before the shrink — bounded by what the file is, not by this constant.
 pub const MAX_LOGO: u32 = 4096;
 
 /// A decoded logo: premultiplied RGBA, encoded in the export's colour space.
