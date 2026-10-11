@@ -119,6 +119,17 @@ pub fn rebalance(edits: &mut Edits, buffer: &ImageBuf) -> bool {
     }
 }
 
+/// The film's γ for the panel's *Film contrast* (±100): 0 is a colour negative's 0.6, +100 halves it
+/// (a contrastier positive), −100 doubles it.
+pub fn gamma_of(contrast: f32) -> f32 {
+    0.6 * 2f32.powf(-contrast / 100.0)
+}
+
+/// The *Film contrast* a γ reads as — [`gamma_of`]'s inverse.
+pub fn contrast_of(gamma: f32) -> f32 {
+    -100.0 * (gamma.max(1e-3) / 0.6).log2()
+}
+
 /// A pixel of the undeveloped decode as the photo's own stages will see it: the positive when the
 /// negative is active, itself otherwise. ⚠⚠ **Every reader of the decode goes through this** — the
 /// eyedroppers, Auto tone, the AI masks' input, red-eye detection — or it measures the negative.
@@ -243,6 +254,17 @@ mod tests {
             "off the photo"
         );
         assert_eq!(e.negative, edit_model::Negative::default());
+    }
+
+    /// The panel's Film contrast: ±100 around a colour negative's 0.6, and back.
+    #[test]
+    fn film_contrast_maps_onto_the_films_gamma_and_back() {
+        assert_eq!(gamma_of(0.0), 0.6);
+        assert!((gamma_of(100.0) - 0.3).abs() < 1e-6, "contrastier");
+        assert!((gamma_of(-100.0) - 1.2).abs() < 1e-6, "softer");
+        for c in [-100.0, -37.5, 0.0, 12.0, 100.0] {
+            assert!((contrast_of(gamma_of(c)) - c).abs() < 1e-3, "{c}");
+        }
     }
 
     #[test]

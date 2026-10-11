@@ -2,7 +2,7 @@
 
 use super::crop_overlay::{self, draw_crop_overlay};
 use super::eye_overlay;
-use super::eyedropper::{pick_fringe, pick_white_balance};
+use super::eyedropper::{pick_fringe, pick_negative, pick_white_balance};
 use super::guide_overlay::{draw_guide_overlay, GuideDrag};
 use super::mask_overlay::{draw_mask_overlay, BrushTool};
 use super::spot_overlay::{draw_spot_overlay, sampler_for};
@@ -148,6 +148,20 @@ pub(super) fn dispatch(
         }
         // ⚠ The white-balance eyedropper's twin (M9.6): its own click-sensing
         // interaction, only while armed, and the same crosshair.
+        // ⚠ M10.11a: the film-base picker, the white-balance eyedropper's twin.
+        Tool::Edit if s.picking_negative => {
+            let pick = ui
+                .interact(
+                    img_rect,
+                    ui.id().with("negative_eyedropper"),
+                    egui::Sense::click(),
+                )
+                .on_hover_cursor(egui::CursorIcon::Crosshair);
+            if let Some(m) = pick_negative(s, &pick, frame_rect, tool) {
+                out.photo_edited |= m.1;
+                out.fringe_status = Some(m.0);
+            }
+        }
         Tool::Edit if s.picking_fringe => {
             let pick = ui
                 .interact(

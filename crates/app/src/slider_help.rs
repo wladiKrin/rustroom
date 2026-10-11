@@ -69,6 +69,8 @@ const GLOBAL: &[(&str, &str)] = &[
     ("Texture", "Sharpens or smooths fine surface detail such as skin, grain and fabric"),
     ("Clarity", "Adds or removes contrast in mid-sized detail"),
     ("Dehaze", "Removes haze, or adds it when negative"),
+    // Film negative (M10.11a)
+    ("Film contrast", "Matches the film's own contrast, higher for a punchier positive"),
     // Colour
     ("Vibrance", "Strengthens muted colours more than vivid ones, sparing skin tones"),
     ("Saturation", "Makes every colour stronger or weaker by the same amount"),

@@ -727,6 +727,7 @@ impl RustroomApp {
             buffer: decoded.buffer.clone(),
             picking_wb: false,
             picking_fringe: false,
+            picking_negative: false,
             zoom: view.0,
             fit_scale: 1.0,
             pan: view.1,

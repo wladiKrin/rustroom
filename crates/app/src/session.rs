@@ -89,6 +89,9 @@ pub struct Session {
     /// The defringe eyedropper is armed: the next click on the canvas sets a fringe's hue range
     /// (M9.6). View state, `picking_wb`'s rule.
     pub(crate) picking_fringe: bool,
+    /// The film-base eyedropper is armed: the next click on the canvas picks the film base and
+    /// measures the frame (M10.11a). View state, `picking_wb`'s rule.
+    pub(crate) picking_negative: bool,
     /// The illuminant the decode left this photo balanced to — the Kelvin slider's zero point.
     ///
     /// ⚠⚠ Kept on the session for the same reason `lens` is: it is a fact about the file that
