@@ -50,13 +50,17 @@ pub fn grain_params(g: &Grain, scale: RenderScale) -> GrainParams {
     }
 }
 
+/// The hash's multipliers: the two coordinates', then the two mixing rounds'. ⚠ The WGSL twin
+/// substitutes these rather than transcribing them, so the two cannot disagree.
+pub const HASH: [u32; 4] = [0x8DA6_B343, 0xD816_3841, 0x7FEB_352D, 0x846C_A68B];
+
 /// An integer hash of a lattice point — the same `u32` arithmetic in the WGSL twin.
 pub fn hash(x: i32, y: i32, seed: u32) -> u32 {
-    let mut h = (x as u32).wrapping_mul(0x8DA6_B343) ^ (y as u32).wrapping_mul(0xD816_3841) ^ seed;
+    let mut h = (x as u32).wrapping_mul(HASH[0]) ^ (y as u32).wrapping_mul(HASH[1]) ^ seed;
     h ^= h >> 16;
-    h = h.wrapping_mul(0x7FEB_352D);
+    h = h.wrapping_mul(HASH[2]);
     h ^= h >> 15;
-    h = h.wrapping_mul(0x846C_A68B);
+    h = h.wrapping_mul(HASH[3]);
     h ^= h >> 16;
     h
 }

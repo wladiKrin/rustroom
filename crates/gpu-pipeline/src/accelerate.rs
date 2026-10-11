@@ -118,6 +118,13 @@ const REPLACEABLE: &[(&str, Builder)] = &[
     ("sharpening", |e, scale, _, _, _, ctx| {
         Some(Box::new(GpuSharpenStage::new(&e.sharpening, scale, ctx)))
     }),
+    // ⚠ M10.11b: grain, after sharpening as in the tail, and reading the region the vignette's row
+    // does — its lattice is addressed in the frame's pixels.
+    ("grain", |e, scale, region, _, _, ctx| {
+        Some(Box::new(crate::GpuGrainStage::new(
+            &e.grain, scale, region, ctx,
+        )))
+    }),
     // ⚠⚠ **After `sharpening`, as in the tail — and the ONLY row that reads the region.** Its
     // falloff is measured against the whole frame, so a region render must be shaded exactly as
     // that part of the whole would have been; passing `None` here would re-centre the vignette on
@@ -2974,6 +2981,11 @@ mod tests {
                 amount: 60.0,
                 ..Default::default()
             },
+            // ⚠ M10.11b: grain, so the tail's every-stage-replaceable and one-chain checks see it.
+            grain: edit_model::Grain {
+                amount: 40.0,
+                ..Default::default()
+            },
             rendering: Some(edit_model::Rendering::Camera),
             look: edit_model::Look {
                 file: Some("x.cube".into()),
@@ -3216,6 +3228,70 @@ mod tests {
             "fixture check: this region must change the vignette"
         );
         let d = crate::compare(&want, &with);
+        assert!(d.worst_levels < 1.0, "the region was not carried: {d:?}");
+    }
+
+    /// M10.11b: the grain row passes the region, as the vignette's does — grain is addressed in the
+    /// frame's pixels, and a row built with `None` would re-seed it on whatever slice is on screen.
+    #[test]
+    fn the_grain_row_carries_the_region() {
+        let Some(ctx) = ctx() else { return };
+        let e = Edits {
+            grain: edit_model::Grain {
+                amount: 80.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        let region = Region {
+            full_w: 64,
+            full_h: 48,
+            x0: 40,
+            y0: 30,
+        };
+        let img = || {
+            let mut px = Vec::with_capacity(20 * 16 * 3);
+            for i in 0..20 * 16 {
+                let t = 0.05 + (i % 97) as f32 / 160.0;
+                px.extend_from_slice(&[t, t * 0.9, t * 1.1]);
+            }
+            core_image::ImageBuf::from_vec(20, 16, px)
+        };
+        let render = |r: Option<Region>| {
+            let tail = pipeline::build_pipeline_split_in_region(
+                &e,
+                SCALE,
+                r,
+                pipeline::TailRendering::colorimetric(),
+            )
+            .1;
+            let (p, c) = accelerate(
+                tail,
+                &e,
+                SCALE,
+                TailFacts {
+                    region: r,
+                    rendering: TailRendering::default(),
+                    spec: RenderSpec::default(),
+                },
+                &ctx,
+            );
+            rejoin(p, c).run(img())
+        };
+        let want = pipeline::build_pipeline_split_in_region(
+            &e,
+            SCALE,
+            Some(region),
+            pipeline::TailRendering::colorimetric(),
+        )
+        .1
+        .run(img());
+        let without = render(None);
+        assert!(
+            crate::compare(&want, &without).worst_levels > 1.0,
+            "fixture check: this region must change the grain"
+        );
+        let d = crate::compare(&want, &render(Some(region)));
         assert!(d.worst_levels < 1.0, "the region was not carried: {d:?}");
     }
 
