@@ -208,6 +208,18 @@ ignoring the negative (2). ⚠ Two tests were added *for* sabotages before runni
 called the helper directly, so the loader's own dispatch got a test through an injectable `load_any`; and
 the AI test covered only the disk cache, so the session's in-memory maps got their own.
 
+**Found in use (2026-10-11): an Ilford HP5 camera scan came out almost black.** The film base pick was
+right; the measurement was not. The uncropped scan held the black holder around the film — measured at
+densities 3.1–4.8, a quarter of the frame — so the 99.5th percentile landed there (5.8) and the picture,
+at most 1.55, came out at 0.1 % of white. Fixed in the measurement: densities film cannot have (below
+−0.05, brighter than the base — sprocket holes; above 3.0 — the holder) are left out, and so is a border,
+15 % of each edge on an uncropped frame (the scan's surroundings, Negative Lab Pro's *border buffer*) and
+2 % once cropped. On the same scan: white measured at 1.70/1.68/1.65, a proper positive
+(`examples/probe_negative.rs` renders it). Sabotages: the filter off → 2 red; ⚠ the border off stayed
+**green** — two tests computed their expectation from the border constant itself, so zeroing it moved both
+sides; `a_film_dense_edge_of_an_uncropped_scan_does_not_set_the_white` asserts against the picture's own
+densest and is red under it.
+
 **Final review: my own pass** (no subagent unasked). Deferred: opening a RAW negative shows its ghost (the
 embedded JPEG through the negative) for a moment in approximate colour until the decode is adopted; a
 returning AI result's key check has no test (it needs a worker). ⚠ `app/src/session_flow.rs` is **979**
