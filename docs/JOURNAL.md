@@ -166,7 +166,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-10-11 — M10.10b: export sizing in cm/in with a PPI, and a file-size limit (branch `m10.10b-export-sizing`)
+### 2026-10-11 — M10.10b: export sizing in cm/in with a PPI, and a file-size limit (branch `m10.10b-export-sizing`, merged 2026-10-11)
 
 **Input:** Phase 10's M10.10b: *"Export sizing in cm/in with a PPI, and a file-size target"*. The author's
 answers: **Lightroom's set of modes**; a **Don't enlarge** tick (on by default); with it on, a print size the
