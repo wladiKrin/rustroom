@@ -259,6 +259,43 @@ mod tests {
         }
     }
 
+    /// ⚠ The border's own job, which the density filter cannot do: an uncropped scan edged by
+    /// something film-dense — the next frame, a dark band like the 2.2 one along the HP5 scan's bottom
+    /// — must not set the white. ⚠ Asserted against the picture's own densest, never against a value
+    /// derived from `BORDER_UNCROPPED`: a sabotaged border of 0 left such a test green.
+    #[test]
+    fn a_film_dense_edge_of_an_uncropped_scan_does_not_set_the_white() {
+        let (w, h) = (200usize, 200usize);
+        let mut img = ImageBuf::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+                let d = if v > 0.9 {
+                    2.4 // a band along the edge: dense, but a density film can have
+                } else {
+                    0.2 + 1.3 * u.clamp(0.2, 0.8) // the picture, 0.46..1.24
+                };
+                img.set_pixel(x, y, BASE.map(|b| b * 10f32.powf(-d)));
+            }
+        }
+        let mut e = Edits {
+            negative: edit_model::Negative {
+                on: true,
+                base: BASE,
+                ..edit_model::Negative::default()
+            },
+            ..Edits::default()
+        };
+        assert!(rebalance(&mut e, &img));
+        for d in e.negative.high {
+            assert!(
+                close(d, 1.24, 0.03),
+                "the band set the white: {:?}",
+                e.negative.high
+            );
+        }
+    }
+
     #[test]
     fn the_measurement_keeps_to_the_crop() {
         let buf = strip(100, 40, 0.2, 1.6);
