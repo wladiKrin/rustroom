@@ -1,0 +1,15 @@
+[package]
+name = "lr-preset"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+# Lightroom develop presets — `.xmp`, `.lrtemplate` and `.zip` packs — read into Rustroom edits (M10.9c).
+# ⚠ No GUI: the app's preset import calls it, and nothing in the app crate parses a Lightroom file.
+[dependencies]
+edit-model = { path = "../edit-model" }
+color = { path = "../color" }
+quick-xml = { workspace = true }
+thiserror = { workspace = true }
+# ⚠ Already in the build (through `image`); pinned to the locked version so nothing new is fetched.
+flate2 = "1.1"

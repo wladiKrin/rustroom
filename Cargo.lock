@@ -295,6 +295,7 @@ dependencies = [
  "image-decode",
  "immich",
  "lens-profile",
+ "lr-preset",
  "muda",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
@@ -2854,6 +2855,17 @@ name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+
+[[package]]
+name = "lr-preset"
+version = "0.1.0"
+dependencies = [
+ "color 0.1.0",
+ "edit-model",
+ "flate2",
+ "quick-xml",
+ "thiserror 2.0.19",
+]
 
 [[package]]
 name = "maplit"
