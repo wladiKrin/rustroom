@@ -1827,7 +1827,10 @@ mod tests {
     #[test]
     fn a_file_size_limit_is_met_by_the_quality_then_by_the_pixels() {
         let d = TempDir::new("limit_met");
-        let o = opts(&d, None);
+        let mut o = opts(&d, None);
+        // ⚠ A caption, so the XMP is part of what each limited file must hold — and is checked to
+        // be there. Found by sabotage: a search measuring and writing without it stayed green.
+        o.metadata.caption = "kept under the limit".into();
         // ⚠ The bounds are measured on this very photo, not invented: the limit sits between the
         // file at the floor and the file at 100.
         let at = |q: u8, name: &str| {
@@ -1859,6 +1862,7 @@ mod tests {
             bytes.len()
         );
         assert!(bytes.len() > floor, "the quality was not simply floored");
+        assert!(has_caption(&bytes), "the limited file lost its metadata");
         assert_eq!(dims, (600, 400), "the quality alone met it");
         assert!(r.notes.is_empty(), "{:?}", r.notes);
 
@@ -1874,6 +1878,7 @@ mod tests {
             bytes.len()
         );
         assert!(dims.0 < 600 && dims.1 < 400, "{dims:?}");
+        assert!(has_caption(&bytes), "the shrunk file lost its metadata");
         assert!(
             (dims.0 as f32 / dims.1 as f32 - 1.5).abs() < 0.05,
             "the shape kept: {dims:?}"
@@ -1882,18 +1887,40 @@ mod tests {
         assert_eq!(r.notes, [format!("1 photo made smaller to fit {kb} KB")]);
     }
 
+    fn has_caption(bytes: &[u8]) -> bool {
+        bytes.windows(20).any(|w| w == b"kept under the limit")
+    }
+
     /// M10.10b: metadata bigger than the limit cannot be met by any picture — that photo fails with
     /// a reason, and nothing over the limit is written.
+    ///
+    /// ⚠⚠ **The limit is one the PICTURE alone could meet**, measured: a tiny JPEG of this photo,
+    /// colour profile and all, plus 2 KB. The first version used 1 KB, which the colour profile alone
+    /// is over — so the photo failed whatever the XMP did, and a search that ignored the XMP passed.
     #[test]
     fn a_limit_smaller_than_the_metadata_fails_that_photo() {
         let d = TempDir::new("limit_meta");
+        let small = export::encode(
+            &grainy(24, 16),
+            export::ExportFormat::Jpeg,
+            40,
+            color::OutputSpace::Srgb,
+            Some(300.0),
+        )
+        .unwrap()
+        .len();
+        let kb = (small / 1000 + 2) as u32;
         let mut o = opts(&d, None);
-        o.metadata.caption = "a long caption ".repeat(140);
-        o.limit = FileSizeLimit { on: true, kb: 1 };
+        o.metadata.caption = "a long caption ".repeat(kb as usize * 1000 / 15 + 100);
+        o.limit = FileSizeLimit { on: true, kb };
         let (r, bytes, _) = exported_jpeg(&d, "a.RAF", o);
         assert_eq!(r.exported, 0);
         assert_eq!(r.failed.len(), 1, "{r:?}");
-        assert!(r.failed[0].1.contains("1 KB"), "{}", r.failed[0].1);
+        assert!(
+            r.failed[0].1.contains(&format!("{kb} KB")),
+            "{}",
+            r.failed[0].1
+        );
         assert!(bytes.is_empty(), "nothing written");
     }
 
