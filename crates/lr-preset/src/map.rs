@@ -61,11 +61,15 @@ const DETAIL: &[&str] = &[
     "ColorNoiseReduction",
     "ColorNoiseReductionSmoothness",
 ];
+/// Lightroom's Effects: the post-crop vignette and, since M10.11b, grain.
 const VIGNETTE: &[&str] = &[
     "PostCropVignetteAmount",
     "PostCropVignetteMidpoint",
     "PostCropVignetteRoundness",
     "PostCropVignetteFeather",
+    "GrainAmount",
+    "GrainSize",
+    "GrainFrequency",
 ];
 const LENS: &[&str] = &[
     "LensProfileEnable",
@@ -270,6 +274,10 @@ pub fn to_edits(s: &Settings) -> Mapped {
     set(&mut e.vignette.midpoint, s, "PostCropVignetteMidpoint");
     set(&mut e.vignette.roundness, s, "PostCropVignetteRoundness");
     set(&mut e.vignette.feather, s, "PostCropVignetteFeather");
+    // M10.11b: grain, one to one — Lightroom's Frequency is the Roughness slider.
+    set(&mut e.grain.amount, s, "GrainAmount");
+    set(&mut e.grain.size, s, "GrainSize");
+    set(&mut e.grain.roughness, s, "GrainFrequency");
 
     // Lens: the profile's switch and chromatic aberration; defringe amounts (0–20 there, 0–100 here).
     let profile = truthy(s, "LensProfileEnable");
@@ -288,9 +296,6 @@ pub fn to_edits(s: &Settings) -> Mapped {
     }
 
     // What there is no counterpart for — named only when it would change something.
-    if nonzero(s, "GrainAmount") {
-        left_out.push("grain");
-    }
     if [
         "MaskGroupBasedCorrections",
         "PaintBasedCorrections",
@@ -482,6 +487,30 @@ mod tests {
         );
         let mut grainy = plain.clone();
         grainy.insert("GrainAmount".into(), crate::Value::Num(25.0));
-        assert!(to_edits(&grainy).left_out.contains(&"grain"));
+        // ⚠ M10.11b: grain has a counterpart now — never left out again.
+        assert!(!to_edits(&grainy).left_out.contains(&"grain"));
+    }
+
+    /// M10.11b: Lightroom's grain maps one to one, and carries the Effects group even alone.
+    #[test]
+    fn lightrooms_grain_maps_across() {
+        let mut s = Settings::new();
+        s.insert("GrainAmount".into(), crate::Value::Num(25.0));
+        s.insert("GrainSize".into(), crate::Value::Num(30.0));
+        s.insert("GrainFrequency".into(), crate::Value::Num(60.0));
+        let m = to_edits(&s);
+        assert_eq!(
+            (
+                m.edits.grain.amount,
+                m.edits.grain.size,
+                m.edits.grain.roughness
+            ),
+            (25.0, 30.0, 60.0)
+        );
+        assert!(m.groups.vignette, "grain alone carries the Effects group");
+        assert!(m.left_out.is_empty(), "{:?}", m.left_out);
+        let mut zero = Settings::new();
+        zero.insert("GrainAmount".into(), crate::Value::Num(0.0));
+        assert_eq!(to_edits(&zero).edits.grain, edit_model::Grain::default());
     }
 }
