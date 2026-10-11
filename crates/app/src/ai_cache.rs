@@ -20,7 +20,16 @@ pub fn models_dir() -> Option<PathBuf> {
 }
 
 /// The cache key of `prompt` answered by `model` on `photo`.
-pub fn key(photo: &Path, model: ModelId, prompt: &AiPrompt) -> String {
+///
+/// ⚠ M10.11a: an **active** negative is part of the key — the model was shown the positive, and
+/// another base or another balance is another positive. An inactive one adds nothing, so no key of a
+/// photo that is not a negative changes.
+pub fn key(
+    photo: &Path,
+    model: ModelId,
+    prompt: &AiPrompt,
+    negative: &edit_model::Negative,
+) -> String {
     let md = std::fs::metadata(photo).ok();
     let size = md.as_ref().map_or(0, |m| m.len());
     let mtime = md
@@ -31,7 +40,18 @@ pub fn key(photo: &Path, model: ModelId, prompt: &AiPrompt) -> String {
         AiPrompt::Subject => "subject".to_string(),
         AiPrompt::Click { point } => format!("click:{:.5}:{:.5}", point[0], point[1]),
     };
-    ai_mask::digest_hex(format!("{}|{size}|{mtime}|{model:?}|{prompt}", photo.display()).as_bytes())
+    let negative = if negative.is_active() {
+        format!("|negative:{negative:?}")
+    } else {
+        String::new()
+    };
+    ai_mask::digest_hex(
+        format!(
+            "{}|{size}|{mtime}|{model:?}|{prompt}{negative}",
+            photo.display()
+        )
+        .as_bytes(),
+    )
 }
 
 pub fn load(dir: &Path, key: &str) -> Option<ProbMap> {
@@ -52,6 +72,34 @@ pub fn store(dir: &Path, key: &str, map: &ProbMap) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    /// M10.11a: a map found on the negative is not the positive's — the key carries the negative.
+    #[test]
+    fn the_key_carries_an_active_negative() {
+        let photo = std::path::Path::new("/nonexistent/scan.RAF");
+        let p = AiPrompt::Subject;
+        let off = edit_model::Negative::default();
+        let on = edit_model::Negative {
+            on: true,
+            base: [0.85, 0.55, 0.3],
+            ..off
+        };
+        let k = |n: &edit_model::Negative| key(photo, ModelId::IsNet, &p, n);
+        assert_ne!(k(&off), k(&on));
+        assert_ne!(
+            k(&on),
+            k(&edit_model::Negative {
+                base: [0.8, 0.55, 0.3],
+                ..on
+            }),
+            "another base is another positive"
+        );
+        assert_eq!(
+            k(&off),
+            k(&edit_model::Negative { gamma: 0.9, ..off }),
+            "an inactive negative changes nothing, so no key either"
+        );
+    }
+
     fn temp_dir(tag: &str) -> PathBuf {
         test_dir::path(&format!("aicache-{tag}"))
     }
@@ -62,12 +110,40 @@ mod tests {
         let photo = d.join("A.RAF");
         std::fs::write(&photo, b"raw").unwrap();
         let click = AiPrompt::Click { point: [0.25, 0.5] };
-        let k = key(&photo, ModelId::SamDecoder, &click);
-        assert_eq!(k, key(&photo, ModelId::SamDecoder, &click), "stable");
-        assert_ne!(k, key(&photo, ModelId::IsNet, &click), "model");
+        let k = key(
+            &photo,
+            ModelId::SamDecoder,
+            &click,
+            &edit_model::Negative::default(),
+        );
+        assert_eq!(
+            k,
+            key(
+                &photo,
+                ModelId::SamDecoder,
+                &click,
+                &edit_model::Negative::default()
+            ),
+            "stable"
+        );
         assert_ne!(
             k,
-            key(&photo, ModelId::SamDecoder, &AiPrompt::Subject),
+            key(
+                &photo,
+                ModelId::IsNet,
+                &click,
+                &edit_model::Negative::default()
+            ),
+            "model"
+        );
+        assert_ne!(
+            k,
+            key(
+                &photo,
+                ModelId::SamDecoder,
+                &AiPrompt::Subject,
+                &edit_model::Negative::default()
+            ),
             "prompt"
         );
         assert_ne!(
@@ -75,15 +151,34 @@ mod tests {
             key(
                 &photo,
                 ModelId::SamDecoder,
-                &AiPrompt::Click { point: [0.26, 0.5] }
+                &AiPrompt::Click { point: [0.26, 0.5] },
+                &edit_model::Negative::default()
             ),
             "point"
         );
         let other = d.join("B.RAF");
         std::fs::write(&other, b"raw").unwrap();
-        assert_ne!(k, key(&other, ModelId::SamDecoder, &click), "file");
+        assert_ne!(
+            k,
+            key(
+                &other,
+                ModelId::SamDecoder,
+                &click,
+                &edit_model::Negative::default()
+            ),
+            "file"
+        );
         std::fs::write(&photo, b"raw, re-saved").unwrap();
-        assert_ne!(k, key(&photo, ModelId::SamDecoder, &click), "size");
+        assert_ne!(
+            k,
+            key(
+                &photo,
+                ModelId::SamDecoder,
+                &click,
+                &edit_model::Negative::default()
+            ),
+            "size"
+        );
     }
 
     #[test]

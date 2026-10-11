@@ -57,9 +57,17 @@ pub fn source_crop(crop: CropRect, o: Orientation) -> CropRect {
 pub fn analyse(
     buffer: &ImageBuf,
     geometry: &Geometry,
+    // ⚠ M10.11a: a film negative is measured as the positive the stage hands on — after the
+    // downscale, where it costs a 512 px pass rather than a full-resolution one.
+    negative: &edit_model::Negative,
     median_target: f32,
 ) -> (Option<Percentiles>, AutoTone) {
     let small = buffer.downscale_to(ANALYSIS_DIM);
+    let small = if negative.is_active() {
+        small.map_pixels(|p| pipeline::negative::positive(p, negative))
+    } else {
+        small
+    };
     let crop = source_crop(geometry.crop, geometry.orientation);
     let p = auto_tone::percentiles(&small, Some(crop));
     (
@@ -81,7 +89,7 @@ pub fn analyse(
 /// threaded through. `median_target_for` is the one place that decision lives.
 pub fn apply(edits: &mut Edits, buffer: &ImageBuf, baseline_ev: Option<f32>) -> AutoTone {
     let target = auto_tone::median_target_for(edits.applied_rendering(), baseline_ev);
-    let (_, a) = analyse(buffer, &edits.geometry, target);
+    let (_, a) = analyse(buffer, &edits.geometry, &edits.negative, target);
     edits.exposure = a.exposure;
     edits.whites = a.whites;
     edits.blacks = a.blacks;
@@ -91,6 +99,43 @@ pub fn apply(edits: &mut Edits, buffer: &ImageBuf, baseline_ev: Option<f32>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A strip of film: densities 0.2..1.6 above an orange base (M10.11a).
+    fn film_strip(w: usize, h: usize) -> (core_image::ImageBuf, edit_model::Negative) {
+        let base = [0.85f32, 0.55, 0.30];
+        let mut img = core_image::ImageBuf::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let d = 0.2 + 1.4 * (x + y) as f32 / (w + h) as f32;
+                img.set_pixel(x, y, base.map(|b| b * 10f32.powf(-d)));
+            }
+        }
+        let n = edit_model::Negative {
+            on: true,
+            base,
+            low: [0.2; 3],
+            high: [1.6; 3],
+            ..edit_model::Negative::default()
+        };
+        (img, n)
+    }
+
+    /// M10.11a: on a negative, Auto measures the positive the stage hands on — never the negative.
+    #[test]
+    fn auto_tone_on_a_negative_measures_the_positive() {
+        let (neg, n) = film_strip(200, 80);
+        let pos = neg.map_pixels(|p| pipeline::negative::positive(p, &n));
+        let none = edit_model::Negative::default();
+        let g = Geometry::default();
+        let (_, on_negative) = analyse(&neg, &g, &n, auto_tone::MEDIAN_TARGET);
+        let (_, on_positive) = analyse(&pos, &g, &none, auto_tone::MEDIAN_TARGET);
+        let (_, raw) = analyse(&neg, &g, &none, auto_tone::MEDIAN_TARGET);
+        assert_ne!(
+            raw, on_positive,
+            "the two must differ for this to mean anything"
+        );
+        assert_eq!(on_negative, on_positive);
+    }
 
     fn grey(w: usize, h: usize, v: f32) -> ImageBuf {
         ImageBuf::from_vec(w, h, vec![v; w * h * 3])
@@ -308,8 +353,18 @@ mod tests {
         let big = grey(ANALYSIS_DIM * 3, ANALYSIS_DIM * 2, 0.08);
         let small = grey(64, 42, 0.08);
         let g = Geometry::default();
-        let (_, a) = analyse(&big, &g, auto_tone::MEDIAN_TARGET);
-        let (_, b) = analyse(&small, &g, auto_tone::MEDIAN_TARGET);
+        let (_, a) = analyse(
+            &big,
+            &g,
+            &edit_model::Negative::default(),
+            auto_tone::MEDIAN_TARGET,
+        );
+        let (_, b) = analyse(
+            &small,
+            &g,
+            &edit_model::Negative::default(),
+            auto_tone::MEDIAN_TARGET,
+        );
         assert!((a.exposure - b.exposure).abs() < 1e-5, "{a:?} vs {b:?}");
     }
 
