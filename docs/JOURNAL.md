@@ -166,6 +166,53 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-10-11 — M10.11a: film negative inversion (branch `m10.11a-film-negative`)
+
+**Input:** Phase 10's M10.11a: *"Film negative inversion — invert, white balance from the film base, a
+tone curve"*, recorded in `docs/BACKLOG.md` as **a stage plus an eyedropper**, not a plugin system. The
+author's answers: **pick the film base, then an automatic balance**, stored in the edits so Sync carries
+it across a roll; and, asked whether a preset would do, **a stage** — a preset can only flip the tone
+curve, which runs after white balance, Exposure and the tone sliders (all would work backwards), clips its
+input at 1 and is forced to rise. Spec `docs/superpowers/specs/2026-10-11-m10.11a-film-negative-design.md`,
+plan beside it.
+
+**Built:**
+- **`edit_model::Negative`** `{ on, base, gamma, low, high, mono }` — densities, not levels, so the film
+  contrast can change after a measurement; **its own group, the 11th, appended (`NEGATIVE_GROUP = 10`) and
+  OFF by default** like Geometry, so a pasted digital photo or a colour preset never switches a negative's
+  inversion off; ⚠ **not serialized while default** — the pinned preview fingerprint caught that a default
+  block would have changed the key of every rendered preview on disk and grown every sidecar.
+- **`pipeline::negative`** — `d = log10(base / px)`, `e = 10^(d/γ)` (film density is `γ·log10 E`, so this
+  is scene exposure, linear), levels per channel from the measured densities to `TARGET` 0.9; Black & white
+  averages the ratios first. **A prefix step right after lens correction**: vignetting is divided out first,
+  and noise reduction, dehaze (its airlight replay includes the step) and everything after see the
+  positive; cached, CPU, no GPU twin needed. A golden of the chart through a film model.
+- **`negative_tool`** (lib) — the pick (a 5 × 5 patch of the decode), the measurement (0.5th/99.5th
+  percentile densities on a 512 px analysis inside the crop), `view` — the one function every reader of the
+  decode goes through: the white-balance and defringe eyedroppers, Auto tone, the AI masks' input (and the
+  AI cache key, the input cache, the session's map store and a returning result's key), the patch/red-eye
+  sampler.
+- **The panel** — a **Negative** block above Profile, collapsed by default, header *on*/*off*, not reset:
+  *Film negative*, the base swatch, *Pick film base*, *Auto balance* (not "Auto" — Auto tone owns that
+  name in the same panel), *Black & white*, *Film contrast* (±100 ↔ γ 1.2…0.3).
+- **Thumbnails** — a RAW negative is thumbnailed from its half-size raw decode, rendered from float with
+  its own rendering and not disk-cached (8-bit would band the dense areas the inversion makes highlights);
+  the embedded JPEG has been through the camera's curve and does not match a base measured on raw data.
+
+**Sabotages — thirteen, `--no-fail-fast` on the whole suite, every one red:** the exponent removed (3,
+the golden among them), levels from the wrong channel (1), the step after dehaze (3), the pick ignoring
+where it was clicked (4), Auto tone / the AI input / the WB eyedropper / the sampler skipping the positive
+(1 each), the AI store kept across a pick (1), the Negative group on by default (2), a default negative
+written (2 — the pinned preview fingerprint among them), the loader skipping the decode (1), the AI key
+ignoring the negative (2). ⚠ Two tests were added *for* sabotages before running them: the thumbnail test
+called the helper directly, so the loader's own dispatch got a test through an injectable `load_any`; and
+the AI test covered only the disk cache, so the session's in-memory maps got their own.
+
+**Final review: my own pass** (no subagent unasked). Deferred: opening a RAW negative shows its ghost (the
+embedded JPEG through the negative) for a moment in approximate colour until the decode is adopted; a
+returning AI result's key check has no test (it needs a worker). ⚠ `app/src/session_flow.rs` is **979**
+lines of code — one line from this milestone, 21 from the ceiling.
+
 ### 2026-10-11 — M10.10b: export sizing in cm/in with a PPI, and a file-size limit (branch `m10.10b-export-sizing`, merged 2026-10-11)
 
 **Input:** Phase 10's M10.10b: *"Export sizing in cm/in with a PPI, and a file-size target"*. The author's
