@@ -32,6 +32,8 @@ pub mod resample;
 pub mod spatial;
 pub(crate) mod spline;
 mod stages;
+/// M10.11b: grain's parameters, noise and stage — the GPU twin reads the same ones.
+pub use stages::grain::{grain_params, GrainParams, GrainStage};
 /// ⚠ The one stage-internal module that is public, re-exported rather than opening `stages`
 /// wholesale — which would make every stage public API for the sake of one benchmark. `bench_hsl`
 /// needs the table and the small-angle pair to sweep table sizes against real pixels.

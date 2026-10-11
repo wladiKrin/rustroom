@@ -2737,3 +2737,19 @@ fn golden_film_negative() {
         neg,
     );
 }
+
+/// ⚠ M10.11b: grain at Amount 50 on the chart — pins the noise lattice, the tone weight and the
+/// placement after sharpening; a change in the hash or the cell would move every grain.
+#[test]
+fn golden_grain() {
+    check_golden(
+        "grain",
+        &Edits {
+            grain: edit_model::Grain {
+                amount: 50.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        },
+    );
+}
