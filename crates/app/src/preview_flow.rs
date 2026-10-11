@@ -168,13 +168,18 @@ impl RustroomApp {
                 gpu_tail: self.settings.gpu_tail,
             },
             width,
-            Some(
-                rustroom_app::looks::LookStore::user_default(
-                    &dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from(".")),
-                )
-                .dir()
-                .to_path_buf(),
-            ),
+            // ⚠ Looks only: a preview never carries a watermark — `build_options` leaves it at
+            // the inert default — so it has no store to read.
+            rustroom_app::batch_export::ExportDirs {
+                looks: Some(
+                    rustroom_app::looks::LookStore::user_default(
+                        &dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from(".")),
+                    )
+                    .dir()
+                    .to_path_buf(),
+                ),
+                watermarks: None,
+            },
             None,
         );
         self.preview_builder = Some((worker, kind));

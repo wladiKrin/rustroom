@@ -60,6 +60,29 @@ pub struct ExportReport {
     /// **none had applied**, but that had to be *checked* rather than assumed. An automatic retry
     /// is how one edit becomes three assets.
     pub unconfirmed: Vec<(PathBuf, String)>,
+    /// What the run could not do that every photo was meant to have — today, an image watermark
+    /// whose copy could not be read (M10.10a). Each is a phrase the status line ends with.
+    pub notes: Vec<String>,
+}
+
+impl ExportReport {
+    /// The status line: `Exported 3, 1 skipped, 1 failed, cancelled`, then each note.
+    ///
+    /// ⚠ Here rather than in the flow that shows it, so the line can be tested without a window.
+    pub fn summary(&self) -> String {
+        let mut parts = vec![format!("Exported {}", self.exported)];
+        if self.skipped > 0 {
+            parts.push(format!("{} skipped", self.skipped));
+        }
+        if !self.failed.is_empty() {
+            parts.push(format!("{} failed", self.failed.len()));
+        }
+        if self.cancelled {
+            parts.push("cancelled".to_string());
+        }
+        parts.extend(self.notes.iter().cloned());
+        parts.join(", ")
+    }
 }
 
 /// A running batch export.
@@ -98,9 +121,10 @@ impl ExportWorker {
         // ⚠ From `Settings::export_width`, already repaired — see its doc for why the ceiling is
         // the core count and why this is a setting rather than a constant.
         width: usize,
-        // ⚠ Where creative looks are read from. `None` means none are available, and every photo
-        // then exports as though its `.cube` were missing — the documented fallback.
-        looks_dir: Option<std::path::PathBuf>,
+        // ⚠ Where creative looks and watermark images are read from. `None` for either means none
+        // are available, and every photo then exports as though the file it names were missing —
+        // the documented fallback for a look, a note in the report for a watermark.
+        dirs: ExportDirs,
         // ⚠ `None` means "write to disk only", which is the ordinary case and not an error. A
         // narrow struct rather than `Settings`, so the worker cannot read preferences that are none
         // of its business — see `immich_upload::UploadConfig`.
@@ -112,7 +136,7 @@ impl ExportWorker {
         std::thread::spawn(move || {
             // ⚠⚠ **Resolved on the WORKER thread, not in `spawn`.** A 64³ cube is 786 KB read from
             // disk; doing it in `spawn` would block the UI thread that starts the export.
-            let looks = resolve_looks(&jobs, looks_dir);
+            let batch = Batch::read(&jobs, &opts, dirs);
             run(
                 jobs,
                 opts,
@@ -122,7 +146,7 @@ impl ExportWorker {
                 flag,
                 render,
                 width,
-                &looks,
+                &batch,
                 upload,
             );
         });
@@ -347,39 +371,6 @@ fn plan(
     Some(out)
 }
 
-/// Load every distinct `.cube` the jobs name, once.
-///
-/// ⚠⚠ **A map rather than one slot, because a selection is not one photograph.** `RenderEngine`'s
-/// worker caches a single look and is right to — it renders one photo at a time. An export runs a
-/// *selection*, whose jobs each carry their own `Edits`, so a one-slot cache would hand some
-/// photographs another's look. The load is still paid once per distinct name.
-///
-/// ⚠ A name that will not load is simply absent from the map, and the photograph then exports
-/// **without the look and with its rendering intact** — `build_pipeline_split_in_region_with_brush`
-/// documents that as the rule for a `.cube` this machine does not have. Never an error that fails
-/// the photo.
-fn resolve_looks(
-    jobs: &[ExportJob],
-    dir: Option<std::path::PathBuf>,
-) -> std::collections::HashMap<String, Arc<pipeline::lut::Cube>> {
-    let mut out = std::collections::HashMap::new();
-    let Some(store) = dir.map(crate::looks::LookStore::new) else {
-        return out;
-    };
-    for j in jobs {
-        let Some(f) = j.edits.look.file.as_deref() else {
-            continue;
-        };
-        if out.contains_key(f) {
-            continue;
-        }
-        if let Ok(cube) = store.load(f) {
-            out.insert(f.to_string(), Arc::new(cube));
-        }
-    }
-    out
-}
-
 /// The photo's sidecar mtime in seconds, for `UploadDate::Edited`.
 fn sidecar_seconds(photo: &Path) -> Option<i64> {
     crate::sidecar::edited_at(photo).and_then(|t| {
@@ -500,10 +491,14 @@ fn run(
     cancel: Arc<AtomicBool>,
     render: ExportRender,
     width: usize,
-    looks: &std::collections::HashMap<String, Arc<pipeline::lut::Cube>>,
+    batch: &Batch,
     upload: Option<crate::immich_upload::UploadConfig>,
 ) {
     let mut report = ExportReport::default();
+    // ⚠ Said once for the run, before anything is written: every photo goes out without the mark.
+    if let Err(note) = &batch.logo {
+        report.notes.push(note.clone());
+    }
     // ⚠ Parsed **once** per run, not per photo. ⚠ A template that will not parse falls back to
     // the default rather than failing the run: the dialog refuses to start an export with an
     // invalid one, so the only way to get here is a hand-edited preset file — and a folder named
@@ -623,9 +618,18 @@ fn run(
                     .file
                     .as_deref()
                     .filter(|_| p.edits.look.is_active())
-                    .and_then(|f| looks.get(f));
+                    .and_then(|f| batch.looks.get(f));
                 let outcome = decoded.and_then(|src| {
-                    export_one(src, &p.edits, &p.dest, opts, render, &p.meta, look)
+                    export_one(
+                        src,
+                        &p.edits,
+                        &p.dest,
+                        opts,
+                        render,
+                        &p.meta,
+                        look,
+                        batch.logo(),
+                    )
                 });
                 // ⚠⚠ Only after a successful write, and it can never turn a success into a
                 // failure. The exported file is the deliverable; the upload is delivery.
@@ -709,82 +713,6 @@ mod tests {
     use crate::batch_export::fixtures::*;
     use crate::photo_id::PhotoId;
     use export::ExportFormat;
-
-    /// Write `n` `.cube` files into a fresh directory and return it.
-    fn looks_dir(tag: &str, names: &[&str]) -> TempDir {
-        let d = TempDir::new(tag);
-        for n in names {
-            std::fs::write(
-                d.0.join(n),
-                "LUT_3D_SIZE 2\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n1 1 1\n",
-            )
-            .unwrap();
-        }
-        d
-    }
-
-    fn job_wanting(dir: &TempDir, name: &str, look: Option<&str>) -> ExportJob {
-        let mut j = jobs(dir, &[name]).pop().unwrap();
-        j.edits.look.file = look.map(|s| s.to_string());
-        j
-    }
-
-    /// ⚠⚠ **Each job's OWN look, and a one-slot cache would get this wrong.** `RenderEngine`'s
-    /// worker caches a single look and is right to — it renders one photograph at a time. An
-    /// export runs a *selection*, whose jobs each carry their own `Edits`, so a batch-wide look
-    /// would render some photographs with another's.
-    #[test]
-    fn every_distinct_look_a_selection_names_is_loaded() {
-        let looks = looks_dir("looks_many", &["a.cube", "b.cube"]);
-        let files = TempDir::new("looks_many_src");
-        let js = vec![
-            job_wanting(&files, "p0.RAF", Some("a.cube")),
-            job_wanting(&files, "p1.RAF", Some("b.cube")),
-            // ⚠ A repeat: it must not be loaded twice, and it must still be present.
-            job_wanting(&files, "p2.RAF", Some("a.cube")),
-            job_wanting(&files, "p3.RAF", None),
-        ];
-        let got = resolve_looks(&js, Some(looks.0.clone()));
-        let mut names: Vec<&str> = got.keys().map(|k| k.as_str()).collect();
-        names.sort();
-        assert_eq!(names, vec!["a.cube", "b.cube"]);
-    }
-
-    /// ⚠⚠ **A `.cube` this machine does not have exports WITHOUT THE LOOK, never without the
-    /// rendering and never as an error.** That is
-    /// `build_pipeline_split_in_region_with_brush`'s documented rule — *"a preset naming a file
-    /// this machine does not have must render without the look, not without a rendering"* — and
-    /// the export path has to agree with it.
-    ///
-    /// ⚠ Sabotage: make `resolve_looks` insert a default cube on a load failure, or propagate the
-    /// error. Either turns a missing file into a wrong photograph or a failed export.
-    #[test]
-    fn a_look_this_machine_does_not_have_is_simply_absent() {
-        let looks = looks_dir("looks_missing", &["present.cube"]);
-        let files = TempDir::new("looks_missing_src");
-        let js = vec![
-            job_wanting(&files, "p0.RAF", Some("present.cube")),
-            job_wanting(&files, "p1.RAF", Some("gone.cube")),
-        ];
-        let got = resolve_looks(&js, Some(looks.0.clone()));
-        assert!(
-            got.contains_key("present.cube"),
-            "the one that exists loads"
-        );
-        assert!(
-            !got.contains_key("gone.cube"),
-            "the one that does not must be ABSENT — the photo then renders without the look"
-        );
-    }
-
-    /// ⚠ No looks directory at all is the same answer as an empty one: every photo exports as
-    /// though its `.cube` were missing.
-    #[test]
-    fn no_looks_directory_resolves_nothing() {
-        let files = TempDir::new("looks_nodir");
-        let js = vec![job_wanting(&files, "p0.RAF", Some("a.cube"))];
-        assert!(resolve_looks(&js, None).is_empty());
-    }
 
     /// Jobs carrying capture metadata, for the tokens that come from the catalog.
     fn jobs_with(dir: &TempDir, files: &[(&str, core_image::Capture)]) -> Vec<ExportJob> {
@@ -1060,7 +988,7 @@ mod tests {
                 Arc::new(AtomicBool::new(false)),
                 CPU,
                 width,
-                None,
+                ExportDirs::default(),
                 None,
             );
             let report = finished(&worker);
@@ -1103,7 +1031,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             CPU,
             1,
-            None,
+            ExportDirs::default(),
             None,
         );
         let mut collisions = 0;
@@ -1330,7 +1258,7 @@ mod tests {
             Arc::new(AtomicBool::new(true)),
             CPU,
             1,
-            None,
+            ExportDirs::default(),
             None,
         );
         let report = finished(&worker);
@@ -1367,7 +1295,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             CPU,
             1,
-            None,
+            ExportDirs::default(),
             None,
         );
 
@@ -1409,7 +1337,7 @@ mod tests {
             flag,
             CPU,
             1,
-            None,
+            ExportDirs::default(),
             None,
         );
 
@@ -1556,7 +1484,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             CPU,
             1,
-            None,
+            ExportDirs::default(),
             // ⚠ Port 1 on loopback: nothing listens, so the connection is refused at once.
             Some(crate::immich_upload::UploadConfig {
                 base_url: "http://127.0.0.1:1".to_string(),
@@ -1591,7 +1519,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             CPU,
             1,
-            None,
+            ExportDirs::default(),
             None,
         );
         let report = finished(&worker);
@@ -1619,7 +1547,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             CPU,
             1,
-            None,
+            ExportDirs::default(),
             Some(crate::immich_upload::UploadConfig {
                 base_url: "http://127.0.0.1:1".to_string(),
                 key: "irrelevant".to_string(),
@@ -1657,7 +1585,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             CPU,
             1,
-            None,
+            ExportDirs::default(),
             None,
         );
         let report = finished(&worker);
@@ -1682,7 +1610,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             CPU,
             1,
-            None,
+            ExportDirs::default(),
             Some(crate::immich_upload::UploadConfig {
                 base_url: "http://127.0.0.1:1".to_string(),
                 key: "irrelevant".to_string(),
@@ -1714,7 +1642,7 @@ mod tests {
             // ⚠ Width 1 so the two failures are ordered; the `swap` guard is what makes the wide
             // case safe, and a width of 1 is the case whose counts are deterministic.
             1,
-            None,
+            ExportDirs::default(),
             Some(crate::immich_upload::UploadConfig {
                 base_url: "http://127.0.0.1:1".to_string(),
                 key: "irrelevant".to_string(),
@@ -1741,6 +1669,109 @@ mod tests {
             report.unconfirmed.len(),
             2,
             "both failures must still be reported"
+        );
+    }
+
+    /// Export one flat photo named `name` with `o`, and read the written PNG back.
+    fn exported_png(
+        d: &TempDir,
+        name: &str,
+        o: ExportOptions,
+        dirs: ExportDirs,
+    ) -> (ExportReport, image::RgbImage) {
+        let worker = ExportWorker::spawn(
+            jobs(d, &[name]),
+            o,
+            |_: &Path| Ok(source(flat(200, 100))),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            dirs,
+            None,
+        );
+        let r = finished(&worker);
+        let stem = Path::new(name).file_stem().unwrap().to_string_lossy();
+        let img = image::open(d.0.join(format!("{stem}.png")))
+            .expect("the export")
+            .to_rgb8();
+        (r, img)
+    }
+
+    /// M10.10a: the logo the run read reaches the written file, in its corner and nowhere else.
+    #[test]
+    fn an_image_watermark_reaches_the_written_file() {
+        let d = TempDir::new("wm_drawn");
+        let store = d.0.join("watermarks");
+        std::fs::create_dir_all(&store).unwrap();
+        write_png(&store.join("logo.png"), 20, 10, [255, 0, 0, 255]);
+        let dirs = || ExportDirs {
+            looks: None,
+            watermarks: Some(store.clone()),
+        };
+        let mut o = opts(&d, None);
+        o.format = ExportFormat::Png8;
+        let (_, plain) = exported_png(&d, "plain.RAF", o.clone(), dirs());
+        o.watermark = Watermark {
+            kind: WatermarkKind::Image,
+            image: "logo.png".into(),
+            image_width: 20,
+            opacity: 100,
+            ..Watermark::default()
+        };
+        let (r, marked) = exported_png(&d, "marked.RAF", o, dirs());
+        assert!(r.notes.is_empty(), "{:?}", r.notes);
+        let mut red = 0;
+        for (x, y, p) in marked.enumerate_pixels() {
+            if p != plain.get_pixel(x, y) {
+                assert!(x >= 100 && y >= 50, "ink at ({x},{y}), outside its corner");
+                if p[0] > 200 && p[1] < 60 {
+                    red += 1;
+                }
+            }
+        }
+        // 20% of a 200 px long edge: a 40×20 logo, 800 pixels.
+        assert!(red > 600, "{red} red pixels");
+    }
+
+    /// M10.10a: a copy that is gone is named, and the photo still exports — never silently
+    /// without its mark. A text mark needs no store and says nothing.
+    #[test]
+    fn a_missing_watermark_image_is_named_and_the_export_still_runs() {
+        let d = TempDir::new("wm_missing");
+        let mut o = opts(&d, None);
+        o.format = ExportFormat::Png8;
+        o.watermark.text = "© me".into();
+        let (r, _) = exported_png(&d, "text.RAF", o.clone(), ExportDirs::default());
+        assert!(r.notes.is_empty(), "a text mark: {:?}", r.notes);
+        o.watermark.kind = WatermarkKind::Image;
+        o.watermark.image = "gone.png".into();
+        let dirs = ExportDirs {
+            looks: None,
+            watermarks: Some(d.0.join("watermarks")),
+        };
+        let (r, _) = exported_png(&d, "image.RAF", o, dirs);
+        assert_eq!(r.exported, 1, "the photo still exports");
+        assert_eq!(r.notes, ["the watermark image gone.png could not be read"]);
+    }
+
+    #[test]
+    fn the_summary_reads_as_before_and_appends_a_note() {
+        let r = ExportReport {
+            exported: 2,
+            skipped: 1,
+            ..ExportReport::default()
+        };
+        assert_eq!(r.summary(), "Exported 2, 1 skipped");
+        let r = ExportReport {
+            exported: 2,
+            failed: vec![(PathBuf::from("a.RAF"), "no".into())],
+            cancelled: true,
+            notes: vec!["the watermark image x.png could not be read".into()],
+            ..ExportReport::default()
+        };
+        assert_eq!(
+            r.summary(),
+            "Exported 2, 1 failed, cancelled, the watermark image x.png could not be read"
         );
     }
 }

@@ -104,6 +104,7 @@ impl RustroomApp {
         // ⚠ Read **before** `opts` is moved into `spawn`.
         let opts_upload_wanted = opts.destination.target().is_some();
         let export_profile = self.camera_profile_path();
+        let config = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
         self.export_progress = format!("Exporting 0 of {}…", jobs.len());
         self.export_collision = None;
         self.exporter = Some(ExportWorker::spawn(
@@ -137,14 +138,20 @@ impl RustroomApp {
             // photo's `ProfileParts`: an export can run over a selection that includes photos
             // never opened, so "where looks live" has to be a session fact here too. ⚠ It is the
             // *directory*, not a loaded table — which look each photo wants is in its own `Edits`,
-            // and the worker resolves every distinct name once.
-            Some(
-                rustroom_app::looks::LookStore::user_default(
-                    &dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from(".")),
-                )
-                .dir()
-                .to_path_buf(),
-            ),
+            // and the worker resolves every distinct name once. The watermark store likewise
+            // (M10.10a): the options name a copy, and the worker reads it once.
+            rustroom_app::batch_export::ExportDirs {
+                looks: Some(
+                    rustroom_app::looks::LookStore::user_default(&config)
+                        .dir()
+                        .to_path_buf(),
+                ),
+                watermarks: Some(
+                    rustroom_app::watermark_store::WatermarkStore::user_default(&config)
+                        .dir()
+                        .to_path_buf(),
+                ),
+            },
             // ⚠⚠ From `Settings`, and `None` unless the *upload* key is set — the browse key is
             // never used here, which is the point of it being a second field. ⚠ Read when the run
             // begins, so a key pasted mid-session applies to the next export without a restart.
@@ -210,17 +217,7 @@ impl RustroomApp {
             self.exporter = None;
             self.export_progress.clear();
             self.export_collision = None;
-            let mut parts = vec![format!("Exported {}", r.exported)];
-            if r.skipped > 0 {
-                parts.push(format!("{} skipped", r.skipped));
-            }
-            if !r.failed.is_empty() {
-                parts.push(format!("{} failed", r.failed.len()));
-            }
-            if r.cancelled {
-                parts.push("cancelled".to_string());
-            }
-            self.status = parts.join(", ");
+            self.status = r.summary();
         }
         // The worker runs off the UI thread, so nothing else would wake the app up.
         if self.exporter.is_some() {

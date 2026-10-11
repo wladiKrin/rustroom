@@ -96,6 +96,7 @@ fn main() {
             },
             &export::FileMetadata::resolve(&o.metadata, described()),
             None,
+            None,
         ) {
             Ok(()) => println!("wrote {}", dest.display()),
             Err(e) => println!("FAILED {}: {e}", dest.display()),

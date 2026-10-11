@@ -101,6 +101,7 @@ fn accelerated_steps<T>(f: impl FnOnce() -> T) -> usize {
 /// ⚠ The tail comes from `build_pipeline_split_in_region_with_brush` with its prefix **discarded**,
 /// deliberately: both halves then come from one builder, so they cannot drift about what belongs
 /// in which.
+#[allow(clippy::too_many_arguments)]
 pub fn export_one(
     source: ExportSource,
     edits: &Edits,
@@ -113,6 +114,9 @@ pub fn export_one(
     // work for a per-batch fact — the same reasoning `RenderEngine`'s worker gives for caching it
     // in one slot. `export_one` does no file I/O of its own.
     look: Option<&std::sync::Arc<pipeline::lut::Cube>>,
+    // ⚠ The image watermark, decoded once for the run on its own reading of the per-batch rule
+    // above; `None` when the mark is text, absent, or its copy could not be read.
+    logo: Option<&export::Logo>,
 ) -> Result<(), String> {
     // ⚠⚠ **The same strip `render_cached`'s worker does, and for the same reason**: a JPEG, a PNG
     // or a TIFF has been through whatever produced it, so applying our rendering on top renders
@@ -281,7 +285,7 @@ pub fn export_one(
     // The metadata goes **last**, after the encode, because it is surgery on the container
     // rather than on the pixels. It cannot change what the photograph looks like.
     export::output_sharpen::apply(&mut rendered, &opts.output_sharpening);
-    export::watermark::apply(&mut rendered, &opts.watermark, None);
+    export::watermark::apply(&mut rendered, &opts.watermark, logo);
     export::save(&rendered, dest, opts.format, opts.quality, opts.space)
         .map_err(|e| e.to_string())?;
     export::metadata::embed(dest, opts.format, meta).map_err(|e| e.to_string())
@@ -471,6 +475,7 @@ mod tests {
                 CPU,
                 &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
                 None,
+                None,
             )
             .unwrap();
             image::open(&dest).unwrap().to_rgb8()
@@ -522,6 +527,7 @@ mod tests {
             &o,
             CPU,
             &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
+            None,
             None,
         )
         .unwrap();
@@ -594,6 +600,7 @@ mod tests {
                 CPU,
                 &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
                 None,
+                None,
             )
             .unwrap();
             std::fs::read(&dest).unwrap()
@@ -629,6 +636,7 @@ mod tests {
             &o,
             CPU,
             &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
+            None,
             None,
         )
         .unwrap();
@@ -697,6 +705,7 @@ mod tests {
                 CPU,
                 &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
                 look,
+                None,
             )
             .unwrap();
             std::fs::read(&dest).unwrap()
@@ -727,6 +736,7 @@ mod tests {
             CPU,
             &export::FileMetadata::default(),
             None,
+            None,
         )
         .unwrap();
         assert_eq!(jpeg_size(&dest), (40, 20));
@@ -743,6 +753,7 @@ mod tests {
             &opts(&d, Some(10)),
             CPU,
             &export::FileMetadata::default(),
+            None,
             None,
         )
         .unwrap();
@@ -761,6 +772,7 @@ mod tests {
             &opts(&d, Some(999)),
             CPU,
             &export::FileMetadata::default(),
+            None,
             None,
         )
         .unwrap();
@@ -853,6 +865,7 @@ mod tests {
                 CPU,
                 &export::FileMetadata::default(),
                 None,
+                None,
             )
             .unwrap();
             std::fs::read(&dest).unwrap()
@@ -899,6 +912,7 @@ mod tests {
                     },
                     &export::FileMetadata::default(),
                     None,
+                    None,
                 )
                 .unwrap();
             })
@@ -936,6 +950,7 @@ mod tests {
             CPU,
             &export::FileMetadata::resolve(&base.metadata, export::FileMetadata::default()),
             None,
+            None,
         )
         .unwrap();
         let mut changed = base.clone();
@@ -948,6 +963,7 @@ mod tests {
             &changed,
             CPU,
             &export::FileMetadata::resolve(&changed.metadata, export::FileMetadata::default()),
+            None,
             None,
         )
         .unwrap();
@@ -1108,6 +1124,7 @@ mod tests {
                 CPU,
                 &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
                 None,
+                None,
             )
             .unwrap();
             pixels(&std::fs::read(&dest).unwrap())
@@ -1136,6 +1153,7 @@ mod tests {
             CPU,
             &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
             None,
+            None,
         )
         .unwrap();
         let bytes = std::fs::read(&dest).unwrap();
@@ -1159,6 +1177,7 @@ mod tests {
             &opts(&d, None),
             CPU,
             &export::FileMetadata::default(),
+            None,
             None,
         )
         .is_err());

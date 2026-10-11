@@ -17,6 +17,7 @@
 //! naming, collisions, cancellation, progress, the failure path — is testable with no image
 //! fixtures at all.
 
+mod batch;
 mod destination;
 mod options;
 mod render;
@@ -24,6 +25,7 @@ mod worker;
 
 // ⚠⚠ Glob re-exports, so every existing caller keeps working unchanged — this is a **move**, and a
 // move that forces its callers to edit their imports is not one.
+pub use batch::*;
 pub use destination::*;
 pub use options::*;
 pub use render::*;
