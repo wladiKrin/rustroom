@@ -227,6 +227,25 @@ mod tests {
     }
 
     #[test]
+    fn a_half_transparent_logo_blends_by_its_alpha() {
+        // ⚠⚠ Found by sabotage: with `k = op` — the alpha ignored — every other test here stayed
+        // green, because a pixel with no alpha is skipped before `k` is read and an opaque one has
+        // `a = 1`. Only an alpha strictly between the two can tell them apart.
+        let logo = Logo::decode(&png(40, 20, |_, _| [255, 255, 255, 128]), OutputSpace::Srgb)
+            .expect("decode");
+        let mut img = grey(400, 300, 0.5);
+        apply(
+            &mut img,
+            &mark(20, 100, WatermarkCorner::BottomRight),
+            Some(&logo),
+        );
+        let a = 128.0 / 255.0;
+        let want = 0.5 * (1.0 - a) + a;
+        let brightest = img.data().iter().copied().fold(0.0f32, f32::max);
+        assert!((brightest - want).abs() < 0.01, "{brightest}, want {want}");
+    }
+
+    #[test]
     fn opacity_scales_the_blend() {
         let logo = white(40, 20);
         let brightest = |o: u8| {
