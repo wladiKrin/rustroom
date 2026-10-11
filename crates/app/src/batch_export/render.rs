@@ -10,21 +10,6 @@ use edit_model::Edits;
 use pipeline::PipelineStage;
 use std::path::Path;
 
-/// The render scale a `max_edge` cap implies for a source whose long edge is `source_long`.
-///
-/// Mirrors `render_engine::render_scale`, with `source_scale` fixed at 1.0 because an export
-/// always decodes at full resolution — never through `DecodeOptions::preview()`.
-pub fn scale_for(source_long: usize, max_edge: Option<usize>) -> pipeline::RenderScale {
-    let Some(max_edge) = max_edge else {
-        return pipeline::RenderScale::FULL;
-    };
-    if source_long == 0 || max_edge >= source_long {
-        // `downscale_to` never upscales, so neither does the scale.
-        return pipeline::RenderScale::FULL;
-    }
-    pipeline::RenderScale::new(max_edge as f32 / source_long as f32)
-}
-
 /// Render one decoded image through `edits` and write it as a JPEG.
 ///
 /// ⚠ The downscale happens **before** the pipeline, not after. Rendering at full resolution
@@ -117,7 +102,7 @@ pub fn export_one(
     // ⚠ The image watermark, decoded once for the run on its own reading of the per-batch rule
     // above; `None` when the mark is text, absent, or its copy could not be read.
     logo: Option<&export::Logo>,
-) -> Result<(), String> {
+) -> Result<Written, String> {
     // ⚠⚠ **The same strip `render_cached`'s worker does, and for the same reason**: a JPEG, a PNG
     // or a TIFF has been through whatever produced it, so applying our rendering on top renders
     // the photograph twice. Done here rather than at the call sites so no caller can forget —
@@ -137,11 +122,21 @@ pub fn export_one(
         &stripped
     };
     let source_long = source.image.width().max(source.image.height());
-    let scaled = match opts.max_edge {
-        Some(max) => source.image.downscale_to(max),
-        None => source.image,
+    // ⚠⚠ M10.10b: the size is the CROPPED picture's — predicted from the edits, the decode shrunk to
+    // the smallest that still covers it. It used to be applied to the uncropped decode.
+    let sizing = super::sizing::for_photo(
+        edits,
+        (source.image.width(), source.image.height()),
+        &opts.size,
+    );
+    let scaled = if sizing.decode_long < source_long {
+        source.image.downscale_to(sizing.decode_long)
+    } else {
+        source.image
     };
-    let scale = scale_for(source_long, opts.max_edge);
+    let scale = sizing.render_scale(source_long);
+    // ⚠ DNG renders into its fixed space (linear ProPhoto) whatever the dialog says.
+    let render_space = opts.format.fixed_space().unwrap_or(opts.space);
     // The buffer the prefix's lens stage corrects — what an AI map's decode mapping must match.
     let (decode_w, decode_h) = (scaled.width(), scaled.height());
     // ⚠⚠ The export must use the SAME airlight definition as the preview, or a dehazed photo
@@ -154,8 +149,7 @@ pub fn export_one(
     // photograph than the one being exported.
     let airlight = pipeline::prefix_airlight(edits, &scaled, render.resampler, source.lens.clone());
     let spec = pipeline::RenderSpec {
-        // ⚠ DNG renders into its fixed space (linear ProPhoto) whatever the dialog says.
-        space: opts.format.fixed_space().unwrap_or(opts.space),
+        space: render_space,
         intent: opts.intent,
         resampler: render.resampler,
         baseline: source.baseline,
@@ -273,7 +267,7 @@ pub fn export_one(
             look,
         },
     );
-    let mut rendered = tail.run(img);
+    let rendered = super::sizing::fit(tail.run(img), &sizing.plan, render_space);
 
     // ⚠⚠ **THE ORDER OF THESE THREE IS THE FEATURE, NOT AN ARRANGEMENT.**
     //
@@ -284,11 +278,9 @@ pub fn export_one(
     //
     // The metadata goes **last**, after the encode, because it is surgery on the container
     // rather than on the pixels. It cannot change what the photograph looks like.
-    export::output_sharpen::apply(&mut rendered, &opts.output_sharpening);
-    export::watermark::apply(&mut rendered, &opts.watermark, logo);
-    export::save(&rendered, dest, opts.format, opts.quality, opts.space)
-        .map_err(|e| e.to_string())?;
-    export::metadata::embed(dest, opts.format, meta).map_err(|e| e.to_string())
+    //
+    // ⚠ All three live in `finish::write`, in that order (M10.10b), with the PPI and the size limit.
+    super::finish::write(rendered, dest, opts, logo, meta, &sizing.plan)
 }
 
 /// The brush side channel carrying `edits`' AI masks for a frame the size of `frame`, or `None`
@@ -779,6 +771,28 @@ mod tests {
         assert_eq!(jpeg_size(&dest), (40, 20));
     }
 
+    /// ⚠⚠ M10.10b: the long edge is the CROPPED picture's. It used to be applied to the uncropped
+    /// decode, so a photo cropped to half its width came out at half the size asked for.
+    #[test]
+    fn a_cropped_photo_meets_its_long_edge() {
+        let d = TempDir::new("one_cropped_cap");
+        let dest = d.0.join("a.jpg");
+        let mut edits = Edits::default();
+        edits.geometry.crop.right = 0.5;
+        export_one(
+            source(flat(400, 200)),
+            &edits,
+            &dest,
+            &opts(&d, Some(100)),
+            CPU,
+            &export::FileMetadata::default(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(jpeg_size(&dest), (100, 100));
+    }
+
     /// A hard vertical edge on a mid-grey field, big enough to hold a watermark.
     fn edged(w: usize, h: usize) -> ImageBuf {
         let mut img = ImageBuf::new(w, h);
@@ -1188,9 +1202,17 @@ mod tests {
         // ⚠ The reason the resize happens *before* the pipeline: the spatial stages have to
         // be told the output resolution, or a resized export would apply full-resolution
         // radii to a small image.
-        assert_eq!(scale_for(40, None).get(), 1.0);
-        assert_eq!(scale_for(40, Some(10)).get(), 0.25);
+        let scale = |long_edge: Option<usize>| {
+            let size = long_edge
+                .map(export::sizing::OutputSize::long_edge_px)
+                .unwrap_or_default();
+            super::super::sizing::for_photo(&Edits::default(), (40, 20), &size)
+                .render_scale(40)
+                .get()
+        };
+        assert_eq!(scale(None), 1.0);
+        assert_eq!(scale(Some(10)), 0.25);
         // No upscaling, so a cap above the source is still 1.0.
-        assert_eq!(scale_for(40, Some(999)).get(), 1.0);
+        assert_eq!(scale(Some(999)), 1.0);
     }
 }

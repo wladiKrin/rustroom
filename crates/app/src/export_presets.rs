@@ -140,10 +140,30 @@ mod tests {
             options: ExportOptions {
                 dest_dir: PathBuf::from("/tmp/rustroom_web"),
                 quality,
-                max_edge: Some(2048),
+                size: crate::batch_export::OutputSize::long_edge_px(2048),
                 ..ExportOptions::default()
             },
         }
+    }
+
+    /// M10.10b: a preset written with `max_edge` keeps its size — the shape this store wrote before.
+    #[test]
+    fn a_preset_from_before_the_size_modes_keeps_its_long_edge() {
+        let d = TempDir::new("max_edge");
+        let store = d.store();
+        std::fs::create_dir_all(store.dir()).unwrap();
+        std::fs::write(
+            store.dir().join("Web.json"),
+            r#"{"name":"Web","options":{"dest_dir":"/tmp/web","quality":85,"max_edge":2048}}"#,
+        )
+        .unwrap();
+        let list = store.list();
+        assert_eq!(list.len(), 1, "the old preset loads");
+        assert_eq!(list[0].options.quality, 85);
+        assert_eq!(
+            list[0].options.size,
+            crate::batch_export::OutputSize::long_edge_px(2048)
+        );
     }
 
     #[test]

@@ -634,7 +634,7 @@ fn run(
                 // ⚠⚠ Only after a successful write, and it can never turn a success into a
                 // failure. The exported file is the deliverable; the upload is delivery.
                 let upload = match (&outcome, uploader) {
-                    (Ok(()), Some(u)) => Some(u.send(
+                    (Ok(_), Some(u)) => Some(u.send(
                         &p.dest,
                         &p.capture,
                         &p.source,
@@ -649,7 +649,7 @@ fn run(
                     // test comparing it must sort or compare as a set.
                     let mut r = shared.lock().expect("export report");
                     match outcome {
-                        Ok(()) => r.exported += 1,
+                        Ok(_) => r.exported += 1,
                         Err(e) => r.failed.push((p.source.clone(), e)),
                     }
                     match upload {

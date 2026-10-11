@@ -4,7 +4,7 @@
 //! ⚠ Pure, in the lib: a trailing text on a header is painted, which the harness cannot read,
 //! so each phrase is testable here and the dialog only places it.
 
-use crate::batch_export::ExportOptions;
+use crate::batch_export::{ExportOptions, FitMode, LengthUnit};
 use crate::export_presets::ExportPreset;
 
 /// The folder's last component, `(none chosen)`, or the name with ` (missing)`.
@@ -64,9 +64,11 @@ pub fn colour(o: &ExportOptions) -> String {
 
 /// `2048 px long edge` or `original`.
 pub fn size(o: &ExportOptions) -> String {
-    match o.max_edge {
-        Some(e) => format!("{e} px long edge"),
-        None => "original".to_string(),
+    let s = &o.size;
+    match (s.fit, s.unit) {
+        (FitMode::Original, _) => "original".to_string(),
+        (FitMode::LongEdge, LengthUnit::Px) => format!("{} px long edge", s.long_edge.round()),
+        (fit, _) => fit.label().to_lowercase(),
     }
 }
 
@@ -134,6 +136,7 @@ pub fn footer_note(presets: &[ExportPreset], selected: Option<&str>, o: &ExportO
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::batch_export::OutputSize;
 
     fn preset(name: &str, o: &ExportOptions) -> ExportPreset {
         ExportPreset {
@@ -154,9 +157,9 @@ mod tests {
         o.dest_dir = std::path::PathBuf::from("/nonexistent/Export");
         assert_eq!(location(&o), "Export (missing)");
 
-        o.max_edge = None;
+        o.size = OutputSize::default();
         assert_eq!(size(&o), "original");
-        o.max_edge = Some(2048);
+        o.size = OutputSize::long_edge_px(2048);
         assert_eq!(size(&o), "2048 px long edge");
 
         o.output_sharpening.amount = 0;

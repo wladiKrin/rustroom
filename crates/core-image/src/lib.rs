@@ -229,6 +229,23 @@ impl ImageBuf {
         out
     }
 
+    /// The size [`Self::downscale_to`] makes of a `w` × `h` image: unchanged unless its long edge is
+    /// over `max_dim`.
+    ///
+    /// ⚠ The one formula both the downscale and the export's size prediction use (M10.10b) — a
+    /// prediction re-deriving it could round one pixel apart and trim the wrong edge.
+    pub fn downscaled_dims(w: usize, h: usize, max_dim: usize) -> (usize, usize) {
+        let long = w.max(h);
+        if max_dim == 0 || long <= max_dim || w == 0 || h == 0 {
+            return (w, h);
+        }
+        let scale = max_dim as f32 / long as f32;
+        (
+            (w as f32 * scale).round().max(1.0) as usize,
+            (h as f32 * scale).round().max(1.0) as usize,
+        )
+    }
+
     /// Downscale so the longer edge is at most `max_dim`, preserving aspect ratio, using
     /// area averaging in the current (linear) light. Never upscales; returns a copy if
     /// already small enough or if `max_dim == 0`.
@@ -249,9 +266,7 @@ impl ImageBuf {
         if max_dim == 0 || long <= max_dim || self.width == 0 || self.height == 0 {
             return self.clone();
         }
-        let scale = max_dim as f32 / long as f32;
-        let dw = (self.width as f32 * scale).round().max(1.0) as usize;
-        let dh = (self.height as f32 * scale).round().max(1.0) as usize;
+        let (dw, dh) = Self::downscaled_dims(self.width, self.height, max_dim);
 
         let mut data = vec![0.0f32; dw * dh * Self::CHANNELS];
         data.par_chunks_exact_mut(dw * Self::CHANNELS)
@@ -685,5 +700,31 @@ mod tests {
             ..Default::default()
         }
         .is_empty());
+    }
+}
+
+#[cfg(test)]
+mod downscaled_dims_tests {
+    use super::*;
+
+    /// M10.10b: the export predicts a downscale's size with this, so it must be exactly the size
+    /// `downscale_to` makes.
+    #[test]
+    fn downscaled_dims_is_what_downscale_to_makes() {
+        for (w, h, m) in [
+            (400, 200, 100),
+            (401, 199, 97),
+            (100, 50, 200),
+            (3, 1000, 7),
+            (640, 480, 640),
+            (600, 300, 197),
+        ] {
+            let out = ImageBuf::new(w, h).downscale_to(m);
+            assert_eq!(
+                ImageBuf::downscaled_dims(w, h, m),
+                (out.width(), out.height()),
+                "{w}x{h} to {m}"
+            );
+        }
     }
 }

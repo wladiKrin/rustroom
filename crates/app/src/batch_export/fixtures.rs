@@ -66,11 +66,12 @@ pub(crate) const CPU: ExportRender = ExportRender {
     gpu_tail: false,
 };
 
-pub(crate) fn opts(dir: &TempDir, max_edge: Option<usize>) -> ExportOptions {
+/// `long_edge`: a long edge in pixels, the one size every test before M10.10b set.
+pub(crate) fn opts(dir: &TempDir, long_edge: Option<usize>) -> ExportOptions {
     ExportOptions {
         dest_dir: dir.0.clone(),
         quality: 90,
-        max_edge,
+        size: long_edge.map(OutputSize::long_edge_px).unwrap_or_default(),
         ..ExportOptions::default()
     }
 }

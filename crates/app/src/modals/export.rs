@@ -462,16 +462,24 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
 
                     });
                     section(ui, "Size", &export_summary::size(&opts), false, |ui| {
-                        let mut resize = opts.max_edge.is_some();
+                        // ⚠ Interim (M10.10b Task 3): the old control on the new field, until the
+                        // Size section's own body replaces it.
+                        use rustroom_app::batch_export::{FitMode, LengthUnit, OutputSize};
+                        let mut resize = opts.size.fit != FitMode::Original;
                         ui.checkbox(&mut resize, "Fit within a long edge")
                             .hover("Scales each photo down so its long edge fits the size below");
                         if resize {
-                            let mut edge = opts.max_edge.unwrap_or(2048);
+                            let mut edge = opts.size.long_edge.round() as usize;
                             ui.add(egui::Slider::new(&mut edge, 256..=8192).text("Long edge (px)"))
                                 .hover("Sets the longest side of each exported photo, in pixels");
-                            opts.max_edge = Some(edge);
+                            opts.size = OutputSize {
+                                fit: FitMode::LongEdge,
+                                unit: LengthUnit::Px,
+                                long_edge: edge as f32,
+                                ..opts.size
+                            };
                         } else {
-                            opts.max_edge = None;
+                            opts.size.fit = FitMode::Original;
                         }
                     });
                     section(

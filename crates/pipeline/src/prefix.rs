@@ -61,6 +61,18 @@ pub struct PrefixStep {
     pub stage: Box<dyn PipelineStage>,
 }
 
+/// The size the prefix leaves a `w` × `h` decode at — the final picture's, since geometry is the
+/// prefix's one resize — without touching a pixel (M10.10b).
+///
+/// ⚠ Folded over the steps' own [`PipelineStage::output_dims`] rather than re-deriving the crop, so
+/// a future stage that changes size is predicted too; `every_prefix_stages_output_dims_match_what_
+/// it_produces` keeps each answer true. Built without the lens, which keeps the size.
+pub fn prefix_output_dims(edits: &Edits, w: usize, h: usize) -> (usize, usize) {
+    build_prefix_steps(edits, RenderScale::FULL, None, Resampler::default(), None)
+        .iter()
+        .fold((w, h), |(w, h), step| step.stage.output_dims(w, h))
+}
+
 /// The prefix as an ordered list of `(key, stage)` pairs.
 ///
 /// An inactive stage produces no step — exactly as it produces no stage in the pipeline today.
@@ -1198,5 +1210,21 @@ mod tests {
             "the spot must actually alter the cropped window"
         );
         assert_eq!(window.data(), part.data());
+    }
+}
+
+#[cfg(test)]
+mod output_dims_tests {
+    use super::*;
+
+    #[test]
+    fn the_predicted_size_follows_the_crop_and_the_turn() {
+        assert_eq!(prefix_output_dims(&Edits::default(), 400, 200), (400, 200));
+        let mut half = Edits::default();
+        half.geometry.crop.right = 0.5;
+        assert_eq!(prefix_output_dims(&half, 400, 200), (200, 200));
+        let mut turned = Edits::default();
+        turned.geometry.orientation.rotate = edit_model::Quarter::Cw90;
+        assert_eq!(prefix_output_dims(&turned, 400, 200), (200, 400));
     }
 }

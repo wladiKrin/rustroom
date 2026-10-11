@@ -45,8 +45,19 @@ pub struct ExportOptions {
     pub dest_dir: PathBuf,
     /// JPEG quality, 1..=100.
     pub quality: u8,
-    /// Fit within this many pixels on the long edge. `None` = full resolution.
-    pub max_edge: Option<usize>,
+    /// How big each photo comes out (M10.10b): Lightroom's modes in px, cm or in with a PPI, applied
+    /// to the **final, cropped** picture.
+    ///
+    /// ⚠ Replaced `max_edge: Option<usize>`, which was applied to the uncropped decode. An options
+    /// file or preset written before reads exactly as it did: `"max_edge": 2048` is a long edge of
+    /// 2048 px, `null` or nothing the photo's own size.
+    #[serde(
+        alias = "max_edge",
+        deserialize_with = "export::sizing::size_or_max_edge"
+    )]
+    pub size: OutputSize,
+    /// Limit file size — JPEG only (M10.10b).
+    pub limit: FileSizeLimit,
     /// Demosaic quality for RAW sources.
     ///
     /// ⚠ An **export** setting rather than a develop edit, and by structure rather than by
@@ -116,6 +127,8 @@ pub struct ExportOptions {
 // anything to do with the batch loop, and putting them there would have left the CLI unable to
 // reach any of it. Re-exported rather than written `export::…` at every use site, because they
 // are `ExportOptions` fields first.
+pub use export::size_limit::FileSizeLimit;
+pub use export::sizing::{FitMode, LengthUnit, OutputSize, SizePlan};
 pub use export::{ExportMetadata, OutputSharpening, Watermark, WatermarkCorner, WatermarkKind};
 
 /// Where the files land inside the destination, and what happens once the run finishes.
@@ -257,7 +270,8 @@ impl Default for ExportOptions {
         Self {
             dest_dir: PathBuf::new(),
             quality: 92,
-            max_edge: None,
+            size: OutputSize::default(),
+            limit: FileSizeLimit::default(),
             demosaic: raw_decode::Demosaic::default(),
             format: ExportFormat::default(),
             space: color::OutputSpace::default(),
