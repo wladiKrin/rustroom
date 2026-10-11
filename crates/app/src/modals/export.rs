@@ -410,10 +410,29 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                         // ⚠ Hidden, not disabled, for a lossless format: at this size a disabled
                         // slider reads the same as an enabled one (P-05).
                         if opts.format.is_lossy() {
-                            ui.add(
-                                egui::Slider::new(&mut opts.quality, 1..=100).text("JPEG quality"),
-                            )
-                            .hover("Trades file size for detail, higher keeping more");
+                            // ⚠ The limit stands in for the quality slider while it is on: the
+                            // search sets the quality, so a slider beside it would be a lie.
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut opts.limit.on, "Limit file size").hover(
+                                    "Lowers the quality, then the size, until each file fits",
+                                );
+                                if opts.limit.on {
+                                    let (lo, hi) = rustroom_app::batch_export::FileSizeLimit::KB_RANGE;
+                                    ui.add(
+                                        egui::DragValue::new(&mut opts.limit.kb)
+                                            .range(lo..=hi)
+                                            .suffix(" KB"),
+                                    )
+                                    .hover("Sets the largest a file may be, in thousands of bytes");
+                                }
+                            });
+                            if !opts.limit.on {
+                                ui.add(
+                                    egui::Slider::new(&mut opts.quality, 1..=100)
+                                        .text("JPEG quality"),
+                                )
+                                .hover("Trades file size for detail, higher keeping more");
+                            }
                         }
                     });
                     // ⚠ Its own collapsed section: colour space and rendering intent are the two
@@ -462,25 +481,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
 
                     });
                     section(ui, "Size", &export_summary::size(&opts), false, |ui| {
-                        // ⚠ Interim (M10.10b Task 3): the old control on the new field, until the
-                        // Size section's own body replaces it.
-                        use rustroom_app::batch_export::{FitMode, LengthUnit, OutputSize};
-                        let mut resize = opts.size.fit != FitMode::Original;
-                        ui.checkbox(&mut resize, "Fit within a long edge")
-                            .hover("Scales each photo down so its long edge fits the size below");
-                        if resize {
-                            let mut edge = opts.size.long_edge.round() as usize;
-                            ui.add(egui::Slider::new(&mut edge, 256..=8192).text("Long edge (px)"))
-                                .hover("Sets the longest side of each exported photo, in pixels");
-                            opts.size = OutputSize {
-                                fit: FitMode::LongEdge,
-                                unit: LengthUnit::Px,
-                                long_edge: edge as f32,
-                                ..opts.size
-                            };
-                        } else {
-                            opts.size.fit = FitMode::Original;
-                        }
+                        super::export_size::body(ui, &mut opts)
                     });
                     section(
                         ui,
@@ -838,6 +839,19 @@ mod tests {
             .into_iter()
             .map(|(l, _)| l)
             .collect()
+    }
+
+    /// M10.10b: a JPEG's size limit stands in for its quality slider; a lossless file has neither.
+    #[test]
+    fn a_file_size_limit_replaces_the_quality_slider() {
+        let drawn = with_app(|_| {});
+        assert!(drawn.iter().any(|l| l == "JPEG quality"), "{drawn:?}");
+        assert!(drawn.iter().any(|l| l == "Limit file size"), "{drawn:?}");
+        let drawn = with_app(|app| app.export_draft.limit.on = true);
+        assert!(!drawn.iter().any(|l| l == "JPEG quality"), "{drawn:?}");
+        assert!(drawn.iter().any(|l| l == "Limit file size"));
+        let drawn = with_app(|app| app.export_draft.format = export::ExportFormat::Png16);
+        assert!(!drawn.iter().any(|l| l == "Limit file size"), "{drawn:?}");
     }
 
     #[test]

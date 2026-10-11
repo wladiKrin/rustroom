@@ -42,7 +42,11 @@ fn folder(o: &ExportOptions) -> String {
 pub fn file(o: &ExportOptions) -> String {
     let mut s = o.format.label().to_string();
     if o.format.is_lossy() {
-        s.push_str(&format!(" · {}", o.quality));
+        if o.limit.on {
+            s.push_str(&format!(" · ≤ {} KB", o.limit.kb));
+        } else {
+            s.push_str(&format!(" · {}", o.quality));
+        }
     }
     s
 }
@@ -65,11 +69,59 @@ pub fn colour(o: &ExportOptions) -> String {
 /// `2048 px long edge` or `original`.
 pub fn size(o: &ExportOptions) -> String {
     let s = &o.size;
-    match (s.fit, s.unit) {
-        (FitMode::Original, _) => "original".to_string(),
-        (FitMode::LongEdge, LengthUnit::Px) => format!("{} px long edge", s.long_edge.round()),
-        (fit, _) => fit.label().to_lowercase(),
+    let unit = s.unit.label();
+    let ppi = if s.unit == LengthUnit::Px {
+        String::new()
+    } else {
+        format!(", {} PPI", s.ppi)
+    };
+    match s.fit {
+        FitMode::Original => "original".to_string(),
+        FitMode::WidthHeight | FitMode::Dimensions => {
+            format!("{} × {} {unit}{ppi}", num(s.width), num(s.height))
+        }
+        FitMode::LongEdge => format!("{} {unit} long edge{ppi}", num(s.long_edge)),
+        FitMode::ShortEdge => format!("{} {unit} short edge{ppi}", num(s.short_edge)),
+        FitMode::Megapixels => format!("{} MP", num(s.megapixels)),
+        FitMode::Percentage => format!("{} %", num(s.percent)),
     }
+}
+
+/// The size in the other measure — pixels for a print size, a print size for pixels — or `None`
+/// where there is no other measure (M10.10b).
+///
+/// ⚠ Not the first photo's own result: its pixels are unknown until it is decoded, and a line that
+/// depended on the selection would change under the person reading it.
+pub fn size_note(o: &ExportOptions) -> Option<String> {
+    let s = &o.size;
+    if !s.fit.uses_length() {
+        return None;
+    }
+    let ppi = f32::from(s.ppi.max(1));
+    let lengths = match s.fit {
+        FitMode::WidthHeight | FitMode::Dimensions => vec![s.width, s.height],
+        FitMode::LongEdge => vec![s.long_edge],
+        _ => vec![s.short_edge],
+    };
+    Some(if s.unit == LengthUnit::Px {
+        let cm: Vec<String> = lengths
+            .iter()
+            .map(|&v| num(LengthUnit::Cm.from_px(v, ppi)))
+            .collect();
+        format!("= {} cm at {} PPI", cm.join(" × "), s.ppi)
+    } else {
+        let px: Vec<String> = lengths
+            .iter()
+            .map(|&v| format!("{}", s.unit.to_px(v, ppi).round()))
+            .collect();
+        format!("= {} px", px.join(" × "))
+    })
+}
+
+/// A number as a person writes it: at most two decimals, none when whole.
+fn num(v: f32) -> String {
+    let s = format!("{v:.2}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// The amount, or `off` at zero.
@@ -192,6 +244,68 @@ mod tests {
         assert!(!file(&o).contains(" · "), "{}", file(&o));
         assert_eq!(demosaic(&o), o.demosaic.label());
         assert_eq!(metadata(&o), o.metadata.scope.label().to_lowercase());
+    }
+
+    /// M10.10b: each size mode's phrase, and the line giving it in the other measure.
+    #[test]
+    fn each_size_mode_has_a_phrase_and_a_conversion() {
+        use crate::batch_export::{FitMode, LengthUnit};
+        let with = |size: OutputSize| ExportOptions {
+            size,
+            ..Default::default()
+        };
+        let print = OutputSize {
+            fit: FitMode::Dimensions,
+            unit: LengthUnit::Cm,
+            width: 30.0,
+            height: 20.0,
+            ..OutputSize::default()
+        };
+        assert_eq!(size(&with(print)), "30 × 20 cm, 300 PPI");
+        assert_eq!(size_note(&with(print)).as_deref(), Some("= 3543 × 2362 px"));
+        let long = OutputSize::long_edge_px(2048);
+        assert_eq!(size(&with(long)), "2048 px long edge");
+        assert_eq!(
+            size_note(&with(long)).as_deref(),
+            Some("= 17.34 cm at 300 PPI")
+        );
+        let short = OutputSize {
+            fit: FitMode::ShortEdge,
+            short_edge: 1000.0,
+            ..OutputSize::default()
+        };
+        assert_eq!(size(&with(short)), "1000 px short edge");
+        let inches = OutputSize {
+            fit: FitMode::LongEdge,
+            unit: LengthUnit::In,
+            long_edge: 10.5,
+            ppi: 240,
+            ..OutputSize::default()
+        };
+        assert_eq!(size(&with(inches)), "10.5 in long edge, 240 PPI");
+        assert_eq!(size_note(&with(inches)).as_deref(), Some("= 2520 px"));
+        let mp = OutputSize {
+            fit: FitMode::Megapixels,
+            ..OutputSize::default()
+        };
+        assert_eq!(size(&with(mp)), "12 MP");
+        assert_eq!(size_note(&with(mp)), None);
+        let pct = OutputSize {
+            fit: FitMode::Percentage,
+            ..OutputSize::default()
+        };
+        assert_eq!(size(&with(pct)), "50 %");
+        assert_eq!(size_note(&with(OutputSize::default())), None);
+    }
+
+    #[test]
+    fn the_file_line_names_a_size_limit() {
+        let mut o = ExportOptions::default();
+        assert_eq!(file(&o), format!("JPEG · {}", o.quality));
+        o.limit.on = true;
+        assert_eq!(file(&o), "JPEG · ≤ 500 KB");
+        o.format = export::ExportFormat::Png8;
+        assert_eq!(file(&o), "PNG 8-bit", "no limit for a lossless format");
     }
 
     #[test]
