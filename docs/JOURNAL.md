@@ -166,6 +166,42 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-10-12 — M10.11b: grain (branch `m10.11b-grain`)
+
+**Input:** Phase 10's M10.11b: *"A Grain slider"*. The author's answers: **Effects, with Vignette**
+(Lightroom's arrangement) and Lightroom's three controls; Amount 100's strength is his to tune on crops.
+Spec `docs/superpowers/specs/2026-10-11-m10.11b-grain-design.md`, plan beside it.
+
+**Built:**
+- **`edit_model::Grain`** `{ amount, size, roughness }`, defaults 0/25/50, in the vignette's group — the
+  field keeps its name, so every stored selection reads as before; `EDIT_GROUP_NAMES[5]` reads **Effects**
+  again (it was renamed *Vignette* when it held one thing). Not serialized while default (M10.11a's lesson).
+- **`pipeline::stages::grain`** — the last scene-linear stage, after sharpening: `out = p · 2^(A·n·w(L))`,
+  brightness only, `w = 4L(1−L)` on the encoded luminance (strongest in the midtones, none past white);
+  value noise on an integer-hashed lattice; the cell `1 + 4·size/100` **full-resolution** pixels times the
+  render scale, so a quarter-scale pixel `x` reads exactly what pixel `4x` does; below one pixel per cell the
+  amplitude falls by the cell (an average's spread) instead of aliasing; Roughness mixes a half-cell octave.
+  `MAX_EV` 0.5 to start. A golden.
+- **`gpu-pipeline::grain`** — the same lattice in `u32`, its multipliers, seeds and offset **substituted**
+  from `pipeline`; in `REPLACEABLE` with the region, so the tail stays one chain.
+- **The panel** — the section shown as Effects: *Post-crop vignette*, then *Grain* (Amount, Size,
+  Roughness, `slider_help::Scope::Grain`), its body in `develop/panel/effects.rs`.
+- **`lr-preset`** — `GrainAmount`/`GrainSize`/`GrainFrequency` map one to one; grain is no longer *left out*.
+
+**Sabotages — nine, every one red:** the tone weight removed (5), the scale ignored (2), the region offset
+ignored (2), grain before sharpening (1), the GPU hash differing (3), the GPU row removed (2), the GPU row
+without the region (1), a default serialized (2 — the preview fingerprint among them), the preset mapping
+dropped (1). ⚠ Two first runs reported *skipped*: the GPU row's anchor no longer matched after `cargo fmt`
+re-wrapped it — re-run by hand, both red.
+
+**Tuning:** `examples/probe_grain.rs` renders a 1:1 crop at Amount 0/25/50/100; on DSCF6291's foliage 25 is
+barely there, 50 subtle, 100 clearly grainy — the author's to judge. ⚠ The first crop was a bright sign,
+where the tone weight rightly leaves almost nothing; pick a midtone area to judge.
+
+**Final review: my own pass** (no subagent unasked). ⚠ A first diagnosis was wrong and retracted: the ~2e-7
+weight at a highlight past white is `linear_to_srgb(1.0)` landing a hair **under** 1, not over — the clamp
+added for "over" did nothing and was removed with its comment.
+
 ### 2026-10-11 — M10.11a: film negative inversion (branch `m10.11a-film-negative`, merged 2026-10-11)
 
 **Input:** Phase 10's M10.11a: *"Film negative inversion — invert, white balance from the film base, a
