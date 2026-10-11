@@ -29,6 +29,9 @@ use edit_model::Edits;
 #[derive(Debug, Clone, PartialEq)]
 pub enum PrefixStepKey {
     LensCorrection(edit_model::LensCorrection, Resampler),
+    /// M10.11a — the film negative's inversion: its whole setting, so a pick, a re-measure or a
+    /// contrast change each miss the cache.
+    Negative(edit_model::Negative),
     SpotRemoval(Vec<edit_model::Spot>),
     /// M9.11 — the whole eye list, so any change to any eye misses the cache (`SpotRemoval`'s rule).
     RedEye(Vec<edit_model::Eye>),
@@ -123,6 +126,18 @@ pub fn build_prefix_steps(
                 )),
             });
         }
+    }
+
+    // ⚠⚠ M10.11a: a film negative becomes a positive here — right AFTER lens correction, whose
+    // vignetting multiplies the negative and must be divided out first, and BEFORE everything that
+    // reads tone: noise reduction then sees the positive's grain, and dehaze's airlight replay (which
+    // includes this step) measures the positive's haze. A per-pixel step on the CPU; it has no GPU
+    // twin, and in the prefix it is computed once and cached, so no tail drag re-runs it.
+    if edits.negative.is_active() {
+        steps.push(PrefixStep {
+            key: PrefixStepKey::Negative(edits.negative),
+            stage: Box::new(crate::stages::negative::NegativeStage::new(&edits.negative)),
+        });
     }
 
     // Noise reduction before every tonal stage: denoising the source is far easier than
@@ -625,10 +640,10 @@ mod tests {
         b.masks[0].adjustments.noise_reduction.luminance = 95.0;
         let steps_a = build_prefix_steps(&a, RenderScale::FULL, None, Resampler::default(), None);
         let steps_b = build_prefix_steps(&b, RenderScale::FULL, None, Resampler::default(), None);
-        assert_eq!(steps_a.len(), 7);
+        assert_eq!(steps_a.len(), 8, "the negative (M10.11a) first");
 
         // Same up to and including the geometry and the defringe (M9.6)...
-        for n in 0..=6 {
+        for n in 0..=7 {
             assert_eq!(
                 PrefixKey::upto(&steps_a, n, RenderScale::FULL),
                 PrefixKey::upto(&steps_b, n, RenderScale::FULL),
@@ -637,8 +652,8 @@ mod tests {
         }
         // ...and different once the masked capture correction has run.
         assert_ne!(
-            PrefixKey::upto(&steps_a, 7, RenderScale::FULL),
-            PrefixKey::upto(&steps_b, 7, RenderScale::FULL)
+            PrefixKey::upto(&steps_a, 8, RenderScale::FULL),
+            PrefixKey::upto(&steps_b, 8, RenderScale::FULL)
         );
 
         // The full key is the deepest truncation, so `new` and `upto` cannot disagree.
@@ -671,6 +686,8 @@ mod tests {
         assert_eq!(
             prefix.stage_names(),
             vec![
+                // ⚠ M10.11a: right after lens, which this fixture has no profile for.
+                "negative",
                 "noise_reduction",
                 "dehaze",
                 "spot_removal",
@@ -840,16 +857,27 @@ mod tests {
         let base_keys = keys(&base);
         assert_eq!(
             base_keys.len(),
-            7,
-            "all seven prefix steps should be active — NR, dehaze, spots, red eye (M9.11), the geometry (with the \
+            8,
+            "all eight prefix steps should be active — the negative (M10.11a), NR, dehaze, spots, red eye (M9.11), the geometry (with the \
              keystone fused in since M7.3b), the defringe (M9.6) and the fixture's masked capture \
              correction"
         );
 
         let variants = [
+            // ⚠ M10.11a: the negative step moves with its own setting and nothing else.
+            (
+                0,
+                Edits {
+                    negative: edit_model::Negative {
+                        gamma: 0.9,
+                        ..base.negative
+                    },
+                    ..base.clone()
+                },
+            ),
             // ⚠ The keystone moves the GEOMETRY key since M7.3b — it is part of that step.
             (
-                4,
+                5,
                 Edits {
                     perspective: edit_model::Perspective {
                         vertical: 70.0,
@@ -859,7 +887,7 @@ mod tests {
                 },
             ),
             (
-                2,
+                3,
                 Edits {
                     spots: vec![edit_model::Spot {
                         centre: [0.7, 0.7],
@@ -872,7 +900,7 @@ mod tests {
                 },
             ),
             (
-                4,
+                5,
                 Edits {
                     geometry: edit_model::Geometry {
                         angle: 7.0,
@@ -882,7 +910,7 @@ mod tests {
                 },
             ),
             (
-                0,
+                1,
                 Edits {
                     noise_reduction: edit_model::NoiseReduction {
                         luminance: 80.0,
@@ -893,7 +921,7 @@ mod tests {
                 },
             ),
             (
-                1,
+                2,
                 Edits {
                     dehaze: edit_model::Dehaze { amount: 90.0 },
                     ..base.clone()
@@ -902,7 +930,7 @@ mod tests {
             // ⚠ The masked capture correction is a prefix step like any other, and its key must
             // move with its own parameters and nothing else — the same property the five above
             // assert, extended to the step this milestone added.
-            (6, {
+            (7, {
                 let mut e = base.clone();
                 e.masks[0].adjustments.noise_reduction.luminance = 90.0;
                 e
@@ -910,7 +938,7 @@ mod tests {
             // ⚠ M9.6: the defringe step moves with the global settings AND with a mask's local
             // slider — and a mask's local slider moves nothing else, not its capture step.
             (
-                5,
+                6,
                 Edits {
                     defringe: edit_model::Defringe {
                         purple_amount: 70.0,
@@ -919,13 +947,13 @@ mod tests {
                     ..base.clone()
                 },
             ),
-            (5, {
+            (6, {
                 let mut e = base.clone();
                 e.masks[0].adjustments.defringe = -40.0;
                 e
             }),
             // ⚠ M9.11: the red-eye step moves with its own eye list and nothing else.
-            (3, {
+            (4, {
                 let mut e = base.clone();
                 e.eyes[0].darken = 95.0;
                 e
@@ -933,7 +961,7 @@ mod tests {
         ];
         for (moved, e) in variants {
             let ks = keys(&e);
-            for i in 0..7 {
+            for i in 0..8 {
                 if i == moved {
                     assert_ne!(ks[i], base_keys[i], "step {i} should have changed");
                 } else {
@@ -1216,6 +1244,44 @@ mod tests {
 #[cfg(test)]
 mod output_dims_tests {
     use super::*;
+
+    fn with_negative() -> Edits {
+        Edits {
+            negative: edit_model::Negative {
+                on: true,
+                base: [0.85, 0.55, 0.3],
+                ..edit_model::Negative::default()
+            },
+            ..Edits::default()
+        }
+    }
+
+    /// M10.11a: the negative step comes before noise reduction and dehaze — everything after it
+    /// works on the positive — and the airlight replay includes it, so dehaze measures the positive.
+    #[test]
+    fn the_negative_step_comes_before_everything_that_reads_tone() {
+        let mut e = with_negative();
+        e.noise_reduction.luminance = 30.0;
+        e.dehaze.amount = 20.0;
+        let names: Vec<&str> =
+            build_prefix_steps(&e, RenderScale::FULL, None, Resampler::default(), None)
+                .iter()
+                .map(|s| s.stage.name())
+                .collect();
+        assert_eq!(
+            names,
+            ["negative", "noise_reduction", "dehaze"],
+            "{names:?}"
+        );
+        let mut plain = e.clone();
+        plain.negative = edit_model::Negative::default();
+        assert_ne!(
+            crate::prefix_airlight_key(&e, Resampler::default(), None),
+            crate::prefix_airlight_key(&plain, Resampler::default(), None),
+            "the airlight is measured on the positive"
+        );
+        assert_eq!(prefix_output_dims(&with_negative(), 40, 20), (40, 20));
+    }
 
     #[test]
     fn the_predicted_size_follows_the_crop_and_the_turn() {
