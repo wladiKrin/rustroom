@@ -1774,7 +1774,11 @@ mod tests {
             .copied()
             .filter(|n| !shown.contains(n))
             .collect();
-        assert_eq!(missing, vec!["Geometry", "Masks", "Retouch", "Rendering"]);
+        // ⚠ Negative (M10.11a) too: a block above the sections, like Profile — the conversion.
+        assert_eq!(
+            missing,
+            vec!["Geometry", "Masks", "Retouch", "Rendering", "Negative"]
+        );
     }
 
     /// Click the segment labelled `want` and report the channel afterwards.
@@ -1835,7 +1839,13 @@ mod tests {
         // reset derives its group set from `SECTIONS`, so a group with no matching section is
         // never touched — which is precisely what stops this button flattening the photograph
         // back to a colorimetric render. See `edit_model::RENDERING_GROUP`.
-        assert_eq!(untouched, vec!["Geometry", "Masks", "Retouch", "Rendering"]);
+        //
+        // ⚠ Negative (M10.11a) for Rendering's reason: no section, so a reset of a scanned negative
+        // starts over from the positive instead of handing back the negative.
+        assert_eq!(
+            untouched,
+            vec!["Geometry", "Masks", "Retouch", "Rendering", "Negative"]
+        );
     }
 
     #[test]

@@ -184,6 +184,14 @@ pub(crate) fn all_edits() -> Edits {
             space: edit_model::LutSpace::SrgbDisplay,
             strength: 65.0,
         },
+        negative: edit_model::Negative {
+            on: true,
+            base: [0.7, 0.45, 0.25],
+            gamma: 0.7,
+            low: [0.05, 0.06, 0.07],
+            high: [1.8, 1.9, 2.1],
+            mono: false,
+        },
     }
 }
 

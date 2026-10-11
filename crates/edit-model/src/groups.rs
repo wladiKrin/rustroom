@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Group names in [`EditGroups`] field order — the one source of truth shared by the merge
 /// logic, the checkbox UI and the tests. Mirrors [`HSL_BAND_NAMES`].
-pub const EDIT_GROUP_NAMES: [&str; 10] = [
+pub const EDIT_GROUP_NAMES: [&str; 11] = [
     "White Balance",
     "Tone",
     "Color",
@@ -15,6 +15,7 @@ pub const EDIT_GROUP_NAMES: [&str; 10] = [
     "Masks",
     "Retouch",
     "Rendering",
+    "Negative",
 ];
 
 /// The `Geometry` group's index into [`EDIT_GROUP_NAMES`].
@@ -38,6 +39,13 @@ pub const RETOUCH_GROUP: usize = 8;
 /// which is what stops that button flattening the photograph back to a colorimetric render. The
 /// control lives in the panel's Profile block above the sections, whose header offers no reset.
 pub const RENDERING_GROUP: usize = 9;
+
+/// The `Negative` group's index into [`EDIT_GROUP_NAMES`] (M10.11a) — the film negative's inversion.
+///
+/// ⚠ **Appended**, so every index before it stays. ⚠ Not a panel section either: the Negative block
+/// sits above them, like Profile, so Reset adjustments leaves the inversion alone — resetting a
+/// scanned negative should start over from the positive, not hand back the negative.
+pub const NEGATIVE_GROUP: usize = 10;
 
 /// Which groups of settings a paste or a preset carries.
 ///
@@ -90,6 +98,12 @@ pub struct EditGroups {
     /// so it should follow a paste, a preset and a sync, where those three are placements tied
     /// to one photograph's content.
     pub rendering: bool,
+    /// The film negative's inversion (M10.11a).
+    ///
+    /// ⚠⚠ **Off by default, like `geometry`** — the base and the densities are measured from one
+    /// roll's film, and a paste of a digital photo's settings or a colour preset must never switch a
+    /// negative's inversion off. Tick it to Sync a balanced frame across its roll.
+    pub negative: bool,
 }
 
 impl Default for EditGroups {
@@ -105,6 +119,7 @@ impl Default for EditGroups {
             masks: false,
             retouch: false,
             rendering: true,
+            negative: false,
         }
     }
 }
@@ -121,6 +136,7 @@ impl EditGroups {
         masks: true,
         retouch: true,
         rendering: true,
+        negative: true,
     };
 
     pub const NONE: Self = Self {
@@ -134,6 +150,7 @@ impl EditGroups {
         masks: false,
         retouch: false,
         rendering: false,
+        negative: false,
     };
 
     /// Only group `i`, indexed as in [`EDIT_GROUP_NAMES`].
@@ -162,6 +179,7 @@ impl EditGroups {
             7 => self.masks,
             8 => self.retouch,
             9 => self.rendering,
+            10 => self.negative,
             _ => panic!("edit group index {i} out of range"),
         }
     }
@@ -182,6 +200,7 @@ impl EditGroups {
             7 => &mut self.masks,
             8 => &mut self.retouch,
             9 => &mut self.rendering,
+            10 => &mut self.negative,
             _ => panic!("edit group index {i} out of range"),
         }
     }
@@ -200,6 +219,18 @@ mod tests {
         assert_eq!(EDIT_GROUP_NAMES[GEOMETRY_GROUP], "Geometry");
         assert_eq!(EDIT_GROUP_NAMES[MASKS_GROUP], "Masks");
         assert_eq!(EDIT_GROUP_NAMES[RETOUCH_GROUP], "Retouch");
+        assert_eq!(EDIT_GROUP_NAMES[NEGATIVE_GROUP], "Negative");
+    }
+
+    /// M10.11a: the Negative group is off by default, like Geometry, and an older selection that
+    /// never heard of it reads it off.
+    #[test]
+    fn the_negative_group_is_off_unless_asked() {
+        assert!(!EditGroups::default().negative);
+        assert!(EditGroups::ALL.get(NEGATIVE_GROUP) && !EditGroups::NONE.get(NEGATIVE_GROUP));
+        assert!(EditGroups::only(NEGATIVE_GROUP).get(NEGATIVE_GROUP));
+        let old: EditGroups = serde_json::from_str(r#"{"tone":true}"#).unwrap();
+        assert!(!old.negative);
     }
 
     #[test]
