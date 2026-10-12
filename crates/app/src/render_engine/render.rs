@@ -1661,6 +1661,56 @@ mod tests {
     }
 
     /// The RGBA sub-rect of a frame, for comparing a region render against a whole one.
+    /// ⚠⚠ **The picture half of the eviction fix (M10.14b, owed since 2026-09-14).** The test above
+    /// proves a drag *resumes* when the budget holds one checkpoint — it counts stages, not pixels. A
+    /// resume is only an optimisation: its frame must be EXACTLY a cold render of the same edits. A
+    /// checkpoint served past the step that moved would show the old dehaze with that test green.
+    ///
+    /// ⚠ On `hazy_buffer` at its own size, not the 16-pixel buffer: dehaze barely acts there, and the
+    /// fixture check below failed on it — equality would have proved nothing.
+    #[test]
+    fn a_resumed_drag_frame_is_exactly_a_cold_render() {
+        let buf = hazy_buffer();
+        let spec = FrameSpec::fit(200);
+        // 200*160*3*4 = 384,000 bytes a checkpoint, so 400,000 holds exactly one — the native rung's
+        // situation, as in the test above.
+        let mut cache = PrefixCache::with_mid_budget(400_000);
+        let mut bc = BrushCache::default();
+        let base = full_prefix();
+        let (first, cold) = render_with(&buf, &base, spec, &mut cache, &mut bc);
+        assert_eq!(
+            cold.prefix_stages, 3,
+            "fixture check: a cold render runs the whole prefix"
+        );
+
+        let dragged = Edits {
+            dehaze: edit_model::Dehaze { amount: 80.0 },
+            ..base.clone()
+        };
+        let (resumed, ran) = render_with(&buf, &dragged, spec, &mut cache, &mut bc);
+        assert!(
+            ran.prefix_stages < 3,
+            "fixture check: the drag resumed rather than restarted, ran {}",
+            ran.prefix_stages
+        );
+
+        let (fresh, _) = render_with(
+            &buf,
+            &dragged,
+            spec,
+            &mut PrefixCache::with_mid_budget(400_000),
+            &mut BrushCache::default(),
+        );
+        assert_ne!(
+            first.rgba, fresh.rgba,
+            "fixture check: the drag changes the picture, or the equality below proves nothing"
+        );
+        assert!(
+            resumed.rgba == fresh.rgba,
+            "the resumed drag frame differs from a cold render of the same edits"
+        );
+    }
+
     fn crop_rgba(f: &RenderedFrame, x: usize, y: usize, w: usize, h: usize) -> Vec<u8> {
         let mut out = Vec::with_capacity(w * h * 4);
         for row in y..y + h {
