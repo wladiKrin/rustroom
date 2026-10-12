@@ -646,6 +646,12 @@ fn gpu_mask(
     spec: RenderSpec,
     ctx: &Arc<GpuContext>,
 ) -> Option<Box<dyn GpuStage>> {
+    // ⚠⚠ M10.12b: a mask fed its coverage from the reference photo declines — a twin would select
+    // from its own base, which its own offsets have moved (the chase b2 removes). Its CPU stage
+    // blends by the slot's plane instead.
+    if s.takes_reference_coverage() {
+        return None;
+    }
     let (masked, geometry, mask_region) = s.mask_description()?;
     // ⚠ The mask's own adjustments projected onto an `Edits`, which is what a `REPLACEABLE`
     // builder reads. `sub_edits`' exhaustive destructure is what stops a field being forgotten.
@@ -3152,6 +3158,52 @@ mod tests {
         assert!(
             d.worst_levels < 1.0,
             "GPU differs by {} levels",
+            d.worst_levels
+        );
+    }
+
+    /// ⚠⚠ M10.12b2 on the GPU: a range mask with a scene offset selects on the reference photo, so
+    /// the offsets stage (which runs it) and the mask's look stage (fed by its slot) both stay on the
+    /// CPU — a `GpuMaskStage` would select from its own base, the chase b2 removes — and the picture
+    /// equals the CPU's.
+    #[test]
+    fn a_range_mask_with_an_offset_renders_on_the_cpu_and_agrees() {
+        let Some(ctx) = ctx() else { return };
+        let mut e = with_hsl();
+        // ⚠ A narrow band and a big lift, so the chase is large: a wide default band selected the
+        // same pixels from either base, and a twin reading its own base passed the picture check.
+        e.masks = vec![edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Luminance(edit_model::LuminanceRange {
+                low: 0.0,
+                high: 40.0,
+                feather: 5.0,
+                invert: false,
+            }),
+            adjustments: edit_model::LocalAdjustments {
+                exposure: 2.0,
+                saturation: 80.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        }];
+        let cpu = tail_of(&e).run(scene_ramp());
+        let p = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            TailRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        );
+        let names = p.stage_names();
+        assert!(
+            names.contains(&"scene_offsets") && names.contains(&"mask"),
+            "both stay on the CPU: {names:?}"
+        );
+        let d = crate::compare(&cpu, &p.run(scene_ramp()));
+        assert!(
+            d.worst_levels < 1.0,
+            "the GPU path differs by {} levels",
             d.worst_levels
         );
     }
