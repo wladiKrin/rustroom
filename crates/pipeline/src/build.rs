@@ -131,6 +131,22 @@ pub fn build_pipeline_split_tapped(
             .map(|s| s.stage)
             .collect();
 
+    // ⚠⚠ M10.12b: when any active mask carries a scene slider, ONE stage owns the global white
+    // balance, exposure, contrast and tone regions together with every mask's offsets to them —
+    // and those four are passed neutral below, or they would apply twice. With no such mask it is
+    // `None` and the tail is built exactly as before, byte for byte.
+    let offsets =
+        crate::SceneOffsetsStage::new(edits, scale, region, &edits.geometry, brush, baseline);
+    let (wb, ev, con, regions) = if offsets.is_some() {
+        (edit_model::WhiteBalance::default(), 0.0, 0.0, [0.0; 4])
+    } else {
+        (
+            edits.white_balance,
+            edits.exposure,
+            edits.contrast,
+            [edits.highlights, edits.shadows, edits.whites, edits.blacks],
+        )
+    };
     // ⚠ `saturation`/`vibrance` are passed as **zero** here, deliberately. In the global chain
     // saturation runs *after* the tone curve and local contrast, not with the basic
     // adjustments — so it stays where it is, further down this tail. Passing the real values
@@ -149,16 +165,16 @@ pub fn build_pipeline_split_tapped(
             dehaze: edit_model::Dehaze::default(),
             // ⚠ Likewise a prefix step (M9.6), after geometry — never a tail stage.
             defringe: 0.0,
-            white_balance: edits.white_balance,
+            white_balance: wb,
             // ⚠ A mask's relative shift (M10.12b); the global white balance above is absolute.
             temp: 0.0,
             tint: 0.0,
-            exposure: edits.exposure,
-            contrast: edits.contrast,
-            highlights: edits.highlights,
-            shadows: edits.shadows,
-            whites: edits.whites,
-            blacks: edits.blacks,
+            exposure: ev,
+            contrast: con,
+            highlights: regions[0],
+            shadows: regions[1],
+            whites: regions[2],
+            blacks: regions[3],
             saturation: 0.0,
             vibrance: 0.0,
             // ⚠⚠ Neutral for the identical reason `saturation` above is zero: **this tail places
@@ -180,6 +196,9 @@ pub fn build_pipeline_split_tapped(
         baseline,
         scale,
     );
+    if let Some(o) = offsets {
+        tail.insert(0, Box::new(o));
+    }
     // ⚠⚠ **All four curves, not just the composite.** An `is_empty` guard naming one field of four
     // would render a channel-only edit unchanged, with nothing failing — the regression this feature
     // invites, and it has its own test.
@@ -239,9 +258,19 @@ pub fn build_pipeline_split_tapped(
     for (i, m) in edits.masks.iter().enumerate() {
         // ⚠ `disabled` is the panel's off switch (2026-09-20): the mask keeps its slot in the
         // coverage tables and its place in the list, and inserts no stage.
-        if m.adjustments.is_active() && !m.disabled {
+        // ⚠ M10.12b: only for its LOOK sliders — its scene sliders are offsets in
+        // `SceneOffsetsStage`, so a mask carrying nothing else inserts no stage here.
+        //
+        // ⚠⚠ The stage is HANDED the look-only mask rather than stripping it itself: `MaskStage`
+        // stays the general "adjustments under a mask" stage (its own tests, the GPU's parity
+        // tests), and the GPU twin builds from the same look-only description it was built from.
+        let look = edit_model::MaskedAdjustment {
+            adjustments: crate::look_only(&m.adjustments),
+            ..m.clone()
+        };
+        if look.adjustments.is_active() && !m.disabled {
             tail.push(Box::new(MaskStage::new_in_region(
-                m,
+                &look,
                 scale,
                 region,
                 &edits.geometry,
@@ -618,10 +647,13 @@ mod tests {
     #[test]
     fn a_switched_off_inverted_mask_changes_nothing() {
         let mut edits = Edits::default();
+        // ⚠ A scene slider AND a look slider (M10.12b): enabled, the mask inserts both stages —
+        // `scene_offsets` for its exposure, `mask` for its saturation — and switched off, neither.
         edits.masks.push(edit_model::MaskedAdjustment {
             invert: true,
             adjustments: edit_model::LocalAdjustments {
                 exposure: 1.0,
+                saturation: 30.0,
                 ..Default::default()
             },
             ..Default::default()
@@ -629,9 +661,10 @@ mod tests {
         let names = |e: &Edits| {
             build_pipeline(e, RenderScale::FULL, TailRendering::colorimetric()).stage_names()
         };
+        let on = names(&edits);
         assert!(
-            names(&edits).contains(&"mask"),
-            "fixture: an inverted mask inserts a stage"
+            on.contains(&"mask") && on.contains(&"scene_offsets"),
+            "fixture: an inverted mask inserts its stages: {on:?}"
         );
         edits.masks[0].disabled = true;
         assert_eq!(
@@ -1252,8 +1285,10 @@ mod tests {
                     invert: false,
                 }),
                 refine: Vec::new(),
+                // ⚠ A LOOK slider: since M10.12b a mask's exposure is an offset at the head of the
+                // tail, and what this test orders is the mask's own stage.
                 adjustments: edit_model::LocalAdjustments {
-                    exposure: 0.75,
+                    saturation: 30.0,
                     ..Default::default()
                 },
                 disabled: false,
@@ -1291,5 +1326,299 @@ mod tests {
             build_pipeline(&edits, RenderScale::FULL, TailRendering::colorimetric()).len(),
             1
         );
+    }
+}
+
+/// M10.12b — a mask's scene sliders as offsets, through the whole pipeline.
+#[cfg(test)]
+mod scene_offset_tail_tests {
+    use crate::{build_pipeline, RenderScale, TailRendering};
+    use core_image::ImageBuf;
+    use edit_model::{
+        Edits, LinearGradient, LocalAdjustments, Mask, MaskedAdjustment, RadialGradient,
+    };
+
+    fn scene(w: usize, h: usize) -> ImageBuf {
+        let mut img = ImageBuf::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let t = x as f32 / (w - 1) as f32;
+                let s = y as f32 / (h - 1) as f32;
+                img.set_pixel(x, y, [t * 1.2, 0.1 + 0.6 * s, 0.05 + 0.5 * (1.0 - t) * s]);
+            }
+        }
+        img
+    }
+
+    fn render(e: &Edits) -> ImageBuf {
+        build_pipeline(e, RenderScale::FULL, TailRendering::colorimetric()).run(scene(48, 24))
+    }
+
+    fn names(e: &Edits) -> Vec<&'static str> {
+        build_pipeline(e, RenderScale::FULL, TailRendering::colorimetric()).stage_names()
+    }
+
+    /// The probe's global edit (`examples/probe_mask_offsets.rs`).
+    fn probe_edit() -> Edits {
+        Edits {
+            contrast: 25.0,
+            highlights: -50.0,
+            shadows: 30.0,
+            saturation: 15.0,
+            tone_curve: edit_model::ToneCurve {
+                points: vec![[0.0, 0.0], [0.25, 0.2], [0.75, 0.82], [1.0, 1.0]],
+            },
+            ..Default::default()
+        }
+    }
+
+    fn everything(a: LocalAdjustments) -> MaskedAdjustment {
+        MaskedAdjustment {
+            mask: Mask::Linear(LinearGradient {
+                from: [-1.0, 0.0],
+                to: [-0.5, 0.0],
+                invert: false,
+            }),
+            adjustments: a,
+            ..Default::default()
+        }
+    }
+
+    fn close(a: &ImageBuf, b: &ImageBuf, tol: f32) -> f32 {
+        let worst = a
+            .data()
+            .iter()
+            .zip(b.data())
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst <= tol, "worst sample differs by {worst}");
+        worst
+    }
+
+    /// ⚠⚠ **The probe as a test.** A mask covering everything with each scene slider renders like the
+    /// global slider moved by the same amount — under the probe's global edit, and with none.
+    #[test]
+    fn a_full_mask_offset_is_the_global_slider() {
+        let baseline = color::wb::Illuminant::default();
+        for base in [probe_edit(), Edits::default()] {
+            type Case = (
+                &'static str,
+                LocalAdjustments,
+                fn(&mut Edits, color::wb::Illuminant),
+            );
+            let cases: Vec<Case> = vec![
+                (
+                    "exposure",
+                    LocalAdjustments {
+                        exposure: 1.0,
+                        ..Default::default()
+                    },
+                    |e, _| e.exposure += 1.0,
+                ),
+                (
+                    "contrast",
+                    LocalAdjustments {
+                        contrast: 30.0,
+                        ..Default::default()
+                    },
+                    |e, _| e.contrast += 30.0,
+                ),
+                (
+                    "highlights",
+                    LocalAdjustments {
+                        highlights: -40.0,
+                        ..Default::default()
+                    },
+                    |e, _| e.highlights += -40.0,
+                ),
+                (
+                    "shadows",
+                    LocalAdjustments {
+                        shadows: 35.0,
+                        ..Default::default()
+                    },
+                    |e, _| e.shadows += 35.0,
+                ),
+                (
+                    "whites",
+                    LocalAdjustments {
+                        whites: 20.0,
+                        ..Default::default()
+                    },
+                    |e, _| e.whites += 20.0,
+                ),
+                (
+                    "blacks",
+                    LocalAdjustments {
+                        blacks: -25.0,
+                        ..Default::default()
+                    },
+                    |e, _| e.blacks += -25.0,
+                ),
+                (
+                    "temp",
+                    LocalAdjustments {
+                        temp: 40.0,
+                        ..Default::default()
+                    },
+                    |e, b| {
+                        e.white_balance =
+                            crate::shifted_white_balance(&e.white_balance, b, 40.0, 0.0)
+                    },
+                ),
+                (
+                    "tint",
+                    LocalAdjustments {
+                        tint: 20.0,
+                        ..Default::default()
+                    },
+                    |e, b| {
+                        e.white_balance =
+                            crate::shifted_white_balance(&e.white_balance, b, 0.0, 20.0)
+                    },
+                ),
+            ];
+            for (name, offset, moved) in cases {
+                let mut masked = base.clone();
+                masked.masks.push(everything(offset));
+                let mut global = base.clone();
+                moved(&mut global, baseline);
+                let (m, g) = (render(&masked), render(&global));
+                assert!(
+                    m.data()
+                        .iter()
+                        .zip(render(&base).data())
+                        .any(|(a, b)| (a - b).abs() > 1e-3),
+                    "fixture: {name} must move the picture"
+                );
+                close(&m, &g, 1e-5);
+            }
+        }
+    }
+
+    #[test]
+    fn where_no_mask_covers_the_render_is_unchanged() {
+        let mut e = probe_edit();
+        e.masks.push(MaskedAdjustment {
+            mask: Mask::Radial(RadialGradient {
+                center: [0.15, 0.5],
+                radius: [0.1, 0.2],
+                feather: 0.0,
+                invert: false,
+            }),
+            adjustments: LocalAdjustments {
+                exposure: 1.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let (with, without) = (render(&e), render(&probe_edit()));
+        assert!(
+            names(&e).contains(&"scene_offsets"),
+            "fixture: the offset stage is in"
+        );
+        for y in 0..24 {
+            for x in 24..48 {
+                assert_eq!(with.pixel(x, y), without.pixel(x, y), "({x},{y})");
+            }
+        }
+        assert_ne!(
+            with.pixel(7, 12),
+            without.pixel(7, 12),
+            "fixture: inside it moves"
+        );
+    }
+
+    #[test]
+    fn no_scene_offset_keeps_the_four_stages() {
+        let mut e = probe_edit();
+        e.exposure = 0.5;
+        let n = names(&e);
+        assert!(
+            n.contains(&"exposure") && !n.contains(&"scene_offsets"),
+            "{n:?}"
+        );
+    }
+
+    #[test]
+    fn look_sliders_alone_keep_the_four_stages() {
+        let mut e = probe_edit();
+        e.exposure = 0.5;
+        e.masks.push(everything(LocalAdjustments {
+            saturation: 40.0,
+            ..Default::default()
+        }));
+        let n = names(&e);
+        assert!(n.contains(&"exposure") && n.contains(&"mask"), "{n:?}");
+        assert!(!n.contains(&"scene_offsets"), "{n:?}");
+    }
+
+    /// Review Focus 1.
+    #[test]
+    fn a_switched_off_mask_adds_no_offset() {
+        let mut e = probe_edit();
+        let mut m = everything(LocalAdjustments {
+            exposure: 1.0,
+            ..Default::default()
+        });
+        m.disabled = true;
+        e.masks.push(m);
+        assert!(!names(&e).contains(&"scene_offsets"));
+        assert_eq!(render(&e), render(&probe_edit()));
+    }
+
+    /// Review Focus 5: a mask's look sliders still apply beside its offsets — and its offsets no
+    /// longer run again inside its `MaskStage`.
+    #[test]
+    fn a_mask_keeps_its_look_sliders() {
+        let offset = everything(LocalAdjustments {
+            exposure: 1.0,
+            ..Default::default()
+        });
+        let both = everything(LocalAdjustments {
+            exposure: 1.0,
+            saturation: 50.0,
+            ..Default::default()
+        });
+        let e1 = Edits {
+            masks: vec![offset],
+            ..probe_edit()
+        };
+        let e2 = Edits {
+            masks: vec![both],
+            ..probe_edit()
+        };
+        let n = names(&e2);
+        assert!(n.contains(&"scene_offsets") && n.contains(&"mask"), "{n:?}");
+        assert_ne!(render(&e1), render(&e2), "saturation must still apply");
+        // The exposure applies ONCE: the look-only mask's saturation, on top of the global +1 EV.
+        let mut global = probe_edit();
+        global.exposure += 1.0;
+        global.masks.push(everything(LocalAdjustments {
+            saturation: 50.0,
+            ..Default::default()
+        }));
+        close(&render(&e2), &render(&global), 1e-5);
+    }
+
+    /// Review Focus 4: under an as-shot global, a legacy mask Kelvin renders as that white balance.
+    #[test]
+    fn a_legacy_kelvin_renders_as_its_shift() {
+        let wb = edit_model::WhiteBalance {
+            kelvin: Some(6500.0),
+            tint: 5.0,
+        };
+        let legacy = Edits {
+            masks: vec![everything(LocalAdjustments {
+                white_balance: wb,
+                ..Default::default()
+            })],
+            ..Default::default()
+        };
+        let global = Edits {
+            white_balance: wb,
+            ..Default::default()
+        };
+        close(&render(&legacy), &render(&global), 1e-5);
     }
 }

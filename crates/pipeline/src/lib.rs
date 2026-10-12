@@ -85,6 +85,7 @@ pub use stages::local_contrast::{
 };
 pub use stages::mask::MaskStage;
 pub use stages::noise_reduction::NoiseReductionStage;
+pub use stages::scene_offsets::SceneOffsetsStage;
 // ⚠⚠ Re-exported so `gpu-pipeline` SUBSTITUTES these into WGSL rather than transcribing them.
 // A substituted constant cannot disagree; a transcribed one is merely checked for agreeing —
 // and `color`'s own doc records six copies of a Rec.709 luma triple that all went wrong on one
@@ -117,7 +118,8 @@ mod tail_rendering;
 mod test_fixtures;
 pub(crate) use adjustments::{adjustment_stages, capture_stages};
 pub use adjustments::{
-    global_wb_gains, mask_wb_shift, shifted_white_balance, white_balance_gains, MIRED_PER_STEP,
+    global_wb_gains, look_only, mask_wb_shift, shifted_white_balance, white_balance_gains,
+    MIRED_PER_STEP,
 };
 pub use build::{
     build_pipeline, build_pipeline_rendered, build_pipeline_spec, build_pipeline_split,

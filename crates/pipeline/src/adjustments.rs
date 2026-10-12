@@ -24,6 +24,23 @@ pub fn white_balance_gains(
     color::wb::adaptation_gains(declared, baseline, &color::spaces::PROPHOTO_TO_XYZ)
 }
 
+/// `a` without its scene sliders — white balance (legacy and relative), exposure, contrast and the
+/// four tone regions — which are offsets in `SceneOffsetsStage` (M10.12b). What a `MaskStage` runs.
+pub fn look_only(a: &edit_model::LocalAdjustments) -> edit_model::LocalAdjustments {
+    edit_model::LocalAdjustments {
+        white_balance: edit_model::WhiteBalance::default(),
+        temp: 0.0,
+        tint: 0.0,
+        exposure: 0.0,
+        contrast: 0.0,
+        highlights: 0.0,
+        shadows: 0.0,
+        whites: 0.0,
+        blacks: 0.0,
+        ..a.clone()
+    }
+}
+
 /// How far one step of a mask's Temp moves the photo's white point, in mireds (M10.12b).
 ///
 /// ⚠ A first value — ±100 mired is about ±2,500 K around daylight — for the author to tune on

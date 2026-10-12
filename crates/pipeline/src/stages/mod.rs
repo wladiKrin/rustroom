@@ -18,6 +18,7 @@ pub mod noise_reduction;
 pub mod output_transform;
 pub mod red_eye;
 pub mod saturation;
+pub mod scene_offsets;
 pub mod sharpening;
 pub mod spot_removal;
 pub mod tone_curve;
