@@ -239,6 +239,16 @@ impl PipelineStage for SceneOffsetsStage {
     }
 }
 
+/// Whether mask `m` selects on the **reference photo** — the globally edited photo, before any mask
+/// (M10.12b): it is on, it reads the photograph, and it carries a scene offset. Its offsets and its
+/// look sliders then share that one coverage, so nothing chases its own effect.
+///
+/// ⚠⚠ ONE definition for the stage that builds the reference and the brush cache that keys a gating
+/// brush's map on it — two predicates would let the map be filed under one base and read under another.
+pub fn reads_reference(m: &MaskedAdjustment) -> bool {
+    !m.disabled && m.adjustments.has_scene_offsets() && m.reads_pixels()
+}
+
 /// `m`'s shape — base, refinements, whole-mask Invert — with no adjustments: what its coverage is.
 pub(crate) fn shape_only(m: &MaskedAdjustment) -> MaskedAdjustment {
     MaskedAdjustment {

@@ -314,6 +314,25 @@ pub struct MaskedAdjustment {
     pub invert: bool,
 }
 
+impl MaskedAdjustment {
+    /// Whether any component — the base or a refinement — reads the photograph rather than the
+    /// position: a luminance or colour range, or a brush that gates on the image
+    /// ([`Brush::needs_base`]). M10.12b: such a mask carrying a scene offset selects on the
+    /// globally edited photo (`pipeline::reads_reference`).
+    ///
+    /// ⚠ Exhaustive on purpose: a new `Mask` variant is a compile error here, never a silent
+    /// "reads nothing".
+    pub fn reads_pixels(&self) -> bool {
+        std::iter::once(&self.mask)
+            .chain(self.refine.iter().map(|r| &r.mask))
+            .any(|k| match k {
+                Mask::Brush(b) => b.needs_base(),
+                Mask::Luminance(_) | Mask::Colour(_) => true,
+                Mask::Linear(_) | Mask::Radial(_) | Mask::Ai(_) => false,
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -662,6 +681,46 @@ mod disabled_mask_tests {
 #[cfg(test)]
 mod scene_offset_field_tests {
     use super::*;
+    use crate::{BrushStroke, MaskOp};
+
+    /// M10.12b: a mask reads the photograph through ANY component — base or refinement — that is a
+    /// range or a gating brush; position-only shapes and AI maps do not.
+    #[test]
+    fn a_mask_reads_pixels_through_any_range_or_gating_component() {
+        let lin = Mask::Linear(LinearGradient::default());
+        let m = |mask: Mask, refine: Vec<Refinement>| MaskedAdjustment {
+            mask,
+            refine,
+            ..Default::default()
+        };
+        assert!(!m(lin.clone(), vec![]).reads_pixels());
+        assert!(!m(Mask::Radial(Default::default()), vec![]).reads_pixels());
+        assert!(!m(Mask::Ai(Default::default()), vec![]).reads_pixels());
+        assert!(m(Mask::Luminance(LuminanceRange::default()), vec![]).reads_pixels());
+        assert!(m(Mask::Colour(ColourRange::default()), vec![]).reads_pixels());
+        let range = Refinement {
+            op: MaskOp::Intersect,
+            mask: Mask::Luminance(LuminanceRange::default()),
+        };
+        assert!(
+            m(lin.clone(), vec![range]).reads_pixels(),
+            "a refinement counts"
+        );
+        let gating = Brush {
+            strokes: vec![BrushStroke {
+                auto_mask: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(gating.needs_base(), "fixture check");
+        assert!(m(Mask::Brush(gating), vec![]).reads_pixels());
+        let plain = Brush {
+            strokes: vec![BrushStroke::default()],
+            ..Default::default()
+        };
+        assert!(!m(Mask::Brush(plain), vec![]).reads_pixels());
+    }
 
     #[test]
     fn temp_and_tint_round_trip_and_a_default_writes_neither() {

@@ -41,6 +41,24 @@ pub fn look_only(a: &edit_model::LocalAdjustments) -> edit_model::LocalAdjustmen
     }
 }
 
+/// `a`'s scene sliders alone — the nine fields [`look_only`] clears, and nothing else: what reaches
+/// ANOTHER mask's base through `SceneOffsetsStage` (M10.12b), so what the brush cache keys a later
+/// mask's base on.
+pub fn scene_only(a: &edit_model::LocalAdjustments) -> edit_model::LocalAdjustments {
+    edit_model::LocalAdjustments {
+        white_balance: a.white_balance,
+        temp: a.temp,
+        tint: a.tint,
+        exposure: a.exposure,
+        contrast: a.contrast,
+        highlights: a.highlights,
+        shadows: a.shadows,
+        whites: a.whites,
+        blacks: a.blacks,
+        ..Default::default()
+    }
+}
+
 /// How far one step of a mask's Temp moves the photo's white point, in mireds (M10.12b).
 ///
 /// ⚠ A first value — ±100 mired is about ±2,500 K around daylight — for the author to tune on
@@ -566,6 +584,61 @@ mod tests {
 mod scene_arithmetic_tests {
     use super::*;
     use crate::stages::{contrast, exposure, tone_regions};
+
+    /// The two halves of a mask (M10.12b): `scene_only` is what reaches another mask's base through
+    /// `SceneOffsetsStage`, `look_only` what its own stage runs — disjoint, and together the whole.
+    #[test]
+    fn scene_only_and_look_only_split_a_mask_without_overlap() {
+        let a = edit_model::LocalAdjustments {
+            white_balance: edit_model::WhiteBalance {
+                kelvin: Some(4000.0),
+                tint: 2.0,
+            },
+            temp: 5.0,
+            tint: -3.0,
+            exposure: 1.0,
+            contrast: 10.0,
+            highlights: -20.0,
+            shadows: 15.0,
+            whites: 5.0,
+            blacks: -5.0,
+            saturation: 30.0,
+            ..Default::default()
+        };
+        assert!(scene_only(&a).has_scene_offsets());
+        assert!(!look_only(&a).has_scene_offsets());
+        assert_eq!(scene_only(&look_only(&a)), Default::default());
+        assert_eq!(look_only(&scene_only(&a)), Default::default());
+        assert_eq!(scene_only(&a).saturation, 0.0);
+        assert_eq!(scene_only(&a).white_balance, a.white_balance);
+    }
+
+    #[test]
+    fn only_an_enabled_pixel_reading_mask_with_an_offset_reads_the_reference() {
+        let range = |a: edit_model::LocalAdjustments, disabled| edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Luminance(Default::default()),
+            adjustments: a,
+            disabled,
+            ..Default::default()
+        };
+        let ev = edit_model::LocalAdjustments {
+            exposure: 1.0,
+            ..Default::default()
+        };
+        let sat = edit_model::LocalAdjustments {
+            saturation: 30.0,
+            ..Default::default()
+        };
+        assert!(crate::reads_reference(&range(ev.clone(), false)));
+        assert!(!crate::reads_reference(&range(ev.clone(), true)));
+        assert!(!crate::reads_reference(&range(sat, false)));
+        let linear = edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Linear(Default::default()),
+            adjustments: ev,
+            ..Default::default()
+        };
+        assert!(!crate::reads_reference(&linear));
+    }
 
     fn samples() -> Vec<f32> {
         (0..1000)

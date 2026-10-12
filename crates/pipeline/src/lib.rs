@@ -85,7 +85,7 @@ pub use stages::local_contrast::{
 };
 pub use stages::mask::MaskStage;
 pub use stages::noise_reduction::NoiseReductionStage;
-pub use stages::scene_offsets::SceneOffsetsStage;
+pub use stages::scene_offsets::{reads_reference, SceneOffsetsStage};
 /// The tone regions' strengths, for a GPU shader to SUBSTITUTE rather than transcribe (M10.12b).
 pub use stages::tone_regions::{
     END_STRENGTH as TONE_REGIONS_END_STRENGTH, STRENGTH as TONE_REGIONS_STRENGTH,
@@ -122,8 +122,8 @@ mod tail_rendering;
 mod test_fixtures;
 pub(crate) use adjustments::{adjustment_stages, capture_stages};
 pub use adjustments::{
-    global_wb_gains, look_only, mask_wb_shift, shifted_white_balance, white_balance_gains,
-    MIRED_PER_STEP,
+    global_wb_gains, look_only, mask_wb_shift, scene_only, shifted_white_balance,
+    white_balance_gains, MIRED_PER_STEP,
 };
 pub use build::{
     build_pipeline, build_pipeline_rendered, build_pipeline_spec, build_pipeline_split,
