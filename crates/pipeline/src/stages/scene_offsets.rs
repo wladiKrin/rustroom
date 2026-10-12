@@ -40,6 +40,9 @@ struct Contribution {
 pub struct SceneOffsetsStage {
     global: Scene,
     masks: Vec<Contribution>,
+    /// Kept for [`Self::duplicate`], which rebuilds the coverage-only stages.
+    scale: RenderScale,
+    baseline: color::wb::Illuminant,
 }
 
 impl SceneOffsetsStage {
@@ -107,13 +110,75 @@ impl SceneOffsetsStage {
                 regions: [edits.highlights, edits.shadows, edits.whites, edits.blacks],
             },
             masks,
+            scale,
+            baseline,
         })
+    }
+
+    /// The global values: `[gain r, gain g, gain b, ev, contrast, highlights, shadows, whites,
+    /// blacks]` — what a GPU twin uploads.
+    pub fn global_values(&self) -> [f32; 9] {
+        let g = &self.global;
+        let r = g.regions;
+        [
+            g.gains[0], g.gains[1], g.gains[2], g.ev, g.contrast, r[0], r[1], r[2], r[3],
+        ]
+    }
+
+    /// Each contributing mask: its coverage-only stage (shape, geometry, region and prebuilt
+    /// maps through `mask_description`/`prebuilt_coverage`) and its offsets `[ev, contrast,
+    /// highlights, shadows, whites, blacks, ln R r, ln R g, ln R b]`.
+    pub fn contributions(&self) -> impl Iterator<Item = (&MaskStage, [f32; 9])> {
+        self.masks.iter().map(|m| {
+            let r = m.regions;
+            (
+                &m.coverage,
+                [
+                    m.ev, m.contrast, r[0], r[1], r[2], r[3], m.ln_r[0], m.ln_r[1], m.ln_r[2],
+                ],
+            )
+        })
+    }
+
+    /// A copy rebuilt from its parts — a GPU twin's own CPU reference (`GpuStage::cpu`).
+    pub fn duplicate(&self) -> Self {
+        Self {
+            global: Scene { ..self.global },
+            masks: self
+                .masks
+                .iter()
+                .map(|m| {
+                    let (masked, geometry, region) = m.coverage.description();
+                    Contribution {
+                        coverage: MaskStage::new_in_region(
+                            masked,
+                            self.scale,
+                            region,
+                            geometry,
+                            m.coverage.prebuilt_coverage(),
+                            self.baseline,
+                            None,
+                        ),
+                        ev: m.ev,
+                        contrast: m.contrast,
+                        regions: m.regions,
+                        ln_r: m.ln_r,
+                    }
+                })
+                .collect(),
+            scale: self.scale,
+            baseline: self.baseline,
+        }
     }
 }
 
 impl PipelineStage for SceneOffsetsStage {
     fn name(&self) -> &'static str {
         "scene_offsets"
+    }
+
+    fn scene_offsets(&self) -> Option<&SceneOffsetsStage> {
+        Some(self)
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
@@ -136,11 +201,11 @@ impl PipelineStage for SceneOffsetsStage {
                 }
                 ev += c * m.ev;
                 con += c * m.contrast;
-                for k in 0..4 {
-                    reg[k] += c * m.regions[k];
+                for (r, o) in reg.iter_mut().zip(&m.regions) {
+                    *r += c * o;
                 }
-                for k in 0..3 {
-                    ln_r[k] += c * m.ln_r[k];
+                for (l, o) in ln_r.iter_mut().zip(&m.ln_r) {
+                    *l += c * o;
                 }
             }
             // The four stages' order: white balance, exposure, contrast, tone regions.

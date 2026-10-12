@@ -107,6 +107,12 @@ pub trait PipelineStage: Send + Sync {
         None
     }
 
+    /// This stage as a [`crate::SceneOffsetsStage`], for the GPU twin that needs its parts
+    /// (M10.12b). `None` for every other stage.
+    fn scene_offsets(&self) -> Option<&crate::SceneOffsetsStage> {
+        None
+    }
+
     /// Coverage maps this stage was handed already rasterized, one per component.
     ///
     /// ⚠⚠ **This is what makes a GATING brush accelerable.** Such a brush reads the photograph to

@@ -2,7 +2,7 @@ use crate::PipelineStage;
 use core_image::ImageBuf;
 
 /// Scales Highlights and Shadows — the broad pair.
-const STRENGTH: f32 = 0.5;
+pub const STRENGTH: f32 = 0.5;
 /// Scales Whites and Blacks — the end pair.
 ///
 /// ⚠⚠ **Its own constant, because the end pair is narrower and must still have authority.**
@@ -14,7 +14,7 @@ const STRENGTH: f32 = 0.5;
 /// midtones: at mid-grey Blacks contributes 0.106 against Shadows' 0.142, so the two stay
 /// distinguishable, while Whites overtakes Highlights above linear ~0.46 — which is exactly what
 /// a white point *should* do. `whites_are_more_end_weighted_than_highlights` pins it.
-const END_STRENGTH: f32 = 0.7;
+pub const END_STRENGTH: f32 = 0.7;
 
 /// Highlights/shadows/whites/blacks as a single luminance-region-weighted gain.
 /// All amounts ~[-100, 100]; positive brightens that region. Hue-preserving.

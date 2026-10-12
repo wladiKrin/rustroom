@@ -564,6 +564,15 @@ fn walk(
                 continue;
             }
         }
+        // ⚠ M10.12b: like a mask, not a `REPLACEABLE` row — its twin needs every contributing
+        // mask's own parts (prebuilt maps included), which a builder taking `&Edits` cannot see. A
+        // decline falls through to the CPU arm below, exactly as a mask's does.
+        if let Some(so) = s.scene_offsets() {
+            if let Some(g) = crate::scene_offsets::GpuSceneOffsetsStage::new(so, ctx) {
+                run.push((Box::new(g), s));
+                continue;
+            }
+        }
         match REPLACEABLE
             .iter()
             .find(|(n, _)| *n == s.name())
@@ -3076,6 +3085,20 @@ mod tests {
         let cube = a_cube();
         let e = every_tail_stage();
         let names = full_tail(&e, Some(&cube)).stage_names();
+        // ⚠ M10.12b: the same tail with a mask carrying a scene offset, where `scene_offsets` takes
+        // the four global scene stages' place — a stage with a twin, like a mask, and no table row.
+        let mut offset = e.clone();
+        offset
+            .masks
+            .push(mask_carrying(edit_model::LocalAdjustments {
+                exposure: 0.5,
+                ..Default::default()
+            }));
+        let offset_names = full_tail(&offset, Some(&cube)).stage_names();
+        assert!(
+            offset_names.contains(&"scene_offsets"),
+            "fixture check: an offset puts `scene_offsets` in the tail, got {offset_names:?}"
+        );
         // ⚠⚠ **The fixture check, and it is what stops this going stale.** The fixture is
         // hand-built, so a row added to `REPLACEABLE` with no field here would leave the property
         // asserted over a tail that never contained the new stage. Asserting the tail carries
@@ -3086,12 +3109,51 @@ mod tests {
                 "fixture check: `every_tail_stage` must switch on {n}, got {names:?}"
             );
         }
-        for n in &names {
+        for n in names.iter().chain(&offset_names) {
             assert!(
-                *n == "mask" || REPLACEABLE.iter().any(|(r, _)| r == n),
+                *n == "mask" || *n == "scene_offsets" || REPLACEABLE.iter().any(|(r, _)| r == n),
                 "{n} is in the tail and is neither replaceable nor a mask: {names:?}"
             );
         }
+    }
+
+    /// ⚠⚠ **The carrier for M10.12b's twin.** A CPU `scene_offsets` and a GPU one render the same
+    /// picture by design, so every equivalence test passes with the substitution deleted — M8.11's
+    /// lesson. This asserts the stage LEFT the CPU list and the picture still agrees.
+    #[test]
+    fn scene_offsets_run_on_the_gpu() {
+        let Some(ctx) = ctx() else { return };
+        let mut e = with_hsl();
+        e.masks = vec![mask_carrying(edit_model::LocalAdjustments {
+            exposure: 0.6,
+            contrast: 20.0,
+            ..Default::default()
+        })];
+        let before = tail_of(&e).stage_names();
+        assert!(
+            before.contains(&"scene_offsets"),
+            "fixture check: the tail carries the offsets: {before:?}"
+        );
+        let cpu = tail_of(&e).run(scene_ramp());
+        let p = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            TailRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        );
+        let after = p.stage_names();
+        assert!(
+            !after.contains(&"scene_offsets"),
+            "the CPU stage must have been substituted: {after:?}"
+        );
+        let d = crate::compare(&cpu, &p.run(scene_ramp()));
+        assert!(
+            d.worst_levels < 1.0,
+            "GPU differs by {} levels",
+            d.worst_levels
+        );
     }
 
     /// ⚠⚠⚠ **THE CARRIER FOR M8.11, AND IT IS WHAT STOPS THE MILESTONE SHIPPING GREEN AND DEAD.**

@@ -86,6 +86,10 @@ pub use stages::local_contrast::{
 pub use stages::mask::MaskStage;
 pub use stages::noise_reduction::NoiseReductionStage;
 pub use stages::scene_offsets::SceneOffsetsStage;
+/// The tone regions' strengths, for a GPU shader to SUBSTITUTE rather than transcribe (M10.12b).
+pub use stages::tone_regions::{
+    END_STRENGTH as TONE_REGIONS_END_STRENGTH, STRENGTH as TONE_REGIONS_STRENGTH,
+};
 // ⚠⚠ Re-exported so `gpu-pipeline` SUBSTITUTES these into WGSL rather than transcribing them.
 // A substituted constant cannot disagree; a transcribed one is merely checked for agreeing —
 // and `color`'s own doc records six copies of a Rec.709 luma triple that all went wrong on one
