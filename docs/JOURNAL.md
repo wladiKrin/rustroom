@@ -198,6 +198,9 @@ re-wrapped it — re-run by hand, both red.
 barely there, 50 subtle, 100 clearly grainy — the author's to judge. ⚠ The first crop was a bright sign,
 where the tone weight rightly leaves almost nothing; pick a midtone area to judge.
 
+**Tuned by the author (2026-10-12): "a bit stronger"** — `MAX_EV` 0.5 → 0.7, about 40 % more grain at every
+Amount; the grain golden rewritten (it failed against the new strength first, so it pins it).
+
 **Final review: my own pass** (no subagent unasked). ⚠ A first diagnosis was wrong and retracted: the ~2e-7
 weight at a highlight past white is `linear_to_srgb(1.0)` landing a hair **under** 1, not over — the clamp
 added for "over" did nothing and was removed with its comment.

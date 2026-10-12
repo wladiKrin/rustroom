@@ -19,8 +19,9 @@ use crate::{PipelineStage, Region, RenderScale};
 use core_image::ImageBuf;
 use edit_model::Grain;
 
-/// Amount 100's strength, in stops at the peak of the noise. ⚠ The author's call, tuned on crops.
-pub const MAX_EV: f32 = 0.5;
+/// Amount 100's strength, in stops at the peak of the noise. ⚠ The author's call, tuned on crops:
+/// 0.5 at first, raised to 0.7 after seeing them ("a bit stronger", 2026-10-12).
+pub const MAX_EV: f32 = 0.7;
 
 /// The lattice's seed, and the second octave's.
 pub const SEED: u32 = 0x9E37_79B9;
