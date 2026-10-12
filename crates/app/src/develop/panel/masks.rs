@@ -17,7 +17,7 @@ use crate::theme::Hover as _;
 use crate::Session;
 use eframe::egui;
 use rustroom_app::mask_kind::MaskKind;
-use rustroom_app::{mask_order, mask_tool};
+use rustroom_app::{mask_actions, mask_order, mask_tool};
 
 /// Brush tool settings, which live on the app rather than on the mask.
 ///
@@ -274,6 +274,8 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
     let mut rects = Vec::with_capacity(s.edits.masks.len());
     // The mask row being dragged, and whether it was released this frame.
     let mut drag: Option<(usize, bool)> = None;
+    // A mask to duplicate from its row's right-click menu, and whether inverted (M10.12a).
+    let mut dup: Option<(usize, bool)> = None;
     for i in 0..s.edits.masks.len() {
         let (kind, name) = {
             let m = &s.edits.masks[i];
@@ -307,6 +309,16 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
                 draggable: true,
             },
         );
+        out.response.context_menu(|ui| {
+            if ui.button("Duplicate").clicked() {
+                dup = Some((i, false));
+                ui.close();
+            }
+            if ui.button("Duplicate and invert").clicked() {
+                dup = Some((i, true));
+                ui.close();
+            }
+        });
         rects.push(out.rect);
         if out.dragging || out.released {
             drag = Some((i, out.released));
@@ -349,8 +361,24 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
         if picked {
             ui.add_enabled_ui(waiting.is_none(), |ui| {
                 mask_components::rows(ui, s, i, ed);
+                mask_components::whole_invert(ui, s, i, ed);
             });
         }
+    }
+    // ⚠ Returns, so a same-frame pick, drag or delete cannot apply against shifted indices.
+    if let Some((i, invert)) = dup {
+        if mask_actions::duplicate(
+            &mut s.edits.masks,
+            &mut s.mask_shown,
+            &mut s.selected_mask,
+            i,
+            invert,
+        ) {
+            s.selected_component = 0;
+            s.active_mask_handle = None;
+            ed.discrete();
+        }
+        return;
     }
     if let (Some((from, released)), None, None) = (drag, pick, remove) {
         if let Some((to, line)) = mask_components::drop_slot(ui, &rects) {
@@ -706,6 +734,53 @@ mod tests {
                 ed.changed |= pass.changed;
                 ed.settled |= pass.settled;
             }
+            ed
+        }
+
+        /// Every centre of a widget labelled `label`.
+        fn centres(&mut self, label: &str) -> Vec<egui::Pos2> {
+            let ctx = self.ctx.clone();
+            test_ui::labelled_centres(&ctx, Vec::new(), |ui| self.body(ui, &mut Edited::default()))
+                .into_iter()
+                .filter(|(l, _)| l == label)
+                .map(|(_, p)| p)
+                .collect()
+        }
+
+        /// Right-click at `at`; `ed` folded over the frames.
+        fn right_click_at(&mut self, at: egui::Pos2) -> Edited {
+            let ctx = self.ctx.clone();
+            let mut ed = Edited::default();
+            test_ui::right_click_at(&ctx, at, |ui| {
+                let mut pass = Edited::default();
+                self.body(ui, &mut pass);
+                ed.changed |= pass.changed;
+                ed.settled |= pass.settled;
+            });
+            ed
+        }
+
+        /// Right-click the row labelled `row`, then click its menu's `item`.
+        ///
+        /// ⚠ The op items share their labels with the mode chips ("Add", "Subtract", "Intersect"),
+        /// so the item is the match the menu ADDED — a centre not drawn before the right-click.
+        fn menu(&mut self, row: &str, item: &str) -> Edited {
+            let before = self.centres(item);
+            let at = self.centre(row);
+            self.right_click_at(at);
+            let at = self
+                .centres(item)
+                .into_iter()
+                .find(|p| !before.contains(p))
+                .unwrap_or_else(|| panic!("right-clicking {row:?} drew no {item:?}"));
+            let ctx = self.ctx.clone();
+            let mut ed = Edited::default();
+            test_ui::click_at(&ctx, at, false, |ui| {
+                let mut pass = Edited::default();
+                self.body(ui, &mut pass);
+                ed.changed |= pass.changed;
+                ed.settled |= pass.settled;
+            });
             ed
         }
     }
@@ -1119,5 +1194,121 @@ mod tests {
         let ed = p.drag_row("Gradient 1", "Radial 2", false);
         assert_eq!(p.s.edits.masks, before);
         assert!(!ed.settled);
+    }
+
+    #[test]
+    fn a_component_rows_menu_changes_its_op_as_one_edit() {
+        let mut p = composite_panel();
+        let ed = p.menu("Subtract Radial", "Intersect");
+        assert!(ed.settled, "an op change is one history entry");
+        assert_eq!(
+            p.s.edits.masks[0].refine[0].op,
+            edit_model::MaskOp::Intersect
+        );
+        assert_eq!(
+            p.s.edits.masks[0].refine[1].op,
+            edit_model::MaskOp::Add,
+            "only that row"
+        );
+        assert!(
+            p.labels().contains(&"Intersect Radial".to_string()),
+            "the row renamed itself"
+        );
+    }
+
+    #[test]
+    fn choosing_the_current_op_is_no_edit() {
+        let mut p = composite_panel();
+        let ed = p.menu("Subtract Radial", "Subtract");
+        assert!(!ed.settled, "nothing changed, so no history entry");
+        assert_eq!(
+            p.s.edits.masks[0].refine[0].op,
+            edit_model::MaskOp::Subtract
+        );
+    }
+
+    /// Review Focus 2: the base is the Add everything folds onto, so its row offers no op.
+    #[test]
+    fn the_base_row_offers_no_op() {
+        let mut p = composite_panel();
+        let chips = p.centres("Intersect").len();
+        // ⚠ "Gradient" names both the base row and the kind button; the row is the LOWER one.
+        let base = p
+            .centres("Gradient")
+            .into_iter()
+            .max_by(|a, b| a.y.total_cmp(&b.y))
+            .expect("the base row is drawn");
+        p.right_click_at(base);
+        assert_eq!(
+            p.centres("Intersect").len(),
+            chips,
+            "the base row opened an op menu"
+        );
+        // Positive control: the same probe on a refinement row DOES add the item.
+        let at = p.centre("Subtract Radial");
+        p.right_click_at(at);
+        assert_eq!(
+            p.centres("Intersect").len(),
+            chips + 1,
+            "fixture: a refinement's menu opens"
+        );
+    }
+
+    #[test]
+    fn duplicate_puts_a_selected_copy_below_as_one_edit() {
+        let mut p = composite_panel();
+        let ed = p.menu("Gradient 1", "Duplicate");
+        assert!(ed.settled);
+        assert_eq!(p.s.edits.masks.len(), 2);
+        assert_eq!(p.s.edits.masks[1], p.s.edits.masks[0]);
+        assert_eq!(p.s.selected_mask, Some(1));
+        assert_eq!(p.s.selected_component, 0, "the copy's first row");
+        assert_eq!(
+            p.s.mask_shown.get(1),
+            Some(&true),
+            "the copy shows its overlay"
+        );
+    }
+
+    #[test]
+    fn duplicate_and_invert_inverts_the_copy_only() {
+        let mut p = composite_panel();
+        p.menu("Gradient 1", "Duplicate and invert");
+        assert!(!p.s.edits.masks[0].invert, "the original is untouched");
+        assert!(
+            p.s.edits.masks[1].invert,
+            "a composite's copy is inverted as a whole"
+        );
+    }
+
+    /// Review Focus 1: a right-click is not a click — no selection change, no drag, no edit.
+    #[test]
+    fn a_right_click_opens_the_menu_without_selecting() {
+        let mut p = Panel::new();
+        p.add(MaskKind::Radial);
+        p.click("Radial 1");
+        assert_eq!(p.s.selected_mask, None, "fixture: nothing selected");
+        let at = p.centre("Radial 1");
+        let ed = p.right_click_at(at);
+        assert_eq!(p.s.selected_mask, None, "a right-click selected the mask");
+        assert!(!ed.changed, "a right-click edited something");
+        assert!(
+            !p.centres("Duplicate").is_empty(),
+            "fixture: the menu opened"
+        );
+    }
+
+    #[test]
+    fn invert_mask_is_drawn_for_a_composite_only_and_is_one_edit() {
+        let mut p = Panel::new();
+        p.add(MaskKind::Radial);
+        assert!(
+            !p.labels().contains(&"Invert mask".to_string()),
+            "a one-shape mask has only its shape's Invert"
+        );
+        p.refine(edit_model::MaskOp::Subtract, MaskKind::Radial);
+        let ed = p.click("Invert mask");
+        assert!(ed.settled);
+        assert!(p.s.edits.masks[0].invert);
     }
 }
