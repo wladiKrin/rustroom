@@ -353,6 +353,7 @@ impl MaskStage {
                 .enumerate()
                 .map(|(k, r)| (r.op, Self::source_for(&r.mask, geometry, at(k + 1))))
                 .collect(),
+            invert: masked.invert,
         }
     }
 
@@ -931,6 +932,25 @@ mod tests {
         assert!(
             got > 0.9,
             "an added component must render over an inert base: {got}"
+        );
+    }
+
+    #[test]
+    fn an_inverted_mask_survives_an_inert_base() {
+        // ⚠⚠ The M7.1c hazard's second door. An unpainted brush is inert, and with no `Add`
+        // refinement the fast path used to return the image untouched — but inverted, a fold of
+        // nothing covers EVERYTHING. Skipping it is silent: the unmasked photograph.
+        let mut m = MaskedAdjustment {
+            mask: Mask::Brush(edit_model::Brush::default()),
+            invert: true,
+            ..Default::default()
+        };
+        m.adjustments.exposure = 1.0;
+        let img = MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(flat(16, 8));
+        let got = img.pixel(8, 4)[0];
+        assert!(
+            got > 0.9,
+            "an inverted inert mask must cover the frame: {got}"
         );
     }
 

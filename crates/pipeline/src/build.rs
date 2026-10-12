@@ -610,6 +610,34 @@ mod tests {
         );
     }
 
+    /// ⚠ "Off" is skipping the stage, never zero coverage — which an Invert would turn into FULL.
+    /// `a_switched_off_mask_inserts_no_stage_anywhere`'s shape, with its positive control.
+    #[test]
+    fn a_switched_off_inverted_mask_changes_nothing() {
+        let mut edits = Edits::default();
+        edits.masks.push(edit_model::MaskedAdjustment {
+            invert: true,
+            adjustments: edit_model::LocalAdjustments {
+                exposure: 1.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let names = |e: &Edits| {
+            build_pipeline(e, RenderScale::FULL, TailRendering::colorimetric()).stage_names()
+        };
+        assert!(
+            names(&edits).contains(&"mask"),
+            "fixture: an inverted mask inserts a stage"
+        );
+        edits.masks[0].disabled = true;
+        assert_eq!(
+            names(&edits),
+            names(&Edits::default()),
+            "a switched-off inverted mask must build the same pipeline as no mask"
+        );
+    }
+
     /// ⚠⚠ **That the wrapper entry points do not quietly substitute the default.** Every
     /// production render outside the engine goes through `build_pipeline_with` or
     /// `build_pipeline_to` — the canvas's `render_once`, every thumbnail, every export — and

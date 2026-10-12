@@ -175,6 +175,8 @@ pub(super) struct PixelCtx<'a> {
 pub(super) struct Composite {
     pub(super) base: CoverageSource,
     pub(super) refine: Vec<(edit_model::MaskOp, CoverageSource)>,
+    /// The whole-mask Invert (M10.12a), applied after the last refinement.
+    pub(super) invert: bool,
 }
 
 impl Composite {
@@ -217,7 +219,13 @@ impl Composite {
             let b = Self::source_at(src, j + 1, cx, base_px, facts).clamp(0.0, 1.0);
             a = op.combine(a, b);
         }
-        a.clamp(0.0, 1.0)
+        let a = a.clamp(0.0, 1.0);
+        // ⚠ After the fold, never before it: inverting the base alone is a different mask.
+        if self.invert {
+            1.0 - a
+        } else {
+            a
+        }
     }
 
     /// Whether an inert base map is enough to skip this mask entirely.
@@ -227,11 +235,13 @@ impl Composite {
     /// the whole mask. Short-circuiting on the base alone would make an added component vanish
     /// whenever the base happened to be an unpainted brush — **silently**, because the render is
     /// then simply the unmasked photograph rather than anything that looks like an error.
+    /// Inverting is the second way (M10.12a): `1 − 0` is everything.
     pub(super) fn base_inert_is_enough(&self) -> bool {
-        !self
-            .refine
-            .iter()
-            .any(|(op, _)| matches!(op, edit_model::MaskOp::Add))
+        !self.invert
+            && !self
+                .refine
+                .iter()
+                .any(|(op, _)| matches!(op, edit_model::MaskOp::Add))
     }
 }
 
@@ -283,6 +293,7 @@ mod tests {
         let c = Composite {
             base: ramp(),
             refine: Vec::new(),
+            invert: false,
         };
         let got = coverage(&c, [0.5; 3]);
         assert!((got - 0.5).abs() < 1e-4, "got {got}");
@@ -293,6 +304,7 @@ mod tests {
         let c = Composite {
             base: everything(),
             refine: vec![(MaskOp::Subtract, ramp())],
+            invert: false,
         };
         let got = coverage(&c, [0.5; 3]);
         assert!(
@@ -306,6 +318,7 @@ mod tests {
         let c = Composite {
             base: ramp(),
             refine: vec![(MaskOp::Intersect, ramp())],
+            invert: false,
         };
         let got = coverage(&c, [0.5; 3]);
         assert!((got - 0.25).abs() < 1e-4, "0.5 * 0.5 is 0.25, got {got}");
@@ -320,6 +333,7 @@ mod tests {
         let c = Composite {
             base: colour(),
             refine: vec![(MaskOp::Add, colour()), (MaskOp::Add, colour())],
+            invert: false,
         };
         conversions_reset();
         let _ = coverage(&c, [0.3, 0.4, 0.5]);
@@ -338,6 +352,7 @@ mod tests {
         let c = Composite {
             base: ramp(),
             refine: vec![(MaskOp::Intersect, ramp())],
+            invert: false,
         };
         conversions_reset();
         let _ = coverage(&c, [0.3, 0.4, 0.5]);
@@ -349,6 +364,7 @@ mod tests {
         let c = Composite {
             base: CoverageSource::Range(LuminanceRange::default()),
             refine: Vec::new(),
+            invert: false,
         };
         let dark = coverage(&c, [0.01; 3]);
         let bright = coverage(&c, [0.9; 3]);
@@ -365,6 +381,7 @@ mod tests {
         let c = |op| Composite {
             base: ramp(),
             refine: vec![(op, ramp())],
+            invert: false,
         };
         assert!(c(MaskOp::Subtract).base_inert_is_enough());
         assert!(c(MaskOp::Intersect).base_inert_is_enough());
@@ -375,7 +392,8 @@ mod tests {
         assert!(
             Composite {
                 base: ramp(),
-                refine: Vec::new()
+                refine: Vec::new(),
+                invert: false,
             }
             .base_inert_is_enough(),
             "with no refinement at all the old fast path must still apply"
@@ -388,15 +406,50 @@ mod tests {
         let a = Composite {
             base: everything(),
             refine: vec![(MaskOp::Subtract, ramp()), (MaskOp::Add, ramp())],
+            invert: false,
         };
         let b = Composite {
             base: everything(),
             refine: vec![(MaskOp::Add, ramp()), (MaskOp::Subtract, ramp())],
+            invert: false,
         };
         let (x, y) = (coverage(&a, [0.5; 3]), coverage(&b, [0.5; 3]));
         assert!(
             (x - y).abs() > 0.1,
             "the two orders must differ: {x} vs {y}"
+        );
+    }
+
+    #[test]
+    fn an_inverted_composite_is_exactly_one_minus_the_fold() {
+        // ⚠ Over a ramp and with a refinement, so the flip is checked at partial coverage and
+        // after the fold — a flip applied to the base alone gives a different number.
+        for u in [0.0, 0.1, 0.37, 0.5, 0.83, 1.0] {
+            let c = |invert| Composite {
+                base: everything(),
+                refine: vec![(MaskOp::Subtract, ramp())],
+                invert,
+            };
+            let f = |c: &Composite| c.at(&ctx(u, 0.5), [0.5; 3], &mut BaseFacts::default());
+            let (plain, inv) = (f(&c(false)), f(&c(true)));
+            assert!(
+                (inv - (1.0 - plain)).abs() < 1e-6,
+                "u {u}: {inv} vs 1 − {plain}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_inverted_mask_is_never_inert_on_its_base() {
+        // ⚠⚠ Inverting zero covers everything, so an inert base is not enough to skip the mask.
+        let c = Composite {
+            base: ramp(),
+            refine: Vec::new(),
+            invert: true,
+        };
+        assert!(
+            !c.base_inert_is_enough(),
+            "an inverted fold of nothing is the whole frame"
         );
     }
 }
