@@ -53,7 +53,18 @@ pub fn show(
         );
         out.show_body(ui, |ui| match g {
             LocalGroup::WhiteBalance => {
-                adjustments::white_balance(ui, &mut a.white_balance, baseline, None, ed);
+                // ⚠⚠ Shifts relative to the photo's white balance, Lightroom's local Temp and Tint
+                // (M10.12b) — not the global sliders' Kelvin. A legacy mask shows its absolute
+                // value as the shift it amounts to, and only a drag converts it: drawing it must
+                // not rewrite an edit nobody touched.
+                let (mut temp, mut tint) = rustroom_app::mask_wb::shown(a, baseline);
+                ed.help_scope = rustroom_app::slider_help::Scope::MaskWhiteBalance;
+                let t = ed.slider(ui, &mut temp, -100.0..=100.0, "Temp", 0.0);
+                let n = ed.slider(ui, &mut tint, -100.0..=100.0, "Tint", 0.0);
+                ed.help_scope = rustroom_app::slider_help::Scope::Global;
+                if t.changed() || n.changed() {
+                    rustroom_app::mask_wb::set(a, temp, tint);
+                }
             }
             LocalGroup::Tone => {
                 ed.slider(ui, &mut a.exposure, -5.0..=5.0, "Exposure", 0.0);
@@ -346,6 +357,71 @@ mod tests {
                 "dragging {label} never reached the mask's own field"
             );
         }
+    }
+
+    /// A mask's Temp and Tint are shifts relative to the photo (M10.12b): a drag writes `temp` and
+    /// `tint`, never the legacy absolute white balance.
+    #[test]
+    fn the_masks_temp_and_tint_are_relative_shifts() {
+        for (label, read) in [
+            ("Temp", (|a| a.temp) as fn(&LocalAdjustments) -> f32),
+            ("Tint", |a| a.tint),
+        ] {
+            let mut h = Harness::new();
+            h.drag_slider(label);
+            assert!(
+                read(&h.a) != 0.0,
+                "dragging {label} never reached the shift"
+            );
+            assert_eq!(
+                h.a.white_balance,
+                edit_model::WhiteBalance::default(),
+                "{label} wrote the legacy absolute value"
+            );
+            assert!(h.ed.changed && h.ed.settled, "{label}: one undo step");
+        }
+    }
+
+    /// ⚠ Not 6500 K: the harness's baseline is `Illuminant::default()`, D65, so 6500 K would amount
+    /// to no shift at all and the conversion would be invisible.
+    fn legacy() -> LocalAdjustments {
+        LocalAdjustments {
+            white_balance: edit_model::WhiteBalance {
+                kelvin: Some(4000.0),
+                tint: 4.0,
+            },
+            ..Default::default()
+        }
+    }
+
+    /// A legacy mask's Kelvin is shown as the shift it amounts to, and the first drag of EITHER
+    /// slider converts it — Tint alone leaves Temp at exactly that shift, not at zero.
+    #[test]
+    fn a_legacy_mask_converts_on_its_first_drag_and_keeps_its_temperature() {
+        let mut h = Harness::new();
+        h.a = legacy();
+        let (temp, _) = pipeline::mask_wb_shift(&h.a, color::wb::Illuminant::default());
+        assert!(
+            temp.abs() > 1.0,
+            "fixture check: the legacy shift is not zero"
+        );
+        h.drag_slider("Tint");
+        assert_eq!(h.a.white_balance, edit_model::WhiteBalance::default());
+        assert_eq!(h.a.temp, temp, "Temp kept the converted legacy value");
+        assert!(
+            h.a.tint != 4.0,
+            "the drag moved Tint from its converted value"
+        );
+    }
+
+    /// Merely looking at a legacy mask converts nothing — only a drag does.
+    #[test]
+    fn drawing_a_legacy_mask_leaves_it_as_it_was() {
+        let mut h = Harness::new();
+        h.a = legacy();
+        h.draw();
+        assert_eq!(h.a, legacy());
+        assert!(!h.ed.changed);
     }
 
     #[test]
