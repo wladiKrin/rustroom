@@ -213,6 +213,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             open: open.as_deref(),
                                         },
                                         &mut app.folders_collapsed,
+                                        &mut app.folder_marks,
                                     ) {
                                         Some(crate::folder_rows::Out::Open(p)) => {
                                             action = Action::OpenFolder(p)
