@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.14c: Clarity's "coalescing" — a spike, withdrawn on its kill rule (2026-10-12)](#2026-10-12--m1014c-claritys-coalescing--a-spike-withdrawn-on-its-kill-rule)
 - [M10.14b: the prefix-cache eviction fix's picture half, closed by a test (2026-10-12)](#2026-10-12--m1014b-the-prefix-cache-eviction-fixs-picture-half-closed-by-a-test-branch-m1014b-resume-picture-merged-2026-10-12)
 - [M10.12b: a mask's scene sliders as offsets, Lightroom's model (2026-10-12)](#2026-10-12--m1012b-a-masks-scene-sliders-as-offsets-lightrooms-model-branch-m1012b-mask-offsets-merged-2026-10-12)
 - [M10.19c: mark several folders, forget them from a right-click menu (2026-10-12)](#2026-10-12--m1019c-mark-several-folders-forget-them-from-a-right-click-menu-branch-m1019c-folder-marks-merged-2026-10-12)
@@ -168,6 +169,37 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-12 — M10.14c: Clarity's "coalescing" — a spike, withdrawn on its kill rule
+
+**The item:** M8.3n's caveat named **coalescing** as the cost of the GPU box blur's running-sum body
+(on the horizontal pass adjacent threads walk adjacent rows, reads `w` floats apart) and called it
+"the obvious next lever" — a transpose or a shared-memory tile. Checked first: Clarity/Texture are on
+6 of the 73 photos with stored history; through the app at fit a Texture+Clarity frame is 12.3 ms
+on the GPU and **40.5 ms at the 3200 rung**. The author chose a spike with a kill rule: keep only if
+the blur's floor drops by ≥ 40 % and the Clarity rows improve, parity intact.
+
+**Built (throwaway):** the horizontal running-sum pass tiled — 64 rows × 16 columns staged through
+three workgroup arrays (13 KB, inside WebGPU's guaranteed 16 KB), every global read and write side by
+side, the running sum itself unchanged in order, so it stayed within one rounding of the CPU
+(`the_running_sum_shader_matches_box_blur_to_one_rounding` green). ⚠ First run failed shader
+validation: a local `a` shadowed the probe's buffer `a` — the kernel's new locals now carry a `bx_`
+prefix (every caller's buffer names checked).
+
+**Measured** (`probe_box`, 3200×2136 = 6.8 Mpx, Apple M2, best of 5, transfer subtracted):
+
+| 3 passes | before | tiled |
+|---|---|---|
+| running body, r = 8 … 40 | 8.7–9.0 ms | 8.9–10.4 ms |
+| Clarity r=40 ×3 | 10.28 | 10.42 |
+| Dehaze guided r=31 ×6 | 20.77 | 21.02 |
+
+**No faster — so the floor was never coalescing**, and the M8.3n caveat had named a cause nobody had
+measured. ⚠ **Withdrawn, the code reverted, and `box_wgsl`'s header corrected** — it asserted the
+coalescing floor in a comment, the kind that outlives its author. The likelier cause, stated as
+**unverified**: one thread per *line* is only 2,136 or 3,200 threads walking whole lines in series,
+leaving most of the GPU idle; the lever would be a parallel prefix sum per line — a different design,
+with its own precision question (a difference of two large prefix sums), not this item.
 
 ### 2026-10-12 — M10.14b: the prefix-cache eviction fix's picture half, closed by a test (branch `m10.14b-resume-picture`, merged 2026-10-12)
 

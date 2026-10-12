@@ -18,11 +18,14 @@
 //! otherwise flat to within 2 ms across a forty-fold change in radius, and a running sum admits no
 //! r-dependence by construction.
 //!
-//! ⚠ What the running sum costs is **coalescing**: on the horizontal pass adjacent threads walk
-//! adjacent *rows*, so their reads sit `w` floats apart. That is the ~11 ms floor visible at every
-//! radius, and it is why the naive shader wins below the threshold despite doing more arithmetic.
-//! The vertical pass has the opposite property, which is exactly why `blur_cols` advances every
-//! column together rather than walking one at a time.
+//! ⚠⚠ **The flat ~9 ms floor is NOT coalescing — measured, M10.14c (2026-10-12).** On the
+//! horizontal pass adjacent threads walk adjacent *rows*, so their reads sit `w` floats apart, and
+//! this header used to name that as the floor. A tiled horizontal pass (64 rows × 16 columns staged
+//! through workgroup memory, every read and write side by side, bit-for-bit the same arithmetic)
+//! measured **8.9–10.4 ms against 8.7–9.0** — no faster. The likelier cause, **unverified**: one
+//! thread per LINE is only 2,136 or 3,200 threads, each walking a whole line in series, which leaves
+//! most of the GPU idle; a parallel prefix sum per line would be the lever, a different design with
+//! its own precision question. The floor is still why the naive shader wins below the threshold.
 
 /// Where the two cross, **swept rather than guessed**.
 ///
