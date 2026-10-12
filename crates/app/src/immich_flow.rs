@@ -137,25 +137,31 @@ impl RustroomApp {
     /// ⚠ `None` rather than `Some((0, 0))`: "we do not know" and "there is nothing here" lead to
     /// different buttons, and collapsing them would hide the action that loads the list.
     ///
-    /// ⚠⚠ **Every album row asks on EVERY Library frame**, so the assets are borrowed and counted
-    /// without touching the disk (`immich_source::downloaded_count`). It used to clone the list and
-    /// build catalog entries — a sidecar `stat` per asset — which over 12 albums of 3,538 assets
-    /// was 85% of the Library's UI time (2026-10-12).
+    /// ⚠⚠ **Every album row asks on EVERY Library frame** (2026-10-12). It used to clone the list and
+    /// build catalog entries — a sidecar `stat` per asset — and, for an album not opened this
+    /// session, read and parse its stored list: over 12 albums of 3,538 assets, most of the
+    /// Library's UI time. Now the names are derived once per list (`immich_album_names`) and only
+    /// looked up in `immich_present` per frame — live, so a download shows at once.
     pub(crate) fn immich_downloaded_of(&self, id: &str) -> Option<(usize, usize)> {
         // ⚠ With no cache root nothing is downloaded or counted: `Some((0, 0))` for a list in hand,
         // exactly what the empty path list gave before — never `None`, which means "not in hand".
         let rooted = self.immich_cache_root().is_some();
-        let count = |assets: &[immich::Asset]| {
-            if rooted {
-                immich_source::downloaded_count(assets, &self.immich_present)
-            } else {
-                (0, 0)
-            }
-        };
-        match self.immich_assets.get(id) {
-            Some(assets) => Some(count(assets)),
-            None => self.immich_cached_album(id).map(|a| count(&a)),
-        }
+        use rustroom_app::immich_album_names::{fingerprint, ListKey};
+        let mut memo = self.immich_album_names.borrow_mut();
+        let names = match self.immich_assets.get(id) {
+            Some(assets) => memo.names(id, ListKey::Session(fingerprint(assets)), || {
+                Some(immich_source::shown_names(assets))
+            }),
+            None => memo.names(id, ListKey::Stored(self.album_validator(id)), || {
+                self.immich_cached_album(id)
+                    .map(|a| immich_source::shown_names(&a))
+            }),
+        }?;
+        Some(if rooted {
+            immich_source::count_present(names, &self.immich_present)
+        } else {
+            (0, 0)
+        })
     }
 
     /// An album's asset list if it is in hand — the session map, then the stored list.
@@ -539,6 +545,45 @@ mod tests {
 
         assert_eq!(app.immich_downloaded_of("al"), Some((1, 2)));
         assert_eq!(app.immich_downloaded_of("not-in-hand"), None);
+    }
+
+    /// ⚠⚠ What is downloaded is read live, never cached with the names: a finished download shows in
+    /// the row's count on the next frame, and a removal likewise.
+    #[test]
+    fn a_download_shows_in_the_album_count_at_once() {
+        let mut app = crate::test_app::for_test();
+        app.settings.immich_url = "https://example.invalid".to_string();
+        let (a, b) = (photo("aaa", "A.JPG"), photo("bbb", "B.jpg"));
+        let root = app.immich_cache_root().expect("a URL gives a cache root");
+        let name = |x: &immich::Asset| {
+            rustroom_app::immich_source::cache_path(&root, x)
+                .file_name()
+                .unwrap()
+                .to_os_string()
+        };
+        let (na, nb) = (name(&a), name(&b));
+        app.immich_assets.insert("al".to_string(), vec![a, b]);
+        assert_eq!(app.immich_downloaded_of("al"), Some((0, 2)));
+        app.immich_present.insert(na.clone());
+        app.immich_present.insert(nb);
+        assert_eq!(app.immich_downloaded_of("al"), Some((2, 2)), "downloaded");
+        app.immich_present.remove(&na);
+        assert_eq!(app.immich_downloaded_of("al"), Some((1, 2)), "one removed");
+    }
+
+    /// ⚠ A list fetched again with another photo in it is counted again.
+    #[test]
+    fn a_refetched_album_list_is_recounted() {
+        let mut app = crate::test_app::for_test();
+        app.settings.immich_url = "https://example.invalid".to_string();
+        app.immich_assets
+            .insert("al".to_string(), vec![photo("aaa", "A.JPG")]);
+        assert_eq!(app.immich_downloaded_of("al"), Some((0, 1)));
+        app.immich_assets.insert(
+            "al".to_string(),
+            vec![photo("aaa", "A.JPG"), photo("ccc", "C.jpg")],
+        );
+        assert_eq!(app.immich_downloaded_of("al"), Some((0, 2)));
     }
 
     fn album(id: &str, count: u32, modified: Option<&str>) -> immich::AlbumSummary {

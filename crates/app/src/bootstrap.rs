@@ -222,6 +222,7 @@ impl RustroomApp {
             immich_test: None,
             immich_opening: None,
             immich_assets: Default::default(),
+            immich_album_names: Default::default(),
             // ⚠ Read at startup so the Folders rail's count is right before any album is opened.
             immich_present: rustroom_app::immich_source::connection(&settings)
                 .map(|c| {

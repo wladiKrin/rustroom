@@ -377,6 +377,12 @@ pub(crate) struct RustroomApp {
     /// ⚠⚠ Cached because the alternative is a stat per thumbnail per frame. Refreshed at startup, when
     /// an Immich library opens, and by one insert per completed download — never per frame.
     pub(crate) immich_present: std::collections::HashSet<std::ffi::OsString>,
+    /// Each album's cache file names, derived once per list — what an album row's download count
+    /// looks up in `immich_present` on every frame (`immich_downloaded_of`, 2026-10-12).
+    ///
+    /// ⚠ A `RefCell` because the rail draws from `&RustroomApp`. Only names are kept: what is
+    /// downloaded is read live, so no writer of `immich_present` has to invalidate anything.
+    pub(crate) immich_album_names: std::cell::RefCell<rustroom_app::immich_album_names::AlbumNames>,
     /// The asset ids a **bulk** download is still waiting on, and how many it asked for.
     ///
     /// ⚠⚠ A set rather than a counter, so opening a single photo while a bulk download runs cannot

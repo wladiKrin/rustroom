@@ -78,21 +78,23 @@ fn shown(assets: &[immich::Asset]) -> impl Iterator<Item = (&immich::Asset, Stri
         })
 }
 
-/// How many of `assets` the Library shows, and how many of those are downloaded — `present` being
-/// the cache directory's file names ([`present_names`]).
+/// The cache file names of the assets the Library shows — what an album row counts.
 ///
-/// ⚠⚠ **Called for every album row on EVERY Library frame** (`immich_panel`). It takes no root, so
-/// it touches no disk — the rule [`present_names`] states for the grid: one `read_dir`, never a stat
-/// per asset. Building catalog entries here instead (a sidecar `stat` per asset) took 85% of the
-/// Library's UI time over 12 albums of 3,538 assets (2026-10-12).
-pub fn downloaded_count(
-    assets: &[immich::Asset],
+/// ⚠ Takes no root, so it touches no disk: the rule [`present_names`] states for the grid, one
+/// `read_dir` and never a stat per asset. Building catalog entries instead (a sidecar `stat` per
+/// asset) took 85% of the Library's UI time over 12 albums of 3,538 assets (2026-10-12).
+pub fn shown_names(assets: &[immich::Asset]) -> Vec<std::ffi::OsString> {
+    shown(assets).map(|(_, name)| name.into()).collect()
+}
+
+/// `(downloaded, shown)`: how many of `names` are in `present`, the cache directory's file names
+/// ([`present_names`]), out of how many.
+pub fn count_present(
+    names: &[std::ffi::OsString],
     present: &std::collections::HashSet<std::ffi::OsString>,
 ) -> (usize, usize) {
-    shown(assets).fold((0, 0), |(have, total), (_, name)| {
-        let here = present.contains(std::ffi::OsStr::new(&name));
-        (have + usize::from(here), total + 1)
-    })
+    let have = names.iter().filter(|n| present.contains(*n)).count();
+    (have, names.len())
 }
 
 /// The file names present in this server's cache directory.
@@ -525,7 +527,7 @@ mod tests {
     /// the disk: the signature is the guard. And its total is exactly what the grid shows —
     /// `entries_from_assets`' own filter — so a row can never count a video the grid leaves out.
     #[test]
-    fn downloaded_count_counts_what_the_grid_shows_and_what_is_present() {
+    fn an_album_count_covers_what_the_grid_shows_and_what_is_present() {
         use immich::AssetType::{Image, Video};
         let assets = vec![
             asset("a", "A.JPG", Image),
@@ -544,7 +546,7 @@ mod tests {
         // Present: one shown JPEG, the shown PNG, and the video — which the grid does not show.
         let present: std::collections::HashSet<std::ffi::OsString> =
             [name(0), name(4), name(2)].into_iter().collect();
-        let (have, total) = downloaded_count(&assets, &present);
+        let (have, total) = count_present(&shown_names(&assets), &present);
         assert_eq!(
             total,
             entries_from_assets(&assets, root).len(),

@@ -42,6 +42,7 @@ pub mod histogram;
 pub mod history;
 pub mod history_store;
 pub mod icons;
+pub mod immich_album_names;
 pub mod immich_cache;
 pub mod immich_catalog;
 pub mod immich_list_cache;
