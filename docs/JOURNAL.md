@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M10.14b: the prefix-cache eviction fix's picture half, closed by a test (2026-10-12)](#2026-10-12--m1014b-the-prefix-cache-eviction-fixs-picture-half-closed-by-a-test-branch-m1014b-resume-picture)
+- [M10.14b: the prefix-cache eviction fix's picture half, closed by a test (2026-10-12)](#2026-10-12--m1014b-the-prefix-cache-eviction-fixs-picture-half-closed-by-a-test-branch-m1014b-resume-picture-merged-2026-10-12)
 - [M10.12b: a mask's scene sliders as offsets, Lightroom's model (2026-10-12)](#2026-10-12--m1012b-a-masks-scene-sliders-as-offsets-lightrooms-model-branch-m1012b-mask-offsets-merged-2026-10-12)
 - [M10.19c: mark several folders, forget them from a right-click menu (2026-10-12)](#2026-10-12--m1019c-mark-several-folders-forget-them-from-a-right-click-menu-branch-m1019c-folder-marks-merged-2026-10-12)
 - [The Library became slow: the rail's per-frame work (2026-10-12)](#2026-10-12--the-library-became-slow-the-rails-per-frame-work-branch-fix-library-rail-speed-merged-2026-10-12)
@@ -169,7 +169,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
-### 2026-10-12 — M10.14b: the prefix-cache eviction fix's picture half, closed by a test (branch `m10.14b-resume-picture`)
+### 2026-10-12 — M10.14b: the prefix-cache eviction fix's picture half, closed by a test (branch `m10.14b-resume-picture`, merged 2026-10-12)
 
 **The item:** the 2026-09-14 fix (*"The prefix cache evicted the checkpoint a drag resumes from"*)
 was confirmed for **speed** from the log; whether a resumed drag shows the **right picture** was left
@@ -187,7 +187,7 @@ would have proved nothing — hence its own test on the buffer built for dehaze.
 test fails, `a_prefix_drag_resumes_when_the_budget_holds_one_checkpoint` stays green (it counts
 stages, not pixels), which is exactly the gap it closes.
 
-**Counts:** 3721 → **3722 tests**. No code changed, so no GUI look is owed.
+**Counts:** 3721 → **3722 tests**. No code changed, so no GUI look is owed. ✅ **Merged 2026-10-12 at the author's word.**
 
 ### 2026-10-12 — M10.12b: a mask's scene sliders as offsets, Lightroom's model (branch `m10.12b-mask-offsets`, merged 2026-10-12)
 
