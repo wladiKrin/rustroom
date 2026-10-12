@@ -1,10 +1,11 @@
-//! How far a mask's scene sliders are from Lightroom's offsets today (M10.12b's brainstorm).
+//! How far a mask's scene sliders are from Lightroom's offsets (M10.12b's brainstorm; since M10.12b1
+//! every row reads ~0, which is the model's whole claim).
 //!
 //! `cargo run --release -p app --example probe_mask_offsets -- <raw> <out-prefix>`
 //!
 //! Under one ordinary global edit, each scene slider is applied two ways: globally (what an offset
-//! gives where a mask covers fully) and through a mask covering the whole frame (what Rustroom does
-//! today — the mask's stages after the global tone curve, saturation, HSL and grading). Prints how
+//! gives where a mask covers fully) and through a mask covering the whole frame (before M10.12b, the mask's stages
+//! ran after the global tone curve, saturation, HSL and grading). Prints how
 //! far apart the two are and writes `<out-prefix>-<case>.png`: global | mask, side by side.
 
 fn main() {
@@ -85,11 +86,10 @@ fn main() {
                 ..base.clone()
             },
             {
+                // ⚠ Since M10.12b a mask's Temp is a shift relative to the global white balance,
+                // in `MIRED_PER_STEP` steps: the shift that takes 5000 K to 6500 K.
                 let mut e = masked(edit_model::LocalAdjustments {
-                    white_balance: edit_model::WhiteBalance {
-                        kelvin: Some(6500.0),
-                        tint: 0.0,
-                    },
+                    temp: (1.0e6 / 5000.0 - 1.0e6 / 6500.0) / pipeline::MIRED_PER_STEP,
                     ..Default::default()
                 });
                 e.white_balance.kelvin = Some(5000.0);

@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.12b: a mask's scene sliders as offsets, Lightroom's model (2026-10-12)](#2026-10-12--m1012b-a-masks-scene-sliders-as-offsets-lightrooms-model-branch-m1012b-mask-offsets-in-progress)
 - [M10.19c: mark several folders, forget them from a right-click menu (2026-10-12)](#2026-10-12--m1019c-mark-several-folders-forget-them-from-a-right-click-menu-branch-m1019c-folder-marks-merged-2026-10-12)
 - [The Library became slow: the rail's per-frame work (2026-10-12)](#2026-10-12--the-library-became-slow-the-rails-per-frame-work-branch-fix-library-rail-speed-merged-2026-10-12)
 - [M10.12a: the flat composite made usable, nesting parked (2026-10-12)](#2026-10-12--m1012a-the-flat-composite-made-usable-nesting-parked-branch-m1012a-mask-composites-merged-2026-10-12)
@@ -166,6 +167,60 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-12 — M10.12b: a mask's scene sliders as offsets, Lightroom's model (branch `m10.12b-mask-offsets`, in progress)
+
+**Asked for:** the author chose **Lightroom's model, true offsets** — a mask's White Balance, Exposure,
+Contrast and the four tone regions add to the global sliders per pixel, at the global stages' own
+position, instead of running as a second pass after the global tone curve, saturation, HSL and grading.
+Range masks select on **the globally edited photo** (his call). Spec
+`2026-10-12-m10.12b-mask-offsets-design.md`; delivered in two parts, **b1** (below) and **b2** (the
+reference photo for pixel-reading masks).
+
+**Measured first** (`examples/probe_mask_offsets.rs`, DSCF6291 at 1200 px under an ordinary global edit,
+a mask covering the whole frame vs the same slider globally): Exposure +1 differed by **14.7 levels mean,
+85 at p99, 77 % of pixels**; Temp 5.0 / 52 / 31 %; Contrast 3.6 / 49 / 29 %; Highlights 0.4 / 5 / 5 %.
+**After b1 every row is 0.00 mean, 0 at p99, 0 %.**
+
+**b1, built:**
+- **`edit-model`** — `LocalAdjustments::{temp, tint}`, **relative** shifts ±100 (`skip_serializing_if`
+  zero); the old absolute `white_balance` is legacy, read as the shift it amounted to
+  (`pipeline::mask_wb_shift`) and cleared by the panel's first drag (`rustroom_app::mask_wb`). +Temp is
+  warmer: `mired' = mired(global) − temp · MIRED_PER_STEP`, clamped to 20..=500. ⚠ **`MIRED_PER_STEP` is
+  1.0 and is the author's to tune.** `has_scene_offsets()` says whether a mask carries any of them.
+- **`pipeline::SceneOffsetsStage`** — first in the tail when any enabled mask has scene offsets; the
+  global scene stages are then built neutral and it does their work: per pixel `global + Σ cᵢ · offsetᵢ`,
+  then WB → exposure → contrast → tone regions, the four stages' own arithmetic, now shared
+  (`exposure::factor`, `contrast::apply`, `tone_regions::gain`). WB composes multiplicatively,
+  `G ⊙ exp(Σ c ln Rᵢ)`. **Bit-identical to the four stages where no mask covers** (tested). A mask's own
+  `MaskStage` now runs only its **look** sliders (`pipeline::look_only`, applied in `build.rs`; the stage
+  itself stays general).
+- **GPU twin** — `GpuSceneOffsetsStage`: every contributing mask's coverage chain, the summed offsets and
+  the four formulas in **one** shader; substituted in the accelerate walk like a mask, not a
+  `REPLACEABLE` row (its builder needs the masks' prebuilt parts). Reuses `GpuMaskStage`'s components and
+  packing (lifted to `pub(crate)` free fns). CPU/GPU within 1 level across every mask kind, overlaps,
+  inverted composites and brushes.
+- **The panel** — the mask's White Balance section is two sliders, Temp and Tint, −100..100, with their
+  own hover scope (`Scope::MaskWhiteBalance`): *relative to the photo*. Drawing a legacy mask converts
+  nothing; only a drag does.
+- **b1's interim:** a luminance- or colour-range mask with scene offsets reads its coverage at the scene
+  position (the pre-tone picture) — b2 gives it the globally edited photo. Range masks *without* scene
+  offsets select exactly as before.
+
+**Goldens rewritten — exactly 5**, each carrying a masked scene slider: `mask_brush_erase`,
+`mask_linear_exposure`, `mask_linear_inverted_saturation`, `mask_luminance_inverted_highlights` (b2 moves
+it again), `mask_radial_inverted_saturation`; the composite goldens stayed within tolerance.
+
+**Sabotages, every one red:** the Temp sign flipped; the contrast slope off by one; WB offsets ignored;
+exposure applied without its coverage; contrast applied at zero amount (bit-exactness); the shader
+dropping the second mask (a 52-level divergence); the walk never substituting the twin; the panel showing
+the raw fields instead of a legacy mask's converted shift.
+
+**Found on the way:** `a_chains_offer_never_survives_into_the_next_mask` had gone **vacuous** — its masks
+carried only exposure, which no longer makes a mask stage, so it asserted `takes() == 0` over nothing; a
+fixture check now requires both masks to be stages. The hover sweep's scope list had missed `Grain`.
+
+**Counts (b1):** 3674 → **3703 tests**.
 
 ### 2026-10-12 — M10.19c: mark several folders, forget them from a right-click menu (branch `m10.19c-folder-marks`, merged 2026-10-12)
 
