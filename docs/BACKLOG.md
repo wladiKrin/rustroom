@@ -32,9 +32,9 @@ and a pointer, not deleted.
 | **M10.9** presets & shortcuts | *Presets: no import/export…* (a, ✅ 2026-10-02); *No user-defined keyboard shortcuts* (b, ✅ 2026-10-10); Lightroom `.xmp` presets, split from (a) by the author 2026-10-02 (c, ✅ 2026-10-11 — the `lr-preset` crate) |
 | **M10.10** export | P-26's image watermark (a, ✅ 2026-10-11) and export sizing (b, ✅ 2026-10-11) |
 | **M10.11** Develop additions | *Film negative inversion* (a, ✅ 2026-10-11); P-26's Grain (b, ✅ 2026-10-12) |
-| **M10.12** the mask model | *Composites are one level deep* (a, ✅ 2026-10-12 — re-scoped: an op in place, Duplicate, Invert mask; nesting itself ⏸ parked on its table); masks' scene sliders as offsets (b, ✅ 2026-10-12 — Lightroom's model; a range or gating mask with an offset selects on the globally edited photo, its GPU cost under *The reference photo on the GPU*); *Anchor strokes and spots in sensor space* + *Brush strokes shift…* (c, ⏸) |
+| **M10.12** the mask model | *Composites are one level deep* (a, ✅ 2026-10-12 — re-scoped: an op in place, Duplicate, Invert mask; nesting itself ⏸ parked on its table); masks' scene sliders as offsets (b, ✅ 2026-10-12 — Lightroom's model; a range or gating mask with an offset selects on the globally edited photo, its GPU cost is M10.14h); *Anchor strokes and spots in sensor space* + *Brush strokes shift…* (c, ⏸) |
 | **M10.13** colour & camera profiles | *C2/C3 have no independent oracle* (a); *`CameraCalibration`…* + `ProfileLookTable` (b); *Per-photo camera profile* (c); P-22 (d) |
-| **M10.14** performance & verification | *What is left in `HslStage`* (a); P-21 (e); *incremental splatting*, *Two Oklab round trips* (f, ⏸); *the u8 wire*, `MAX_TILE_DABS` (g, ⏸) |
+| **M10.14** performance & verification | *What is left in `HslStage`* (a); P-21 (e); *incremental splatting*, *Two Oklab round trips* (f, ⏸); *the u8 wire*, `MAX_TILE_DABS` (g, ⏸); *The reference photo on the GPU* (h) |
 | **M10.15** Immich | the keychain, cached-original eviction, Immich's rating (a–c); *Two-way sync* (d, re-opened) |
 | **M10.16** AI tools | depth masks (a); P-23 (b); P-26's content-aware remove (c) |
 | **M10.17** merge | P-24 |
@@ -1321,7 +1321,7 @@ render-during-interaction pattern the app already applies elsewhere. **Do not sc
 `MaskStage` work**: at 1600 the whole masked delta is 2.8 ms, and no amount of optimising it moves
 a 53 ms frame meaningfully.
 
-### ⚠ The reference photo on the GPU (recorded 2026-10-12, from M10.12b2) → not yet placed — the author's call
+### ⚠ The reference photo on the GPU (recorded 2026-10-12, from M10.12b2) → M10.14h
 
 A luminance/colour range or gating brush that carries a **scene offset** selects on the globally edited
 photo (M10.12b2). `SceneOffsetsStage` computes that reference on the **CPU**, and both it and the mask's

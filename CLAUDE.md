@@ -224,7 +224,7 @@ that had grown to ~170 lines by appending.)
 | M10.11a | Film negative: pick the base, each channel balanced from measured densities | a prefix step after lens, its own group OFF by default; the measurement skips densities outside −0.05…3.0 and a 15 % border (2 % once cropped) — a scan's holder had made an HP5 frame black |
 | M10.11b | Grain in Effects (the vignette's group; the field is still `vignette`) | `MAX_EV` 0.7 by the author's tuning; the noise sits at pixel corners in FRAME coordinates, so a ¼-scale preview reads exactly the export's pixel |
 | M10.12a | A row's op by right-click; Duplicate / Duplicate and invert; **Invert mask** for a composite — nesting ⏸ parked | the item's example was already expressible since reordering (measured table in the backlog); an inverted mask waiting for an AI map covers NOTHING (`Composite::waits_for_a_map`) |
-| M10.12b | A mask's WB, Exposure, Contrast and tone regions are **offsets** to the global sliders (Lightroom's model); Temp/Tint relative ±100 | `SceneOffsetsStage` heads the tail (*Warnings*); a range/gating mask with an offset selects once, on the globally edited photo — 31 ms vs 7–9 at fit on the GPU path, the reference on the CPU (backlog: *The reference photo on the GPU*); `MIRED_PER_STEP` 1.0 untuned |
+| M10.12b | A mask's WB, Exposure, Contrast and tone regions are **offsets** to the global sliders (Lightroom's model); Temp/Tint relative ±100 | `SceneOffsetsStage` heads the tail (*Warnings*); a range/gating mask with an offset selects once, on the globally edited photo — 31 ms vs 7–9 at fit on the GPU path, the reference on the CPU (M10.14h); `MIRED_PER_STEP` 1.0 untuned |
 | M10.19c | ⌘/⇧-click marks folders in the rail; right-click forgets them, one confirmation, one undo step | marks keyed by PATH (rows move on collapse); `folder_tree::subtrees` lists a nested mark once, or its second delete fails mid-batch |
 
 ### ▶ Next action — Phase 10, top down
@@ -245,7 +245,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 |---|---|
 | **M10.12** the mask model | c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a an independent C2/C3 reference · b `CameraCalibration` + `ProfileLookTable` · c per-photo profile · d camera-matching colour out of the box (P-22) |
-| **M10.14** performance & verification | a HSL `cbrt`/`atan2` · b the prefix-cache eviction fix's picture half · c Clarity's coalescing · d the ~10–12 ms drag gap · e a 100k-photo catalog benchmark · f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) |
+| **M10.14** performance & verification | a HSL `cbrt`/`atan2` · b the prefix-cache eviction fix's picture half · c Clarity's coalescing · d the ~10–12 ms drag gap · e a 100k-photo catalog benchmark · f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h the reference photo on the GPU (M10.12b's range masks with an offset, 31 ms vs 7–9 at fit) |
 | **M10.15** Immich | a API keys in the keychain · b evict cached originals · c read Immich's rating · d two-way sync (re-opened) |
 | **M10.16** AI tools | a depth masks · b AI denoise · c content-aware remove |
 | **M10.17** merge | a HDR · b panorama |
