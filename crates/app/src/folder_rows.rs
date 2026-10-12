@@ -9,13 +9,15 @@
 use crate::list_row::{self, RowAction, RowSpec};
 use catalog::db::FolderRow;
 use eframe::egui;
+use rustroom_app::folder_marks::FolderMarks;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// What a row asked for, applied after the panel closes.
 pub(crate) enum Out {
     Open(PathBuf),
-    Forget(i64, PathBuf, i64),
+    /// Forget these folders (each with everything beneath it) — after the confirmation.
+    Forget(Vec<PathBuf>),
 }
 
 pub(crate) struct View<'a> {
@@ -27,13 +29,24 @@ pub(crate) struct View<'a> {
     pub open: Option<&'a Path>,
 }
 
+/// Draw the tree. A plain click opens a folder; ⌘-click marks it, ⇧-click marks the visible range,
+/// and a right-click forgets the marks — or that row alone (M10.19c, `FolderMarks`).
 pub(crate) fn rows(
     ui: &mut egui::Ui,
     view: View<'_>,
     collapsed: &mut HashSet<PathBuf>,
+    marks: &mut FolderMarks,
 ) -> Option<Out> {
     let mut out = None;
-    for node in rustroom_app::folder_tree::build(view.folders, collapsed) {
+    marks.follow(view.open);
+    // ⚠ Against EVERY catalog folder, not the visible rows: a collapse hides a mark, it does not drop
+    // it. A set, because this runs every frame (`CLAUDE.md`: nothing in the rail may grow per frame).
+    let exists: HashSet<&Path> = view.folders.iter().map(|f| f.path.as_path()).collect();
+    marks.retain(|p| exists.contains(p));
+    let nodes = rustroom_app::folder_tree::build(view.folders, collapsed);
+    // The rail's visible order — what a ⇧-click's range runs over.
+    let order: Vec<PathBuf> = nodes.iter().map(|n| n.path.clone()).collect();
+    for node in nodes {
         let is_immich = view.immich_root == Some(node.path.as_path());
         // ⚠ The basename is what fits and what identifies; the full path is the hover. ⚠ Except
         // the Immich cache root, whose basename is a host slug that says nothing — see
@@ -60,7 +73,8 @@ pub(crate) fn rows(
                 name: &shown,
                 count: Some(count),
                 meta: "",
-                selected: view.open == Some(node.path.as_path()),
+                // ⚠ The one accent for every marked row, and for the open folder (DESIGN §2).
+                selected: marks.contains(&node.path) || view.open == Some(node.path.as_path()),
                 indent,
                 hover: &path,
                 actions: &[RowAction {
@@ -84,11 +98,32 @@ pub(crate) fn rows(
                 }
             }
         }
-        // The Forget total covers the subtree, as does the forget itself.
+        // ⚠ The marks only from a marked row: a right-click elsewhere acts on that row alone.
+        r.response.context_menu(|ui| {
+            let targets = marks.targets(&node.path);
+            let label = match targets.len() {
+                1 => "Forget folder".to_string(),
+                n => format!("Forget {n} folders"),
+            };
+            if ui.button(label).clicked() {
+                out = Some(Out::Forget(targets));
+                ui.close();
+            }
+        });
+        // The Forget total covers the subtree, as does the forget itself (`ask_forget_folders`).
         if r.action == Some(0) {
-            out = Some(Out::Forget(node.id, node.path.clone(), node.count));
+            out = Some(Out::Forget(vec![node.path.clone()]));
         } else if r.clicked && !toggled {
-            out = Some(Out::Open(node.path.clone()));
+            // ⚠ The Dates section's gestures (`smart_sources::click_period`); ⌘ and ⇧ never open.
+            let mods = ui.input(|i| i.modifiers);
+            if mods.command {
+                marks.toggle(&node.path);
+            } else if mods.shift {
+                marks.extend_to(&node.path, &order);
+            } else {
+                marks.click(&node.path);
+                out = Some(Out::Open(node.path.clone()));
+            }
         }
     }
     out
@@ -98,6 +133,105 @@ pub(crate) fn rows(
 mod tests {
     use super::*;
     use crate::test_ui;
+
+    /// The rail over [`folders`] with nothing open, keeping its marks and the last thing it asked.
+    struct Rail {
+        ctx: egui::Context,
+        f: Vec<FolderRow>,
+        collapsed: HashSet<PathBuf>,
+        marks: FolderMarks,
+        out: Option<Out>,
+    }
+
+    impl Rail {
+        fn new() -> Self {
+            Self {
+                ctx: test_ui::ctx(),
+                f: folders(),
+                collapsed: HashSet::new(),
+                marks: FolderMarks::default(),
+                out: None,
+            }
+        }
+
+        fn body(&mut self, ui: &mut egui::Ui) {
+            if let Some(o) = rows(
+                ui,
+                View {
+                    folders: &self.f,
+                    immich_root: None,
+                    immich_count: 0,
+                    open: None,
+                },
+                &mut self.collapsed,
+                &mut self.marks,
+            ) {
+                self.out = Some(o);
+            }
+        }
+
+        fn click_with(&mut self, label: &str, mods: egui::Modifiers) {
+            let ctx = self.ctx.clone();
+            test_ui::click_with(&ctx, label, mods, |ui| self.body(ui));
+        }
+
+        /// Right-click the row labelled `row`, then choose `item` from its menu.
+        fn menu(&mut self, row: &str, item: &str) {
+            let ctx = self.ctx.clone();
+            test_ui::right_click(&ctx, row, |ui| self.body(ui));
+            test_ui::click(&ctx, item, |ui| self.body(ui));
+        }
+
+        fn forgot(&self) -> Option<Vec<PathBuf>> {
+            match &self.out {
+                Some(Out::Forget(paths)) => Some(paths.clone()),
+                _ => None,
+            }
+        }
+    }
+
+    fn p(s: &str) -> PathBuf {
+        PathBuf::from(s)
+    }
+
+    #[test]
+    fn a_command_click_marks_without_opening() {
+        let mut r = Rail::new();
+        r.click_with("fuji", egui::Modifiers::COMMAND);
+        assert!(r.out.is_none(), "a ⌘-click must not open the folder");
+        assert!(r.marks.contains(&p("/p/fuji")));
+    }
+
+    #[test]
+    fn a_shift_click_marks_the_visible_range() {
+        let mut r = Rail::new();
+        r.click_with("fuji", egui::Modifiers::COMMAND);
+        r.click_with("other", egui::Modifiers::SHIFT);
+        assert!(r.out.is_none(), "a ⇧-click must not open the folder");
+        assert_eq!(
+            r.marks.targets(&p("/p/other")),
+            vec![p("/p/fuji"), p("/p/fuji/2026"), p("/p/other")]
+        );
+    }
+
+    #[test]
+    fn the_menu_forgets_every_mark_from_a_marked_row() {
+        let mut r = Rail::new();
+        r.click_with("fuji", egui::Modifiers::COMMAND);
+        r.click_with("other", egui::Modifiers::COMMAND);
+        r.menu("other", "Forget 2 folders");
+        assert_eq!(r.forgot(), Some(vec![p("/p/fuji"), p("/p/other")]));
+    }
+
+    /// Review Focus 1: a right-click on an unmarked row never acts on the marks.
+    #[test]
+    fn a_right_click_on_an_unmarked_row_forgets_only_it() {
+        let mut r = Rail::new();
+        r.click_with("fuji", egui::Modifiers::COMMAND);
+        r.click_with("other", egui::Modifiers::COMMAND);
+        r.menu("2026", "Forget folder");
+        assert_eq!(r.forgot(), Some(vec![p("/p/fuji/2026")]));
+    }
 
     fn folders() -> Vec<FolderRow> {
         let row = |id, p: &str, count| FolderRow {
@@ -124,6 +258,7 @@ mod tests {
                     open: None,
                 },
                 collapsed,
+                &mut FolderMarks::default(),
             );
         })
         .into_iter()
@@ -153,6 +288,7 @@ mod tests {
                     open: None,
                 },
                 &mut collapsed,
+                &mut FolderMarks::default(),
             );
         };
         let fuji = test_ui::find(&ctx, "fuji", &mut body).expect("fuji is drawn");
@@ -186,6 +322,7 @@ mod tests {
                     open: None,
                 },
                 &mut collapsed,
+                &mut FolderMarks::default(),
             ) {
                 got = Some(match o {
                     Out::Open(p) => format!("open {}", p.display()),

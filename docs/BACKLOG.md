@@ -39,7 +39,7 @@ and a pointer, not deleted.
 | **M10.16** AI tools | depth masks (a); P-23 (b); P-26's content-aware remove (c) |
 | **M10.17** merge | P-24 |
 | **M10.18** new modules | P-25 (brought in by the author) |
-| **M10.19** found in use | HEIC/HEIF support (a, new 2026-10-01 — never an entry here); *Move to folder left one thing out* (b) |
+| **M10.19** found in use | HEIC/HEIF support (a, new 2026-10-01 — never an entry here); *Move to folder left one thing out* (b); marking several folders and forgetting them from a right-click menu (c, ✅ 2026-10-12 — found in use and built the same day at the author's request) |
 | **M11.2** Windows & Linux | *The in-window menu bar has never been run*; *Multi-monitor on Linux and Windows*; P-28 |
 | **M11.3** / **M11.5** | *Contributor-facing documentation* / *A plugin system* |
 

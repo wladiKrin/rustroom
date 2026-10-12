@@ -260,6 +260,8 @@ pub(crate) struct RustroomApp {
     pub(crate) keyword_rename: Option<(i64, String)>,
     /// Folders collapsed in the Folders tree (M9.9), for this session.
     pub(crate) folders_collapsed: std::collections::HashSet<std::path::PathBuf>,
+    /// The Folders rail's marked folders — view state like `folders_collapsed` (M10.19c).
+    pub(crate) folder_marks: rustroom_app::folder_marks::FolderMarks,
     /// The Library panel section being dragged, if one is.
     ///
     /// ⚠ On the app rather than a local, because a drag spans frames and a `Response` only knows

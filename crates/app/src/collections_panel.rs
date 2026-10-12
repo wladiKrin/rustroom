@@ -109,7 +109,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         MoveKeyword(i64, Option<i64>),
         OpenAllPhotos,
         OpenFolder(std::path::PathBuf),
-        ForgetFolder(i64, std::path::PathBuf, i64),
+        ForgetFolders(Vec<std::path::PathBuf>),
         OpenPeriod(rustroom_app::date_tree::Period, egui::Modifiers),
         OpenSmart(i64, String),
         DeleteSmart(i64),
@@ -213,12 +213,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             open: open.as_deref(),
                                         },
                                         &mut app.folders_collapsed,
+                                        &mut app.folder_marks,
                                     ) {
                                         Some(crate::folder_rows::Out::Open(p)) => {
                                             action = Action::OpenFolder(p)
                                         }
-                                        Some(crate::folder_rows::Out::Forget(id, p, n)) => {
-                                            action = Action::ForgetFolder(id, p, n)
+                                        Some(crate::folder_rows::Out::Forget(paths)) => {
+                                            action = Action::ForgetFolders(paths)
                                         }
                                         None => {}
                                     }
@@ -780,9 +781,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         }
         Action::OpenPeriod(period, mods) => app.click_period(ctx, period, mods),
         Action::OpenFolder(path) => app.open_catalog_folder(ctx, &path),
-        Action::ForgetFolder(id, path, count) => {
-            app.modal = crate::modals::Modal::ConfirmForgetFolder { path, id, count };
-        }
+        Action::ForgetFolders(paths) => app.ask_forget_folders(paths),
         Action::OpenKeyword(id, name) => app.open_keyword(ctx, id, &name),
         Action::DeleteKeyword(id, name) => {
             let scope = app

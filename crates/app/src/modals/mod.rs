@@ -124,15 +124,18 @@ pub enum Modal {
         /// here like `dims`, then committed when the dialog closes — see `info::show`.
         description: Option<rustroom_app::description::DescriptionDraft>,
     },
-    /// Confirming that a folder is removed from the catalog.
+    /// Confirming that folders are removed from the catalog — one from its ×, or every folder marked
+    /// in the rail (M10.19c). `folders` and `photos` count everything beneath them, each once.
     ///
-    /// ⚠ **No `dont_ask_again`, deliberately.** A deleted preset goes to a 20-entry trash and is
-    /// restorable by Ctrl+Z; this has neither. Suppressing a guard on the *irrecoverable* action
-    /// is exactly the distinction `the_two_delete_guards_are_independent` exists to protect.
-    ConfirmForgetFolder {
-        path: std::path::PathBuf,
-        id: i64,
-        count: i64,
+    /// ⚠ **No `dont_ask_again`, deliberately** — but not for the reason this once gave. It said a
+    /// forget had neither trash nor undo; it is ONE undo step
+    /// (`forgetting_a_parent_forgets_its_subtree_as_one_undo_step`). The dialog stays because one
+    /// click can take hundreds of photos' ratings, flags and keywords with it, and that deserves a
+    /// sentence first — the distinction `the_two_delete_guards_are_independent` protects.
+    ConfirmForgetFolders {
+        paths: Vec<std::path::PathBuf>,
+        folders: usize,
+        photos: i64,
     },
     /// Confirming a keyword deletion that would take descendants or assignments with it.
     ///
@@ -232,7 +235,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::ConfirmDeleteExportPreset { .. } => Which::ConfirmDeleteExport,
         Modal::ConfirmDeletePreset { .. } => Which::ConfirmDelete,
         Modal::ConfirmDeletePresetFolder { .. } => Which::ConfirmDeleteFolder,
-        Modal::ConfirmForgetFolder { .. } => Which::ConfirmForget,
+        Modal::ConfirmForgetFolders { .. } => Which::ConfirmForget,
         Modal::ConfirmDeleteKeyword { .. } => Which::ConfirmDeleteKeyword,
         Modal::ConfirmMergeKeyword { .. } => Which::ConfirmMergeKeyword,
         Modal::PhotoInfo { .. } => Which::PhotoInfo,
@@ -275,43 +278,64 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
     }
 }
 
-/// Confirming that a folder is removed from the catalog.
+/// Confirming that folders are removed from the catalog — one, or every marked one (M10.19c).
 ///
-/// ⚠⚠ **No "don't ask again".** A deleted preset goes to a 20-entry trash and Ctrl+Z restores it;
-/// this has neither, so the guard on the irrecoverable action is never suppressible.
+/// ⚠⚠ **No "don't ask again"** — see `Modal::ConfirmForgetFolders` for why the guard stays.
 fn confirm_forget_folder(app: &mut RustroomApp, ctx: &egui::Context) {
-    let Modal::ConfirmForgetFolder { path, id, count } = &app.modal else {
+    let Modal::ConfirmForgetFolders {
+        paths,
+        folders,
+        photos,
+    } = &app.modal
+    else {
         return;
     };
-    let (path, id, count) = (path.clone(), *id, *count);
+    let (paths, folders, photos) = (paths.clone(), *folders, *photos);
+    let (title, hover) = match paths.len() {
+        1 => (
+            "Forget folder?".to_string(),
+            "Removes this folder from the catalog and leaves its files on disk",
+        ),
+        n => (
+            format!("Forget {n} folders?"),
+            "Removes these folders from the catalog and leaves their files on disk",
+        ),
+    };
 
     let out = dialog(
         ctx,
         &mut app.settings,
         "confirm_forget_folder",
-        "Forget folder?",
+        &title,
         theme::DialogSize::Compact,
-        Footer::confirm(
-            "Forget",
-            "Removes this folder from the catalog and leaves its files on disk",
-            true,
-            "Cancel",
-        ),
+        Footer::confirm("Forget", hover, true, "Cancel"),
         |ui| {
-            ui.label(format!("Forget “{}”?", path.display()));
-            crate::theme::hint(
-                ui,
-                &format!(
-                    "Removes {count} photos from the catalog — this folder and every folder \
-                     beneath it — with their ratings, flags, labels and keywords. No files are \
-                     deleted and no edits are lost — re-opening the folder catalogues it again."
-                ),
-            );
+            if let [one] = paths.as_slice() {
+                ui.label(format!("Forget “{}”?", one.display()));
+                crate::theme::hint(
+                    ui,
+                    &format!(
+                        "Removes {photos} photos from the catalog — this folder and every folder \
+                         beneath it — with their ratings, flags, labels and keywords. No files are \
+                         deleted and no edits are lost — re-opening the folder catalogues it again."
+                    ),
+                );
+            } else {
+                ui.label(format!("Forget {} folders?", paths.len()));
+                crate::theme::hint(
+                    ui,
+                    &format!(
+                        "Removes {photos} photos in {folders} folders from the catalog — with their \
+                         ratings, flags, labels and keywords. No files are deleted and no edits are \
+                         lost — re-opening a folder catalogues it again."
+                    ),
+                );
+            }
         },
     );
 
     if out.primary {
-        app.forget_folder(ctx, id, &path);
+        app.forget_folders(ctx, &paths);
         app.modal = Modal::None;
     } else if out.dismissed {
         app.modal = Modal::None;

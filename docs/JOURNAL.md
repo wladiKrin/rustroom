@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.19c: mark several folders, forget them from a right-click menu (2026-10-12)](#2026-10-12--m1019c-mark-several-folders-forget-them-from-a-right-click-menu-branch-m1019c-folder-marks-merged-2026-10-12)
 - [The Library became slow: the rail's per-frame work (2026-10-12)](#2026-10-12--the-library-became-slow-the-rails-per-frame-work-branch-fix-library-rail-speed-merged-2026-10-12)
 - [M10.12a: the flat composite made usable, nesting parked (2026-10-12)](#2026-10-12--m1012a-the-flat-composite-made-usable-nesting-parked-branch-m1012a-mask-composites-merged-2026-10-12)
 - [Handover sweep: every summary re-measured, and what had drifted (2026-10-12)](#2026-10-12--handover-sweep-every-summary-re-measured-and-what-had-drifted)
@@ -165,6 +166,41 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-12 — M10.19c: mark several folders, forget them from a right-click menu (branch `m10.19c-folder-marks`, merged 2026-10-12)
+
+**Input:** found in use the same day — 180 LightCraft thumbnail folders, each its own rail row, took one ×
+and one confirmation each; the author had started clicking. Asked for: mark several folders, forget them
+all from a right-click menu. His calls: *delete* = **Forget from the catalog** (files untouched, undoable);
+marks are for actions only (Lightroom's union view offered, not chosen). Built now at his request, filed
+as M10.19c. Spec `2026-10-12-m10.19c-folder-marks-design.md`, plan beside it. (The 180 folders and their
+333 photos were forgotten first through `Catalog::forget_folder`, a backup of `catalog.db` taken.)
+
+**Built:**
+- **`folder_marks::FolderMarks`** (lib) — marks keyed by **path**, never row index (rows move when a
+  parent collapses); the Dates section's gestures: ⌘ toggles, ⇧ extends over the visible order from the
+  last non-⇧ click, a plain click opens and marks just that folder. `follow(open)` resets the marks when
+  the open folder changes; `retain` drops marks of folders gone from the catalog — against a set of
+  EVERY folder, so a collapse hides a mark without dropping it, at linear per-frame cost.
+- **`folder_tree::subtrees`** — every row under any of the paths, **each once**: a marked folder beneath
+  another marked one would otherwise be counted twice and its second delete would fail mid-batch.
+- **`forget_folders(paths)`** replaces `forget_folder(id, path)`; **one confirmation** for the × and the
+  menu (`Modal::ConfirmForgetFolders { paths, folders, photos }`, *"Forget N folders?"*), **one undo step**.
+- **The rail:** marked rows take the accent; right-click → *Forget folder* / *Forget N folders* — the marks
+  only from a marked row, else that row alone. `test_ui::click_with` (⌘/⇧-clicks) for the harness.
+- ⚠ **A stale comment corrected:** the confirmation's doc said a forget had neither trash nor undo;
+  `forgetting_a_parent_forgets_its_subtree_as_one_undo_step` has proved the undo since M9.9. The dialog
+  stays for the real reason — one click can take hundreds of photos' ratings and keywords.
+
+**Sabotages, every one red:** `targets` ignoring whether the row is marked; `follow` resetting every
+frame; `subtrees` without the dedupe (both forget tests *and* the `subtrees` test); the menu acting on the
+marks from any row; ⌘ falling through to open (3 tests).
+
+**Ruled at the final review (my own pass, no subagent unasked):** every non-folder source is "no open
+folder" to the rail, so marks made in All Photos survive a switch to a collection — visible, and a forget
+still asks; the spec now says so rather than a source identity being plumbed in.
+
+**Counts:** 3660 → **3674 tests**. ✅ **Confirmed by the author ("works") and merged 2026-10-12.**
 
 ### 2026-10-12 — The Library became slow: the rail's per-frame work (branch `fix-library-rail-speed`, merged 2026-10-12)
 
