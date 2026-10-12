@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M10.19c: mark several folders, forget them from a right-click menu (2026-10-12)](#2026-10-12--m1019c-mark-several-folders-forget-them-from-a-right-click-menu-branch-m1019c-folder-marks)
+- [M10.19c: mark several folders, forget them from a right-click menu (2026-10-12)](#2026-10-12--m1019c-mark-several-folders-forget-them-from-a-right-click-menu-branch-m1019c-folder-marks-merged-2026-10-12)
 - [The Library became slow: the rail's per-frame work (2026-10-12)](#2026-10-12--the-library-became-slow-the-rails-per-frame-work-branch-fix-library-rail-speed-merged-2026-10-12)
 - [M10.12a: the flat composite made usable, nesting parked (2026-10-12)](#2026-10-12--m1012a-the-flat-composite-made-usable-nesting-parked-branch-m1012a-mask-composites-merged-2026-10-12)
 - [Handover sweep: every summary re-measured, and what had drifted (2026-10-12)](#2026-10-12--handover-sweep-every-summary-re-measured-and-what-had-drifted)
@@ -167,7 +167,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
-### 2026-10-12 — M10.19c: mark several folders, forget them from a right-click menu (branch `m10.19c-folder-marks`)
+### 2026-10-12 — M10.19c: mark several folders, forget them from a right-click menu (branch `m10.19c-folder-marks`, merged 2026-10-12)
 
 **Input:** found in use the same day — 180 LightCraft thumbnail folders, each its own rail row, took one ×
 and one confirmation each; the author had started clicking. Asked for: mark several folders, forget them
@@ -200,7 +200,7 @@ marks from any row; ⌘ falling through to open (3 tests).
 folder" to the rail, so marks made in All Photos survive a switch to a collection — visible, and a forget
 still asks; the spec now says so rather than a source identity being plumbed in.
 
-**Counts:** 3660 → **3674 tests**.
+**Counts:** 3660 → **3674 tests**. ✅ **Confirmed by the author ("works") and merged 2026-10-12.**
 
 ### 2026-10-12 — The Library became slow: the rail's per-frame work (branch `fix-library-rail-speed`, merged 2026-10-12)
 
