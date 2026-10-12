@@ -115,8 +115,10 @@ mod region;
 mod tail_rendering;
 #[cfg(test)]
 mod test_fixtures;
-pub use adjustments::white_balance_gains;
 pub(crate) use adjustments::{adjustment_stages, capture_stages};
+pub use adjustments::{
+    global_wb_gains, mask_wb_shift, shifted_white_balance, white_balance_gains, MIRED_PER_STEP,
+};
 pub use build::{
     build_pipeline, build_pipeline_rendered, build_pipeline_spec, build_pipeline_split,
     build_pipeline_split_in_region, build_pipeline_split_in_region_with_brush,
