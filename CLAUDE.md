@@ -102,7 +102,7 @@ rustroom/
 │   ├── xmp/                  # ✅ stem.xmp read / merge-write: rating, label, keywords, title/caption/rights/creator (M6.3 + M6.2); zero GUI, zero catalog
 │   ├── immich/               # ✅ Immich client (zero GUI, `ureq`): search/buckets/album/stacks/**upload** (+ `multipart.rs`, hand-rolled — ureq has none), `Asset`/`AlbumSummary`/`Bucket`/`Upload`. ⚠ DTOs deliberately narrow; nullable-vs-required audited against a *captured* reply
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
-│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs holds only the module list, the shared constants and `fn main` — the state is defined in `app`/`session` and built in `bootstrap` (M10.7d; the "78 lines of code" once quoted here was the first-`#[cfg(test)]` blind spot: it held 555); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. ⚠⚠ **THE MODULE LIST THAT USED TO SIT HERE IS GONE ON PURPOSE.** It enumerated ~50 of the **152 `.rs` files** under `crates/app/src` and had silently gone half-stale — it was missing `multi/{compare,survey,pane}`, `menu`, `menu_bar`, `native_menu`, `commands`, `tone_curve_tool`, `brush_tool`, `mask_tool`, `looks`, `marks` and ~40 more, which is worse than no list because this one is the *placement guide*. **`ls crates/app/src/` is the inventory; what belongs here is the RULE:** `lib.rs` declares **107** modules and **not one of them uses egui** (2026-10-11: every `egui::` in them is in a comment) while `main.rs` declares **53** bin modules (2026-10-11) and egui lives only there. ⚠ Re-measure, never requote — it said 73 and 33 for weeks: count with `grep -c '^pub mod [a-z_0-9]*;' crates/app/src/lib.rs` (BSD `grep -E` has no `\s`, and zsh does not word-split a `$files` list — pipe it through `xargs`). Logic goes in the lib, widgets in the bin.
+│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs holds only the module list, the shared constants and `fn main` — the state is defined in `app`/`session` and built in `bootstrap` (M10.7d; the "78 lines of code" once quoted here was the first-`#[cfg(test)]` blind spot: it held 555); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. ⚠⚠ **THE MODULE LIST THAT USED TO SIT HERE IS GONE ON PURPOSE.** It enumerated ~50 of what are now **266 `.rs` files** under `crates/app/src` (2026-10-12) and had silently gone half-stale — it was missing `multi/{compare,survey,pane}`, `menu`, `menu_bar`, `native_menu`, `commands`, `tone_curve_tool`, `brush_tool`, `mask_tool`, `looks`, `marks` and ~40 more, which is worse than no list because this one is the *placement guide*. **`ls crates/app/src/` is the inventory; what belongs here is the RULE:** `lib.rs` declares **108** modules and **not one of them uses egui** (2026-10-12: every `egui::` in them is in a comment) while `main.rs` declares **53** bin modules (2026-10-12) and egui lives only there. ⚠ Re-measure, never requote — it said 73 and 33 for weeks: count with `grep -c '^pub mod [a-z_0-9]*;' crates/app/src/lib.rs` (BSD `grep -E` has no `\s`, and zsh does not word-split a `$files` list — pipe it through `xargs`). Logic goes in the lib, widgets in the bin.
 │   └── catalog/              # ✅ scan_folder → RAW+JPEG/PNG/TIFF entries (+ mtime); SortOrder/sort (name/modified/edited, case-insensitive, name tie-break); is_raw/is_supported (in-memory; SQLite DAM later) + Description per file (v7, M6.2)
 │   ⚠⚠ THE TREE ABOVE LISTS 12 OF 18 CRATES — it omits `gpu-pipeline`, `lens-profile`, `camera-profile`, `ai-mask`, `test-dir` (dev-only: every test's temp directory, M10.7c) and `lr-preset` (Lightroom presets read into edits, no GUI, M10.9c). **`ls crates/` is the answer; this tree is a sketch.**
 ├── docs/
@@ -129,16 +129,11 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
   `cargo test --workspace immich_source`. ⚠ Give clippy its own directory for the same reason — a
   different rustc wrapper evicts rustc's own artifacts:
   `CARGO_TARGET_DIR=target/clippy cargo clippy --workspace --all-targets -- -D warnings`.
-  ⚠ Two hypotheses were measured and **wrong**: test execution (the whole `lens-profile` suite runs
-  in **2.4 s**, the goldens in **0.30 s**, so `opt-level` buys nothing) and fingerprint cost (1 s warm
-  over 2.39 M files). The cost was **cold filesystem work**: `target/debug` had reached **85 GB**, and
-  a fresh binary's `_dyld_start` wait scales with its size. Fixed by
-  `[profile.dev] debug = "line-tables-only"` — cold run **437 s → 11 s**, tree **90 → 10 GB**.
-  ⚠ A `SessionStart` hook (`scripts/target-budget.sh`, wired in the untracked
-  `.claude/settings.local.json`) warns when `target/` passes **250,000 files** — a healthy tree here
-  is ~37k, and the pathological one was **2.39 M**, of which ~98.5% were stale because **Cargo never
-  garbage-collects**. It counts files rather than bytes, bounded by `find | head`, so it costs at
-  most ~1.3 s however large the tree is; a `du` would be slowest exactly when it most needs to run.
+  ⚠ The slowness was never test execution or fingerprinting but **cold filesystem work** in an 85 GB
+  `target/`; `[profile.dev] debug = "line-tables-only"` fixed it (cold **437 s → 11 s**;
+  `grep -n '_dyld_start' docs/JOURNAL.md`). ⚠ A `SessionStart` hook (`scripts/target-budget.sh`, in the
+  untracked `.claude/settings.local.json`) warns past **250,000 files** in `target/` (healthy ~37k) —
+  **Cargo never garbage-collects**; it counts files with `find | head`, never `du`.
   ⚠⚠ **THE WHOLE GATE IS ~79 SECONDS** (fmt instant, clippy 62 s cold, tests 16 s). Any document
   saying it is 15–30 minutes predates 2026-09-23 and is wrong; so is the 2026-09-19 journal note
   calling the stall "not fixable from here".
@@ -169,11 +164,12 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ Workflow:** every feature goes brainstorm → spec → plan → executing-plans, **inline** (the user has chosen inline every single time; offer the choice but expect that answer). Specs land in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`.
 >
-> **⚠ The history is in `docs/JOURNAL.md`** — 94 dated sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
+> **⚠ The history is in `docs/JOURNAL.md`** — 184 sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-09-29)
+### State (2026-10-12)
 
-**3621 tests**, **84 goldens**, gate green on `main`. ⚠⚠ **Run the git command above rather than
+**3621 tests** (7 ignored), **85 golden tests** (73 reference images — `cargo test --workspace --test golden`),
+gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -217,10 +213,24 @@ that had grown to ~170 lines by appending.)
   2026-09-29 — start from `docs/BACKLOG.md`'s reasons table. ⚠ The server is a **Tailscale Funnel**: a stopped
   Tailscale on the Mac is never the cause of an Immich error.
 
+**Phase 10 so far — M10.6 to M10.11, merged 2026-09-29 – 10-12, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`):
+
+| Id | What | The thing to remember |
+|---|---|---|
+| M10.6–7 | Immich Timeline; a hover on every control; ICC date pinned, `TailRendering`, `test-dir`, big files split | the hover sweep and the 1,000-line ceiling (*Warnings*) |
+| M10.8a–d | Keyword suggestions; movable panels + a vertical filmstrip; hand stacks (catalog v12); batch rename ⌘R | a rename keeps its XMP and every catalog table |
+| M10.9a–c | Preset folders, import/export; user shortcuts (Settings → Keyboard); Lightroom presets (crate `lr-preset`) | what a Lightroom preset sets that Rustroom lacks is NAMED to the user, never dropped silently |
+| M10.10a/b | Image watermark; export sizing in px/cm/in with a PPI, Limit file size | sizing applies to the CROPPED picture (it used to shrink the uncropped decode); the limit lowers quality to 40, then pixels |
+| M10.11a | Film negative: pick the base, each channel balanced from measured densities | a prefix step after lens, its own group OFF by default; the measurement skips densities outside −0.05…3.0 and a 15 % border (2 % once cropped) — a scan's holder had made an HP5 frame black |
+| M10.11b | Grain in Effects (the vignette's group; the field is still `vignette`) | `MAX_EV` 0.7 by the author's tuning; the noise sits at pixel corners in FRAME coordinates, so a ¼-scale preview reads exactly the export's pixel |
+
 ### ▶ Next action — Phase 10, top down
 
-✅ Phase 9 (M9.13 merged 2026-09-28, M9.14 2026-09-29); ✅ the design language (2026-09-29); ✅ reordering
-masks and components (2026-09-29, `grep -n 'Reordering masks' docs/JOURNAL.md`).
+✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.11** (table above).
+
+**▶ NEXT: M10.12a — nested mask composites**, `radial ∩ (brush ∪ gradient)`; composites are one level
+deep today on purpose, and the backlog's *Composites are one level deep* holds why. Start it when the
+author says to continue.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
 release engineering, LAST.** The canonical list — every sub-item with its date, size and reasoning — is
@@ -230,12 +240,6 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 
 | Milestone | Sub-items |
 |---|---|
-| **M10.6** your to-do + a design leftover | a ✅ Immich Timeline at the top, plus the row buttons always faintly drawn and 20 pt wide — merged 2026-09-29 (`grep -n 'M10.6a' docs/JOURNAL.md`) · b ✅ every clickable control's hover sentence, checked on the drawn app; a photo's name on hover in the filmstrip (the grid's caption says it) — merged 2026-09-30 (`grep -n 'M10.6b' docs/JOURNAL.md`) |
-| **M10.7** code health | a ✅ pin lcms2's ICC creation date (reproducible exports, merged 2026-09-30) · b ✅ `ProfileRendering` → `TailRendering`, the type and its bindings (merged 2026-09-30) · c ✅ every test's temp directory from the `test-dir` crate, 54 sites, two gates at once proven safe (merged 2026-09-30) · d ✅ the nine files over 1,000 lines of code split by responsibility and their four giant functions broken into phases, a ceiling guard (merged 2026-09-30) · e ✅ absorbed into d (`PrefixCache`'s tests are in `prefix_cache.rs`) |
-| **M10.8** Library & workflow | a ✅ keyword suggestions (same capture day + companions), type to tag, tagging undoable — merged 2026-10-01 (`grep -n 'M10.8a' docs/JOURNAL.md`) · b ✅ movable panels — the Library rail, the edit panel and the filmstrip each left/right (the strip also bottom), set in Settings → Appearance, a vertical filmstrip — merged 2026-10-01 (`grep -n 'M10.8b' docs/JOURNAL.md`) · c ✅ stacks by hand (⌘G, ⇧⌘G, drag to reorder) and Stack by capture time (with None), a pile drawing (photos below · cards · none), stored in the catalog (v12) — merged 2026-10-02 (`grep -n 'M10.8c' docs/JOURNAL.md`) · d ✅ batch rename — Rename… ⌘R and the right-click: a template, `{seq}` in grid order from a start number, a preview, one undo step; the single rename now keeps its XMP and every catalog table — merged 2026-10-02 (`grep -n 'M10.8d' docs/JOURNAL.md`) |
-| **M10.9** presets & shortcuts | a ✅ preset folders (one level), rename in place, Update with current settings, Move to, import/export JSON, one undo step each — merged 2026-10-02 (`grep -n 'M10.9a' docs/JOURNAL.md`) · b ✅ user-defined shortcuts — Settings → Keyboard: any menu command (one Open most recent folder), any chord with ⌥ and F-keys, take-over, Reset, a sentence per command; every menu, the reference and hover text follow — merged 2026-10-10 (`grep -n 'M10.9b' docs/JOURNAL.md`) · c ✅ import Lightroom presets — `.xmp`, `.lrtemplate`, `.zip` packs through the new crate `lr-preset`, each into its group's folder, what is left out named; tested on real files — merged 2026-10-11 (`grep -n 'M10.9c' docs/JOURNAL.md`) |
-| **M10.10** export | a ✅ an image watermark — Export → Watermark: Text · Image, a kept copy (numbered on a clash), width as a share of the long edge, blended by its alpha in the export's colour space; a missing copy named in the status — merged 2026-10-11 (`grep -n 'M10.10a' docs/JOURNAL.md`) · b ✅ export sizing — Lightroom's Resize to fit (W & H, Dimensions, long/short edge, MP, %) in px/cm/in with a PPI and Don't enlarge, applied to the CROPPED picture (it used to shrink the uncropped decode); the PPI in JPEG/PNG/TIFF; Limit file size (quality to 40, then pixels) — merged 2026-10-11 (`grep -n 'M10.10b' docs/JOURNAL.md`) |
-| **M10.11** Develop additions | a ✅ film negative inversion — Develop → Negative: pick the film base, the frame balanced per channel from measured densities, a prefix step after lens (`pipeline::negative`), its own edit group off by default; every reader of the decode sees the positive (`negative_tool::view`); RAW negatives thumbnailed from their decode; the measurement leaves out the scan's holder, sprocket holes and border — merged 2026-10-11 (`grep -n 'M10.11a' docs/JOURNAL.md`) · b ✅ Grain — Effects (the vignette's group, shown as Effects again): Amount, Size, Roughness; luminance in stops, strongest in the midtones, sized in the frame's pixels, after sharpening; a GPU twin; Lightroom presets' grain maps; Amount 100 at 0.7 stops by the author's tuning — merged 2026-10-12 (`grep -n 'M10.11b' docs/JOURNAL.md`) |
 | **M10.12** the mask model | a nested composites · b scene sliders as offsets (Lightroom's model) · c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a an independent C2/C3 reference · b `CameraCalibration` + `ProfileLookTable` · c per-photo profile · d camera-matching colour out of the box (P-22) |
 | **M10.14** performance & verification | a HSL `cbrt`/`atan2` · b the prefix-cache eviction fix's picture half · c Clarity's coalescing · d the ~10–12 ms drag gap · e a 100k-photo catalog benchmark · f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) |
@@ -252,11 +256,9 @@ WITHDRAWN — it was never real** (the licence has been committed since `e71330d
 ⚠ **Retired ids:** M9.1–M9.5 and M10.1–M10.5 moved with their work (M9.2 → M10.2 → M11.2), so Phase 10
 starts at **M10.6**; M5.1c and M6.4c kept their own ids.
 
-**How the author works** (and has every milestone this session): brainstorm → spec → plan → execute
-inline with no check-ins after the design is approved; a branch per feature; he tries it in the GUI
-and says "works, merge it and delete the branch" — then merge `--no-ff`, delete the branch, mark the
-journal/CLAUDE.md/Obsidian ✅. He reports what he sees precisely; take it literally. He asks for plain
-explanations of domain terms (DNG, fringe, rendering intent) before choosing — give them.
+**How the author closes a milestone:** he tries it in the GUI and says "works, merge and delete the
+branch" — then merge `--no-ff`, delete it, mark the journal, this file, the backlog map and the vault ✅.
+He reports what he sees precisely (take it literally) and asks for domain terms explained plainly first.
 
 ⚠⚠ **The GPU port is finished** — done, declined with numbers, or parked/blocked (M10.14f/g).
 ⛔ Declined with numbers in `docs/BACKLOG.md` — do not re-propose from a list: the prefix seams'
@@ -265,9 +267,10 @@ GPU device for the window and the pipeline.
 
 ### The GPU port — closed (reopened once, for geometry, 2026-09-26)
 
-⚠⚠ **19 of the 20 stages that `impl PipelineStage`** have GPU twins; only `spot_removal` is a
-deliberate omission (measured and closed unbuilt). ⚠⚠ **Geometry was declined too, and that decline
-was WRONG for one reason worth remembering: it priced the COMPUTE and missed the TRANSFERS.** On a
+⚠⚠ **20 of the 24 stages that `impl PipelineStage`** have GPU twins (2026-10-12; `per_pixel`'s three
+test doubles not counted). The four without — `spot_removal` (measured and closed unbuilt), `defringe`
+(parked, M10.14f), `red_eye` and `negative` — are all **prefix steps**: every TAIL stage has a twin.
+⚠⚠ **Geometry was declined too, and that decline was WRONG for one reason worth remembering: it priced the COMPUTE and missed the TRANSFERS.** On a
 fitted rung of 6.8 Mpx a Straighten frame was 63 ms, and the twin's value was that it let the pixels
 stay on the GPU: a resident input and a no-download handoff to the tail. ⚠ **Do not re-propose from a
 list alone**; the order with each row's cost is in `docs/JOURNAL.md` (`grep -n "agreed order"`) and
@@ -298,9 +301,21 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   counts non-blank lines outside every `#[cfg(test)]` item **wherever it sits**, and skips a file
   declared `#[cfg(test)] mod x;`. ⚠ The old `awk` to the *first* `#[cfg(test)]` is blind past a
   mid-file test item — it read `main.rs` as 78 lines where it held 555; do not use it. Nearest the
-  ceiling on 2026-09-30: `app/src/session_flow.rs` 978, `modals/export.rs` 796,
-  `develop/panel/adjustments.rs` 795. ⚠⚠ **Re-measure, never requote** — set the ceiling to 500 for
-  the list. Split by responsibility, never to dodge the number: the M10.7d spec and plan are the method.
+  ceiling on 2026-10-12: `app/src/session_flow.rs` 979, `modals/settings.rs` 863,
+  `collections_panel.rs` 801, `modals/export.rs` 796, `develop/panel/adjustments.rs` 778.
+  ⚠⚠ **Re-measure, never requote** — set `CEILING` to 600 for the list, then set it back. Split by responsibility, never to dodge the number: the M10.7d spec and plan are the method.
+- ⚠⚠ **A new `Edits` field is `#[serde(default, skip_serializing_if = "<T>::is_default")]`** (M10.11a/b),
+  or the default's serialization changes and every rendered preview on disk misses at once.
+  `the_fingerprint_is_stable_across_calls_and_pinned` catches it; re-pin only for a deliberate format change.
+- ⚠⚠ **A new TAIL stage needs a GPU twin with a `REPLACEABLE` row AND a field set in `accelerate.rs`'s
+  `every_tail_stage()`.** That fixture is hand-built: a stage with neither is invisible to
+  `every_tail_stage_is_replaceable_or_a_mask`, and the GPU tail silently splits at it.
+- ⚠ **A new PREFIX step trips three tests in `prefix.rs` that count or index the steps** (truncated
+  key, capture stages, own key) — on purpose: renumber them; the step's `PrefixStepKey` carries its whole setting.
+- ⚠⚠ **Every reader of the undeveloped decode (`Session.buffer`) sees the positive** (M10.11a): a pixel
+  through `negative_tool::view`, an image through `pipeline::negative::positive` (Auto tone, the AI
+  input), and a cache of anything derived from it keyed on `edits.negative` (`ai_cache::key`, the AI
+  input cache). A new eyedropper or analysis that skips it measures the negative.
 
 ### Standing lessons (the expensive ones — full stories in `docs/JOURNAL.md`)
 

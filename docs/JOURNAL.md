@@ -23,6 +23,25 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [Handover sweep: every summary re-measured, and what had drifted (2026-10-12)](#2026-10-12--handover-sweep-every-summary-re-measured-and-what-had-drifted)
+- [M10.11b: grain (2026-10-12)](#2026-10-12--m1011b-grain-branch-m1011b-grain-merged-2026-10-12)
+- [M10.11a: film negative inversion (2026-10-11)](#2026-10-11--m1011a-film-negative-inversion-branch-m1011a-film-negative-merged-2026-10-11)
+- [M10.10b: export sizing in cm/in with a PPI, and a file-size limit (2026-10-11)](#2026-10-11--m1010b-export-sizing-in-cmin-with-a-ppi-and-a-file-size-limit-branch-m1010b-export-sizing-merged-2026-10-11)
+- [M10.10a: an image watermark (2026-10-11)](#2026-10-11--m1010a-an-image-watermark-branch-m1010a-image-watermark-merged-2026-10-11)
+- [M10.9c: import Lightroom presets (2026-10-10)](#2026-10-10--m109c-import-lightroom-presets-branch-m109c-lightroom-presets-merged-2026-10-11)
+- [M10.9b: user-defined keyboard shortcuts (2026-10-10)](#2026-10-10--m109b-user-defined-keyboard-shortcuts-branch-m109b-shortcuts-merged-2026-10-10)
+- [M10.9a: preset folders, rename, import and export (2026-10-02)](#2026-10-02--m109a-preset-folders-rename-import-and-export-branch-m109a-presets-merged-2026-10-02)
+- [M10.8d: batch rename (2026-10-02)](#2026-10-02--m108d-batch-rename-branch-m108d-batch-rename-merged-2026-10-02)
+- [M10.8c: stacks by hand, and stacking by capture time (2026-10-01)](#2026-10-01--m108c-stacks-by-hand-and-stacking-by-capture-time-branch-m108c-stacks-merged-2026-10-02)
+- [M10.8b: movable panels and a vertical filmstrip (2026-10-01)](#2026-10-01--m108b-movable-panels-and-a-vertical-filmstrip-branch-m108b-layout-merged-2026-10-01)
+- [Move to folder, Immich downloads included (2026-10-01)](#2026-10-01--move-to-folder-immich-downloads-included-branch-move-to-folder-merged-2026-10-01)
+- [Virtual copies from the Library: made and deleted without leaving it (2026-10-01)](#2026-10-01--virtual-copies-from-the-library-made-and-deleted-without-leaving-it-branch-library-copy-actions-merged-2026-10-01)
+- [Remove from collection, undoable collections, and views of member copies only (2026-10-01)](#2026-10-01--remove-from-collection-undoable-collections-and-views-of-member-copies-only-branch-remove-from-collection-merged-2026-10-01)
+- [Live views: a keyword, collection, smart-collection or date view follows the catalog (2026-10-01)](#2026-10-01--live-views-a-keyword-collection-smart-collection-or-date-view-follows-the-catalog-branch-library-live-sources-merged-2026-10-01)
+- [M10.8a: keyword suggestions, type to tag, and tagging made undoable (2026-10-01)](#2026-10-01--m108a-keyword-suggestions-type-to-tag-and-tagging-made-undoable-branch-m108a-keyword-suggestions-merged-2026-10-01)
+- [An empty grid says what emptied it (2026-09-30)](#2026-09-30--an-empty-grid-says-what-emptied-it-branch-library-empty-search-message-merged-2026-09-30)
+- [M10.7d: the large files split, and the giant functions inside them (2026-09-30)](#2026-09-30--m107d-the-large-files-split-and-the-giant-functions-inside-them-branch-m107d-split-large-files-merged-2026-09-30)
+- [M10.7c: every test's temp directory is its own (2026-09-30)](#2026-09-30--m107c-every-tests-temp-directory-is-its-own-branch-m107c-temp-dir-isolation-merged-2026-09-30)
 - [M10.7b: `ProfileRendering` → `TailRendering` (2026-09-30)](#2026-09-30--m107b-profilerendering--tailrendering-branch-m107b-tail-rendering-rename-merged-2026-09-30)
 - [M10.7a: bit-reproducible exports (2026-09-30)](#2026-09-30--m107a-bit-reproducible-exports-branch-m107a-reproducible-exports-merged-2026-09-30)
 - [M10.6b: every clickable control says what it does (2026-09-30)](#2026-09-30--m106b-every-clickable-control-says-what-it-does-branch-m106b-hover-table-merged-2026-09-30)
@@ -143,28 +162,34 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Fixes found by using the finished rework (2026-08-24)](#fixes-found-by-using-the-finished-rework-2026-08-24)
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
-- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### The Export dialog: presets beside summarised sections (2026-09-22)
+- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
-The user, right after the dialogs rework: "Let's also rework the export dialog." Three
-mockups on the canvas "Rustroom Export" (https://claude.ai/artifact/GG1AUf12BdF9hhxs7xPgJf);
-**C** chosen — the preset list beside the sections, Lightroom's shape at the Wide size. On
-`export-presets-sheet`; spec `2026-09-22-export-dialog-design.md`. **2633 → 2634 tests**,
-goldens unmoved.
+### 2026-10-12 — Handover sweep: every summary re-measured, and what had drifted
 
-| what landed | where |
-|---|---|
-| the dialog at **Wide**, titled `Export 3 photos`; a 170 pt **preset column** on the left — `list_row`s (lit when the current options equal the preset's, click applies, × deletes through the confirm path by selecting first), "+ Save current…" at the bottom (accessible "Save current as preset…") | `modals/export.rs` |
-| the settings as **eight collapsible sections** with the panels' header and the state as trailing text — LOCATION `Export`, NAMING `DSCF6509-web.jpg` (rendered live, or `invalid`), FILE `JPEG · sRGB · 92`, SIZE `2048 px long edge`, SHARPENING, DEMOSAIC, METADATA, WATERMARK — the first three open by default; the long hints are hovers, the token list stays inline | `modals/export.rs` `section`; lib **`export_summary.rs`** (pure, each phrase tested) |
-| the footer note names the preset the options equal, or `changed from “Web”` | `export_summary::footer_note` |
+**Input:** the author, after M10.11b: *"update all the files, roadmap and memory, we'll continue in a
+different chat"*. Every number was re-measured rather than requoted, and each summary checked against
+the lines beneath it.
+
+| what had drifted | found | now |
+|---|---|---|
+| the vault's Phase 10 **summary table** | ⬜ for M10.6–M10.9 (every item line below it said ✅); M10.9 as a–b | ✅, a–c |
+| `docs/BACKLOG.md`'s map, P-26, three one-line entries and *Film negative inversion* | still open | ✅ with dates |
+| `CLAUDE.md` golden count | 84 | **85** golden tests (73 reference images) |
+| `CLAUDE.md` GPU twins | "19 of the 20 stages" | **20 of 24** — defringe, red eye, negative and grain came after; all four without a twin are prefix steps |
+| `CLAUDE.md` file and module counts | 152 app files, 107 lib modules, 94 journal sections | 266, 108, 184 (the repaired heading and this entry included) |
+| this journal | a heading glued to the last contents line since `4937357b` (2026-09-22), so *The Export dialog* section had no heading and sat above every entry written after it; the contents stopped at M10.7b | moved to its date; the contents filled in to here |
 
 **Worth keeping:**
 
-- ⚠ A header's trailing text is painted and the harness cannot read it — so every summary is a
-  lib function with its own test, and the dialog test asserts the section *names* and the
-  preset rows (named, and lit through AccessKit's `toggled`).
-- ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
-  one closure. Reported; the collision and save-preset dialogs are the natural split if it
-  grows again.
+- ⚠ **A per-merge update touches the line for the item and misses the summaries above it** — the
+  vault's table, a count in `CLAUDE.md`, the contents list. Four milestones of careful per-merge edits
+  left the table wrong. The shape is *Standing lessons*' "a claim restated stops being checked": a
+  summary is a claim, and only a sweep that re-derives it notices.
+- ⚠ **Left as found:** the contents list older than 2026-09-30 is out of step (132 headings missing,
+  70 anchors pointing at no heading, many in another slug style). The journal is grepped, never
+  browsed, so rebuilding it was not worth a hand edit of ~200 lines; `grep -n '^### '` is the index.
+- `CLAUDE.md` gained four warnings from M10.11: the default-skipping serde attribute, a tail stage's
+  twin plus fixture field, the prefix tripwires, and the negative's readers.
 
 ### 2026-10-12 — M10.11b: grain (branch `m10.11b-grain`, merged 2026-10-12)
 
@@ -3909,6 +3934,29 @@ made the new Immich tab render Input's contents.
 Immich's default thumbnail format, so without it every album thumbnail would fail to decode and the
 grid would stay empty with no error. A generated 38-byte lossless webp fixture pins it; a PNG
 fixture cannot.
+
+### The Export dialog: presets beside summarised sections (2026-09-22)
+
+The user, right after the dialogs rework: "Let's also rework the export dialog." Three
+mockups on the canvas "Rustroom Export" (https://claude.ai/artifact/GG1AUf12BdF9hhxs7xPgJf);
+**C** chosen — the preset list beside the sections, Lightroom's shape at the Wide size. On
+`export-presets-sheet`; spec `2026-09-22-export-dialog-design.md`. **2633 → 2634 tests**,
+goldens unmoved.
+
+| what landed | where |
+|---|---|
+| the dialog at **Wide**, titled `Export 3 photos`; a 170 pt **preset column** on the left — `list_row`s (lit when the current options equal the preset's, click applies, × deletes through the confirm path by selecting first), "+ Save current…" at the bottom (accessible "Save current as preset…") | `modals/export.rs` |
+| the settings as **eight collapsible sections** with the panels' header and the state as trailing text — LOCATION `Export`, NAMING `DSCF6509-web.jpg` (rendered live, or `invalid`), FILE `JPEG · sRGB · 92`, SIZE `2048 px long edge`, SHARPENING, DEMOSAIC, METADATA, WATERMARK — the first three open by default; the long hints are hovers, the token list stays inline | `modals/export.rs` `section`; lib **`export_summary.rs`** (pure, each phrase tested) |
+| the footer note names the preset the options equal, or `changed from “Web”` | `export_summary::footer_note` |
+
+**Worth keeping:**
+
+- ⚠ A header's trailing text is painted and the harness cannot read it — so every summary is a
+  lib function with its own test, and the dialog test asserts the section *names* and the
+  preset rows (named, and lit through AccessKit's `toggled`).
+- ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
+  one closure. Reported; the collision and save-preset dialogs are the natural split if it
+  grows again.
 
 ### The dialogs in one language (2026-09-22)
 

@@ -27,11 +27,11 @@ and a pointer, not deleted.
 | Milestone | Entries in this file |
 | --- | --- |
 | **M10.6** your to-do + a design leftover | (from the vault's `to dos.md` and `DESIGN.md`; the welcome screen and the empty Library's text went to **M11.4**) |
-| **M10.7** code health | *Exports are not bit-reproducible* (a, ✅ 2026-09-30); the `ProfileRendering` → `TailRendering` rename (b, 2026-09-30 — the entries below keep the old name, as history); the temp-dir test isolation (c, ✅ 2026-09-30 — the `test-dir` crate); the large files split, with M10.7e's `PrefixCache` tests (d, 2026-09-30); the follow-ups d left on purpose are below the table |
-| **M10.8** Library & workflow | keyword suggestions (a, ✅ 2026-10-01 — from M4.2b's caveat, never an entry here; its two omissions are below the table); P-26's batch rename (d); *Library: … vertical filmstrip* (b) |
-| **M10.9** presets & shortcuts | *Presets: no import/export…* (a); *No user-defined keyboard shortcuts* (b); Lightroom `.xmp` presets, split from (a) by the author 2026-10-02 (c) |
-| **M10.10** export | P-26's image watermark (a) and export sizing (b) |
-| **M10.11** Develop additions | *Film negative inversion* (a); P-26's Grain (b) |
+| **M10.7** code health | *Exports are not bit-reproducible* (a, ✅ 2026-09-30); the `ProfileRendering` → `TailRendering` rename (b, ✅ 2026-09-30 — the entries below keep the old name, as history); the temp-dir test isolation (c, ✅ 2026-09-30 — the `test-dir` crate); the large files split, with M10.7e's `PrefixCache` tests (d, ✅ 2026-09-30); the follow-ups d left on purpose are below the table |
+| **M10.8** Library & workflow | keyword suggestions (a, ✅ 2026-10-01 — from M4.2b's caveat, never an entry here; its two omissions are below the table); P-26's batch rename (d, ✅ 2026-10-02); *Library: … vertical filmstrip* (b, ✅ 2026-10-01 — widened to movable panels); hand stacks (c, ✅ 2026-10-02) |
+| **M10.9** presets & shortcuts | *Presets: no import/export…* (a, ✅ 2026-10-02); *No user-defined keyboard shortcuts* (b, ✅ 2026-10-10); Lightroom `.xmp` presets, split from (a) by the author 2026-10-02 (c, ✅ 2026-10-11 — the `lr-preset` crate) |
+| **M10.10** export | P-26's image watermark (a, ✅ 2026-10-11) and export sizing (b, ✅ 2026-10-11) |
+| **M10.11** Develop additions | *Film negative inversion* (a, ✅ 2026-10-11); P-26's Grain (b, ✅ 2026-10-12) |
 | **M10.12** the mask model | *Composites are one level deep* (a); masks' scene sliders as offsets (b, `CLAUDE.md`); *Anchor strokes and spots in sensor space* + *Brush strokes shift…* (c, ⏸) |
 | **M10.13** colour & camera profiles | *C2/C3 have no independent oracle* (a); *`CameraCalibration`…* + `ProfileLookTable` (b); *Per-photo camera profile* (c); P-22 (d) |
 | **M10.14** performance & verification | *What is left in `HslStage`* (a); P-21 (e); *incremental splatting*, *Two Oklab round trips* (f, ⏸); *the u8 wire*, `MAX_TILE_DABS` (g, ⏸) |
@@ -156,8 +156,8 @@ reviews measured so the deletion loses nothing. Ids are the professional review'
 - **P-25 · Scope: tethering, GPS/map, people tagging, publish services, print** → **M10.18a–e**, brought
   into scope by the author 2026-09-29. Originally: out of scope by
   declaration (tethering is on the target list, untouched). Recorded so the scope statement is explicit.
-- **P-26 · Small professional gaps:** → batch rename **M10.8d**, image watermark **M10.10a**, export
-  sizing **M10.10b**, Grain **M10.11b**, content-aware remove **M10.16c**. text-only watermark; rename one photo at a time (the import
+- **P-26 · Small professional gaps:** → batch rename **M10.8d** ✅, image watermark **M10.10a** ✅, export
+  sizing **M10.10b** ✅, Grain **M10.11b** ✅ (all merged 2026-10-02 – 10-12); content-aware remove **M10.16c** still open. As recorded: text-only watermark; rename one photo at a time (the import
   template exists); export resizes by pixel long edge only (no cm/in, PPI or file-size target); no
   content-aware remove; no Grain slider.
 - **P-28 · Cross-platform is a promise so far** — the GUI has only run on this Mac; **M11.2** (was M10.2).
@@ -1364,15 +1364,15 @@ is the only thing to trust here.
 - **The in-window menu bar has never been run** → **M11.2** — only unit-tested — there is no Linux machine here
   and macOS never shows it. Flip the `!cfg!(target_os = "macos")` guard in `shell.rs` to look at it.
   Relatedly, **`native_menu.rs` can rot silently**, since CI never compiles it.
-- **No user-defined keyboard shortcuts.** → **M10.9b**.
+- ~~**No user-defined keyboard shortcuts.**~~ ✅ **M10.9b, 2026-10-10.**
 - ~~**The accent colour reaches only egui's own widgets.**~~ ✅ **Settled by the design language** (`DESIGN.md`
   §4.2, 2026-09-29): the accent marks selection and set state only, and the hand-painted colours that stay
   outside it are listed there on purpose. Struck 2026-09-29. As recorded: The crop overlay, histogram and thumbnail
   selection border are painted by hand with hardcoded colours — most visible in **light** mode,
   which has barely been looked at.
 - ~~**Export has no filename templating**~~ ✅ **M6.1a, 2026-09-01.**
-- **Presets: no import/export, no folders, no rename.** → **M10.9a**.
-- **Library:** ~~no on-disk thumbnail cache~~ ✅ M8.2, ~~no subfolders~~ ✅ M9.9, no vertical filmstrip → **M10.8b**.
+- ~~**Presets: no import/export, no folders, no rename.**~~ ✅ **M10.9a, 2026-10-02.**
+- **Library:** ~~no on-disk thumbnail cache~~ ✅ M8.2, ~~no subfolders~~ ✅ M9.9, ~~no vertical filmstrip~~ ✅ M10.8b, 2026-10-01.
 - ~~**A nicer decode placeholder**~~ ⛔ **superseded by M9.14** and against the author's rule that no
   low-resolution stand-in is ever painted (struck 2026-09-29). As recorded: run the pipeline over the thumbnail for an instant low-res
   preview, instead of showing the camera JPEG.
@@ -1776,9 +1776,13 @@ the most time in this integration were both invisible in the OpenAPI schema.
   Linux first". A network dependency is a genuine change of character — not wrong, but worth
   deciding deliberately rather than sliding into.
 
-## Film negative inversion (recorded 2026-08-26 — a FEATURE, not a plugin) → M10.11a
+## ~~Film negative inversion~~ (recorded 2026-08-26 — a FEATURE, not a plugin) → ✅ M10.11a
 
-**Status:** ⬜ **M10.11a** (scheduled 2026-09-29). Wanted, not blocked. A `PipelineStage` like any other.
+**Status:** ✅ **M10.11a, merged 2026-10-11** — built as this entry argued: a prefix step after lens plus
+an eyedropper on the film base, no plugin system (`grep -n 'M10.11a' docs/JOURNAL.md`). The reasoning
+below is kept as recorded.
+
+**As recorded:** ⬜ **M10.11a** (scheduled 2026-09-29). Wanted, not blocked. A `PipelineStage` like any other.
 ⚠ **2026-09-29:** the eyedropper this entry calls the one new piece of machinery **exists now** — white
 balance (`wb_tool`) and defringe both sample the canvas.
 
