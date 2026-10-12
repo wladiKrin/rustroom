@@ -6,6 +6,7 @@ pub mod dehaze;
 pub mod display_rendering;
 pub mod exposure;
 pub mod geometry;
+pub mod grain;
 pub mod hsl;
 pub mod hue_table;
 pub mod lens_correction;

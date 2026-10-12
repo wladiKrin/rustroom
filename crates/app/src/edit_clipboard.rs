@@ -210,6 +210,11 @@ mod tests {
                 space: edit_model::LutSpace::Linear,
                 strength: 80.0,
             },
+            grain: edit_model::Grain {
+                amount: 30.0,
+                size: 40.0,
+                roughness: 70.0,
+            },
             negative: edit_model::Negative {
                 on: true,
                 base: [0.8, 0.5, 0.3],

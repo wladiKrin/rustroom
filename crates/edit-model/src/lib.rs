@@ -20,7 +20,7 @@ mod tone;
 pub use colour::{
     ColorGrading, GradeWheel, Hsl, HslBand, Look, LutSpace, Rendering, HSL_BAND_NAMES,
 };
-pub use detail::{Defringe, Dehaze, LocalContrast, NoiseReduction, Sharpening, Vignette};
+pub use detail::{Defringe, Dehaze, Grain, LocalContrast, NoiseReduction, Sharpening, Vignette};
 pub use geo_group::GeoGroup;
 pub use geometry::{CropRect, Geometry, LensCorrection, Orientation, Perspective, Quarter};
 pub use groups::{
@@ -139,6 +139,11 @@ pub struct Edits {
     /// every digital photo's sidecar with a film setting it has nothing to do with.
     #[serde(default, skip_serializing_if = "Negative::is_default")]
     pub negative: Negative,
+    /// Film grain (M10.11b), the last scene-linear stage. Rides the vignette's group (Effects).
+    /// ⚠ Not written while default — `negative`'s reason: a default block would change every preview's
+    /// key on disk.
+    #[serde(default, skip_serializing_if = "Grain::is_default")]
+    pub grain: Grain,
 }
 
 impl Edits {
@@ -213,6 +218,7 @@ impl Edits {
             look,
             eyes,
             negative,
+            grain,
         } = src;
 
         if groups.white_balance {
@@ -251,6 +257,8 @@ impl Edits {
         }
         if groups.vignette {
             self.vignette = *vignette;
+            // ⚠ M10.11b: grain with the vignette — the group shown as Effects, Lightroom's.
+            self.grain = *grain;
         }
         if groups.geometry {
             self.geometry = *geometry;
@@ -537,6 +545,32 @@ mod tests {
     /// one change, not the twenty fields that mask happens to contain.
     /// M10.11a: a negative travels only with its own group, which is off by default — pasting a
     /// digital photo's settings must never switch a negative's inversion off.
+    /// M10.11b: grain rides the vignette's group, shown as Effects; a default is not written, so no
+    /// sidecar or preview key changes for a photo without grain.
+    #[test]
+    fn grain_rides_the_effects_group_and_a_default_is_not_written() {
+        let src = Edits {
+            grain: Grain {
+                amount: 40.0,
+                ..Grain::default()
+            },
+            ..Edits::default()
+        };
+        let mut a = Edits::default();
+        a.merge_from(&src, EditGroups::only(5));
+        assert_eq!(a.grain, src.grain);
+        let mut b = Edits::default();
+        b.merge_from(&src, EditGroups::only(1));
+        assert_eq!(b.grain, Grain::default(), "not with Tone");
+        assert_eq!(EDIT_GROUP_NAMES[5], "Effects");
+        let plain = serde_json::to_string(&Edits::default()).unwrap();
+        assert!(!plain.contains("grain"), "{plain}");
+        let back: Edits = serde_json::from_str(&serde_json::to_string(&src).unwrap()).unwrap();
+        assert_eq!(back.grain, src.grain);
+        let old: Edits = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.grain, Grain::default());
+    }
+
     #[test]
     fn a_negative_is_carried_only_with_its_group() {
         let src = Edits {
@@ -876,6 +910,11 @@ mod tests {
                 file: Some("velvia.cube".into()),
                 space: LutSpace::Rec709,
                 strength: 65.0,
+            },
+            grain: Grain {
+                amount: 30.0,
+                size: 40.0,
+                roughness: 70.0,
             },
             negative: Negative {
                 on: true,

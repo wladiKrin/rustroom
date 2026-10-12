@@ -274,6 +274,17 @@ pub fn build_pipeline_split_tapped(
         tail.push(Box::new(SharpenStage::new(&edits.sharpening, scale)));
     }
 
+    // ⚠ M10.11b: grain, the last scene-linear stage — after sharpening, which must not sharpen it, and
+    // before the rendering. Position-dependent like the vignette (frame coordinates, so a region is
+    // the same crop) but reads no neighbour, so it needs no margin.
+    if edits.grain.is_active() {
+        tail.push(Box::new(crate::stages::grain::GrainStage::new_in_region(
+            &edits.grain,
+            scale,
+            region,
+        )));
+    }
+
     // ⚠⚠ **Last before the output transform.** Every capture stage upstream keeps its
     // scene-linear tuning — `local_contrast`'s `MID_GRAY`, `sharpening`'s `LUMA_EPS`,
     // `dehaze`'s airlight percentile — and this is what bounds the data to [0, 1], which is the
@@ -993,6 +1004,27 @@ mod tests {
         assert_eq!(
             build_pipeline(&edits, RenderScale::FULL, TailRendering::colorimetric()).len(),
             1
+        );
+    }
+
+    /// M10.11b: grain is the last scene-linear stage — after sharpening, which must not sharpen it.
+    #[test]
+    fn grain_runs_after_sharpening_and_before_the_output_transform() {
+        let e = Edits {
+            exposure: 0.5,
+            sharpening: edit_model::Sharpening {
+                amount: 40.0,
+                ..Default::default()
+            },
+            grain: edit_model::Grain {
+                amount: 30.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        assert_eq!(
+            build_pipeline(&e, RenderScale::FULL, TailRendering::colorimetric()).stage_names(),
+            vec!["exposure", "sharpening", "grain", "output_transform"]
         );
     }
 

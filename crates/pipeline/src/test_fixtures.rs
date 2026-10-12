@@ -184,6 +184,11 @@ pub(crate) fn all_edits() -> Edits {
             space: edit_model::LutSpace::SrgbDisplay,
             strength: 65.0,
         },
+        grain: edit_model::Grain {
+            amount: 30.0,
+            size: 40.0,
+            roughness: 70.0,
+        },
         negative: edit_model::Negative {
             on: true,
             base: [0.7, 0.45, 0.25],
