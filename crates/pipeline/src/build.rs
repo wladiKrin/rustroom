@@ -587,6 +587,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         });
         let names = |e: &Edits| {
             build_pipeline(e, RenderScale::FULL, TailRendering::colorimetric()).stage_names()
@@ -606,6 +607,34 @@ mod tests {
             off,
             names(&Edits::default()),
             "a switched-off mask must build the same pipeline as no mask"
+        );
+    }
+
+    /// ⚠ "Off" is skipping the stage, never zero coverage — which an Invert would turn into FULL.
+    /// `a_switched_off_mask_inserts_no_stage_anywhere`'s shape, with its positive control.
+    #[test]
+    fn a_switched_off_inverted_mask_changes_nothing() {
+        let mut edits = Edits::default();
+        edits.masks.push(edit_model::MaskedAdjustment {
+            invert: true,
+            adjustments: edit_model::LocalAdjustments {
+                exposure: 1.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let names = |e: &Edits| {
+            build_pipeline(e, RenderScale::FULL, TailRendering::colorimetric()).stage_names()
+        };
+        assert!(
+            names(&edits).contains(&"mask"),
+            "fixture: an inverted mask inserts a stage"
+        );
+        edits.masks[0].disabled = true;
+        assert_eq!(
+            names(&edits),
+            names(&Edits::default()),
+            "a switched-off inverted mask must build the same pipeline as no mask"
         );
     }
 
@@ -785,6 +814,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         };
         let one = Edits {
             masks: vec![masked(100.0)],
@@ -1224,6 +1254,7 @@ mod tests {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             vignette: edit_model::Vignette {
                 amount: -40.0,

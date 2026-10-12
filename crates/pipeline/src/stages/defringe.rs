@@ -313,6 +313,7 @@ mod tests {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             };
             let stage = MaskStage::new_capture(
                 &m,

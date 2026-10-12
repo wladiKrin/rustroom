@@ -386,9 +386,61 @@ pub fn click(ctx: &egui::Context, label: &str, mut body: impl FnMut(&mut egui::U
     }
 }
 
+/// Right-click at `at`, then run one more frame so a context menu it opened is laid out.
+///
+/// ⚠ egui opens a context menu on the **release** of the secondary button, and draws it on the frame
+/// after — so three frames, the last with no input.
+pub fn right_click_at(ctx: &egui::Context, at: egui::Pos2, mut body: impl FnMut(&mut egui::Ui)) {
+    let button = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Secondary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    for events in [
+        vec![egui::Event::PointerMoved(at), button(true)],
+        vec![button(false)],
+        Vec::new(),
+    ] {
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen()),
+                events,
+                ..Default::default()
+            },
+            &mut body,
+        );
+    }
+}
+
+/// [`right_click_at`] the widget labelled `label`. Panics if no such widget was drawn.
+pub fn right_click(ctx: &egui::Context, label: &str, mut body: impl FnMut(&mut egui::Ui)) {
+    let at = find(ctx, label, &mut body)
+        .unwrap_or_else(|| panic!("no widget labelled {label:?} was drawn"));
+    right_click_at(ctx, at, body);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⚠ The primitive the masks panel's menu tests stand on: a right-click opens a context menu
+    /// whose items the harness can then find by label.
+    #[test]
+    fn a_right_click_opens_a_context_menu_the_harness_can_read() {
+        let ctx = ctx();
+        let body = |ui: &mut egui::Ui| {
+            ui.button("Row").context_menu(|ui| {
+                let _ = ui.button("Duplicate");
+            });
+        };
+        assert!(find(&ctx, "Duplicate", body).is_none(), "fixture: closed");
+        right_click(&ctx, "Row", body);
+        assert!(
+            find(&ctx, "Duplicate", body).is_some(),
+            "the menu's item is not readable after a right-click"
+        );
+    }
 
     #[test]
     fn a_button_is_found_by_its_label() {

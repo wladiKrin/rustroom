@@ -96,6 +96,7 @@ fn masked(n: usize, mask: fn() -> Mask, adj: fn() -> LocalAdjustments) -> Edits 
                 refine: Vec::new(),
                 adjustments: adj(),
                 disabled: false,
+                invert: false,
             })
             .collect(),
         ..Edits::default()

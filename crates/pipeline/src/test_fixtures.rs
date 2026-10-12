@@ -162,6 +162,7 @@ pub(crate) fn all_edits() -> Edits {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         }],
         spots: vec![edit_model::Spot {
             centre: [0.3, 0.4],

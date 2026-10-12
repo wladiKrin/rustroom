@@ -168,7 +168,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-10-12)
 
-**3621 tests** (7 ignored), **85 golden tests** (73 reference images — `cargo test --workspace --test golden`),
+**3650 tests** (7 ignored), **87 golden tests** (74 reference images — `cargo test --workspace --test golden`),
 gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
@@ -213,7 +213,7 @@ that had grown to ~170 lines by appending.)
   2026-09-29 — start from `docs/BACKLOG.md`'s reasons table. ⚠ The server is a **Tailscale Funnel**: a stopped
   Tailscale on the Mac is never the cause of an Immich error.
 
-**Phase 10 so far — M10.6 to M10.11, merged 2026-09-29 – 10-12, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`):
+**Phase 10 so far — M10.6 to M10.12a, merged 2026-09-29 – 10-12, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`):
 
 | Id | What | The thing to remember |
 |---|---|---|
@@ -223,14 +223,15 @@ that had grown to ~170 lines by appending.)
 | M10.10a/b | Image watermark; export sizing in px/cm/in with a PPI, Limit file size | sizing applies to the CROPPED picture (it used to shrink the uncropped decode); the limit lowers quality to 40, then pixels |
 | M10.11a | Film negative: pick the base, each channel balanced from measured densities | a prefix step after lens, its own group OFF by default; the measurement skips densities outside −0.05…3.0 and a 15 % border (2 % once cropped) — a scan's holder had made an HP5 frame black |
 | M10.11b | Grain in Effects (the vignette's group; the field is still `vignette`) | `MAX_EV` 0.7 by the author's tuning; the noise sits at pixel corners in FRAME coordinates, so a ¼-scale preview reads exactly the export's pixel |
+| M10.12a | A row's op by right-click; Duplicate / Duplicate and invert; **Invert mask** for a composite — nesting ⏸ parked | the item's example was already expressible since reordering (measured table in the backlog); an inverted mask waiting for an AI map covers NOTHING (`Composite::waits_for_a_map`) |
 
 ### ▶ Next action — Phase 10, top down
 
-✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.11** (table above).
+✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.12a** (table above).
 
-**▶ NEXT: M10.12a — nested mask composites**, `radial ∩ (brush ∪ gradient)`; composites are one level
-deep today on purpose, and the backlog's *Composites are one level deep* holds why. Start it when the
-author says to continue.
+**▶ NEXT: M10.12b — masks' scene sliders (WB, exposure, contrast, tone regions) as offsets**, Lightroom's
+model; today they run after the global tone curve (raised in M7.3b's brainstorm). Start it when the author
+says to continue.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
 release engineering, LAST.** The canonical list — every sub-item with its date, size and reasoning — is
@@ -240,7 +241,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 
 | Milestone | Sub-items |
 |---|---|
-| **M10.12** the mask model | a nested composites · b scene sliders as offsets (Lightroom's model) · c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
+| **M10.12** the mask model | b scene sliders as offsets (Lightroom's model) · c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a an independent C2/C3 reference · b `CameraCalibration` + `ProfileLookTable` · c per-photo profile · d camera-matching colour out of the box (P-22) |
 | **M10.14** performance & verification | a HSL `cbrt`/`atan2` · b the prefix-cache eviction fix's picture half · c Clarity's coalescing · d the ~10–12 ms drag gap · e a 100k-photo catalog benchmark · f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) |
 | **M10.15** Immich | a API keys in the keychain · b evict cached originals · c read Immich's rating · d two-way sync (re-opened) |
@@ -307,6 +308,12 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
 - ⚠⚠ **A new `Edits` field is `#[serde(default, skip_serializing_if = "<T>::is_default")]`** (M10.11a/b),
   or the default's serialization changes and every rendered preview on disk misses at once.
   `the_fingerprint_is_stable_across_calls_and_pinned` catches it; re-pin only for a deliberate format change.
+- ⚠⚠ **A mask's coverage is folded in THREE places and keyed in THREE** (M10.12a): the folds are
+  `Composite::at` (CPU), `mask_wgsl::coverage_entry` (GPU) and the Show-mask tint; the shape keys are
+  `capture_projection`, `defringe_projection` (prefix) and `TintCache::same_shape`. A new field that
+  changes coverage must reach all six — `same_shape`'s exhaustive destructure forces the tint's choice,
+  the projections are literals without `..`. ⚠ And a missing AI map covers **nothing**, inverted too
+  (`Composite::waits_for_a_map`).
 - ⚠⚠ **A new TAIL stage needs a GPU twin with a `REPLACEABLE` row AND a field set in `accelerate.rs`'s
   `every_tail_stage()`.** That fixture is hand-built: a stage with neither is invisible to
   `every_tail_stage_is_replaceable_or_a_mask`, and the GPU tail silently splits at it.

@@ -439,6 +439,7 @@ mod tests {
                             ..Default::default()
                         },
                         disabled: false,
+                        invert: false,
                     }]
                 } else {
                     Vec::new()

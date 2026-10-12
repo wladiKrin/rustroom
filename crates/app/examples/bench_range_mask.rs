@@ -174,6 +174,7 @@ fn main() {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         },
         RenderScale::FULL,
         &Geometry::default(),

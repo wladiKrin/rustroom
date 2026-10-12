@@ -937,6 +937,7 @@ fn golden_mask_linear_exposure() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -988,6 +989,7 @@ fn composite_case(op: edit_model::MaskOp) -> Edits {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         }],
         ..Edits::default()
     }
@@ -1016,6 +1018,60 @@ fn golden_mask_intersect() {
 #[test]
 fn golden_mask_add() {
     check_golden("mask_add", &composite_case(edit_model::MaskOp::Add));
+}
+
+/// The subtract composite, inverted as a whole (M10.12a): everything the gradient-minus-radial
+/// left out — the radial's centre and the gradient's uncovered end.
+///
+/// ⚠ **Measured, and the gradient runs LEFT-to-right here — the opposite of `composite_case`.**
+/// Inverting moves full coverage to the gradient's other end, so `composite_case`'s right-to-left
+/// gradient put the +0.45 EV lift on the ramp's bright end: **361** clipped samples against the
+/// chart's own 24. Left-to-right lands it on the dark end again: 24, the floor exactly.
+fn inverted_case() -> Edits {
+    let mut e = composite_case(edit_model::MaskOp::Subtract);
+    e.masks[0].invert = true;
+    e.masks[0].mask = edit_model::Mask::Linear(edit_model::LinearGradient {
+        from: [0.0, 0.0],
+        to: [1.0, 0.0],
+        invert: false,
+    });
+    e
+}
+
+#[test]
+fn golden_mask_subtract_inverted() {
+    check_golden("mask_subtract_inverted", &inverted_case());
+}
+
+/// ⚠⚠ The inverted reference must differ from the uninverted one, or a flag ignored everywhere
+/// renders the subtract golden twice and passes forever. And it must add no clipping of its own —
+/// inverting moves full coverage to the other end of the chart's ramp, which is exactly where
+/// `composite_case` warns a lift clips.
+#[test]
+fn the_inverted_golden_discriminates() {
+    let render = |e: &Edits| {
+        to_rgb8(&build_pipeline(e, RenderScale::FULL, TailRendering::colorimetric()).run(chart()))
+    };
+    let inv = render(&inverted_case());
+    // ⚠ Against the SAME case with the flag off — `composite_case` runs its gradient the other
+    // way, so comparing with it would pass even if the flag did nothing.
+    let mut plain = inverted_case();
+    plain.masks[0].invert = false;
+    assert_ne!(inv, render(&plain), "the flag changed nothing");
+    let clipped = |px: &[u8]| px.iter().filter(|&&v| v == 255).count();
+    let floor = clipped(&render(&Edits::default()));
+    assert_eq!(
+        clipped(&inv),
+        floor,
+        "the inverted composite clipped {} samples against the chart's own {floor}",
+        clipped(&inv)
+    );
+    let distinct: std::collections::HashSet<u8> = inv.iter().copied().collect();
+    assert!(
+        distinct.len() >= 100,
+        "only {} distinct values",
+        distinct.len()
+    );
 }
 
 /// ⚠⚠ **Three plausible PNGs prove nothing.** A composite that silently ignored its refinements
@@ -1107,6 +1163,7 @@ fn golden_mask_linear_inverted_saturation() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -1142,6 +1199,7 @@ fn golden_mask_radial_exposure() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -1172,6 +1230,7 @@ fn golden_mask_radial_inverted_saturation() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -1202,6 +1261,7 @@ fn masked_clarity_edits() -> Edits {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         }],
         ..Edits::default()
     }
@@ -1288,6 +1348,7 @@ fn golden_mask_brush_exposure() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -1330,6 +1391,7 @@ fn golden_mask_brush_erase() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -1367,6 +1429,7 @@ fn auto_mask_edits() -> Edits {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         }],
         ..Edits::default()
     }
@@ -1482,6 +1545,7 @@ fn golden_mask_brush_flow_buildup() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -1542,6 +1606,7 @@ fn luminance_mask_cases() -> Vec<(&'static str, Edits)> {
             refine: Vec::new(),
             adjustments: a,
             disabled: false,
+            invert: false,
         }],
         ..Edits::default()
     };
@@ -2304,6 +2369,7 @@ fn colour_mask_cases() -> Vec<(&'static str, Edits)> {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -2436,6 +2502,7 @@ fn golden_mask_curve() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -2476,6 +2543,7 @@ fn golden_mask_grade() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -2508,6 +2576,7 @@ fn golden_mask_nr() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -2536,6 +2605,7 @@ fn golden_mask_dehaze() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -2571,6 +2641,7 @@ fn a_masked_capture_correction_really_changes_the_chart() {
                         ..Default::default()
                     },
                     disabled: false,
+                    invert: false,
                 }],
                 ..Edits::default()
             },
@@ -2591,6 +2662,7 @@ fn a_masked_capture_correction_really_changes_the_chart() {
                         ..Default::default()
                     },
                     disabled: false,
+                    invert: false,
                 }],
                 ..Edits::default()
             },

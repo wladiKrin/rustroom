@@ -2111,6 +2111,7 @@ mod tests {
             refine: Vec::new(),
             adjustments: a,
             disabled: false,
+            invert: false,
         }
     }
 
@@ -3318,6 +3319,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         }];
         let names = tail_of(&e).stage_names();
         for (n, _) in REPLACEABLE {

@@ -283,6 +283,7 @@ fn masked() -> MaskedAdjustment {
         },
         refine: Vec::new(),
         disabled: false,
+        invert: false,
     }
 }
 

@@ -557,6 +557,7 @@ mod tests {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..full_prefix()
         };

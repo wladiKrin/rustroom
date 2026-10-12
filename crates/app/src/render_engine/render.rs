@@ -552,6 +552,7 @@ mod tests {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         };
@@ -802,6 +803,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         });
 
         let mut cache = PrefixCache::default();
@@ -1751,6 +1753,7 @@ mod tests {
                         ..Default::default()
                     },
                     disabled: false,
+                    invert: false,
                 },
                 // ⚠⚠ **AN AUTO-MASKED BRUSH BELONGS IN THIS EDIT SET, AND THIS IS THE GUARD ON THE
                 // WHOLE AUTO-MASK DESIGN.** Its coverage depends on PIXEL VALUES as well as position,
@@ -1787,6 +1790,7 @@ mod tests {
                         ..Default::default()
                     },
                     disabled: false,
+                    invert: false,
                 },
             ],
             ..Edits::default()

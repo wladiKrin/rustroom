@@ -321,6 +321,7 @@ mod tests {
                 refine: Vec::new(),
                 adjustments: Default::default(),
                 disabled: false,
+                invert: false,
             });
             e
         };
@@ -374,6 +375,7 @@ mod tests {
             refine: Vec::new(),
             adjustments: Default::default(),
             disabled: false,
+            invert: false,
         };
         m.adjustments.exposure = mask_exposure;
         Edits {
@@ -522,6 +524,7 @@ mod tests {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         }
@@ -649,6 +652,7 @@ mod tests {
             refine: Vec::new(),
             adjustments: edit_model::LocalAdjustments::default(),
             disabled: false,
+            invert: false,
         };
         edits.masks.insert(0, inactive);
         let mut cache = BrushCache::default();

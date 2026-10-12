@@ -339,6 +339,8 @@ fn defringe_projection(m: &edit_model::MaskedAdjustment) -> edit_model::MaskedAd
             ..Default::default()
         },
         disabled: false,
+        // ⚠ The whole-mask Invert is part of the shape (M10.12a) — `m.invert`, never `false`.
+        invert: m.invert,
     }
 }
 
@@ -367,6 +369,8 @@ fn capture_projection(m: &edit_model::MaskedAdjustment) -> edit_model::MaskedAdj
             ..Default::default()
         },
         disabled: false,
+        // ⚠ The whole-mask Invert is part of the shape (M10.12a) — `m.invert`, never `false`.
+        invert: m.invert,
     }
 }
 
@@ -745,6 +749,7 @@ mod tests {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         };
@@ -796,6 +801,41 @@ mod tests {
             key(&refined),
             "a refinement changes which pixels are denoised, so it belongs in the key"
         );
+
+        // ⚠⚠ The whole-mask Invert is part of the shape too (M10.12a): it changes which pixels
+        // are denoised, and it is neither a capture correction nor a refinement.
+        let mut inverted = base.clone();
+        inverted.masks[0].invert = true;
+        assert_ne!(
+            key(&base),
+            key(&inverted),
+            "inverting a mask changes which pixels are denoised, so it belongs in the key"
+        );
+    }
+
+    /// ⚠ The defringe step copies the mask's shape through its OWN projection, so the invert must
+    /// reach the key there too — the capture test above cannot see this one.
+    #[test]
+    fn the_defringe_key_follows_a_masks_whole_invert() {
+        let e = Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Radial(edit_model::RadialGradient::default()),
+                adjustments: edit_model::LocalAdjustments {
+                    defringe: 40.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Edits::default()
+        };
+        let key = |e: &Edits| PrefixKey::new(e, RenderScale::FULL, Resampler::default());
+        let mut inverted = e.clone();
+        inverted.masks[0].invert = true;
+        assert_ne!(
+            key(&e),
+            key(&inverted),
+            "a masked defringe's coverage flips with the mask"
+        );
     }
 
     /// M9.6: when the defringe step exists. ⚠ Both directions for each case: a hue range alone and
@@ -817,6 +857,7 @@ mod tests {
                     ..Default::default()
                 },
                 disabled,
+                invert: false,
             }],
             ..Edits::default()
         };

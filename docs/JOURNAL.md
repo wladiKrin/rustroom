@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.12a: the flat composite made usable, nesting parked (2026-10-12)](#2026-10-12--m1012a-the-flat-composite-made-usable-nesting-parked-branch-m1012a-mask-composites-merged-2026-10-12)
 - [Handover sweep: every summary re-measured, and what had drifted (2026-10-12)](#2026-10-12--handover-sweep-every-summary-re-measured-and-what-had-drifted)
 - [M10.11b: grain (2026-10-12)](#2026-10-12--m1011b-grain-branch-m1011b-grain-merged-2026-10-12)
 - [M10.11a: film negative inversion (2026-10-11)](#2026-10-11--m1011a-film-negative-inversion-branch-m1011a-film-negative-merged-2026-10-11)
@@ -163,6 +164,71 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-12 — M10.12a: the flat composite made usable, nesting parked (branch `m10.12a-mask-composites`, merged 2026-10-12)
+
+**Input:** Phase 10's M10.12a, *"Nested composites — `radial ∩ (brush ∪ gradient)`"*. Spec
+`docs/superpowers/specs/2026-10-12-m10.12a-mask-composites-design.md`, plan beside it.
+
+**Measured first, and it re-scoped the item.** The example was already expressible: since reordering
+(2026-09-29) it is `brush`, Add `gradient`, Intersect `radial` — exact, because Intersect is a product.
+A brute-force search (every order, op and per-shape Invert; 40 random coverages, 1e-9) over nine nested
+expressions: four reachable by ordering, two only by inverting every shape (De Morgan), and three —
+two compound operands at one op, e.g. `(A − B) ∪ (C − D)` — unreachable. That last row is "two
+separately refined areas, one adjustment", which two masks already do. What blocked the reachable ones
+in practice: **a row's op was fixed at creation** (nothing assigned `Refinement::op`), and there was no
+Duplicate. **The author's call:** build an op changed in place, Duplicate / Duplicate and invert and a
+whole-mask Invert; park nesting (`docs/BACKLOG.md`, with the table) — if ever built, to any depth.
+
+**Built:**
+- **`MaskedAdjustment::invert`** — coverage `1 −` the folded rows; `skip_serializing_if`, so every
+  sidecar and preview key is unchanged (the fingerprint pin stayed green). 74 struct literals took the
+  field: 73 by a script whose diff was proved to be nothing but `+ invert: false,` lines, and the
+  exhaustive fixture by hand with `invert: true` (its own comments demand exercised fields).
+- **Three folds, all flipped after the last row:** `Composite::at` (CPU), the generated WGSL
+  (`coverage_entry`, the flag in the shader text so it caches as its own program), the Show-mask tint.
+- **Three traps named in the spec, each pinned and sabotaged:** the inert-base shortcut (an inverted
+  fold of nothing is *everything*), the tint cache (now `TintCache::same_shape`, an exhaustive
+  destructure so the next field cannot slip past), and **two** prefix shape projections —
+  `capture_projection` *and* `defringe_projection` — each carrying `m.invert`.
+- **`mask_actions`** (lib, no egui): `set_op`, `duplicate`, `whole_invert_drawn`, `flip_whole_invert`.
+- **The panel:** a refinement row's right-click → Add · Subtract · Intersect (radio, the base row has
+  none); a mask row's right-click → Duplicate · Duplicate and invert (the copy below, selected, overlay
+  on, one undo step); **Invert mask** under a composite's rows, drawn also while on so a flag left on a
+  mask cut back to one shape is never hidden. "Duplicate and invert" flips the flag on a composite and
+  the shape's own Invert on one shape — the same coverage, and only one control ever shown for it.
+- `test_ui::right_click_at` / `right_click` — the first harness for a context menu; the menu tests find
+  an op item as the centre the menu *added*, since "Add/Subtract/Intersect" also label the mode chips.
+- A golden, `mask_subtract_inverted`, and a guard that it differs from the same case uninverted.
+
+**Sabotages — fifteen, every one red:** the inert clause (2 tests), each projection's `m.invert` (1 each),
+the flip before the fold (1), a built switched-off mask (1), the CPU flag ignored (both goldens), the GPU
+flag ignored (parity's differ-guard), the tint's three pieces (from the RED run, each test reaching only
+its own piece), `duplicate` without padding the eyes (1), `whole_invert_drawn` without the flag (1), the
+op menu on the base row, Duplicate and invert not inverting, the checkbox always drawn, a full stop on its
+hover (the sweep), and the right-click helper pressing Primary.
+
+**Worth keeping:**
+- ⚠⚠ **The golden clipped where the plan predicted it might:** inverting moves full coverage to the
+  gradient's other end, onto the chart's bright end — **361** clipped samples against the chart's own
+  24. The inverted case runs its gradient left-to-right (24, the floor). Then the "flag changed
+  nothing" guard had to compare against *that* case uninverted — against `composite_case` it compared two
+  different gradients and would have passed with the flag ignored (shape (c) of *Standing lessons*).
+- ⚠⚠ **Found in my own final review: an inverted composite waiting for its AI map covered EVERYTHING.**
+  A missing map reads 0 (M9.13: "covers nothing until computed"); inverted, 0 is the whole frame — in
+  the view while a map loads, and in an **export whose cache lacks the map** (another Subject model, a
+  cleared cache; `maps_for` reads only the disk cache). `Composite::waits_for_a_map` makes the whole
+  mask cover nothing until every map has arrived — in `apply`, the defringe plane and the tint; the GPU
+  already declines a missing map. Two tests, each with a positive control (the map answered: it renders).
+- ⚠ The `task-done` ledger line quotes the **last** crate's summary — `0 passed` from a doc-test crate —
+  so every total here was summed from the saved log instead.
+
+✅ **Confirmed by the author and merged 2026-10-12.**
+
+**Counts:** 3621 → **3650 tests** (7 ignored), goldens 85 → **87** (74 reference images). Gate green on
+the tip. ⚠ `gpu-pipeline/src/mask.rs` is 712 lines of code (over the ~600 marker; +3 here).
+**Final review: my own pass** (no subagent unasked) — the AI-map finding above, fixed; minors left:
+the eye list after undoing a Duplicate (as after a delete), `MaskOp::chip_label` now used only by its test.
 
 ### 2026-10-12 — Handover sweep: every summary re-measured, and what had drifted
 

@@ -8,7 +8,7 @@ use crate::theme::Hover as _;
 use crate::Session;
 use eframe::egui;
 use rustroom_app::mask_kind::MaskKind;
-use rustroom_app::{mask_order, mask_tool};
+use rustroom_app::{mask_actions, mask_order, mask_tool};
 
 /// The mask at component `j` — `0` is the base, `j > 0` the `j-1`th refinement.
 ///
@@ -42,6 +42,9 @@ pub const MASK_ROW_HOVER: &str =
 /// A mask's component row's hover.
 pub const COMPONENT_ROW_HOVER: &str =
     "Selects this shape, and a drag moves it to change the order the shapes combine in";
+/// "Invert mask"'s hover.
+pub const WHOLE_INVERT_HOVER: &str =
+    "Inverts the whole mask so it covers what its shapes leave out";
 /// How far a component row sits in from its mask.
 pub const INDENT: f32 = 18.0;
 const GLYPH: f32 = crate::theme::tokens::ICON_INLINE;
@@ -441,6 +444,8 @@ pub fn rows(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
     let mut rects = Vec::with_capacity(names.len());
     // The row being dragged, and whether it was released this frame.
     let mut drag: Option<(usize, bool)> = None;
+    // A row's op chosen from its right-click menu (M10.12a).
+    let mut set_op: Option<(usize, edit_model::MaskOp)> = None;
     for (j, (kind, op, accessible, name)) in names.iter().enumerate() {
         let out = row(
             ui,
@@ -461,6 +466,18 @@ pub fn rows(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
                 draggable: true,
             },
         );
+        // ⚠ The base row has no op (M10.12a): it is the Add every other row folds onto.
+        if j > 0 {
+            let current = s.edits.masks[i].refine[j - 1].op;
+            out.response.context_menu(|ui| {
+                for op in edit_model::MaskOp::ALL {
+                    if ui.radio(op == current, op.label()).clicked() {
+                        set_op = Some((j, op));
+                        ui.close();
+                    }
+                }
+            });
+        }
         rects.push(out.rect);
         if out.dragging || out.released {
             drag = Some((j, out.released));
@@ -470,6 +487,12 @@ pub fn rows(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
         } else if out.clicked {
             pick = Some(j);
         }
+    }
+    if let Some((j, op)) = set_op {
+        if mask_actions::set_op(&mut s.edits.masks[i], j, op) {
+            ed.discrete();
+        }
+        return;
     }
     if let (Some((from, released)), None, None) = (drag, pick, remove) {
         if let Some((to, line)) = drop_slot(ui, &rects) {
@@ -506,6 +529,27 @@ pub fn rows(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
         s.active_mask_handle = None;
         ed.discrete();
     }
+}
+
+/// "Invert mask" under mask `i`'s rows, where [`mask_actions::whole_invert_drawn`] says — a
+/// composite, or a mask whose flag is still on (M10.12a).
+pub fn whole_invert(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
+    let Some(m) = s.edits.masks.get_mut(i) else {
+        return;
+    };
+    if !mask_actions::whole_invert_drawn(m) {
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.add_space(INDENT);
+        if ui
+            .checkbox(&mut m.invert, "Invert mask")
+            .hover(WHOLE_INVERT_HOVER)
+            .changed()
+        {
+            ed.discrete();
+        }
+    });
 }
 
 /// A kind button's height: 36, up from 28 with option B of the 2026-09-29 canvas ("same modes,
@@ -643,6 +687,7 @@ mod tests {
                 ],
                 adjustments: Default::default(),
                 disabled: false,
+                invert: false,
             }];
             s.selected_mask = Some(0);
         }
