@@ -181,6 +181,7 @@ pub fn for_test() -> RustroomApp {
         snapshot_rename: None,
         keyword_rename: None,
         folders_collapsed: Default::default(),
+        folder_marks: Default::default(),
         panel_drag: None,
         cell_zoom_pending: false,
         info_sizes: Default::default(),

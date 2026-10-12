@@ -15,7 +15,8 @@ use std::path::{Path, PathBuf};
 /// What a row asked for, applied after the panel closes.
 pub(crate) enum Out {
     Open(PathBuf),
-    Forget(i64, PathBuf, i64),
+    /// Forget these folders (each with everything beneath it) — after the confirmation.
+    Forget(Vec<PathBuf>),
 }
 
 pub(crate) struct View<'a> {
@@ -84,9 +85,9 @@ pub(crate) fn rows(
                 }
             }
         }
-        // The Forget total covers the subtree, as does the forget itself.
+        // The Forget total covers the subtree, as does the forget itself (`ask_forget_folders`).
         if r.action == Some(0) {
-            out = Some(Out::Forget(node.id, node.path.clone(), node.count));
+            out = Some(Out::Forget(vec![node.path.clone()]));
         } else if r.clicked && !toggled {
             out = Some(Out::Open(node.path.clone()));
         }

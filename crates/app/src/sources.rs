@@ -228,22 +228,41 @@ impl RustroomApp {
         );
     }
 
-    /// Remove a folder from the catalog.
+    /// Ask before forgetting `paths`: the confirmation names how many folders and photos go
+    /// (M10.19c) — every folder beneath each path included, a nested one counted once.
+    pub(crate) fn ask_forget_folders(&mut self, paths: Vec<std::path::PathBuf>) {
+        let folders = self
+            .catalog
+            .as_ref()
+            .and_then(|c| c.folders().ok())
+            .unwrap_or_default();
+        let scope = rustroom_app::folder_tree::subtrees(&folders, &paths);
+        let photos = scope.iter().map(|f| f.count).sum();
+        self.modal = crate::modals::Modal::ConfirmForgetFolders {
+            folders: scope.len(),
+            photos,
+            paths,
+        };
+    }
+
+    /// Remove folders from the catalog — each with every folder beneath it — as ONE undo step.
     ///
     /// ⚠ Deletes catalog rows only — the photos, their sidecars and every edit in them are
-    /// untouched. Re-opening the folder catalogues it again, minus the library metadata.
-    pub(crate) fn forget_folder(&mut self, ctx: &egui::Context, id: i64, path: &std::path::Path) {
+    /// untouched. Re-opening a folder catalogues it again, minus the library metadata.
+    ///
+    /// ⚠ M10.19c: several paths at once, from the rail's marks. A marked folder beneath another
+    /// marked one is in both subtrees — `folder_tree::subtrees` lists each row once, or the second
+    /// delete would fail and leave the undo step half-built.
+    pub(crate) fn forget_folders(&mut self, ctx: &egui::Context, paths: &[std::path::PathBuf]) {
         if let Some(cat) = &self.catalog {
             // ⚠ M9.9: the folder AND every folder beneath it — the tree shows them as one, and
             // forgetting a parent while its children stayed would leave them re-rooted, surprising.
             // One undo step: a `Batch` of the deletions, the shape a paste already uses.
             let folders = cat.folders().unwrap_or_default();
-            let mut ids: Vec<i64> = rustroom_app::folder_tree::subtree(&folders, path)
+            let ids: Vec<i64> = rustroom_app::folder_tree::subtrees(&folders, paths)
+                .iter()
                 .map(|f| f.id)
                 .collect();
-            if ids.is_empty() {
-                ids.push(id);
-            }
             let mut parts = Vec::new();
             for fid in ids {
                 match cat.forget_folder(fid) {
@@ -266,9 +285,9 @@ impl RustroomApp {
             }
         }
         // ⚠ What is on screen may now be rows that exist nowhere. Two cases, and both need
-        // handling: the folder itself, and All Photos, which was showing some of its photos.
+        // handling: a forgotten folder itself, and All Photos, which was showing some of its photos.
         match self.library.as_ref().map(|l| l.source.clone()) {
-            Some(LibrarySource::Folder(p)) if p.starts_with(path) => {
+            Some(LibrarySource::Folder(p)) if paths.iter().any(|q| p.starts_with(q)) => {
                 // ⚠ Closed rather than left showing rows the catalog no longer has — the rule the
                 // collection and keyword deletions already follow.
                 self.library = None;
@@ -276,7 +295,11 @@ impl RustroomApp {
             Some(LibrarySource::AllPhotos) => self.open_all_photos(ctx),
             _ => {}
         }
-        self.status = format!("Forgot “{}”", path.display());
+        self.folder_marks = Default::default();
+        self.status = match paths {
+            [one] => format!("Forgot “{}”", one.display()),
+            _ => format!("Forgot {} folders", paths.len()),
+        };
     }
 
     /// Build and show a `Library` from an already-sorted scan, returning how many rows it holds.
@@ -870,10 +893,72 @@ mod forget_tests {
             2,
             "fixture: the parent and its subfolder are catalogued"
         );
-        let id = app.catalog.as_ref().unwrap().folders().unwrap()[0].id;
-        app.forget_folder(&ctx, id, &root);
+        app.forget_folders(&ctx, std::slice::from_ref(&root));
         assert_eq!(n(&app), 0, "both forgotten");
         app.undo_action(&ctx);
         assert_eq!(n(&app), 2, "one undo brings both back");
+    }
+
+    /// Two separate folders, `one` with a subfolder, catalogued — the M10.19c fixture.
+    fn three_folders(
+        d: &TestDir,
+    ) -> (
+        crate::RustroomApp,
+        egui::Context,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
+        let (one, two) = (d.0.join("one"), d.0.join("two"));
+        std::fs::create_dir_all(one.join("sub")).unwrap();
+        std::fs::create_dir_all(&two).unwrap();
+        std::fs::write(one.join("a.RAF"), b"1").unwrap();
+        std::fs::write(one.join("sub/b.RAF"), b"22").unwrap();
+        std::fs::write(two.join("c.RAF"), b"333").unwrap();
+        let ctx = egui::Context::default();
+        let mut app = for_test();
+        app.open_folder_at(&ctx, one.clone());
+        app.open_folder_at(&ctx, two.clone());
+        (app, ctx, one, two)
+    }
+
+    fn folder_count(app: &crate::RustroomApp) -> usize {
+        app.catalog.as_ref().unwrap().folders().unwrap().len()
+    }
+
+    /// Review Focus 3 (M10.19c): two marked roots, one with its child marked too — each forgotten
+    /// once, one undo step bringing every one back.
+    #[test]
+    fn forgetting_several_folders_is_one_undo_step() {
+        let d = TestDir::new("m1019c_forget_many");
+        let (mut app, ctx, one, two) = three_folders(&d);
+        assert_eq!(folder_count(&app), 3, "fixture: three folders catalogued");
+        app.forget_folders(&ctx, &[one.clone(), one.join("sub"), two.clone()]);
+        assert_eq!(folder_count(&app), 0, "all three forgotten");
+        assert!(!app.status.contains("Could not"), "{}", app.status);
+        app.undo_action(&ctx);
+        assert_eq!(folder_count(&app), 3, "one undo brings every one back");
+    }
+
+    /// The confirmation counts every folder and photo once — a nested mark included.
+    #[test]
+    fn asking_to_forget_names_the_folders_and_photos_once_each() {
+        let d = TestDir::new("m1019c_ask_forget");
+        let (mut app, _ctx, one, two) = three_folders(&d);
+        app.ask_forget_folders(vec![one.clone(), one.join("sub"), two.clone()]);
+        match &app.modal {
+            crate::modals::Modal::ConfirmForgetFolders {
+                paths,
+                folders,
+                photos,
+            } => {
+                assert_eq!(paths.len(), 3);
+                assert_eq!(
+                    (*folders, *photos),
+                    (3, 3),
+                    "the nested folder counted once"
+                );
+            }
+            _ => panic!("no confirmation opened"),
+        }
     }
 }
