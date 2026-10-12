@@ -339,6 +339,7 @@ fn defringe_projection(m: &edit_model::MaskedAdjustment) -> edit_model::MaskedAd
             ..Default::default()
         },
         disabled: false,
+        invert: false,
     }
 }
 
@@ -367,6 +368,7 @@ fn capture_projection(m: &edit_model::MaskedAdjustment) -> edit_model::MaskedAdj
             ..Default::default()
         },
         disabled: false,
+        invert: false,
     }
 }
 
@@ -745,6 +747,7 @@ mod tests {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         };
@@ -817,6 +820,7 @@ mod tests {
                     ..Default::default()
                 },
                 disabled,
+                invert: false,
             }],
             ..Edits::default()
         };

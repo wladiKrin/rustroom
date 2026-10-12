@@ -508,6 +508,7 @@ mod tests {
             refine: Vec::new(),
             adjustments: Default::default(),
             disabled: false,
+            invert: false,
         });
         s.selected_mask = Some(0);
     }
@@ -520,6 +521,7 @@ mod tests {
             refine: Vec::new(),
             adjustments: Default::default(),
             disabled: false,
+            invert: false,
         });
         s.selected_mask = Some(0);
     }
@@ -550,6 +552,7 @@ mod tests {
             }],
             adjustments: Default::default(),
             disabled: false,
+            invert: false,
         });
         s.selected_mask = Some(0);
         s.selected_component = 1;

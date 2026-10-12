@@ -267,6 +267,16 @@ pub struct MaskedAdjustment {
     /// hand-written `Default` is needed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disabled: bool,
+    /// Inverts the **whole composite**: coverage is `1 −` the rows folded top to bottom (M10.12a).
+    ///
+    /// ⚠ Not a shape's own `invert` ([`Mask::invert_mut`]), which flips one shape **before** it
+    /// folds. On a one-shape mask the two are the same coverage, which is why the panel draws this
+    /// one only for a composite, or while it is on (`mask_actions::whole_invert_drawn`).
+    ///
+    /// ⚠ `skip_serializing_if`: an uninverted mask writes the bytes it always did — every sidecar,
+    /// preset and rendered-preview key on disk is unchanged. `disabled`'s rule.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert: bool,
 }
 
 #[cfg(test)]
@@ -477,6 +487,7 @@ mod tests {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         };
@@ -579,5 +590,36 @@ mod disabled_mask_tests {
         // ⚠ And a sidecar from before the field reads as enabled.
         let old: MaskedAdjustment = serde_json::from_str("{}").unwrap();
         assert!(!old.disabled);
+    }
+
+    #[test]
+    fn a_whole_mask_invert_round_trips_and_an_uninverted_mask_writes_nothing_new() {
+        // ⚠ Both halves, `disabled`'s rule: the flag survives the sidecar, and a mask that is
+        // not inverted serialises exactly as before the field existed.
+        //
+        // ⚠ Read as a JSON *object*, not as text: the shape nested under "mask" serialises its
+        // own `"invert":false`, so a substring test for "invert" fails on correct code.
+        let plain = serde_json::to_value(MaskedAdjustment::default()).unwrap();
+        assert!(
+            plain.get("invert").is_none(),
+            "an uninverted mask wrote the flag: {plain}"
+        );
+        let inverted = MaskedAdjustment {
+            invert: true,
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&inverted).unwrap();
+        assert_eq!(v["invert"], true, "{v}");
+        let mut back: MaskedAdjustment = serde_json::from_value(v).unwrap();
+        assert!(back.invert);
+        assert!(
+            !*back.mask.invert_mut(),
+            "the shape's own Invert is a separate flag"
+        );
+        let old: MaskedAdjustment = serde_json::from_str("{}").unwrap();
+        assert!(
+            !old.invert,
+            "a sidecar from before the field reads uninverted"
+        );
     }
 }

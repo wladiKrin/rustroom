@@ -1406,6 +1406,7 @@ mod tests {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             });
         }
         let masked = s.render_margin(&s.edits.clone(), rung);

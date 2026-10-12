@@ -844,6 +844,7 @@ mod tests {
             },
             refine: Vec::new(),
             disabled: false,
+            invert: false,
         }
     }
 
@@ -1076,6 +1077,7 @@ mod tests {
             },
             refine: Vec::new(),
             disabled: false,
+            invert: false,
         }
     }
 

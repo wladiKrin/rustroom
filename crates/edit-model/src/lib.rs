@@ -889,6 +889,9 @@ mod tests {
                     ..Default::default()
                 },
                 disabled: false,
+                // ⚠ On, for the reason `refine` is non-empty above: an exhaustive fixture must
+                // exercise the field or it travels untested through every consumer (M10.12a).
+                invert: true,
             }],
             spots: vec![Spot {
                 centre: [0.3, 0.4],

@@ -224,6 +224,7 @@ fn add_controls(
                     refine: Vec::new(),
                     adjustments: edit_model::LocalAdjustments::default(),
                     disabled: false,
+                    invert: false,
                 });
                 s.selected_mask = Some(s.edits.masks.len() - 1);
                 s.selected_component = 0;

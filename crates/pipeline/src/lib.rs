@@ -152,6 +152,7 @@ mod per_pixel_mask_tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         };
         let stage = MaskStage::new(&masked, RenderScale::FULL, &edit_model::Geometry::default());
         let mut img = core_image::ImageBuf::new(32, 24);

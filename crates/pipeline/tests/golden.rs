@@ -937,6 +937,7 @@ fn golden_mask_linear_exposure() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -988,6 +989,7 @@ fn composite_case(op: edit_model::MaskOp) -> Edits {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         }],
         ..Edits::default()
     }
@@ -1107,6 +1109,7 @@ fn golden_mask_linear_inverted_saturation() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -1142,6 +1145,7 @@ fn golden_mask_radial_exposure() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -1172,6 +1176,7 @@ fn golden_mask_radial_inverted_saturation() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -1202,6 +1207,7 @@ fn masked_clarity_edits() -> Edits {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         }],
         ..Edits::default()
     }
@@ -1288,6 +1294,7 @@ fn golden_mask_brush_exposure() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -1330,6 +1337,7 @@ fn golden_mask_brush_erase() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -1367,6 +1375,7 @@ fn auto_mask_edits() -> Edits {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         }],
         ..Edits::default()
     }
@@ -1482,6 +1491,7 @@ fn golden_mask_brush_flow_buildup() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -1542,6 +1552,7 @@ fn luminance_mask_cases() -> Vec<(&'static str, Edits)> {
             refine: Vec::new(),
             adjustments: a,
             disabled: false,
+            invert: false,
         }],
         ..Edits::default()
     };
@@ -2304,6 +2315,7 @@ fn colour_mask_cases() -> Vec<(&'static str, Edits)> {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -2436,6 +2448,7 @@ fn golden_mask_curve() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -2476,6 +2489,7 @@ fn golden_mask_grade() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -2508,6 +2522,7 @@ fn golden_mask_nr() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -2536,6 +2551,7 @@ fn golden_mask_dehaze() {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         },
@@ -2571,6 +2587,7 @@ fn a_masked_capture_correction_really_changes_the_chart() {
                         ..Default::default()
                     },
                     disabled: false,
+                    invert: false,
                 }],
                 ..Edits::default()
             },
@@ -2591,6 +2608,7 @@ fn a_masked_capture_correction_really_changes_the_chart() {
                         ..Default::default()
                     },
                     disabled: false,
+                    invert: false,
                 }],
                 ..Edits::default()
             },

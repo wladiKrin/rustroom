@@ -597,6 +597,7 @@ mod tests {
             },
             refine: Vec::new(),
             disabled: false,
+            invert: false,
         };
         let geo = Geometry {
             angle: 3.0,
@@ -651,6 +652,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         };
         let mut stage = MaskStage::new(&masked, RenderScale::new(1.0), &Geometry::default());
         assert!(
@@ -711,6 +713,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         };
         let out = MaskStage::new(&masked, RenderScale::new(1.0), &Geometry::default()).apply(img);
         assert!(
@@ -755,6 +758,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         };
         let coverage = std::sync::Arc::new(crate::BrushCoverage::with_slots(&[1]));
         let stage = MaskStage::new_in_region(
@@ -792,6 +796,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         }
     }
 
@@ -851,6 +856,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         }
     }
 
@@ -1061,6 +1067,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         }
     }
 
@@ -1165,6 +1172,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         }
     }
 
@@ -1354,6 +1362,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         };
         let out = MaskStage::new_capture(
             &masked,
@@ -1467,6 +1476,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         };
         let out = MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(src.clone());
 
@@ -1520,6 +1530,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         };
         let out = MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(src.clone());
 
@@ -1547,6 +1558,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         };
         let out = MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(flat(80, 40));
         assert!(

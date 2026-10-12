@@ -64,6 +64,7 @@ fn main() {
                         ..Default::default()
                     },
                     disabled: false,
+                    invert: false,
                 }],
                 ..Edits::default()
             },

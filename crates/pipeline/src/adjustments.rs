@@ -394,6 +394,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         };
         let edits = Edits {
             noise_reduction: edit_model::NoiseReduction {
@@ -432,6 +433,7 @@ mod tests {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             ..Edits::default()
         };

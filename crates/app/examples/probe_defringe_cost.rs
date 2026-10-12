@@ -63,6 +63,7 @@ fn main() {
             ..Default::default()
         },
         disabled: false,
+        invert: false,
     };
     let stage = MaskStage::new_capture(&m, scale, &edit_model::Geometry::default(), &[], None);
     let with_mask = DefringeStage::new(global, vec![(stage, -100.0)], scale);

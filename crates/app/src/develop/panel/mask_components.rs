@@ -643,6 +643,7 @@ mod tests {
                 ],
                 adjustments: Default::default(),
                 disabled: false,
+                invert: false,
             }];
             s.selected_mask = Some(0);
         }

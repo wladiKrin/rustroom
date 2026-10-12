@@ -587,6 +587,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         });
         let names = |e: &Edits| {
             build_pipeline(e, RenderScale::FULL, TailRendering::colorimetric()).stage_names()
@@ -785,6 +786,7 @@ mod tests {
                 ..Default::default()
             },
             disabled: false,
+            invert: false,
         };
         let one = Edits {
             masks: vec![masked(100.0)],
@@ -1224,6 +1226,7 @@ mod tests {
                     ..Default::default()
                 },
                 disabled: false,
+                invert: false,
             }],
             vignette: edit_model::Vignette {
                 amount: -40.0,
