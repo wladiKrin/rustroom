@@ -46,17 +46,55 @@ pub fn cache_root(base_url: &str) -> PathBuf {
 /// hostile server sent never reaches the filesystem. The extension is preserved because it is
 /// what picks the decoder, and it is sanitised for the same reason.
 pub fn cache_path(root: &Path, asset: &immich::Asset) -> PathBuf {
+    root.join(cache_name(asset))
+}
+
+/// The file name [`cache_path`] gives `asset`, without the directory.
+pub fn cache_name(asset: &immich::Asset) -> String {
     let ext = Path::new(&asset.original_file_name)
         .extension()
         .map(|e| e.to_string_lossy().to_string())
         .unwrap_or_default();
     let stem = crate::safe_name::sanitize(&asset.id);
-    let name = if ext.is_empty() {
+    if ext.is_empty() {
         stem
     } else {
         format!("{}.{}", stem, crate::safe_name::sanitize(&ext))
-    };
-    root.join(name)
+    }
+}
+
+/// The assets the Library shows — images whose cached file Rustroom can read — each with that
+/// file's name.
+///
+/// ⚠ The one filter [`entries_from_assets`] and [`downloaded_count`] share, so an album row's count
+/// and the grid it opens cannot disagree about what is in it.
+fn shown(assets: &[immich::Asset]) -> impl Iterator<Item = (&immich::Asset, String)> {
+    assets
+        .iter()
+        .filter(|a| a.asset_type == immich::AssetType::Image)
+        .filter_map(|a| {
+            let name = cache_name(a);
+            catalog::is_supported(Path::new(&name)).then_some((a, name))
+        })
+}
+
+/// The cache file names of the assets the Library shows — what an album row counts.
+///
+/// ⚠ Takes no root, so it touches no disk: the rule [`present_names`] states for the grid, one
+/// `read_dir` and never a stat per asset. Building catalog entries instead (a sidecar `stat` per
+/// asset) took 85% of the Library's UI time over 12 albums of 3,538 assets (2026-10-12).
+pub fn shown_names(assets: &[immich::Asset]) -> Vec<std::ffi::OsString> {
+    shown(assets).map(|(_, name)| name.into()).collect()
+}
+
+/// `(downloaded, shown)`: how many of `names` are in `present`, the cache directory's file names
+/// ([`present_names`]), out of how many.
+pub fn count_present(
+    names: &[std::ffi::OsString],
+    present: &std::collections::HashSet<std::ffi::OsString>,
+) -> (usize, usize) {
+    let have = names.iter().filter(|n| present.contains(*n)).count();
+    (have, names.len())
 }
 
 /// The file names present in this server's cache directory.
@@ -107,21 +145,16 @@ pub fn entries_from_assets(assets: &[immich::Asset], root: &Path) -> Vec<catalog
             m.insert(a.id.clone(), a.updated_at.clone());
         }
     }
-    assets
-        .iter()
-        .filter(|a| a.asset_type == immich::AssetType::Image)
-        .filter_map(|a| {
-            let path = cache_path(root, a);
-            if !catalog::is_supported(&path) {
-                return None;
-            }
+    shown(assets)
+        .map(|(a, name)| {
+            let path = root.join(name);
             let edited = crate::sidecar::edited_at(&path);
-            Some(catalog::CatalogEntry {
+            catalog::CatalogEntry {
                 path,
                 file_name: a.original_file_name.clone(),
                 modified: parse_rfc3339(&a.file_modified_at),
                 edited,
-            })
+            }
         })
         .collect()
 }
@@ -486,6 +519,41 @@ mod tests {
             file_modified_at: "2025-08-14T09:21:33.000Z".into(),
             updated_at: "2026-01-01T00:00:00.000Z".into(),
         }
+    }
+
+    /// ⚠⚠ **The rail calls this for every album row on EVERY Library frame** (2026-10-12: 12 albums,
+    /// 3,538 assets — building catalog entries, a sidecar `stat` per asset, took 85% of the
+    /// Library's UI time once the folder tree stopped hiding it). It takes no root, so it cannot touch
+    /// the disk: the signature is the guard. And its total is exactly what the grid shows —
+    /// `entries_from_assets`' own filter — so a row can never count a video the grid leaves out.
+    #[test]
+    fn an_album_count_covers_what_the_grid_shows_and_what_is_present() {
+        use immich::AssetType::{Image, Video};
+        let assets = vec![
+            asset("a", "A.JPG", Image),
+            asset("b", "b.raf", Image),
+            asset("v", "clip.mov", Video),
+            asset("x", "notes.xyz", Image),
+            asset("c", "c.png", Image),
+        ];
+        let root = Path::new("/c/immich/host");
+        let name = |i: usize| {
+            cache_path(root, &assets[i])
+                .file_name()
+                .unwrap()
+                .to_os_string()
+        };
+        // Present: one shown JPEG, the shown PNG, and the video — which the grid does not show.
+        let present: std::collections::HashSet<std::ffi::OsString> =
+            [name(0), name(4), name(2)].into_iter().collect();
+        let (have, total) = count_present(&shown_names(&assets), &present);
+        assert_eq!(
+            total,
+            entries_from_assets(&assets, root).len(),
+            "the count's total is the grid's"
+        );
+        assert_eq!(total, 3, "fixture: two of the five are not shown");
+        assert_eq!(have, 2, "a present video is not a downloaded photo");
     }
 
     /// ⚠⚠ **The whole design rests on this.** The path must be knowable before the file exists

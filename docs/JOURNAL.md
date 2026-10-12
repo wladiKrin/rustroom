@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [The Library became slow: the rail's per-frame work (2026-10-12)](#2026-10-12--the-library-became-slow-the-rails-per-frame-work-branch-fix-library-rail-speed-merged-2026-10-12)
 - [M10.12a: the flat composite made usable, nesting parked (2026-10-12)](#2026-10-12--m1012a-the-flat-composite-made-usable-nesting-parked-branch-m1012a-mask-composites-merged-2026-10-12)
 - [Handover sweep: every summary re-measured, and what had drifted (2026-10-12)](#2026-10-12--handover-sweep-every-summary-re-measured-and-what-had-drifted)
 - [M10.11b: grain (2026-10-12)](#2026-10-12--m1011b-grain-branch-m1011b-grain-merged-2026-10-12)
@@ -164,6 +165,52 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-12 — The Library became slow: the rail's per-frame work (branch `fix-library-rail-speed`, merged 2026-10-12)
+
+**Reported in use:** *"Rustroom became extremely slow in the library view, but works fine in develop
+mode."* Read literally, and it was exact: the difference is the **rail**, which only the Library draws.
+
+**Measured, not guessed** — `sample` on the release build with the author's own profile, All Photos
+open, twelve scroll events, 8 s each time. Main-thread samples:
+
+| | UI | the rail | folder tree | Immich rows | CPU scrolling → after |
+|---|---|---|---|---|---|
+| before | 5,709 | 5,692 | **5,644** (93% of the main thread) | 43 | 86–102% → 102% |
+| tree fixed | 2,805 | 2,626 | 15 | **2,391** | 45% → 0% |
+| no `stat` | 1,784 | 1,327 | 17 | 1,118 | 29% → 0% |
+
+**Three per-frame costs, the first hiding the other two:**
+1. **`folder_tree::build` was cubic and ran every frame** — every expanded node filtered every row, and
+   each row's `parent_of` scanned every row again. **"Became":** 189 of the catalog's 211 folders arrived
+   11–12 Oct — `~/Pictures/LightCraft Library/thumbs/00…ff`, another app's thumbnail cache scanned in with
+   `Pictures` (333 "photos"; the directory is gone from disk since). 22³ to 211³ is ~870× the work. Now
+   each row's parent is found by walking up its own path through an index: **482 folders, debug: 27,199 →
+   3.3 ms**. The old algorithm is kept in the tests as the reference the output must equal.
+2. **Every Immich album row stat-ed a sidecar per asset per frame** — `immich_downloaded_of` built full
+   catalog entries (`entries_from_assets`) just to count downloads. ⚠ `present_names` already carried the
+   rule *"one `read_dir`, never a stat per asset"* — for the grid; the rail broke it.
+3. **…and parsed each stored album list and rebuilt every file name per frame.** Fixed by
+   `immich_album_names`: the names are derived once per list (keyed by its content, or a stored list by
+   its validator) and only looked up per frame — **live**, so a download shows at once and no writer of
+   `immich_present` has to invalidate anything. `examples/bench_album_counts.rs` on the real lists (12
+   albums, 3,538 assets): **8.13 → 3.74 → 0.079 ms per frame**, all three counting the same 34.
+
+**Sabotages, every one red:** the subtree counts not summed (3 tests); the count ignoring what is present
+(2); the count skipping the grid's filter (1); the memo's session key constant (the refetch guard).
+
+**Worth keeping:**
+- ⚠⚠ **Fixing the biggest cost unmasked the next, twice** — the Immich rows were 43 samples while the
+  tree ate the frame and 85% of the UI once it did not. Re-sample after every fix; one profile is a list
+  of what is *currently* largest, not of what is wrong.
+- ⚠ A parity slip caught in my own read: with no cache root the old count was `Some((0, 0))` (Download
+  offered) and a `?` made it `None` ("list not in hand", both buttons). Restored and commented.
+- ⚠ My first fixture check (*"the tree is deep"*) was asserted under every collapse — false, correctly,
+  when `thumbs` is collapsed. The check moved to the uncollapsed tree; the threshold was not touched.
+- ⚠ The final GUI measurement could not be taken: the Mac locked (`loginwindow` frontmost) — hence the
+  headless bench for the third fix.
+
+**Counts:** 3650 → **3660 tests**. Merged 2026-10-12 at the author's call, before his own run of it (the Mac had locked); the 180 LightCraft folders were then forgotten from his catalog through `Catalog::forget_folder`, a backup taken first.
 
 ### 2026-10-12 — M10.12a: the flat composite made usable, nesting parked (branch `m10.12a-mask-composites`, merged 2026-10-12)
 

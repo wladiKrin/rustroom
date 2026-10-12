@@ -168,7 +168,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-10-12)
 
-**3650 tests** (7 ignored), **87 golden tests** (74 reference images — `cargo test --workspace --test golden`),
+**3660 tests** (7 ignored), **87 golden tests** (74 reference images — `cargo test --workspace --test golden`),
 gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
@@ -308,6 +308,12 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
 - ⚠⚠ **A new `Edits` field is `#[serde(default, skip_serializing_if = "<T>::is_default")]`** (M10.11a/b),
   or the default's serialization changes and every rendered preview on disk misses at once.
   `the_fingerprint_is_stable_across_calls_and_pinned` catches it; re-pin only for a deliberate format change.
+- ⚠⚠ **EVERYTHING THE LIBRARY RAIL DRAWS RUNS EVERY FRAME — no work there may grow with the catalog
+  or an album** (2026-10-12: a cubic folder tree and a `stat` + JSON parse per Immich asset made the
+  Library crawl while Develop, which draws no rail, stayed fast). Derive once per input, look up per
+  frame, and read changing state (`immich_present`) live rather than invalidating a cache from a list
+  of writers. ⚠ **Find it with `sample <pid> 8`**, never by reading code — and re-sample after each
+  fix: twice the next cost was hidden behind the last. `grep -n 'became slow' docs/JOURNAL.md`.
 - ⚠⚠ **A mask's coverage is folded in THREE places and keyed in THREE** (M10.12a): the folds are
   `Composite::at` (CPU), `mask_wgsl::coverage_entry` (GPU) and the Show-mask tint; the shape keys are
   `capture_projection`, `defringe_projection` (prefix) and `TintCache::same_shape`. A new field that
