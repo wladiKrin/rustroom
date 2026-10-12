@@ -166,7 +166,7 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
-### 2026-10-12 — M10.11b: grain (branch `m10.11b-grain`)
+### 2026-10-12 — M10.11b: grain (branch `m10.11b-grain`, merged 2026-10-12)
 
 **Input:** Phase 10's M10.11b: *"A Grain slider"*. The author's answers: **Effects, with Vignette**
 (Lightroom's arrangement) and Lightroom's three controls; Amount 100's strength is his to tune on crops.
