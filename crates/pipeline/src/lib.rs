@@ -85,7 +85,7 @@ pub use stages::local_contrast::{
 };
 pub use stages::mask::MaskStage;
 pub use stages::noise_reduction::NoiseReductionStage;
-pub use stages::scene_offsets::{reads_reference, SceneOffsetsStage};
+pub use stages::scene_offsets::{reads_reference, CoverageSlot, SceneOffsetsStage};
 /// The tone regions' strengths, for a GPU shader to SUBSTITUTE rather than transcribe (M10.12b).
 pub use stages::tone_regions::{
     END_STRENGTH as TONE_REGIONS_END_STRENGTH, STRENGTH as TONE_REGIONS_STRENGTH,

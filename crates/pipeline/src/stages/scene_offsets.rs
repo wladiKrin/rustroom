@@ -35,11 +35,41 @@ struct Contribution {
     regions: [f32; 4],
     /// `ln(R)`, `R` the gains of the global white balance shifted by this mask, over the global gains.
     ln_r: [f32; 3],
+    /// The mask's position in `edits.masks`.
+    index: usize,
+    /// Where this mask's coverage goes for its look stage — `Some` exactly when it
+    /// [`reads_reference`], and then that coverage is computed on the reference photo.
+    slot: Option<std::sync::Arc<CoverageSlot>>,
+}
+
+/// A coverage plane handed from [`SceneOffsetsStage`] to one mask's look stage (M10.12b): a mask
+/// that reads the photograph and carries a scene offset selects ONCE, on the reference photo, and
+/// its look sliders blend by that same plane — so neither half chases the other's effect.
+///
+/// ⚠ An `Arc` built with the pipeline and shared by the two stages, which run in order in one
+/// render; each render overwrites it. A poisoned lock is taken as it stands, never a panic: the
+/// worst a stale plane can do is select like the previous frame.
+#[derive(Default)]
+pub struct CoverageSlot(std::sync::Mutex<Option<std::sync::Arc<Vec<f32>>>>);
+
+impl CoverageSlot {
+    pub fn put(&self, plane: std::sync::Arc<Vec<f32>>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(plane);
+    }
+
+    pub fn get(&self) -> Option<std::sync::Arc<Vec<f32>>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
 }
 
 pub struct SceneOffsetsStage {
     global: Scene,
     masks: Vec<Contribution>,
+    /// The global look — the four scene stages at the global values, the curve, local contrast,
+    /// saturation, HSL and the grade (`build.rs`' `global_look`) — run on a copy of the input to give
+    /// the **reference photo**: the globally edited photo, before any mask. `Some` only when a
+    /// contributing mask [`reads_reference`], so its cost is paid only there.
+    reference: Option<Vec<Box<dyn PipelineStage>>>,
     /// Kept for [`Self::duplicate`], which rebuilds the coverage-only stages.
     scale: RenderScale,
     baseline: color::wb::Illuminant,
@@ -48,6 +78,9 @@ pub struct SceneOffsetsStage {
 impl SceneOffsetsStage {
     /// The stage for `edits`, or `None` when no active mask carries a scene offset — then the tail is
     /// built exactly as before (`build.rs`).
+    ///
+    /// ⚠ `reference` builds the global look's stages; it is called only when a contributing mask
+    /// [`reads_reference`] — the one place the reference's cost is decided.
     pub fn new(
         edits: &Edits,
         scale: RenderScale,
@@ -55,6 +88,7 @@ impl SceneOffsetsStage {
         geometry: &Geometry,
         brush: Option<&std::sync::Arc<crate::BrushCoverage>>,
         baseline: color::wb::Illuminant,
+        reference: impl FnOnce() -> Vec<Box<dyn PipelineStage>>,
     ) -> Option<Self> {
         let gains = crate::global_wb_gains(&edits.white_balance, baseline);
         let masks: Vec<Contribution> = edits
@@ -79,10 +113,14 @@ impl SceneOffsetsStage {
                         (r[2] / gains[2]).ln(),
                     ]
                 };
+                let reads = reads_reference(m);
                 Contribution {
-                    // ⚠⚠ **No deposit.** The brush coverage cache keys a gating brush's map on the
-                    // base `MaskStage` reads, after the global tail; this stage reads before it,
-                    // so a map deposited from here would be served to `MaskStage` as a stale hit.
+                    // ⚠⚠ **A deposit only for a mask that reads the reference.** Its coverage is
+                    // built HERE, on the reference photo, which is what the brush cache keys such a
+                    // mask's gating brush on (`render_engine`'s `brush_cache::base_id`, through the
+                    // same `reads_reference`). Any other mask's coverage is positional here, and its
+                    // gating brush — if it has one — is built by its own `MaskStage`, on that
+                    // stage's base: a map deposited from here would be filed under the wrong base.
                     coverage: MaskStage::new_in_region(
                         &shape_only(m),
                         scale,
@@ -90,18 +128,23 @@ impl SceneOffsetsStage {
                         geometry,
                         brush.map_or(&[][..], |b| b.row(i)),
                         baseline,
-                        None,
+                        brush
+                            .filter(|_| reads)
+                            .map(|b| (std::sync::Arc::clone(b), i)),
                     ),
                     ev: a.exposure,
                     contrast: a.contrast,
                     regions: [a.highlights, a.shadows, a.whites, a.blacks],
                     ln_r,
+                    index: i,
+                    slot: reads.then(Default::default),
                 }
             })
             .collect();
         if masks.is_empty() {
             return None;
         }
+        let reference = masks.iter().any(|m| m.slot.is_some()).then(reference);
         Some(Self {
             global: Scene {
                 gains,
@@ -110,6 +153,7 @@ impl SceneOffsetsStage {
                 regions: [edits.highlights, edits.shadows, edits.whites, edits.blacks],
             },
             masks,
+            reference,
             scale,
             baseline,
         })
@@ -140,9 +184,29 @@ impl SceneOffsetsStage {
         })
     }
 
-    /// A copy rebuilt from its parts — a GPU twin's own CPU reference (`GpuStage::cpu`).
-    pub fn duplicate(&self) -> Self {
-        Self {
+    /// Whether this stage runs the reference photo — some contributing mask reads it.
+    pub fn has_reference(&self) -> bool {
+        self.reference.is_some()
+    }
+
+    /// Mask `i`'s slot (`i` its position in `edits.masks`), for its look `MaskStage` — `Some` when
+    /// that mask [`reads_reference`].
+    pub fn slot_for(&self, i: usize) -> Option<std::sync::Arc<CoverageSlot>> {
+        self.masks
+            .iter()
+            .find(|m| m.index == i)
+            .and_then(|m| m.slot.clone())
+    }
+
+    /// A copy rebuilt from its parts — a GPU twin's own CPU reference (`GpuStage::cpu`) — or `None`
+    /// for a stage with a reference: its boxed stages cannot be copied, and the twin, the only
+    /// caller, declines such a stage anyway (the GPU does not compute the reference — the spec's
+    /// *Out of scope*).
+    pub fn duplicate(&self) -> Option<Self> {
+        if self.reference.is_some() {
+            return None;
+        }
+        Some(Self {
             global: Scene { ..self.global },
             masks: self
                 .masks
@@ -163,12 +227,15 @@ impl SceneOffsetsStage {
                         contrast: m.contrast,
                         regions: m.regions,
                         ln_r: m.ln_r,
+                        index: m.index,
+                        slot: None,
                     }
                 })
                 .collect(),
+            reference: None,
             scale: self.scale,
             baseline: self.baseline,
-        }
+        })
     }
 }
 
@@ -183,11 +250,28 @@ impl PipelineStage for SceneOffsetsStage {
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
         let w = image.width();
-        let planes: Vec<Vec<f32>> = self
+        // ⚠⚠ The reference photo, for the masks that read it: the global look on a copy — the
+        // globally edited photo, before any mask (M10.12b, the author's choice). Each such mask's
+        // ONE coverage drives its offsets here and, through its slot, its look stage later.
+        let reference = self.reference.as_ref().map(|stages| {
+            crate::per_pixel::run_stages(stages.iter().map(|s| s.as_ref()), image.clone())
+        });
+        let planes: Vec<std::sync::Arc<Vec<f32>>> = self
             .masks
             .iter()
-            .map(|m| m.coverage.coverage_plane(&image))
+            .map(|m| {
+                let from = match (&m.slot, &reference) {
+                    (Some(_), Some(r)) => r,
+                    _ => &image,
+                };
+                std::sync::Arc::new(m.coverage.coverage_plane(from))
+            })
             .collect();
+        for (m, plane) in self.masks.iter().zip(&planes) {
+            if let Some(slot) = &m.slot {
+                slot.put(std::sync::Arc::clone(plane));
+            }
+        }
         let g = &self.global;
         image.map_pixels_xy(|x, y, p| {
             let i = y * w + x;
@@ -302,6 +386,7 @@ mod tests {
             &Geometry::default(),
             None,
             color::wb::Illuminant::default(),
+            Vec::new,
         )
         .expect("a mask with a scene offset builds the stage")
     }
@@ -411,6 +496,7 @@ mod tests {
             &Geometry::default(),
             None,
             color::wb::Illuminant::default(),
+            Vec::new,
         )
         .unwrap()
         .apply(img.crop(x0, y0, w, h));

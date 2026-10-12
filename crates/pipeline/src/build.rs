@@ -135,8 +135,26 @@ pub fn build_pipeline_split_tapped(
     // balance, exposure, contrast and tone regions together with every mask's offsets to them —
     // and `global_look` builds those four neutral, or they would apply twice. With no such mask it is
     // `None` and the tail is built exactly as before, byte for byte.
-    let offsets =
-        crate::SceneOffsetsStage::new(edits, scale, region, &edits.geometry, brush, baseline);
+    // ⚠ The reference photo (b2) is the global look itself, built at the global values — asked for
+    // only when a mask reads it.
+    let offsets = crate::SceneOffsetsStage::new(
+        edits,
+        scale,
+        region,
+        &edits.geometry,
+        brush,
+        baseline,
+        || {
+            let (mut stages, grade) = global_look(edits, scale, baseline, true);
+            stages.extend(grade);
+            stages
+        },
+    );
+    // ⚠ Taken before the stage moves into the tail: each mask that reads the reference hands its
+    // slot to its own look stage below.
+    let slots: Vec<Option<std::sync::Arc<crate::CoverageSlot>>> = (0..edits.masks.len())
+        .map(|i| offsets.as_ref().and_then(|o| o.slot_for(i)))
+        .collect();
     // ⚠ The tap point: the global look is the first half, the grade begins the second.
     let (mut before_grade, grade) = global_look(edits, scale, baseline, offsets.is_none());
     if let Some(o) = offsets {
@@ -168,7 +186,7 @@ pub fn build_pipeline_split_tapped(
             ..m.clone()
         };
         if look.adjustments.is_active() && !m.disabled {
-            tail.push(Box::new(MaskStage::new_in_region(
+            let stage = MaskStage::new_in_region(
                 &look,
                 scale,
                 region,
@@ -183,7 +201,13 @@ pub fn build_pipeline_split_tapped(
                 // against another's key: a stale hit, which renders positionally while the tint
                 // shows the gate working.
                 brush.map(|b| (std::sync::Arc::clone(b), i)),
-            )));
+            );
+            // ⚠⚠ M10.12b: a mask that reads the reference blends by the coverage its offsets used,
+            // never by its own base — which those offsets have already moved.
+            tail.push(Box::new(match slots[i].clone() {
+                Some(slot) => stage.with_coverage_from(slot),
+                None => stage,
+            }));
         }
     }
 
@@ -280,6 +304,9 @@ pub fn build_pipeline_split_tapped(
     )
 }
 
+/// One boxed stage — `global_look`'s grade, apart from the rest.
+type Stage = Box<dyn PipelineStage>;
+
 /// The global look: the four scene stages, the tone curve, local contrast, saturation and HSL — and
 /// the grade, returned apart because the tail is tapped between them (`TailHalves`).
 ///
@@ -292,7 +319,7 @@ fn global_look(
     scale: RenderScale,
     baseline: color::wb::Illuminant,
     scene: bool,
-) -> (Vec<Box<dyn PipelineStage>>, Option<Box<dyn PipelineStage>>) {
+) -> (Vec<Box<dyn PipelineStage>>, Option<Stage>) {
     let (wb, ev, con, regions) = if scene {
         (
             edits.white_balance,
@@ -1639,5 +1666,325 @@ mod scene_offset_tail_tests {
             ..Default::default()
         };
         close(&render(&legacy), &render(&global), 1e-5);
+    }
+
+    // ---- b2: the reference photo for pixel-reading masks with a scene offset ----
+
+    /// A dark band, lightness [0, 40] with a 2.5-wide falloff (feather 5; lightness is the
+    /// sRGB-encoded luminance × 100).
+    fn band(a: LocalAdjustments) -> MaskedAdjustment {
+        MaskedAdjustment {
+            mask: Mask::Luminance(edit_model::LuminanceRange {
+                low: 0.0,
+                high: 40.0,
+                feather: 5.0,
+                invert: false,
+            }),
+            adjustments: a,
+            ..Default::default()
+        }
+    }
+
+    fn uniform(rgb: [f32; 3]) -> ImageBuf {
+        let mut img = ImageBuf::new(16, 16);
+        for y in 0..16 {
+            for x in 0..16 {
+                img.set_pixel(x, y, rgb);
+            }
+        }
+        img
+    }
+
+    fn render_on(e: &Edits, img: &ImageBuf) -> ImageBuf {
+        build_pipeline(e, RenderScale::FULL, TailRendering::colorimetric()).run(img.clone())
+    }
+
+    fn chroma(p: [f32; 3]) -> f32 {
+        p[0].max(p[1]).max(p[2]) - p[0].min(p[1]).min(p[2])
+    }
+
+    fn masks_of(masks: Vec<MaskedAdjustment>) -> Edits {
+        Edits {
+            masks,
+            ..Default::default()
+        }
+    }
+
+    /// ⚠⚠ **The chase made impossible.** +2 EV lifts the patch (lightness ≈ 25) out of the band that
+    /// selected it (≈ 50). Selecting ONCE, on the reference photo, the mask's Saturation still lands
+    /// on it; selecting from its own base after the offset, it would land on nothing.
+    #[test]
+    fn a_range_mask_selects_the_same_pixels_for_its_offset_and_its_look() {
+        let patch = uniform([0.06, 0.05, 0.04]);
+        let ev_only = render_on(
+            &masks_of(vec![band(LocalAdjustments {
+                exposure: 2.0,
+                ..Default::default()
+            })]),
+            &patch,
+        );
+        let ev_sat = render_on(
+            &masks_of(vec![band(LocalAdjustments {
+                exposure: 2.0,
+                saturation: 80.0,
+                ..Default::default()
+            })]),
+            &patch,
+        );
+        let plain = render_on(&Edits::default(), &patch);
+        assert!(
+            ev_only.pixel(8, 8)[0] > plain.pixel(8, 8)[0] + 0.15,
+            "fixture check: the band selected the patch and the offset lifted it"
+        );
+        let (a, b) = (chroma(ev_sat.pixel(8, 8)), chroma(ev_only.pixel(8, 8)));
+        assert!(
+            a > 1.3 * b,
+            "the mask's Saturation lost the pixels its offset moved: {a} vs {b}"
+        );
+    }
+
+    /// The reference is the GLOBALLY EDITED photo: a global −2 EV brings mid-grey (lightness ≈ 46,
+    /// outside the band) into it, so the mask's +1 makes the global −1.
+    #[test]
+    fn a_range_mask_with_an_offset_selects_on_the_globally_edited_photo() {
+        let grey = uniform([0.18; 3]);
+        let masked = Edits {
+            exposure: -2.0,
+            masks: vec![band(LocalAdjustments {
+                exposure: 1.0,
+                ..Default::default()
+            })],
+            ..Default::default()
+        };
+        let global = Edits {
+            exposure: -1.0,
+            ..Default::default()
+        };
+        let unmasked = Edits {
+            exposure: -2.0,
+            ..Default::default()
+        };
+        assert!(
+            (render_on(&global, &grey).pixel(8, 8)[0] - render_on(&unmasked, &grey).pixel(8, 8)[0])
+                .abs()
+                > 0.05,
+            "fixture check: one stop apart"
+        );
+        close(&render_on(&masked, &grey), &render_on(&global, &grey), 1e-5);
+    }
+
+    /// What each mask's stages say about the reference: `(has_reference, slot per mask)` from the
+    /// offsets stage, and `takes_reference_coverage` per mask stage, in order.
+    fn reference_facts(e: &Edits) -> (Option<(bool, Vec<bool>)>, Vec<bool>) {
+        let stages =
+            build_pipeline(e, RenderScale::FULL, TailRendering::colorimetric()).into_stages();
+        let offsets = stages.iter().find_map(|s| {
+            s.scene_offsets().map(|o| {
+                (
+                    o.has_reference(),
+                    (0..e.masks.len())
+                        .map(|i| o.slot_for(i).is_some())
+                        .collect(),
+                )
+            })
+        });
+        let masks = stages
+            .iter()
+            .filter(|s| s.name() == "mask")
+            .map(|s| s.takes_reference_coverage())
+            .collect();
+        (offsets, masks)
+    }
+
+    /// The cost is paid only where it is needed: a positional mask's offsets build no reference, a
+    /// range mask without an offset takes no slot, and a range mask with one takes ITS slot.
+    #[test]
+    fn the_reference_is_built_only_for_a_pixel_reading_mask_with_an_offset() {
+        let ev = LocalAdjustments {
+            exposure: 1.0,
+            ..Default::default()
+        };
+        let sat = LocalAdjustments {
+            saturation: 30.0,
+            ..Default::default()
+        };
+        let both = LocalAdjustments {
+            exposure: 1.0,
+            saturation: 30.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            reference_facts(&masks_of(vec![everything(ev.clone())])),
+            (Some((false, vec![false])), vec![])
+        );
+        assert_eq!(
+            reference_facts(&masks_of(vec![everything(ev), band(sat)])),
+            (Some((false, vec![false, false])), vec![false])
+        );
+        assert_eq!(
+            reference_facts(&masks_of(vec![band(both.clone())])),
+            (Some((true, vec![true])), vec![true])
+        );
+        assert_eq!(
+            reference_facts(&masks_of(vec![everything(both.clone()), band(both)])),
+            (Some((true, vec![false, true])), vec![false, true])
+        );
+    }
+
+    #[test]
+    fn a_disabled_range_mask_with_an_offset_builds_no_reference_and_changes_nothing() {
+        let off = MaskedAdjustment {
+            disabled: true,
+            ..band(LocalAdjustments {
+                exposure: 2.0,
+                saturation: 80.0,
+                ..Default::default()
+            })
+        };
+        let lin = everything(LocalAdjustments {
+            exposure: 0.5,
+            ..Default::default()
+        });
+        assert_eq!(
+            reference_facts(&masks_of(vec![lin.clone(), off.clone()])),
+            (Some((false, vec![false, false])), vec![])
+        );
+        let patch = uniform([0.06, 0.05, 0.04]);
+        close(
+            &render_on(&masks_of(vec![lin.clone(), off]), &patch),
+            &render_on(&masks_of(vec![lin]), &patch),
+            0.0,
+        );
+    }
+
+    /// ⚠ The band intersected with a ramp across the middle, so the coverage depends on POSITION too:
+    /// a plane indexed at the wrong pixel would show.
+    fn reference_edit() -> Edits {
+        let mut m = band(LocalAdjustments {
+            exposure: 1.5,
+            saturation: 60.0,
+            ..Default::default()
+        });
+        m.refine = vec![edit_model::Refinement {
+            op: edit_model::MaskOp::Intersect,
+            mask: Mask::Linear(LinearGradient {
+                from: [0.3, 0.0],
+                to: [0.7, 0.0],
+                invert: false,
+            }),
+        }];
+        Edits {
+            exposure: -1.0,
+            masks: vec![m],
+            ..Default::default()
+        }
+    }
+
+    /// A region render — zoomed in, panning — selects exactly as the whole frame does there: the
+    /// slot's plane and the reference are both region-sized.
+    #[test]
+    fn a_region_render_of_a_range_mask_with_an_offset_is_the_whole_frames_crop() {
+        let e = reference_edit();
+        let whole = scene(48, 24);
+        let (_, tail) = crate::build_pipeline_split_in_region(
+            &e,
+            RenderScale::FULL,
+            None,
+            TailRendering::colorimetric(),
+        );
+        let want = tail.run(whole.clone()).crop(10, 6, 20, 12);
+        let region = crate::Region {
+            full_w: 48,
+            full_h: 24,
+            x0: 10,
+            y0: 6,
+        };
+        let (_, tail) = crate::build_pipeline_split_in_region(
+            &e,
+            RenderScale::FULL,
+            Some(region),
+            TailRendering::colorimetric(),
+        );
+        let got = tail.run(whole.crop(10, 6, 20, 12));
+        assert_ne!(
+            render(&e).data(),
+            render(&Edits::default()).data(),
+            "fixture check: the mask does something"
+        );
+        close(&got, &want, 1e-6);
+    }
+
+    /// The grade range view runs the tail as two halves: the offsets stage in the first, the
+    /// slot-fed mask in the second — they must share ONE slot.
+    #[test]
+    fn the_tapped_halves_share_the_slot() {
+        let e = reference_edit();
+        let (_, halves) = crate::build_pipeline_split_tapped(
+            &e,
+            RenderScale::FULL,
+            None,
+            None,
+            crate::RenderSpec::default(),
+            None,
+            TailRendering::colorimetric(),
+        );
+        let (_, tail) = crate::build_pipeline_split_in_region(
+            &e,
+            RenderScale::FULL,
+            None,
+            TailRendering::colorimetric(),
+        );
+        let img = scene(48, 24);
+        close(
+            &halves.from_grade.run(halves.before_grade.run(img.clone())),
+            &tail.run(img),
+            0.0,
+        );
+    }
+
+    /// A gating brush with an offset selects on the reference, so the offsets stage is where its map
+    /// is built — and it reports it, so the next frame is served from the cache.
+    #[test]
+    fn a_gating_brush_with_an_offset_deposits_its_map_from_the_reference() {
+        let brush = edit_model::Brush {
+            strokes: vec![edit_model::BrushStroke {
+                points: vec![[0.5, 0.5]],
+                radius: 0.3,
+                hardness: 100.0,
+                flow: 100.0,
+                auto_mask: true,
+                tolerance: 35.0,
+                ..Default::default()
+            }],
+            invert: false,
+        };
+        let e = masks_of(vec![MaskedAdjustment {
+            mask: Mask::Brush(brush),
+            adjustments: LocalAdjustments {
+                exposure: 1.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        }]);
+        let cov = std::sync::Arc::new(crate::BrushCoverage::with_slots(&[1]));
+        let (_, tail) = crate::build_pipeline_split_in_region_with_brush(
+            &e,
+            RenderScale::FULL,
+            None,
+            Some(&cov),
+            crate::RenderSpec::default(),
+            None,
+            TailRendering::colorimetric(),
+        );
+        assert_eq!(
+            tail.stage_names().iter().filter(|n| **n == "mask").count(),
+            0,
+            "fixture check: offsets only"
+        );
+        let _ = tail.run(scene(48, 24));
+        assert!(
+            cov.take_built(0, 0).is_some(),
+            "the reference's map was built and not reported"
+        );
     }
 }

@@ -82,7 +82,9 @@ impl GpuSceneOffsetsStage {
                 .map(Component::coverage_cost)
                 .sum::<f32>();
         Some(Self {
-            cpu: cpu.duplicate(),
+            // ⚠ M10.12b: `None` for a stage carrying the reference photo, which the GPU does not compute
+            // (the spec's *Out of scope*) — so such a stage declines and runs on the CPU.
+            cpu: cpu.duplicate()?,
             chains,
             values,
             region,
@@ -409,6 +411,7 @@ mod tests {
             &Geometry::default(),
             None,
             color::wb::Illuminant::default(),
+            Vec::new,
         )
         .expect("a mask with a scene offset builds the stage")
     }
@@ -507,33 +510,6 @@ mod tests {
                 )],
             ),
             (
-                "luminance highlights",
-                vec![masked(
-                    Mask::Luminance(LuminanceRange {
-                        low: 40.0,
-                        high: 100.0,
-                        feather: 20.0,
-                        invert: false,
-                    }),
-                    LocalAdjustments {
-                        highlights: -60.0,
-                        whites: 30.0,
-                        ..Default::default()
-                    },
-                )],
-            ),
-            (
-                "colour temp",
-                vec![masked(
-                    Mask::Colour(ColourRange::default()),
-                    LocalAdjustments {
-                        temp: 50.0,
-                        blacks: -20.0,
-                        ..Default::default()
-                    },
-                )],
-            ),
-            (
                 "two overlapping",
                 vec![
                     masked(
@@ -627,6 +603,42 @@ mod tests {
         let src = scene(64, 48);
         let (want, got) = both(&ctx, &e, &src);
         assert_agrees("brush", &want, &got, &src);
+    }
+
+    /// ⚠ M10.12b2: a range mask with a scene offset selects on the reference photo — the globally
+    /// edited photo, which the GPU does not compute — so the twin declines and the CPU stage runs.
+    /// (Range components are still compiled by the shared chain builder; since b2 they never reach
+    /// this twin.)
+    #[test]
+    fn a_stage_with_a_reference_declines() {
+        let Some(ctx) = ctx() else { return };
+        for mask in [
+            Mask::Luminance(LuminanceRange {
+                low: 40.0,
+                high: 100.0,
+                feather: 20.0,
+                invert: false,
+            }),
+            Mask::Colour(ColourRange::default()),
+        ] {
+            let e = Edits {
+                masks: vec![masked(
+                    mask,
+                    LocalAdjustments {
+                        highlights: -60.0,
+                        temp: 50.0,
+                        ..Default::default()
+                    },
+                )],
+                ..Default::default()
+            };
+            let cpu = cpu_for(&e, None);
+            assert!(
+                cpu.has_reference(),
+                "fixture check: the range reads the reference"
+            );
+            assert!(GpuSceneOffsetsStage::new(&cpu, &ctx).is_none());
+        }
     }
 
     /// A gating brush decides its coverage from the photograph — the CPU stage runs instead.

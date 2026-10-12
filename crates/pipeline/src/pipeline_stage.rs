@@ -113,6 +113,12 @@ pub trait PipelineStage: Send + Sync {
         None
     }
 
+    /// Whether this stage blends by a coverage plane `SceneOffsetsStage` hands it from the reference
+    /// photo (M10.12b) — a mask a GPU twin must not replace, since a twin would read its own base.
+    fn takes_reference_coverage(&self) -> bool {
+        false
+    }
+
     /// Coverage maps this stage was handed already rasterized, one per component.
     ///
     /// ⚠⚠ **This is what makes a GATING brush accelerable.** Such a brush reads the photograph to

@@ -77,6 +77,11 @@ pub struct MaskStage {
     /// ⚠ `GpuSharpenStage`'s sigma is in **full-resolution** pixels and only the scale says what
     /// that is here, so an accelerator without it cannot build the sharpen row at all.
     scale: RenderScale,
+    /// Where `SceneOffsetsStage` leaves this mask's coverage, computed on the **reference photo**
+    /// (M10.12b) — `Some` for a mask that reads the photograph and carries a scene offset. It then
+    /// blends by that plane instead of selecting from its own base, which its own offsets have
+    /// already moved: one coverage for both halves, so nothing chases its own effect.
+    from_reference: Option<std::sync::Arc<crate::CoverageSlot>>,
 }
 
 impl MaskStage {
@@ -123,6 +128,7 @@ impl MaskStage {
             prebuilt: prebuilt.to_vec(),
             scale,
             coverage_gpu: None,
+            from_reference: None,
         }
     }
 
@@ -163,6 +169,7 @@ impl MaskStage {
             prebuilt: prebuilt.to_vec(),
             scale,
             coverage_gpu: None,
+            from_reference: None,
         }
     }
 
@@ -279,6 +286,14 @@ impl MaskStage {
         maps
     }
 
+    /// Blend by the plane `SceneOffsetsStage` leaves in `slot` (M10.12b). `build.rs` chains it onto
+    /// a mask that `reads_reference`; an empty slot — a tail run without its offsets stage — falls
+    /// back to selecting from this stage's own base, as every mask did before.
+    pub fn with_coverage_from(mut self, slot: std::sync::Arc<crate::CoverageSlot>) -> Self {
+        self.from_reference = Some(slot);
+        self
+    }
+
     /// This mask's coverage at every pixel of `image`, row-major, in `[0, 1]` — exactly the
     /// weight `apply` blends with. For the prefix's defringe step (M9.6), which scales a local
     /// amount by it rather than blending a sub-stage's output.
@@ -382,6 +397,16 @@ impl MaskStage {
     }
 }
 
+/// `base` moved toward `adj` by coverage `c` — the one blend, for a mask's own coverage and for a
+/// plane handed from the reference (M10.12b).
+fn mix(base: [f32; 3], adj: [f32; 3], c: f32) -> [f32; 3] {
+    [
+        base[0] + (adj[0] - base[0]) * c,
+        base[1] + (adj[1] - base[1]) * c,
+        base[2] + (adj[2] - base[2]) * c,
+    ]
+}
+
 /// A view of the buffer [`MaskStage::apply`] was handed, addressed in **frame** coordinates.
 ///
 /// ⚠ Under a region render the buffer *is* the region, so a frame coordinate is offset by the
@@ -445,6 +470,10 @@ impl PipelineStage for MaskStage {
         Some(self.description())
     }
 
+    fn takes_reference_coverage(&self) -> bool {
+        self.from_reference.is_some()
+    }
+
     fn apply(&self, image: ImageBuf) -> ImageBuf {
         // ⚠⚠ **A guard rather than a call, because it has to cover every early return below —
         // and a panic.** An offered rasteriser holds state scoped to one apply (`gpu-pipeline`
@@ -479,6 +508,25 @@ impl PipelineStage for MaskStage {
             return image;
         }
         let aspect = fw as f32 / fh as f32;
+
+        // ⚠⚠ M10.12b: a mask that reads the reference blends by the plane `SceneOffsetsStage` left —
+        // AFTER `_end` exists, so an offered rasteriser is still released on this path. A plane of
+        // the wrong size (it cannot be: both stages see one region) falls through rather than
+        // indexing out of bounds.
+        if let Some(plane) = self
+            .from_reference
+            .as_ref()
+            .and_then(|s| s.get())
+            .filter(|p| p.len() == w * h)
+        {
+            if plane.iter().all(|&c| c == 0.0) {
+                return image;
+            }
+            let adjusted =
+                crate::per_pixel::run_stages(self.stages.iter().map(|s| s.as_ref()), image.clone());
+            return image
+                .map_pixels_xy(|x, y, base| mix(base, adjusted.pixel(x, y), plane[y * w + x]));
+        }
 
         let t_cov = std::time::Instant::now();
         let maps = self.coverage_maps(&image);
@@ -545,12 +593,7 @@ impl PipelineStage for MaskStage {
                 maps: &maps,
             };
             let c = self.composite.at(&cx, base, &mut facts);
-            let adj = adjusted.pixel(x, y);
-            [
-                base[0] + (adj[0] - base[0]) * c,
-                base[1] + (adj[1] - base[1]) * c,
-                base[2] + (adj[2] - base[2]) * c,
-            ]
+            mix(base, adjusted.pixel(x, y), c)
         });
         let d_blend = t_blend.elapsed();
         // ⚠⚠ Kept permanently, the `RUSTROOM_DEBUG_BRUSH` / `RUSTROOM_DEBUG_RENDER` precedent.
@@ -783,6 +826,80 @@ mod tests {
             coverage.take_built(0, 0).is_some(),
             "the stage built a coverage map and did not report it, so nothing can cache it"
         );
+    }
+
+    /// A linear gradient whose ramp lies wholly left of the frame, so it covers NOTHING by position.
+    fn nowhere(a: LocalAdjustments) -> MaskedAdjustment {
+        MaskedAdjustment {
+            mask: Mask::Linear(edit_model::LinearGradient {
+                from: [-0.5, 0.0],
+                to: [-1.0, 0.0],
+                invert: false,
+            }),
+            adjustments: a,
+            ..Default::default()
+        }
+    }
+
+    /// M10.12b: a slot-fed mask blends by the plane it is handed, never by its own shape.
+    #[test]
+    fn a_slot_fed_mask_blends_by_the_plane() {
+        let m = nowhere(LocalAdjustments {
+            exposure: 1.0,
+            ..Default::default()
+        });
+        let geo = Geometry::default();
+        let plain = MaskStage::new(&m, RenderScale::FULL, &geo).apply(flat(8, 6));
+        assert_eq!(
+            plain.pixel(3, 3),
+            [0.5; 3],
+            "fixture check: the shape covers nothing"
+        );
+        // ⚠ A ramp, not a constant: a plane read at the wrong pixel must show.
+        let c = |x: usize, y: usize| (x + 8 * y) as f32 / 47.0;
+        let slot = std::sync::Arc::new(crate::CoverageSlot::default());
+        slot.put(std::sync::Arc::new(
+            (0..6).flat_map(|y| (0..8).map(move |x| c(x, y))).collect(),
+        ));
+        let out = MaskStage::new(&m, RenderScale::FULL, &geo)
+            .with_coverage_from(slot)
+            .apply(flat(8, 6));
+        for y in 0..6 {
+            for x in 0..8 {
+                // +1 EV takes 0.5 to 1.0; coverage c moves it c of the way.
+                let want = 0.5 + 0.5 * c(x, y);
+                let got = out.pixel(x, y)[0];
+                assert!((got - want).abs() < 1e-6, "({x}, {y}): {got} vs {want}");
+            }
+        }
+    }
+
+    /// An empty slot — a tail run without its offsets stage — selects from the stage's own base,
+    /// as every mask did before M10.12b, rather than panicking or covering nothing.
+    #[test]
+    fn a_mask_handed_an_empty_slot_selects_from_its_own_base() {
+        let m = MaskedAdjustment {
+            mask: Mask::Linear(edit_model::LinearGradient {
+                from: [-1.0, 0.0],
+                to: [-0.5, 0.0],
+                invert: false,
+            }),
+            ..nowhere(LocalAdjustments {
+                exposure: 1.0,
+                ..Default::default()
+            })
+        };
+        let geo = Geometry::default();
+        let want = MaskStage::new(&m, RenderScale::FULL, &geo).apply(flat(8, 6));
+        let got = MaskStage::new(&m, RenderScale::FULL, &geo)
+            .with_coverage_from(std::sync::Arc::new(crate::CoverageSlot::default()))
+            .apply(flat(8, 6));
+        assert_eq!(
+            want.pixel(3, 3),
+            [1.0; 3],
+            "fixture check: the shape covers everything"
+        );
+        assert_eq!(got.data(), want.data());
     }
 
     /// A flat mid-grey image.
