@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.12b: a mask's scene sliders as offsets, Lightroom's model (2026-10-12)](#2026-10-12--m1012b-a-masks-scene-sliders-as-offsets-lightrooms-model-branch-m1012b-mask-offsets-in-progress)
 - [M10.19c: mark several folders, forget them from a right-click menu (2026-10-12)](#2026-10-12--m1019c-mark-several-folders-forget-them-from-a-right-click-menu-branch-m1019c-folder-marks-merged-2026-10-12)
 - [The Library became slow: the rail's per-frame work (2026-10-12)](#2026-10-12--the-library-became-slow-the-rails-per-frame-work-branch-fix-library-rail-speed-merged-2026-10-12)
 - [M10.12a: the flat composite made usable, nesting parked (2026-10-12)](#2026-10-12--m1012a-the-flat-composite-made-usable-nesting-parked-branch-m1012a-mask-composites-merged-2026-10-12)
@@ -166,6 +167,114 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-12 — M10.12b: a mask's scene sliders as offsets, Lightroom's model (branch `m10.12b-mask-offsets`, in progress)
+
+**Asked for:** the author chose **Lightroom's model, true offsets** — a mask's White Balance, Exposure,
+Contrast and the four tone regions add to the global sliders per pixel, at the global stages' own
+position, instead of running as a second pass after the global tone curve, saturation, HSL and grading.
+Range masks select on **the globally edited photo** (his call). Spec
+`2026-10-12-m10.12b-mask-offsets-design.md`; delivered in two parts, **b1** (below) and **b2** (the
+reference photo for pixel-reading masks).
+
+**Measured first** (`examples/probe_mask_offsets.rs`, DSCF6291 at 1200 px under an ordinary global edit,
+a mask covering the whole frame vs the same slider globally): Exposure +1 differed by **14.7 levels mean,
+85 at p99, 77 % of pixels**; Temp 5.0 / 52 / 31 %; Contrast 3.6 / 49 / 29 %; Highlights 0.4 / 5 / 5 %.
+**After b1 every row is 0.00 mean, 0 at p99, 0 %.**
+
+**b1, built:**
+- **`edit-model`** — `LocalAdjustments::{temp, tint}`, **relative** shifts ±100 (`skip_serializing_if`
+  zero); the old absolute `white_balance` is legacy, read as the shift it amounted to
+  (`pipeline::mask_wb_shift`) and cleared by the panel's first drag (`rustroom_app::mask_wb`). +Temp is
+  warmer: `mired' = mired(global) − temp · MIRED_PER_STEP`, clamped to 20..=500. ⚠ **`MIRED_PER_STEP` is
+  1.0 and is the author's to tune.** `has_scene_offsets()` says whether a mask carries any of them.
+- **`pipeline::SceneOffsetsStage`** — first in the tail when any enabled mask has scene offsets; the
+  global scene stages are then built neutral and it does their work: per pixel `global + Σ cᵢ · offsetᵢ`,
+  then WB → exposure → contrast → tone regions, the four stages' own arithmetic, now shared
+  (`exposure::factor`, `contrast::apply`, `tone_regions::gain`). WB composes multiplicatively,
+  `G ⊙ exp(Σ c ln Rᵢ)`. **Bit-identical to the four stages where no mask covers** (tested). A mask's own
+  `MaskStage` now runs only its **look** sliders (`pipeline::look_only`, applied in `build.rs`; the stage
+  itself stays general).
+- **GPU twin** — `GpuSceneOffsetsStage`: every contributing mask's coverage chain, the summed offsets and
+  the four formulas in **one** shader; substituted in the accelerate walk like a mask, not a
+  `REPLACEABLE` row (its builder needs the masks' prebuilt parts). Reuses `GpuMaskStage`'s components and
+  packing (lifted to `pub(crate)` free fns). CPU/GPU within 1 level across every mask kind, overlaps,
+  inverted composites and brushes.
+- **The panel** — the mask's White Balance section is two sliders, Temp and Tint, −100..100, with their
+  own hover scope (`Scope::MaskWhiteBalance`): *relative to the photo*. Drawing a legacy mask converts
+  nothing; only a drag does.
+- **b1's interim:** a luminance- or colour-range mask with scene offsets reads its coverage at the scene
+  position (the pre-tone picture) — b2 gives it the globally edited photo. Range masks *without* scene
+  offsets select exactly as before.
+
+**Goldens rewritten — exactly 5**, each carrying a masked scene slider: `mask_brush_erase`,
+`mask_linear_exposure`, `mask_linear_inverted_saturation`, `mask_luminance_inverted_highlights` (b2 moves
+it again), `mask_radial_inverted_saturation`; the composite goldens stayed within tolerance.
+
+**Sabotages, every one red:** the Temp sign flipped; the contrast slope off by one; WB offsets ignored;
+exposure applied without its coverage; contrast applied at zero amount (bit-exactness); the shader
+dropping the second mask (a 52-level divergence); the walk never substituting the twin; the panel showing
+the raw fields instead of a legacy mask's converted shift.
+
+**Found on the way:** `a_chains_offer_never_survives_into_the_next_mask` had gone **vacuous** — its masks
+carried only exposure, which no longer makes a mask stage, so it asserted `takes() == 0` over nothing; a
+fixture check now requires both masks to be stages. The hover sweep's scope list had missed `Grain`.
+
+**Counts (b1):** 3674 → **3703 tests**.
+
+**b2, built — the reference photo** (plan `2026-10-12-m10.12b2-mask-reference.md`):
+- **`pipeline::reads_reference(m)`** — on, reads the photograph (`MaskedAdjustment::reads_pixels`: a
+  range or a gating brush, base or refinement, an exhaustive match) and carries a scene offset. ONE
+  predicate for the stage and the brush cache.
+- **`SceneOffsetsStage`** runs the **global look** (`build.rs`' `global_look`, now one builder for the
+  tail and the reference — the four scene stages at the global values, curve, local contrast,
+  saturation, HSL, grade) on a copy **only when such a mask exists**; that mask's coverage is computed
+  on it, drives its offsets, and goes through a **`CoverageSlot`** to the same mask's look `MaskStage`,
+  which blends by it (`with_coverage_from`; an empty slot falls back to its own base). One coverage
+  for both halves: nothing chases its own effect. Its gating brush's map is deposited from there.
+- **GPU:** both decline — the twin (`duplicate()` is `None` with a reference) and that mask's
+  `GpuMaskStage` (`takes_reference_coverage`); the CPU stages run. The twin's parity test lost its two
+  range cases to `a_stage_with_a_reference_declines` (a range with an offset never reaches it now).
+- **The brush cache** (`brush_cache::base_id`) — ⚠⚠ **a b1 hazard fixed:** since b1 every mask's
+  offsets run at the head of the tail, so a LATER mask's offset reaches an earlier gating brush's base,
+  and the key — the masks before it, truncated — would have served a map gated on pixels that no
+  longer existed. Now: a reference-reading mask is keyed on the global edits alone; any other on the
+  earlier masks whole plus every later one's **scene part** (`pipeline::scene_only`).
+- **Golden:** exactly `mask_luminance_inverted_highlights` (48 levels) — the bright greens its −0.5 EV
+  had moved into the inverted band are now desaturated too; b1 kept that chase.
+
+**The cost, measured** (`examples/bench_mask_reference.rs`, DSCF6291, M2, best of 5 warm frames):
+
+| rung | case | CPU ms | GPU ms |
+|---|---|---|---|
+| 1600 | global only | 19.6 | 6.1 |
+| 1600 | + range, Saturation (no offset) | 29.0 | 9.3 |
+| 1600 | + linear, Exposure (offsets only) | 28.1 | 6.9 |
+| 1600 | + range, Exposure (**reference**) | 39.7 | **31.0** |
+| 1600 | + range, Exposure + Saturation | 41.7 | **34.8** |
+| 3200 | + linear, Exposure (offsets only) | 110.9 | 21.9 |
+| 3200 | + range, Exposure (**reference**) | 148.3 | **107.1** |
+| 3200 | + range, Exposure + Saturation | 156.9 | **129.5** |
+
+⚠⚠ **Paid only by a range or gating mask carrying a scene offset — but there it is 4–5× on the GPU
+path**: the CPU runs the global look a second time, and the tail splits around two CPU stages (two
+downloads, two uploads). The fix is the spec's *out of scope*: the GPU computing the reference itself
+(the global look's twins all exist) — recorded in `docs/BACKLOG.md`, *The reference photo on the GPU*.
+
+**Sabotages (b2), every one red** — after four were made to be: `reads_reference` without `disabled`;
+the plane from the input instead of the reference; `MaskStage` ignoring its slot; `slot_for` returning
+the first slot; no deposit; the reference's coverage built without the region; the GPU decline removed
+(names, and the picture alone: 3.0 levels); `duplicate` ignoring the reference; the old truncating key;
+later masks keyed whole. ⚠ **Four tests passed against the bug they named until strengthened:** a
+uniform plane could not see an off-by-one read (now a ramp); the GPU fixture's wide default band
+selected the same pixels from either base (now a narrow band, +2 EV); the reference-key test put the
+brush at mask 0, where truncation already meant "no mask" (now mask 1); and a later mask without an
+offset is filtered before `scene_only` matters (now one with both).
+
+**Not changed, and why:** the canvas tint still evaluates a range on the displayed frame with this mask
+held out — other masks remain in it, as before; exact needs the render worker's reference.
+
+**Counts (b2):** 3703 → **3720 tests**.
 
 ### 2026-10-12 — M10.19c: mark several folders, forget them from a right-click menu (branch `m10.19c-folder-marks`, merged 2026-10-12)
 

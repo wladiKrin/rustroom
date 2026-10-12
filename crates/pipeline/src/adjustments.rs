@@ -24,6 +24,95 @@ pub fn white_balance_gains(
     color::wb::adaptation_gains(declared, baseline, &color::spaces::PROPHOTO_TO_XYZ)
 }
 
+/// `a` without its scene sliders — white balance (legacy and relative), exposure, contrast and the
+/// four tone regions — which are offsets in `SceneOffsetsStage` (M10.12b). What a `MaskStage` runs.
+pub fn look_only(a: &edit_model::LocalAdjustments) -> edit_model::LocalAdjustments {
+    edit_model::LocalAdjustments {
+        white_balance: edit_model::WhiteBalance::default(),
+        temp: 0.0,
+        tint: 0.0,
+        exposure: 0.0,
+        contrast: 0.0,
+        highlights: 0.0,
+        shadows: 0.0,
+        whites: 0.0,
+        blacks: 0.0,
+        ..a.clone()
+    }
+}
+
+/// `a`'s scene sliders alone — the nine fields [`look_only`] clears, and nothing else: what reaches
+/// ANOTHER mask's base through `SceneOffsetsStage` (M10.12b), so what the brush cache keys a later
+/// mask's base on.
+pub fn scene_only(a: &edit_model::LocalAdjustments) -> edit_model::LocalAdjustments {
+    edit_model::LocalAdjustments {
+        white_balance: a.white_balance,
+        temp: a.temp,
+        tint: a.tint,
+        exposure: a.exposure,
+        contrast: a.contrast,
+        highlights: a.highlights,
+        shadows: a.shadows,
+        whites: a.whites,
+        blacks: a.blacks,
+        ..Default::default()
+    }
+}
+
+/// How far one step of a mask's Temp moves the photo's white point, in mireds (M10.12b).
+///
+/// ⚠ A first value — ±100 mired is about ±2,500 K around daylight — for the author to tune on
+/// crops. Mireds, because equal steps there are equal perceptual steps (the global Temp slider's
+/// own reason).
+pub const MIRED_PER_STEP: f32 = 1.0;
+
+/// A mask's white-balance shift `(temp, tint)` — its relative `temp`/`tint`, plus a **legacy**
+/// absolute value read as the shift it amounted to (M10.12b).
+///
+/// ⚠ The legacy model applied a mask's Kelvin as a correction from the baseline ON TOP of the
+/// global one. Under an as-shot global that equals moving the white point to that Kelvin, which is
+/// this shift exactly; under any other global it corrected twice, which nothing should reproduce.
+pub fn mask_wb_shift(
+    a: &edit_model::LocalAdjustments,
+    baseline: color::wb::Illuminant,
+) -> (f32, f32) {
+    let mut temp = a.temp;
+    if let Some(k) = a.white_balance.kelvin {
+        temp += (1.0e6 / baseline.kelvin - 1.0e6 / k) / MIRED_PER_STEP;
+    }
+    (temp, a.tint + a.white_balance.tint)
+}
+
+/// The global white balance moved by a shift: `+temp` warmer — the white point's Kelvin raised —
+/// and `tint` in the global Tint's own units. The mired is kept within 20..=500 (50,000 K to
+/// 2,000 K), the global slider's own reach.
+pub fn shifted_white_balance(
+    global: &edit_model::WhiteBalance,
+    baseline: color::wb::Illuminant,
+    temp: f32,
+    tint: f32,
+) -> edit_model::WhiteBalance {
+    let kelvin = global.kelvin.unwrap_or(baseline.kelvin);
+    let mired = (1.0e6 / kelvin - temp * MIRED_PER_STEP).clamp(20.0, 500.0);
+    edit_model::WhiteBalance {
+        kelvin: Some(1.0e6 / mired),
+        tint: global.tint + tint,
+    }
+}
+
+/// The gains the global white balance applies — `[1, 1, 1]` when it is inactive, because the tail
+/// then inserts no white-balance stage at all, so that is what "the global gains" are.
+pub fn global_wb_gains(
+    global: &edit_model::WhiteBalance,
+    baseline: color::wb::Illuminant,
+) -> [f32; 3] {
+    if global.is_active() {
+        white_balance_gains(global, baseline)
+    } else {
+        [1.0; 3]
+    }
+}
+
 /// Build the stages for one set of adjustments.
 ///
 /// ⚠ **One list, two consumers**: the global tail calls it with the values from `Edits`, and
@@ -486,5 +575,141 @@ mod tests {
             !cap.is_empty(),
             "fixture check: all_edits' mask must carry capture corrections"
         );
+    }
+}
+
+/// M10.12b: the scene stages' arithmetic as functions `SceneOffsetsStage` shares, and a mask's
+/// relative white balance.
+#[cfg(test)]
+mod scene_arithmetic_tests {
+    use super::*;
+    use crate::stages::{contrast, exposure, tone_regions};
+
+    /// The two halves of a mask (M10.12b): `scene_only` is what reaches another mask's base through
+    /// `SceneOffsetsStage`, `look_only` what its own stage runs — disjoint, and together the whole.
+    #[test]
+    fn scene_only_and_look_only_split_a_mask_without_overlap() {
+        let a = edit_model::LocalAdjustments {
+            white_balance: edit_model::WhiteBalance {
+                kelvin: Some(4000.0),
+                tint: 2.0,
+            },
+            temp: 5.0,
+            tint: -3.0,
+            exposure: 1.0,
+            contrast: 10.0,
+            highlights: -20.0,
+            shadows: 15.0,
+            whites: 5.0,
+            blacks: -5.0,
+            saturation: 30.0,
+            ..Default::default()
+        };
+        assert!(scene_only(&a).has_scene_offsets());
+        assert!(!look_only(&a).has_scene_offsets());
+        assert_eq!(scene_only(&look_only(&a)), Default::default());
+        assert_eq!(look_only(&scene_only(&a)), Default::default());
+        assert_eq!(scene_only(&a).saturation, 0.0);
+        assert_eq!(scene_only(&a).white_balance, a.white_balance);
+    }
+
+    #[test]
+    fn only_an_enabled_pixel_reading_mask_with_an_offset_reads_the_reference() {
+        let range = |a: edit_model::LocalAdjustments, disabled| edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Luminance(Default::default()),
+            adjustments: a,
+            disabled,
+            ..Default::default()
+        };
+        let ev = edit_model::LocalAdjustments {
+            exposure: 1.0,
+            ..Default::default()
+        };
+        let sat = edit_model::LocalAdjustments {
+            saturation: 30.0,
+            ..Default::default()
+        };
+        assert!(crate::reads_reference(&range(ev.clone(), false)));
+        assert!(!crate::reads_reference(&range(ev.clone(), true)));
+        assert!(!crate::reads_reference(&range(sat, false)));
+        let linear = edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Linear(Default::default()),
+            adjustments: ev,
+            ..Default::default()
+        };
+        assert!(!crate::reads_reference(&linear));
+    }
+
+    fn samples() -> Vec<f32> {
+        (0..1000)
+            .map(|i| (i as f32 * 0.7919).fract() * 3.0)
+            .collect()
+    }
+
+    /// ⚠ Against copies of the formulas as they stood before the refactor, written out here —
+    /// comparing with the stages would compare the function with itself.
+    #[test]
+    fn the_shared_functions_are_the_old_formulas_bit_for_bit() {
+        for ev in [-2.0f32, -0.3, 0.0, 0.45, 1.0, 3.7] {
+            assert_eq!(exposure::factor(ev).to_bits(), 2.0f32.powf(ev).to_bits());
+        }
+        for amount in [-60.0f32, -5.0, 0.0, 25.0, 55.0] {
+            for s in samples() {
+                let old = (0.18 + (s - 0.18) * (1.0 + amount / 100.0)).max(0.0);
+                assert_eq!(
+                    contrast::apply([s, s, s], amount)[0].to_bits(),
+                    old.to_bits()
+                );
+            }
+        }
+        let a = [-0.5f32, 0.3, 0.1, -0.2];
+        for l in samples() {
+            let e = color::linear_to_srgb(l.clamp(0.0, 1.0));
+            let old = 1.0
+                + 0.5 * (a[1] * ((1.0 - e) * (1.0 - e)) + a[0] * (e * e))
+                + 0.7 * (a[3] * (1.0 - e).powi(3) + a[2] * e.powi(3));
+            assert_eq!(tone_regions::gain(l, a).to_bits(), old.to_bits(), "l {l}");
+        }
+    }
+
+    fn mired(k: f32) -> f32 {
+        1.0e6 / k
+    }
+
+    #[test]
+    fn a_legacy_kelvin_reads_as_the_shift_it_amounted_to() {
+        let baseline = color::wb::Illuminant::new(5500.0, 0.0);
+        let a = edit_model::LocalAdjustments {
+            white_balance: edit_model::WhiteBalance {
+                kelvin: Some(6500.0),
+                tint: 7.0,
+            },
+            ..Default::default()
+        };
+        let (t, n) = mask_wb_shift(&a, baseline);
+        assert!(
+            (t - (mired(5500.0) - mired(6500.0)) / MIRED_PER_STEP).abs() < 1e-3,
+            "{t}"
+        );
+        assert_eq!(n, 7.0);
+        // And that shift, from an as-shot global, is the old absolute correction again.
+        let shifted = shifted_white_balance(&edit_model::WhiteBalance::default(), baseline, t, n);
+        let got = white_balance_gains(&shifted, baseline);
+        let want = white_balance_gains(&a.white_balance, baseline);
+        for c in 0..3 {
+            assert!((got[c] - want[c]).abs() < 1e-5, "{got:?} vs {want:?}");
+        }
+    }
+
+    #[test]
+    fn a_positive_temp_warms() {
+        let baseline = color::wb::Illuminant::new(5500.0, 0.0);
+        let g = global_wb_gains(&edit_model::WhiteBalance::default(), baseline);
+        assert_eq!(g, [1.0; 3], "an as-shot global applies no gains");
+        let warm = white_balance_gains(
+            &shifted_white_balance(&edit_model::WhiteBalance::default(), baseline, 40.0, 0.0),
+            baseline,
+        );
+        assert!(warm[0] > warm[2], "warmer: red gain above blue, {warm:?}");
     }
 }

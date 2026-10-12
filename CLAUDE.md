@@ -230,9 +230,11 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.12a** (table above).
 
-**▶ NEXT: M10.12b — masks' scene sliders (WB, exposure, contrast, tone regions) as offsets**, Lightroom's
-model; today they run after the global tone curve (raised in M7.3b's brainstorm). Start it when the author
-says to continue.
+**▶ IN REVIEW: M10.12b — masks' scene sliders as offsets** (Lightroom's model), built on branch
+`m10.12b-mask-offsets` (b1 + b2), gate green, **awaiting the author's try in the GUI** — and his tuning of
+`pipeline::MIRED_PER_STEP` (1.0). ⚠ A range/gating mask with an offset costs 31 ms vs 7–9 at fit on the
+GPU path (the reference runs on the CPU) — `grep -n 'reference photo on the GPU' docs/BACKLOG.md`.
+After it: **M10.13a**.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
 release engineering, LAST.** The canonical list — every sub-item with its date, size and reasoning — is
@@ -315,6 +317,11 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   frame, and read changing state (`immich_present`) live rather than invalidating a cache from a list
   of writers. ⚠ **Find it with `sample <pid> 8`**, never by reading code — and re-sample after each
   fix: twice the next cost was hidden behind the last. `grep -n 'became slow' docs/JOURNAL.md`.
+- ⚠⚠ **A mask's scene sliders (WB, Temp/Tint, Exposure, Contrast, the four regions) are OFFSETS in
+  `SceneOffsetsStage`** (M10.12b), never its `MaskStage` (`pipeline::look_only`). A new scene field joins
+  `has_scene_offsets`, `look_only`, `scene_only`, the stage and its GPU twin. A range/gating mask with an
+  offset selects on the reference photo (`pipeline::reads_reference` — ONE predicate, also the brush
+  cache's `base_id`), and its look stage blends by the same plane through a `CoverageSlot`.
 - ⚠⚠ **A mask's coverage is folded in THREE places and keyed in THREE** (M10.12a): the folds are
   `Composite::at` (CPU), `mask_wgsl::coverage_entry` (GPU) and the Show-mask tint; the shape keys are
   `capture_projection`, `defringe_projection` (prefix) and `TintCache::same_shape`. A new field that

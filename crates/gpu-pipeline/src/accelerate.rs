@@ -258,6 +258,10 @@ fn sub_edits(a: &edit_model::LocalAdjustments) -> Edits {
         noise_reduction: _,
         dehaze: _,
         defringe: _,
+        // deliberately not carried — a relative white-balance shift is a scene OFFSET, applied by
+        // `SceneOffsetsStage` at the head of the tail, never one of a mask's sub-stages (M10.12b)
+        temp: _,
+        tint: _,
     } = a;
     Edits {
         exposure: *exposure,
@@ -560,6 +564,15 @@ fn walk(
                 continue;
             }
         }
+        // ⚠ M10.12b: like a mask, not a `REPLACEABLE` row — its twin needs every contributing
+        // mask's own parts (prebuilt maps included), which a builder taking `&Edits` cannot see. A
+        // decline falls through to the CPU arm below, exactly as a mask's does.
+        if let Some(so) = s.scene_offsets() {
+            if let Some(g) = crate::scene_offsets::GpuSceneOffsetsStage::new(so, ctx) {
+                run.push((Box::new(g), s));
+                continue;
+            }
+        }
         match REPLACEABLE
             .iter()
             .find(|(n, _)| *n == s.name())
@@ -633,6 +646,12 @@ fn gpu_mask(
     spec: RenderSpec,
     ctx: &Arc<GpuContext>,
 ) -> Option<Box<dyn GpuStage>> {
+    // ⚠⚠ M10.12b: a mask fed its coverage from the reference photo declines — a twin would select
+    // from its own base, which its own offsets have moved (the chase b2 removes). Its CPU stage
+    // blends by the slot's plane instead.
+    if s.takes_reference_coverage() {
+        return None;
+    }
     let (masked, geometry, mask_region) = s.mask_description()?;
     // ⚠ The mask's own adjustments projected onto an `Edits`, which is what a `REPLACEABLE`
     // builder reads. `sub_edits`' exhaustive destructure is what stops a field being forgotten.
@@ -2063,15 +2082,24 @@ mod tests {
             eprintln!("SKIPPED: RUSTROOM_NO_FUSION is set");
             return;
         }
+        // ⚠ Two per-pixel LOOK sub-stages, so "fused into one" is a claim about more than one.
+        // It was exposure, contrast and saturation until M10.12b made the first two offsets —
+        // leaving one sub-stage, for which one dispatch is no evidence of fusion at all.
         let e = Edits {
             masks: vec![mask_carrying(edit_model::LocalAdjustments {
-                exposure: 0.6,
-                contrast: 20.0,
+                tone_curve: edit_model::ToneCurve {
+                    points: vec![[0.0, 0.0], [0.4, 0.55], [1.0, 1.0]],
+                },
                 saturation: 25.0,
                 ..Default::default()
             })],
             ..Edits::default()
         };
+        assert_eq!(
+            tail_of(&e).sub_stage_names_of("mask").map(|v| v.len()),
+            Some(2),
+            "fixture check: the mask carries two sub-stages to fuse"
+        );
         let cpu = tail_of(&e).run(scene_ramp());
         let unmasked = tail_of(&Edits::default()).run(scene_ramp());
         assert!(
@@ -2135,8 +2163,9 @@ mod tests {
     fn accelerate_offers_a_coverage_rasterizer_to_a_mask() {
         let Some(ctx) = ctx() else { return };
         let e = Edits {
+            // ⚠ A look slider (M10.12b): a mask's exposure is an offset now, not a sub-stage.
             masks: vec![gating_brush_mask(edit_model::LocalAdjustments {
-                exposure: 0.5,
+                saturation: 30.0,
                 ..Default::default()
             })],
             ..Edits::default()
@@ -2385,9 +2414,10 @@ mod tests {
         // chain sat behind `local_contrast`; porting that stage means every mask sub-stage is now
         // GPU-able, so a mask leaves its deposit unclaimed for the *other* reason instead — its
         // sub-stages are too cheap to be worth a chain, so no chain exists to take the plane.
-        // Exposure alone is 1.3 ms against a 27.0 ms transfer.
+        // Saturation alone is 7.2 ms against a 27.0 ms transfer. ⚠ It was exposure (1.3 ms) until
+        // M10.12b made a mask's exposure an offset rather than one of its sub-stages.
         e.masks = vec![gating_brush_mask(edit_model::LocalAdjustments {
-            exposure: 0.6,
+            saturation: 30.0,
             ..Default::default()
         })];
         let p = accel(
@@ -2454,8 +2484,9 @@ mod tests {
     fn a_gate_that_takes_the_chains_plane_still_renders_the_cpus_picture() {
         let Some(ctx) = private_ctx() else { return };
         let mut e = with_hsl();
+        // ⚠ A look slider (M10.12b): a mask's exposure is an offset now, not a sub-stage.
         e.masks = vec![gating_brush_mask(edit_model::LocalAdjustments {
-            exposure: 0.6,
+            saturation: 30.0,
             ..Default::default()
         })];
         let cpu = tail_of(&e).run(big_scene());
@@ -2512,10 +2543,14 @@ mod tests {
         //
         // ⚠ So the first mask has to be one the twin **declines** — a gating brush, permanently —
         // whose box is nonetheless **under `MIN_GPU_BOX_PX`**, so `rasterize` returns at the floor
-        // before it can take. Exposure alone keeps its sub-stages too cheap for a chain, which is
+        // before it can take. Saturation alone keeps its sub-stages too cheap for a chain, which is
         // the second way it could have claimed the plane.
+        //
+        // ⚠⚠ Exposure until M10.12b, which made a mask's exposure an offset: both masks then had
+        // NO stage at all, and the counter below read 0 because no gate existed — the test passed
+        // vacuously until the fixture check after the masks was added.
         let mut small = gating_brush_mask(edit_model::LocalAdjustments {
-            exposure: 0.6,
+            saturation: 30.0,
             ..Default::default()
         });
         if let edit_model::Mask::Brush(b) = &mut small.mask {
@@ -2525,10 +2560,19 @@ mod tests {
         e.masks = vec![
             small,
             gating_brush_mask(edit_model::LocalAdjustments {
-                exposure: -0.4,
+                saturation: -20.0,
                 ..Default::default()
             }),
         ];
+        let masks = tail_of(&e)
+            .stage_names()
+            .iter()
+            .filter(|n| **n == "mask")
+            .count();
+        assert_eq!(
+            masks, 2,
+            "fixture check: both masks must be stages, or no gate exists"
+        );
         let cpu = tail_of(&e).run(big_scene());
         let gpu = accel(
             tail_of(&e),
@@ -2613,13 +2657,14 @@ mod tests {
     fn a_mask_that_deposits_nothing_never_takes_another_masks_plane() {
         let Some(ctx) = private_ctx() else { return };
 
-        // ⚠ The leaver's sub-stages are too cheap to be worth a chain (exposure alone is 1.3 ms
-        // against a 27.0 ms transfer), so its gate deposits a plane nobody takes. ⚠⚠ It used to
+        // ⚠ The leaver's sub-stages are too cheap to be worth a chain (saturation alone is 7.2 ms
+        // against a 27.0 ms transfer — exposure until M10.12b made it an offset), so its gate
+        // deposits a plane nobody takes. ⚠⚠ It used to
         // be a mask whose chain sat behind `local_contrast`; porting that stage at M8.3n made
         // every mask sub-stage GPU-able, so that fixture no longer exists.
         let leaver = Edits {
             masks: vec![gating_brush_mask(edit_model::LocalAdjustments {
-                exposure: 0.6,
+                saturation: 30.0,
                 ..Default::default()
             })],
             ..Edits::default()
@@ -2784,14 +2829,19 @@ mod tests {
             ..Edits::default()
         };
         let subs = mask_sub_stages(&tail_of(&e));
-        // ⚠⚠ **All ten, asserted by name.** `subs.len() > 1` was the old check and it is far too
+        // ⚠⚠ **All six, asserted by name.** `subs.len() > 1` was the old check and it is far too
         // weak: it holds for any two, so the one stage the test is about could go missing without
         // anything failing — which is exactly what happened.
+        //
+        // ⚠ Six, not ten, since M10.12b: the fixture still sets white balance, exposure, contrast
+        // and highlights, and those are offsets in `SceneOffsetsStage` now — never sub-stages.
+        for scene in ["white_balance", "exposure", "contrast", "tone_regions"] {
+            assert!(
+                !subs.contains(&scene),
+                "a mask's {scene} is an offset, not a sub-stage: {subs:?}"
+            );
+        }
         for want in [
-            "white_balance",
-            "exposure",
-            "contrast",
-            "tone_regions",
             "tone_curve",
             "local_contrast",
             "saturation",
@@ -2850,16 +2900,30 @@ mod tests {
         );
     }
 
-    /// ⚠⚠ **The gate reaches the right verdict INSIDE a mask, and this is the case the catalogue
-    /// actually has.** Its one masked photograph carries `exposure: -3.6` and nothing else — 1.3 ms
-    /// of work against a 27.0 ms transfer — so it must be **refused**. A milestone that accelerated
-    /// it would make that photograph slower.
+    /// ⚠⚠ **The gate reaches the right verdict INSIDE a mask.** A mask carrying one cheap slider —
+    /// saturation, 7.2 ms of work against a 27.0 ms transfer — must be **refused**: accelerating it
+    /// would make the photograph slower.
+    ///
+    /// ⚠ This was `a_mask_carrying_only_exposure_is_not_worth_a_chain`, the catalogue's one masked
+    /// photograph (`exposure: -3.6` and nothing else). Since M10.12b that mask inserts NO mask
+    /// stage — its exposure is an offset in `SceneOffsetsStage` — which the first assertion pins.
     #[test]
-    fn a_mask_carrying_only_exposure_is_not_worth_a_chain() {
+    fn a_mask_carrying_one_cheap_slider_is_not_worth_a_chain() {
         let Some(ctx) = ctx() else { return };
-        let e = Edits {
+        let exposure_only = Edits {
             masks: vec![gating_brush_mask(edit_model::LocalAdjustments {
                 exposure: -3.6,
+                ..Default::default()
+            })],
+            ..Edits::default()
+        };
+        assert!(
+            !tail_of(&exposure_only).stage_names().contains(&"mask"),
+            "an exposure-only mask is an offset, with no mask stage"
+        );
+        let e = Edits {
+            masks: vec![gating_brush_mask(edit_model::LocalAdjustments {
+                saturation: 30.0,
                 ..Default::default()
             })],
             ..Edits::default()
@@ -2874,8 +2938,8 @@ mod tests {
         ));
         assert_eq!(
             after,
-            vec!["exposure"],
-            "exposure alone must stay on the CPU inside a mask"
+            vec!["saturation"],
+            "one cheap slider must stay on the CPU inside a mask"
         );
     }
 
@@ -3027,6 +3091,20 @@ mod tests {
         let cube = a_cube();
         let e = every_tail_stage();
         let names = full_tail(&e, Some(&cube)).stage_names();
+        // ⚠ M10.12b: the same tail with a mask carrying a scene offset, where `scene_offsets` takes
+        // the four global scene stages' place — a stage with a twin, like a mask, and no table row.
+        let mut offset = e.clone();
+        offset
+            .masks
+            .push(mask_carrying(edit_model::LocalAdjustments {
+                exposure: 0.5,
+                ..Default::default()
+            }));
+        let offset_names = full_tail(&offset, Some(&cube)).stage_names();
+        assert!(
+            offset_names.contains(&"scene_offsets"),
+            "fixture check: an offset puts `scene_offsets` in the tail, got {offset_names:?}"
+        );
         // ⚠⚠ **The fixture check, and it is what stops this going stale.** The fixture is
         // hand-built, so a row added to `REPLACEABLE` with no field here would leave the property
         // asserted over a tail that never contained the new stage. Asserting the tail carries
@@ -3037,12 +3115,97 @@ mod tests {
                 "fixture check: `every_tail_stage` must switch on {n}, got {names:?}"
             );
         }
-        for n in &names {
+        for n in names.iter().chain(&offset_names) {
             assert!(
-                *n == "mask" || REPLACEABLE.iter().any(|(r, _)| r == n),
+                *n == "mask" || *n == "scene_offsets" || REPLACEABLE.iter().any(|(r, _)| r == n),
                 "{n} is in the tail and is neither replaceable nor a mask: {names:?}"
             );
         }
+    }
+
+    /// ⚠⚠ **The carrier for M10.12b's twin.** A CPU `scene_offsets` and a GPU one render the same
+    /// picture by design, so every equivalence test passes with the substitution deleted — M8.11's
+    /// lesson. This asserts the stage LEFT the CPU list and the picture still agrees.
+    #[test]
+    fn scene_offsets_run_on_the_gpu() {
+        let Some(ctx) = ctx() else { return };
+        let mut e = with_hsl();
+        e.masks = vec![mask_carrying(edit_model::LocalAdjustments {
+            exposure: 0.6,
+            contrast: 20.0,
+            ..Default::default()
+        })];
+        let before = tail_of(&e).stage_names();
+        assert!(
+            before.contains(&"scene_offsets"),
+            "fixture check: the tail carries the offsets: {before:?}"
+        );
+        let cpu = tail_of(&e).run(scene_ramp());
+        let p = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            TailRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        );
+        let after = p.stage_names();
+        assert!(
+            !after.contains(&"scene_offsets"),
+            "the CPU stage must have been substituted: {after:?}"
+        );
+        let d = crate::compare(&cpu, &p.run(scene_ramp()));
+        assert!(
+            d.worst_levels < 1.0,
+            "GPU differs by {} levels",
+            d.worst_levels
+        );
+    }
+
+    /// ⚠⚠ M10.12b2 on the GPU: a range mask with a scene offset selects on the reference photo, so
+    /// the offsets stage (which runs it) and the mask's look stage (fed by its slot) both stay on the
+    /// CPU — a `GpuMaskStage` would select from its own base, the chase b2 removes — and the picture
+    /// equals the CPU's.
+    #[test]
+    fn a_range_mask_with_an_offset_renders_on_the_cpu_and_agrees() {
+        let Some(ctx) = ctx() else { return };
+        let mut e = with_hsl();
+        // ⚠ A narrow band and a big lift, so the chase is large: a wide default band selected the
+        // same pixels from either base, and a twin reading its own base passed the picture check.
+        e.masks = vec![edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Luminance(edit_model::LuminanceRange {
+                low: 0.0,
+                high: 40.0,
+                feather: 5.0,
+                invert: false,
+            }),
+            adjustments: edit_model::LocalAdjustments {
+                exposure: 2.0,
+                saturation: 80.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        }];
+        let cpu = tail_of(&e).run(scene_ramp());
+        let p = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            TailRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        );
+        let names = p.stage_names();
+        assert!(
+            names.contains(&"scene_offsets") && names.contains(&"mask"),
+            "both stay on the CPU: {names:?}"
+        );
+        let d = crate::compare(&cpu, &p.run(scene_ramp()));
+        assert!(
+            d.worst_levels < 1.0,
+            "the GPU path differs by {} levels",
+            d.worst_levels
+        );
     }
 
     /// ⚠⚠⚠ **THE CARRIER FOR M8.11, AND IT IS WHAT STOPS THE MILESTONE SHIPPING GREEN AND DEAD.**
@@ -3061,10 +3224,12 @@ mod tests {
         let Some(ctx) = ctx() else { return };
         // exposure -> mask -> output_transform: the mask sits between two replaceable stages, so
         // before M8.11 it split them into two runs.
+        // ⚠ The mask carries a LOOK slider: since M10.12b a masked exposure is an offset at the
+        // head of the tail and inserts no mask stage at all.
         let e = Edits {
             exposure: 0.5,
             masks: vec![mask_carrying(edit_model::LocalAdjustments {
-                exposure: 1.0,
+                saturation: 30.0,
                 ..Default::default()
             })],
             ..Edits::default()
@@ -3392,8 +3557,9 @@ mod tests {
         // ⚠ A GATING brush: M8.11 substitutes every mask its twin can build, so an ordinary mask
         // is no longer a CPU stage at all. One that decides its coverage from the photograph
         // cannot be built before the photograph exists, so it declines and keeps its position.
+        // ⚠ A look slider (M10.12b): a mask's exposure is an offset now, not a sub-stage.
         e.masks = vec![gating_brush_mask(edit_model::LocalAdjustments {
-            exposure: 0.4,
+            saturation: 30.0,
             ..Default::default()
         })];
         let tail = tail_of(&e);
@@ -3428,8 +3594,9 @@ mod tests {
         // ⚠ A GATING brush: M8.11 substitutes every mask its twin can build, so an ordinary mask
         // is no longer a CPU stage at all. One that decides its coverage from the photograph
         // cannot be built before the photograph exists, so it declines and keeps its position.
+        // ⚠ A look slider (M10.12b): a mask's exposure is an offset now, not a sub-stage.
         e.masks = vec![gating_brush_mask(edit_model::LocalAdjustments {
-            exposure: 0.4,
+            saturation: 30.0,
             ..Default::default()
         })];
         let after = accel(

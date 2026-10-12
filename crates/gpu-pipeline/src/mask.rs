@@ -65,7 +65,7 @@ const LUMINANCE_COVERAGE_COST: f32 = 35.0;
 ///
 /// ⚠ The *kind* decides the shader text, and the shader text is the program cache's key — so a
 /// mask of each kind compiles once and is reused, which is M8.3d's rule rather than a new one.
-enum Component {
+pub(crate) enum Component {
     /// A coverage map somebody else already rasterised — `render_engine`'s cache.
     ///
     /// ⚠⚠ **The only way a GATING brush reaches this stage.** Such a brush reads the photograph to
@@ -118,7 +118,7 @@ impl Component {
     /// ⚠ The index is threaded in rather than the kernel deriving it, because the same kernel
     /// serves every component of its kind — which is what keeps the shader text one program per
     /// composite *shape* rather than one per composite.
-    fn expr(&self, j: usize) -> String {
+    pub(crate) fn expr(&self, j: usize) -> String {
         match self {
             Component::Painted { .. } | Component::Prebuilt { .. } => {
                 format!("painted_at(fx, fy, {j}u)")
@@ -139,7 +139,7 @@ impl Component {
     /// where the component is built is a second fact that can disagree with the expression, and
     /// the failure is a shader referencing `hue` that was never hoisted — a compile error at best,
     /// and at worst a stale value if some other component happened to hoist it.
-    fn facts(&self) -> crate::mask_wgsl::Facts {
+    pub(crate) fn facts(&self) -> crate::mask_wgsl::Facts {
         let mut f = crate::mask_wgsl::Facts::default();
         if let Component::Range { expr, .. } = self {
             if expr.starts_with("cov_luminance") {
@@ -161,7 +161,7 @@ impl Component {
     /// ⚠⚠ A **range** component is emphatically not zero — it is an Oklab round trip or an sRGB
     /// encode per pixel, and it is the whole reason a colour range's `blend` column reads 68.5–90.7
     /// ms against a brush's 10.3–11.9. Each carries its own measured number.
-    fn coverage_cost(&self) -> f32 {
+    pub(crate) fn coverage_cost(&self) -> f32 {
         match self {
             Component::Painted { .. } | Component::Prebuilt { .. } | Component::Analytic { .. } => {
                 0.0
@@ -176,7 +176,7 @@ impl Component {
 /// ⚠⚠ **An exhaustive match, deliberately: a fourth `MaskOp` must be a compile error here.** A
 /// catch-all mapping an unknown op to `Add` would composite it plausibly and wrongly — the trap
 /// `CoverageSource`'s own `other =>` arm already sprang once, producing a mask covering nothing.
-fn fold_of(op: edit_model::MaskOp) -> crate::mask_wgsl::Fold {
+pub(crate) fn fold_of(op: edit_model::MaskOp) -> crate::mask_wgsl::Fold {
     use crate::mask_wgsl::Fold;
     match op {
         edit_model::MaskOp::Add => Fold::Add,
@@ -276,7 +276,7 @@ impl GpuMaskStage {
     /// records.** That match once read `other => Analytic(..)`, so a new variant whose
     /// `analytic_coverage` returned `None` fell through and produced a mask covering **nothing**,
     /// silently. Naming every variant makes a new one a compile error in exactly one place.
-    fn component(
+    pub(crate) fn component(
         mask: &edit_model::Mask,
         geometry: &Geometry,
         prebuilt: Option<std::sync::Arc<pipeline::brush::CoverageMap>>,
@@ -434,44 +434,7 @@ impl GpuMaskStage {
     /// ⚠ `maps` is indexed by the same chain order, so a painted component's box and its word
     /// offset come from the very entry `pack` concatenated — the two are built from one walk.
     fn comps(&self, maps: &[Option<std::sync::Arc<pipeline::brush::CoverageMap>>]) -> Vec<u8> {
-        const STRIDE: usize = 64;
-        let mut out = vec![0u8; STRIDE * (1 + self.refine.len())];
-        let mut off_words = 0u32;
-        for (j, c) in self.components().enumerate() {
-            let b = j * STRIDE;
-            let put = |p: &mut Vec<u8>, at: usize, v: u32| {
-                p[b + at..b + at + 4].copy_from_slice(&v.to_le_bytes())
-            };
-            let putf = |p: &mut Vec<u8>, at: usize, v: f32| {
-                p[b + at..b + at + 4].copy_from_slice(&v.to_le_bytes())
-            };
-            match c {
-                Component::Painted { .. } | Component::Prebuilt { .. } => {
-                    if let Some(m) = maps.get(j).and_then(|m| m.as_ref()) {
-                        put(&mut out, 28, m.outside as u32);
-                        put(&mut out, 32, m.x0 as u32);
-                        put(&mut out, 36, m.y0 as u32);
-                        put(&mut out, 40, m.w as u32);
-                        put(&mut out, 44, m.h as u32);
-                        put(&mut out, 48, off_words);
-                        off_words += words_for(m);
-                    }
-                }
-                Component::Analytic {
-                    a, feather, invert, ..
-                }
-                | Component::Range {
-                    a, feather, invert, ..
-                } => {
-                    for (k, v) in a.iter().enumerate() {
-                        putf(&mut out, k * 4, *v);
-                    }
-                    putf(&mut out, 16, *feather);
-                    put(&mut out, 24, u32::from(*invert));
-                }
-            }
-        }
-        out
+        comps_bytes(self.components(), maps)
     }
 
     /// Rasterise a painted component over the frame, or `None` for the other kinds.
@@ -483,17 +446,7 @@ impl GpuMaskStage {
         &self,
         frame: (usize, usize),
     ) -> Vec<Option<std::sync::Arc<pipeline::brush::CoverageMap>>> {
-        self.components()
-            .map(|c| match c {
-                // ⚠ Already rasterised, and at the same `fw`/`fh` by construction — the coverage
-                // cache's key carries them, which is why it must never lose them.
-                Component::Prebuilt { map } => Some(map.clone()),
-                Component::Painted { brush, geometry } => Some(std::sync::Arc::new(
-                    pipeline::brush::rasterize(brush, geometry, frame.0, frame.1),
-                )),
-                Component::Analytic { .. } | Component::Range { .. } => None,
-            })
-            .collect()
+        rasterize_components(self.components(), frame)
     }
 
     /// Every painted component's coverage, concatenated into one buffer of `u32` words.
@@ -539,13 +492,7 @@ impl GpuMaskStage {
     }
 
     fn pack(&self, maps: &[Option<std::sync::Arc<pipeline::brush::CoverageMap>>]) -> Vec<u32> {
-        let owned: Vec<std::sync::Arc<pipeline::brush::CoverageMap>> =
-            maps.iter().flatten().cloned().collect();
-        let mut packed = Self::pack_maps(&owned);
-        if packed.is_empty() {
-            packed.push(0);
-        }
-        packed
+        pack_words(maps)
     }
 }
 
@@ -556,6 +503,82 @@ impl GpuMaskStage {
 /// its neighbour's coverage — a plausible mask, not an error.
 fn words_for(m: &pipeline::brush::CoverageMap) -> u32 {
     (m.w * m.h).div_ceil(4) as u32
+}
+
+pub(crate) fn comps_bytes<'a>(
+    components: impl Iterator<Item = &'a Component>,
+    maps: &[Option<std::sync::Arc<pipeline::brush::CoverageMap>>],
+) -> Vec<u8> {
+    let list: Vec<&Component> = components.collect();
+    const STRIDE: usize = 64;
+    let mut out = vec![0u8; STRIDE * list.len()];
+    let mut off_words = 0u32;
+    for (j, c) in list.iter().enumerate() {
+        let b = j * STRIDE;
+        let put = |p: &mut Vec<u8>, at: usize, v: u32| {
+            p[b + at..b + at + 4].copy_from_slice(&v.to_le_bytes())
+        };
+        let putf = |p: &mut Vec<u8>, at: usize, v: f32| {
+            p[b + at..b + at + 4].copy_from_slice(&v.to_le_bytes())
+        };
+        match c {
+            Component::Painted { .. } | Component::Prebuilt { .. } => {
+                if let Some(m) = maps.get(j).and_then(|m| m.as_ref()) {
+                    put(&mut out, 28, m.outside as u32);
+                    put(&mut out, 32, m.x0 as u32);
+                    put(&mut out, 36, m.y0 as u32);
+                    put(&mut out, 40, m.w as u32);
+                    put(&mut out, 44, m.h as u32);
+                    put(&mut out, 48, off_words);
+                    off_words += words_for(m);
+                }
+            }
+            Component::Analytic {
+                a, feather, invert, ..
+            }
+            | Component::Range {
+                a, feather, invert, ..
+            } => {
+                for (k, v) in a.iter().enumerate() {
+                    putf(&mut out, k * 4, *v);
+                }
+                putf(&mut out, 16, *feather);
+                put(&mut out, 24, u32::from(*invert));
+            }
+        }
+    }
+    out
+}
+
+pub(crate) fn rasterize_components<'a>(
+    components: impl Iterator<Item = &'a Component>,
+    frame: (usize, usize),
+) -> Vec<Option<std::sync::Arc<pipeline::brush::CoverageMap>>> {
+    components
+        .map(|c| match c {
+            // ⚠ Already rasterised, and at the same `fw`/`fh` by construction — the coverage
+            // cache's key carries them, which is why it must never lose them.
+            Component::Prebuilt { map } => Some(map.clone()),
+            Component::Painted { brush, geometry } => Some(std::sync::Arc::new(
+                pipeline::brush::rasterize(brush, geometry, frame.0, frame.1),
+            )),
+            Component::Analytic { .. } | Component::Range { .. } => None,
+        })
+        .collect()
+}
+
+/// Every painted component's map, concatenated in component order — never empty, since a binding
+/// cannot be zero-sized.
+pub(crate) fn pack_words(
+    maps: &[Option<std::sync::Arc<pipeline::brush::CoverageMap>>],
+) -> Vec<u32> {
+    let owned: Vec<std::sync::Arc<pipeline::brush::CoverageMap>> =
+        maps.iter().flatten().cloned().collect();
+    let mut packed = GpuMaskStage::pack_maps(&owned);
+    if packed.is_empty() {
+        packed.push(0);
+    }
+    packed
 }
 
 impl GpuStage for GpuMaskStage {

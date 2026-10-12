@@ -6,11 +6,15 @@ pub struct ExposureStage {
     factor: f32,
 }
 
+/// The gain an exposure of `ev` stops applies — shared with `SceneOffsetsStage` (M10.12b), so a
+/// mask's offset and the global slider are one formula.
+pub fn factor(ev: f32) -> f32 {
+    2.0f32.powf(ev)
+}
+
 impl ExposureStage {
     pub fn new(ev: f32) -> Self {
-        Self {
-            factor: 2.0f32.powf(ev),
-        }
+        Self { factor: factor(ev) }
     }
 }
 

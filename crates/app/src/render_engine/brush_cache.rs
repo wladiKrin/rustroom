@@ -47,14 +47,20 @@ pub(super) struct MaskCoverageKey {
     /// What produced the pixels this mask's gate compared against, or `None` for a brush that does
     /// not gate.
     ///
-    /// ⚠⚠ **`Edits` truncated to the masks BEFORE this one, plus the rung.** Sound because
-    /// everything upstream of this mask's base is in it: the prefix stages all live in `Edits`, so
-    /// does the entire global tail, and so does every earlier mask's shape *and* adjustments.
+    /// ⚠⚠ **`Edits` reduced to what reaches this mask's base, plus the rung** ([`BrushCache::base_id`]).
+    /// Since M10.12b that is one of two things. A mask that `pipeline::reads_reference` selects on
+    /// the reference photo — the global edits and NO mask. Any other: every earlier mask whole, and
+    /// every later one through its **scene offsets** alone, which `SceneOffsetsStage` applies at the
+    /// head of the tail — before this mask's stage — while their look sliders run after it.
     ///
-    /// ⚠⚠ **And the truncation is what makes the cache worth having** — dropping this mask drops
-    /// its own adjustments with it, so moving its exposure leaves the identity unchanged. That is
-    /// the case a mask exists for and the only thing this buys: a **global** slider genuinely
-    /// changes the base, and no cache can help it.
+    /// ⚠⚠ **This mask's own adjustments are never in it, and that is what makes the cache worth
+    /// having** — moving its exposure or saturation leaves the identity unchanged. That is the case
+    /// a mask exists for and the only thing this buys: a **global** slider genuinely changes the
+    /// base, and no cache can help it.
+    ///
+    /// ⚠ Until M10.12b it was the masks before this one, truncated — which a later mask's offset now
+    /// reaches past, so a gating brush would have been served a map gated on pixels that no longer
+    /// existed (`a_gating_brushs_base_follows_a_later_masks_offset`).
     ///
     /// ⚠ It fails toward a **miss**, [`PrefixKey`]'s rule. The dangerous direction is a stale hit:
     /// coverage rendered positionally while the canvas tint shows it stopping at an edge, which is
@@ -110,7 +116,28 @@ impl BrushCache {
             return None;
         }
         let mut upstream = edits.clone();
-        upstream.masks.truncate(i);
+        upstream.masks = if edits.masks.get(i).is_some_and(pipeline::reads_reference) {
+            // ⚠ The reference photo (M10.12b): the global edits and no mask at all. Its map is built
+            // and deposited by `SceneOffsetsStage`, through the same `reads_reference`.
+            Vec::new()
+        } else {
+            // ⚠ The masks before this one whole; a later one only through its scene offsets, which
+            // reach this base in `SceneOffsetsStage` at the head of the tail. Its look sliders run
+            // after this mask's stage — keying on them would miss for nothing.
+            edits.masks[..i.min(edits.masks.len())]
+                .iter()
+                .cloned()
+                .chain(
+                    edits.masks[i.min(edits.masks.len())..]
+                        .iter()
+                        .filter(|m| !m.disabled && m.adjustments.has_scene_offsets())
+                        .map(|m| edit_model::MaskedAdjustment {
+                            adjustments: pipeline::scene_only(&m.adjustments),
+                            ..m.clone()
+                        }),
+                )
+                .collect()
+        };
         Some((upstream, max_dim))
     }
 
@@ -383,6 +410,133 @@ mod tests {
             masks: vec![m],
             ..Edits::default()
         }
+    }
+
+    // ---- M10.12b: the base a gating brush really reads ----
+
+    /// A linear mask over everything with these adjustments — a second mask beside the brush.
+    fn linear(a: edit_model::LocalAdjustments) -> edit_model::MaskedAdjustment {
+        edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Linear(Default::default()),
+            adjustments: a,
+            ..Default::default()
+        }
+    }
+
+    /// The gating brush (mask 0) carrying `a`, then `later` (mask 1).
+    fn brush_then(a: edit_model::LocalAdjustments, later: edit_model::MaskedAdjustment) -> Edits {
+        let mut e = auto_masked_edits(0.0, 0.0);
+        e.masks[0].adjustments = a;
+        e.masks.push(later);
+        e
+    }
+
+    fn base_of(e: &Edits) -> Option<(Edits, usize)> {
+        let edit_model::Mask::Brush(b) = &e.masks[0].mask else {
+            panic!("fixture check: mask 0 is the brush")
+        };
+        BrushCache::base_id(e, 0, b, 1600)
+    }
+
+    fn sat(v: f32) -> edit_model::LocalAdjustments {
+        edit_model::LocalAdjustments {
+            saturation: v,
+            ..Default::default()
+        }
+    }
+
+    fn ev(v: f32) -> edit_model::LocalAdjustments {
+        edit_model::LocalAdjustments {
+            exposure: v,
+            ..Default::default()
+        }
+    }
+
+    /// ⚠⚠ Since M10.12b a LATER mask's scene offset reaches this brush's base (`SceneOffsetsStage`
+    /// runs every mask's offsets at the head of the tail), so it must miss — keyed on the masks
+    /// before this one alone, the old key served a map gated on pixels that no longer exist.
+    #[test]
+    fn a_gating_brushs_base_follows_a_later_masks_offset() {
+        assert_ne!(
+            base_of(&brush_then(sat(20.0), linear(ev(0.5)))),
+            base_of(&brush_then(sat(20.0), linear(ev(0.9))))
+        );
+    }
+
+    /// …while a later mask's LOOK slider runs after this brush's stage and must not cost a miss —
+    /// for a later mask with an offset too, whose scene part IS in the key.
+    #[test]
+    fn a_gating_brushs_base_ignores_a_later_masks_look_slider() {
+        let later = |s: f32| {
+            linear(edit_model::LocalAdjustments {
+                exposure: 0.5,
+                saturation: s,
+                ..Default::default()
+            })
+        };
+        assert_eq!(
+            base_of(&brush_then(sat(20.0), linear(sat(10.0)))),
+            base_of(&brush_then(sat(20.0), linear(sat(40.0))))
+        );
+        assert_eq!(
+            base_of(&brush_then(sat(20.0), later(10.0))),
+            base_of(&brush_then(sat(20.0), later(40.0)))
+        );
+    }
+
+    /// A gating brush with its own offset selects on the reference photo — the global edits, no mask
+    /// at all — so its own sliders and every other mask leave it, and a global slider moves it.
+    ///
+    /// ⚠ The brush is mask **1**, behind another mask: as mask 0 the old key — the masks before it —
+    /// was already "no mask", and this test passed against it.
+    #[test]
+    fn a_gating_brush_with_an_offset_is_keyed_on_the_reference() {
+        let with = |earlier: edit_model::MaskedAdjustment, own: edit_model::LocalAdjustments| {
+            let mut e = auto_masked_edits(0.0, 0.0);
+            e.masks[0].adjustments = own;
+            e.masks.insert(0, earlier);
+            let edit_model::Mask::Brush(b) = &e.masks[1].mask else {
+                panic!("fixture check: mask 1 is the brush")
+            };
+            let id = BrushCache::base_id(&e, 1, b, 1600);
+            (e, id)
+        };
+        let both = |e: f32, s: f32| edit_model::LocalAdjustments {
+            exposure: e,
+            saturation: s,
+            ..Default::default()
+        };
+        let (_, reference) = with(linear(sat(10.0)), both(1.0, 20.0));
+        assert_eq!(
+            reference,
+            with(linear(sat(10.0)), both(1.0, 50.0)).1,
+            "its own look slider"
+        );
+        assert_eq!(
+            reference,
+            with(linear(sat(10.0)), both(2.0, 20.0)).1,
+            "its own offset"
+        );
+        assert_eq!(
+            reference,
+            with(linear(sat(40.0)), both(1.0, 20.0)).1,
+            "an earlier mask's look"
+        );
+        assert_eq!(
+            reference,
+            with(linear(ev(0.7)), both(1.0, 20.0)).1,
+            "an earlier mask's offset"
+        );
+        let (mut global, _) = with(linear(sat(10.0)), both(1.0, 20.0));
+        global.exposure = 0.5;
+        let edit_model::Mask::Brush(b) = &global.masks[1].mask else {
+            unreachable!()
+        };
+        assert_ne!(
+            reference,
+            BrushCache::base_id(&global, 1, b, 1600),
+            "a global slider"
+        );
     }
 
     /// A coverage map distinguishable from a default one, so a hit can be told from a miss.

@@ -171,7 +171,19 @@ pub struct LocalAdjustments {
     /// airlight as you panned and the photograph would change under you. The prefix always runs
     /// whole-buffer, which is what makes a frame-global airlight possible at all.
     pub dehaze: Dehaze,
+    /// ⚠ **Legacy since M10.12b**: an absolute white balance, as masks had until 2026-10-12. Read
+    /// as the shift it amounted to (`pipeline::mask_wb_shift`) and cleared by the panel's first
+    /// Temp or Tint edit; nothing new writes it.
     pub white_balance: WhiteBalance,
+    /// Lightroom's local Temp, −100..=100: a **shift** of the photo's own white balance where the
+    /// mask covers — `+` warmer (M10.12b). Like every scene slider here, an offset added to the
+    /// global value per pixel by `pipeline`'s `SceneOffsetsStage`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub temp: f32,
+    /// Lightroom's local Tint, −100..=100: a shift toward magenta (`+`) or green, in the global
+    /// Tint's units (M10.12b).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub tint: f32,
     pub exposure: f32,
     pub contrast: f32,
     pub highlights: f32,
@@ -230,6 +242,29 @@ impl LocalAdjustments {
     pub fn is_active(&self) -> bool {
         *self != Self::default()
     }
+
+    /// Whether this carries a **scene** slider — white balance, exposure, contrast or a tone
+    /// region — which acts as an offset to the global one at its own position (M10.12b), rather
+    /// than after the global look like the rest.
+    pub fn has_scene_offsets(&self) -> bool {
+        self.white_balance.is_active()
+            || [
+                self.temp,
+                self.tint,
+                self.exposure,
+                self.contrast,
+                self.highlights,
+                self.shadows,
+                self.whites,
+                self.blacks,
+            ]
+            .iter()
+            .any(|v| *v != 0.0)
+    }
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
 }
 
 /// One mask and the adjustments it carries.
@@ -277,6 +312,25 @@ pub struct MaskedAdjustment {
     /// preset and rendered-preview key on disk is unchanged. `disabled`'s rule.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub invert: bool,
+}
+
+impl MaskedAdjustment {
+    /// Whether any component — the base or a refinement — reads the photograph rather than the
+    /// position: a luminance or colour range, or a brush that gates on the image
+    /// ([`Brush::needs_base`]). M10.12b: such a mask carrying a scene offset selects on the
+    /// globally edited photo (`pipeline::reads_reference`).
+    ///
+    /// ⚠ Exhaustive on purpose: a new `Mask` variant is a compile error here, never a silent
+    /// "reads nothing".
+    pub fn reads_pixels(&self) -> bool {
+        std::iter::once(&self.mask)
+            .chain(self.refine.iter().map(|r| &r.mask))
+            .any(|k| match k {
+                Mask::Brush(b) => b.needs_base(),
+                Mask::Luminance(_) | Mask::Colour(_) => true,
+                Mask::Linear(_) | Mask::Radial(_) | Mask::Ai(_) => false,
+            })
+    }
 }
 
 #[cfg(test)]
@@ -621,5 +675,148 @@ mod disabled_mask_tests {
             !old.invert,
             "a sidecar from before the field reads uninverted"
         );
+    }
+}
+
+#[cfg(test)]
+mod scene_offset_field_tests {
+    use super::*;
+    use crate::{BrushStroke, MaskOp};
+
+    /// M10.12b: a mask reads the photograph through ANY component — base or refinement — that is a
+    /// range or a gating brush; position-only shapes and AI maps do not.
+    #[test]
+    fn a_mask_reads_pixels_through_any_range_or_gating_component() {
+        let lin = Mask::Linear(LinearGradient::default());
+        let m = |mask: Mask, refine: Vec<Refinement>| MaskedAdjustment {
+            mask,
+            refine,
+            ..Default::default()
+        };
+        assert!(!m(lin.clone(), vec![]).reads_pixels());
+        assert!(!m(Mask::Radial(Default::default()), vec![]).reads_pixels());
+        assert!(!m(Mask::Ai(Default::default()), vec![]).reads_pixels());
+        assert!(m(Mask::Luminance(LuminanceRange::default()), vec![]).reads_pixels());
+        assert!(m(Mask::Colour(ColourRange::default()), vec![]).reads_pixels());
+        let range = Refinement {
+            op: MaskOp::Intersect,
+            mask: Mask::Luminance(LuminanceRange::default()),
+        };
+        assert!(
+            m(lin.clone(), vec![range]).reads_pixels(),
+            "a refinement counts"
+        );
+        let gating = Brush {
+            strokes: vec![BrushStroke {
+                auto_mask: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(gating.needs_base(), "fixture check");
+        assert!(m(Mask::Brush(gating), vec![]).reads_pixels());
+        let plain = Brush {
+            strokes: vec![BrushStroke::default()],
+            ..Default::default()
+        };
+        assert!(!m(Mask::Brush(plain), vec![]).reads_pixels());
+    }
+
+    #[test]
+    fn temp_and_tint_round_trip_and_a_default_writes_neither() {
+        // ⚠ Read as a JSON object: `white_balance` nests its own `tint`, so a substring test for
+        // "tint" fails on correct code (M10.12a's lesson).
+        let plain = serde_json::to_value(LocalAdjustments::default()).unwrap();
+        assert!(plain.get("temp").is_none(), "{plain}");
+        assert!(plain.get("tint").is_none(), "{plain}");
+        let a = LocalAdjustments {
+            temp: 30.0,
+            tint: -12.0,
+            ..Default::default()
+        };
+        let back: LocalAdjustments =
+            serde_json::from_value(serde_json::to_value(&a).unwrap()).unwrap();
+        assert_eq!((back.temp, back.tint), (30.0, -12.0));
+    }
+
+    #[test]
+    fn has_scene_offsets_sees_each_scene_slider_and_nothing_else() {
+        let each: Vec<(&str, LocalAdjustments)> = vec![
+            (
+                "exposure",
+                LocalAdjustments {
+                    exposure: 0.5,
+                    ..Default::default()
+                },
+            ),
+            (
+                "contrast",
+                LocalAdjustments {
+                    contrast: 10.0,
+                    ..Default::default()
+                },
+            ),
+            (
+                "highlights",
+                LocalAdjustments {
+                    highlights: -10.0,
+                    ..Default::default()
+                },
+            ),
+            (
+                "shadows",
+                LocalAdjustments {
+                    shadows: 10.0,
+                    ..Default::default()
+                },
+            ),
+            (
+                "whites",
+                LocalAdjustments {
+                    whites: 10.0,
+                    ..Default::default()
+                },
+            ),
+            (
+                "blacks",
+                LocalAdjustments {
+                    blacks: -10.0,
+                    ..Default::default()
+                },
+            ),
+            (
+                "temp",
+                LocalAdjustments {
+                    temp: 10.0,
+                    ..Default::default()
+                },
+            ),
+            (
+                "tint",
+                LocalAdjustments {
+                    tint: 10.0,
+                    ..Default::default()
+                },
+            ),
+            (
+                "a legacy Kelvin",
+                LocalAdjustments {
+                    white_balance: WhiteBalance {
+                        kelvin: Some(6500.0),
+                        tint: 0.0,
+                    },
+                    ..Default::default()
+                },
+            ),
+        ];
+        for (name, a) in &each {
+            assert!(a.has_scene_offsets(), "{name} is a scene offset");
+        }
+        assert!(!LocalAdjustments::default().has_scene_offsets());
+        let look = LocalAdjustments {
+            saturation: 20.0,
+            ..Default::default()
+        };
+        assert!(!look.has_scene_offsets(), "saturation is a look slider");
     }
 }

@@ -185,9 +185,9 @@ pub(crate) fn white_balance(
     ui: &mut egui::Ui,
     wb: &mut edit_model::WhiteBalance,
     baseline: color::wb::Illuminant,
-    // ⚠ `Option`, not a scratch `&mut false`: a mask has no eyedropper, because solving one
-    // against a region is a different question from solving it against the frame. `None` says
-    // that rather than drawing a control that quietly does nothing.
+    // ⚠ `Option`, not a scratch `&mut false`: `None` draws no eyedropper rather than one that
+    // quietly does nothing. ⚠ A mask no longer calls this — since M10.12b its Temp and Tint are
+    // shifts relative to the photo, drawn in `mask_adjust` — so `None` is the tests' case.
     picking: Option<&mut bool>,
     ed: &mut Edited,
 ) {
@@ -234,8 +234,8 @@ pub(crate) fn white_balance(
     ed.slider(ui, &mut wb.tint, -100.0..=100.0, "Tint", 0.0);
 
     // ⚠ One row for the two shortcuts (2026-09-19): both move the sliders above, and two
-    // full-width rows of buttons under two sliders was heavy for what they are. A mask has
-    // no eyedropper, and then the row holds Presets alone.
+    // full-width rows of buttons under two sliders was heavy for what they are. Without an
+    // eyedropper the row holds Presets alone.
     ui.horizontal(|ui| {
         if let Some(picking) = picking {
             // ⚠ A toggle, not a button: an armed eyedropper changes what a click on the canvas does,

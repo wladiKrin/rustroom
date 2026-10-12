@@ -2,7 +2,7 @@ use crate::PipelineStage;
 use core_image::ImageBuf;
 
 /// Scales Highlights and Shadows — the broad pair.
-const STRENGTH: f32 = 0.5;
+pub const STRENGTH: f32 = 0.5;
 /// Scales Whites and Blacks — the end pair.
 ///
 /// ⚠⚠ **Its own constant, because the end pair is narrower and must still have authority.**
@@ -14,7 +14,7 @@ const STRENGTH: f32 = 0.5;
 /// midtones: at mid-grey Blacks contributes 0.106 against Shadows' 0.142, so the two stay
 /// distinguishable, while Whites overtakes Highlights above linear ~0.46 — which is exactly what
 /// a white point *should* do. `whites_are_more_end_weighted_than_highlights` pins it.
-const END_STRENGTH: f32 = 0.7;
+pub const END_STRENGTH: f32 = 0.7;
 
 /// Highlights/shadows/whites/blacks as a single luminance-region-weighted gain.
 /// All amounts ~[-100, 100]; positive brightens that region. Hue-preserving.
@@ -52,25 +52,7 @@ impl ToneRegionsStage {
     /// ⚠ `linear_to_srgb` is the pipeline's own output transfer curve, so "two thirds" here means
     /// two thirds of what you will *see* — the frame the sliders are judged in.
     pub fn gain_for_luma(&self, l: f32) -> f32 {
-        let e = color::linear_to_srgb(l.clamp(0.0, 1.0));
-        let shadow_w = (1.0 - e) * (1.0 - e);
-        let highlight_w = e * e;
-        // ⚠⚠ **A fourth power, not a hard cutoff, and this is the second half of the fix.**
-        // `max(0, 3e − 2)` is exactly zero below two thirds, so on any photograph whose brightest
-        // content does not reach there the Whites slider did *nothing* — it could not even be
-        // solved for, and Auto Tone parked it at 0 or at a boundary. A power curve is never zero,
-        // so the slider always has leverage, while `^3` against the broad pair's `^2` keeps it
-        // twice as end-weighted at mid-grey and so still clearly a *white point* control rather
-        // than a second Highlights.
-        //
-        // ⚠ A cube rather than a fourth power, and the difference was measured rather than
-        // guessed: `^4` is so end-weighted that **Blacks came out weaker in real shadows than the
-        // hard cutoff it replaced** (0.32 against 0.85 at linear 0.05), which traded one defect
-        // for another. The cube keeps 0.43 there and still falls to 0.008 by linear 0.6.
-        let black_w = (1.0 - e).powi(3);
-        let white_w = e.powi(3);
-        1.0 + STRENGTH * (self.shadows * shadow_w + self.highlights * highlight_w)
-            + END_STRENGTH * (self.blacks * black_w + self.whites * white_w)
+        gain(l, [self.highlights, self.shadows, self.whites, self.blacks])
     }
 
     /// The largest luminance the gain table resolves.
@@ -110,6 +92,19 @@ impl ToneRegionsStage {
             .map(|i| self.gain_for_luma(i as f32 / (Self::LUT_SIZE - 1) as f32 * Self::LUT_TOP))
             .collect()
     }
+}
+
+/// The tone regions' gain at linear luminance `l`, for amounts `[highlights, shadows, whites,
+/// blacks]` already divided by 100 — shared with `SceneOffsetsStage` (M10.12b), where the amounts
+/// are summed per pixel. ⚠ Linear in the amounts, which is what makes a per-pixel sum exact.
+pub fn gain(l: f32, [highlights, shadows, whites, blacks]: [f32; 4]) -> f32 {
+    let e = color::linear_to_srgb(l.clamp(0.0, 1.0));
+    let shadow_w = (1.0 - e) * (1.0 - e);
+    let highlight_w = e * e;
+    let black_w = (1.0 - e).powi(3);
+    let white_w = e.powi(3);
+    1.0 + STRENGTH * (shadows * shadow_w + highlights * highlight_w)
+        + END_STRENGTH * (blacks * black_w + whites * white_w)
 }
 
 impl crate::per_pixel::PerPixel for ToneRegionsStage {

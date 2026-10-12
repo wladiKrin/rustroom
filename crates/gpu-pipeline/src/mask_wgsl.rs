@@ -269,6 +269,60 @@ fn cov_colour(hue: f32, chroma: f32, j: u32) -> f32 {
 }
 "#;
 
+/// The scene facts a chain reads, hoisted once: `lum` for a luminance range, `hue` and `chroma` for
+/// a colour range. ⚠ Expects `px` in scope — the pixel the coverage is decided on.
+///
+/// ⚠⚠ `linear_to_srgb` clamps its input, and that IS the index clamp — the selector is clamped
+/// while the pixel keeps its headroom. A specular highlight therefore selects at the top of the
+/// scale and still carries every bit of its latitude into the adjustment. Clamping the *pixel*
+/// would be the `ProfileHueSatMap` trap, met three times in this repo.
+///
+/// ⚠ Chroma is NOT clamped and must not be — it is the gate's own input, and a wide-gamut colour
+/// legitimately reads above anything sRGB can express.
+pub(crate) fn fact_lines(facts: Facts) -> String {
+    let mut out = String::new();
+    if facts.luma {
+        out.push_str(
+            "    let lum = linear_to_srgb(prophoto_luminance(px.x, px.y, px.z)) * 100.0;\n",
+        );
+    }
+    if facts.oklab {
+        out.push_str(
+            "    let lab = prophoto_to_oklab(px.x, px.y, px.z);\n\
+             \x20   let hue = degrees(atan2(lab.z, lab.y));\n\
+             \x20   let chroma = sqrt(lab.y * lab.y + lab.z * lab.z);\n",
+        );
+    }
+    out
+}
+
+/// One mask's coverage as statements leaving it in `var {name}`: the base, each refinement folded
+/// on in list order, then the whole-mask Invert. Shared by `coverage_entry` (one mask, `a`) and
+/// `GpuSceneOffsetsStage` (one variable per mask, M10.12b).
+///
+/// ⚠ Each component is clamped to 0..1 before it is folded, exactly as `Composite::at` clamps
+/// `source_at`'s result. The ops are only order-preserving on that range: `Add` with a b above 1
+/// drives coverage past 1, and `Subtract` with one below 0 *raises* it.
+pub(crate) fn chain(name: &str, base: &str, refine: &[(Fold, String)], invert: bool) -> String {
+    let mut out = format!("    var {name} = clamp({base}, 0.0, 1.0);\n");
+    for (op, expr) in refine {
+        out.push_str(&match op {
+            // Standard "over": adds a fraction of what is still uncovered.
+            Fold::Add => {
+                format!("    {name} = {name} + (1.0 - {name}) * clamp({expr}, 0.0, 1.0);\n")
+            }
+            Fold::Subtract => format!("    {name} = {name} * (1.0 - clamp({expr}, 0.0, 1.0));\n"),
+            Fold::Intersect => format!("    {name} = {name} * clamp({expr}, 0.0, 1.0);\n"),
+        });
+    }
+    // ⚠ The whole-mask Invert (M10.12a): after the LAST fold, as `Composite::at` does. The flag is
+    // in the shader text, so an inverted mask is its own cached program.
+    if invert {
+        out.push_str(&format!("    {name} = 1.0 - {name};\n"));
+    }
+    out
+}
+
 /// How one refinement folds onto the coverage built so far.
 ///
 /// ⚠⚠ **These are `MaskOp::combine`'s three rules, and they must stay exactly those.** That
@@ -327,42 +381,8 @@ pub(crate) fn coverage_entry(
             "    let b = i * 3u;\n    let px = vec3<f32>(img[b], img[b + 1u], img[b + 2u]);\n",
         );
     }
-    if facts.luma {
-        // ⚠⚠ `linear_to_srgb` clamps its input, and that IS the index clamp — the selector is
-        // clamped while the pixel keeps its headroom. A specular highlight therefore selects at
-        // the top of the scale and still carries every bit of its latitude into the adjustment.
-        // Clamping the *pixel* would be the `ProfileHueSatMap` trap, met three times in this repo.
-        hoist.push_str(
-            "    let lum = linear_to_srgb(prophoto_luminance(px.x, px.y, px.z)) * 100.0;\n",
-        );
-    }
-    if facts.oklab {
-        // ⚠ Chroma is NOT clamped and must not be — it is the gate's own input, and a wide-gamut
-        // colour legitimately reads above anything sRGB can express.
-        hoist.push_str(
-            "    let lab = prophoto_to_oklab(px.x, px.y, px.z);\n\
-             \x20   let hue = degrees(atan2(lab.z, lab.y));\n\
-             \x20   let chroma = sqrt(lab.y * lab.y + lab.z * lab.z);\n",
-        );
-    }
-
-    // ⚠ Each component is clamped to 0..1 before it is folded, exactly as `Composite::at` clamps
-    // `source_at`'s result. The ops are only order-preserving on that range: `Add` with a b above
-    // 1 drives coverage past 1, and `Subtract` with one below 0 *raises* it.
-    let mut chain = format!("    var a = clamp({base}, 0.0, 1.0);\n");
-    for (op, expr) in refine {
-        chain.push_str(&match op {
-            // Standard "over": adds a fraction of what is still uncovered.
-            Fold::Add => format!("    a = a + (1.0 - a) * clamp({expr}, 0.0, 1.0);\n"),
-            Fold::Subtract => format!("    a = a * (1.0 - clamp({expr}, 0.0, 1.0));\n"),
-            Fold::Intersect => format!("    a = a * clamp({expr}, 0.0, 1.0);\n"),
-        });
-    }
-    // ⚠ The whole-mask Invert (M10.12a): after the LAST fold, as `Composite::at` does. The flag is
-    // in the shader text, so an inverted mask is its own cached program.
-    if invert {
-        chain.push_str("    a = 1.0 - a;\n");
-    }
+    hoist.push_str(&fact_lines(facts));
+    let chain = chain("a", base, refine, invert);
 
     format!(
         r#"

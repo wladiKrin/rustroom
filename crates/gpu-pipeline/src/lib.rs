@@ -44,6 +44,7 @@ mod output_transform;
 mod per_pixel;
 mod quantize;
 mod saturation;
+mod scene_offsets;
 mod shared_plane;
 mod sharpen;
 mod srgb_wgsl;

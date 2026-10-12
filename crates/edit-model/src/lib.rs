@@ -842,6 +842,10 @@ mod tests {
                 ],
                 adjustments: LocalAdjustments {
                     exposure: 0.75,
+                    // ⚠ Set by hand, exercised (M10.12b): `..Default::default()` below would
+                    // otherwise carry them untested through every consumer.
+                    temp: 12.0,
+                    tint: -6.0,
                     // ⚠⚠ Set by hand, because this fixture **does not fail to compile** when
                     // `LocalAdjustments` grows: it fills the rest with `..Default::default()`.
                     // A construct that names exhaustiveness and does not deliver it through a

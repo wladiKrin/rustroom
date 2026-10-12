@@ -64,6 +64,8 @@ impl LocalAdjustments {
             noise_reduction,
             dehaze,
             white_balance,
+            temp,
+            tint,
             exposure,
             contrast,
             highlights,
@@ -82,6 +84,8 @@ impl LocalAdjustments {
         match group {
             LocalGroup::WhiteBalance => {
                 *white_balance = from.white_balance;
+                *temp = from.temp;
+                *tint = from.tint;
             }
             LocalGroup::Tone => {
                 *exposure = from.exposure;

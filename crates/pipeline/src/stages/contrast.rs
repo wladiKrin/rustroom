@@ -11,23 +11,27 @@ pub const PIVOT: f32 = 0.18;
 
 /// Contrast around a mid-gray pivot: `out = pivot + (in - pivot) * slope`.
 pub struct ContrastStage {
-    slope: f32,
+    amount: f32,
 }
 
 impl ContrastStage {
     /// `amount` ~[-100, 100]; 0 = identity, +100 = slope 2, -100 = slope 0 (flat).
     pub fn new(amount: f32) -> Self {
-        Self {
-            slope: 1.0 + amount / 100.0,
-        }
+        Self { amount }
     }
+}
+
+/// Contrast `amount` on one pixel — shared with `SceneOffsetsStage` (M10.12b), so a mask's offset
+/// and the global slider are one formula.
+pub fn apply(p: [f32; 3], amount: f32) -> [f32; 3] {
+    let slope = 1.0 + amount / 100.0;
+    let f = |s: f32| (PIVOT + (s - PIVOT) * slope).max(0.0);
+    [f(p[0]), f(p[1]), f(p[2])]
 }
 
 impl crate::per_pixel::PerPixel for ContrastStage {
     fn px(&self, _x: usize, _y: usize, p: [f32; 3]) -> [f32; 3] {
-        let slope = self.slope;
-        let f = |s: f32| (PIVOT + (s - PIVOT) * slope).max(0.0);
-        [f(p[0]), f(p[1]), f(p[2])]
+        apply(p, self.amount)
     }
 }
 

@@ -45,6 +45,8 @@ pub enum Scope {
     Patch,
     /// A red-eye or pet-eye correction.
     Eye,
+    /// A mask's Temp and Tint — shifts relative to the photo's white balance (M10.12b).
+    MaskWhiteBalance,
 }
 
 /// The HSL bands' three tabs.
@@ -227,6 +229,17 @@ const EYE: &[(&str, &str)] = &[
     ("Darken", "Sets how dark the corrected pupil becomes"),
 ];
 
+const MASK_WHITE_BALANCE: &[(&str, &str)] = &[
+    (
+        "Temp",
+        "Warms or cools what this mask covers, relative to the photo's white balance",
+    ),
+    (
+        "Tint",
+        "Shifts what this mask covers toward magenta or green, relative to the photo",
+    ),
+];
+
 fn table(scope: Scope) -> &'static [(&'static str, &'static str)] {
     match scope {
         Scope::Global | Scope::Hsl(_) => &[],
@@ -244,6 +257,7 @@ fn table(scope: Scope) -> &'static [(&'static str, &'static str)] {
         Scope::ColourRange => COLOUR_RANGE,
         Scope::Patch => PATCH,
         Scope::Eye => EYE,
+        Scope::MaskWhiteBalance => MASK_WHITE_BALANCE,
     }
 }
 
@@ -298,7 +312,7 @@ pub fn text(scope: Scope, label: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    const SCOPES: [Scope; 16] = [
+    const SCOPES: [Scope; 18] = [
         Scope::Global,
         Scope::Parametric,
         Scope::Hsl(HslTab::Hue),
@@ -315,6 +329,8 @@ mod tests {
         Scope::LuminanceRange,
         Scope::ColourRange,
         Scope::Patch,
+        Scope::Grain,
+        Scope::MaskWhiteBalance,
     ];
 
     /// Every sentence the table can produce, with where it came from.
@@ -340,6 +356,17 @@ mod tests {
     /// clear sentence", and no "Double-click to reset" on each. Checked over every sentence the
     /// table can produce, so a new entry cannot drift back into paragraphs.
     /// The shared rule, both halves: each fault is named, and a good sentence has none.
+    /// A mask's Temp and Tint are shifts relative to the photo (M10.12b), not the global sliders'
+    /// absolute temperature — the global sentences would describe the wrong control.
+    #[test]
+    fn a_masks_white_balance_reads_as_a_relative_shift() {
+        for label in ["Temp", "Tint"] {
+            let t = text(Scope::MaskWhiteBalance, label).expect(label);
+            assert!(t.contains("relative to the photo"), "{label}: {t}");
+            assert_ne!(Some(t), text(Scope::Global, label), "{label}");
+        }
+    }
+
     #[test]
     fn sentence_fault_names_each_way_a_hover_goes_wrong() {
         assert_eq!(sentence_fault("Shows the photos in this collection"), None);
