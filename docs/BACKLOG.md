@@ -34,7 +34,7 @@ and a pointer, not deleted.
 | **M10.11** Develop additions | *Film negative inversion* (a, ✅ 2026-10-11); P-26's Grain (b, ✅ 2026-10-12) |
 | **M10.12** the mask model | *Composites are one level deep* (a, ✅ 2026-10-12 — re-scoped: an op in place, Duplicate, Invert mask; nesting itself ⏸ parked on its table); masks' scene sliders as offsets (b, ✅ 2026-10-12 — Lightroom's model; a range or gating mask with an offset selects on the globally edited photo, its GPU cost is M10.14h); *Anchor strokes and spots in sensor space* + *Brush strokes shift…* (c, ⏸) |
 | **M10.13** colour & camera profiles | *C2/C3 have no independent oracle* (a, ⏸ parked 2026-10-12 — how to verify is the author's to settle); ~~*`CameraCalibration`…*~~ (b, ⛔ withdrawn 2026-10-12 — not a profile tag) + `ProfileLookTable` (b → folded into d); *Per-photo camera profile* (c → folded into d); P-22 (d) — **re-scoped 2026-10-12 by the author:** b's LookTable and c only matter once a profile that has a LookTable, or a second profile for one body, is in hand, which is d's question |
-| **M10.14** performance & verification | *What is left in `HslStage`* (a); P-21 (e); *incremental splatting*, *Two Oklab round trips* (f, ⏸); *the u8 wire*, `MAX_TILE_DABS` (g, ⏸); *The reference photo on the GPU* (h) |
+| **M10.14** performance & verification | ~~*What is left in `HslStage`*~~ (a, ⛔ withdrawn 2026-10-12 — superseded by the GPU port, ~1% of an export); P-21 (e); *incremental splatting*, *Two Oklab round trips* (f, ⏸); *the u8 wire*, `MAX_TILE_DABS` (g, ⏸); *The reference photo on the GPU* (h) |
 | **M10.15** Immich | the keychain, cached-original eviction, Immich's rating (a–c); *Two-way sync* (d, re-opened) |
 | **M10.16** AI tools | depth masks (a); P-23 (b); P-26's content-aware remove (c) |
 | **M10.17** merge | P-24 |
@@ -1356,7 +1356,19 @@ The fix: run the global look's twins (all exist) on a copy on the GPU, compute t
 there, and hand the plane to `GpuMaskStage` as a prebuilt raster (the AI-mask path). Spec *Out of scope*;
 `grep -n 'M10.12b' docs/JOURNAL.md`.
 
-### ⚠ What is left in `HslStage` after the hue LUT (recorded 2026-09-05) → M10.14a
+### ⛔ What is left in `HslStage` after the hue LUT (recorded 2026-09-05) → M10.14a — WITHDRAWN 2026-10-12
+
+**Withdrawn by the author on a measurement (2026-10-12) — the GPU port superseded it.** `bench_hsl` on
+DSCF6291 at the fit size: the shipped CPU stage is **16.88 ms** above its floor, of which the Oklab round
+trip is **6.72 ms** and `atan2` **2.96 ms** — a realistic saving of ~5–7 ms. But **the preview never runs
+it**: HSL has a GPU twin, and the CPU stage now runs only in **exports**, whose tail is CPU-only — about
+**250 ms** at full resolution, so the change would save **~75–105 ms of an ~8.3 s export (≈1%)**, and only
+for photos with HSL, while approximating `cbrt` would change Oklab for every CPU consumer (NR,
+sharpening, local contrast, grading, HSL) and move the parity tests and goldens. ⚠ The bigger export
+lever, **not measured**: the export's TAIL on the GPU (only its prefix is accelerated) — measure its
+share of an export before proposing it.
+
+*The original entry, kept for its numbers:*
 
 The LUT took the stage from ~29–34 ms to ~20 ms above a harness floor (1.47–1.66×). **What remains
 is two things and neither is a tweak.** Decomposed shares of the *original* cost:

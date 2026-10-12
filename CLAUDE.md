@@ -231,8 +231,9 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.12b** (table above).
 
-**▶ NEXT: M10.14a — the HSL stage's `cbrt`/`atan2`** (performance). The author moved on from M10.13 on
-2026-10-12: a ⏸ parked, b and c folded into d, d left open.
+**▶ NEXT: M10.14b — the prefix-cache eviction fix's picture half** (performance & verification). The
+author moved on from M10.13 on 2026-10-12 (a ⏸ parked, b and c folded into d, d left open) and withdrew
+M10.14a on its measurement.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
 release engineering, LAST.** The canonical list — every sub-item with its date, size and reasoning — is
@@ -244,7 +245,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 |---|---|
 | **M10.12** the mask model | c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · d camera-matching colour out of the box (P-22), **with b's `ProfileLookTable` and c's per-photo profile folded in** (re-scoped 2026-10-12: neither changes a photo until d brings such a profile; b's `CameraCalibration` ⛔ withdrawn — a DNG-file tag, never in a profile) |
-| **M10.14** performance & verification | a HSL `cbrt`/`atan2` · b the prefix-cache eviction fix's picture half · c Clarity's coalescing · d the ~10–12 ms drag gap · e a 100k-photo catalog benchmark · f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h the reference photo on the GPU (M10.12b's range masks with an offset, 31 ms vs 7–9 at fit) |
+| **M10.14** performance & verification | a ⛔ HSL `cbrt`/`atan2` (withdrawn 2026-10-12: the preview runs HSL on the GPU; ~1% of an export) · b the prefix-cache eviction fix's picture half · c Clarity's coalescing · d the ~10–12 ms drag gap · e a 100k-photo catalog benchmark · f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h the reference photo on the GPU (M10.12b's range masks with an offset, 31 ms vs 7–9 at fit) |
 | **M10.15** Immich | a API keys in the keychain · b evict cached originals · c read Immich's rating · d two-way sync (re-opened) |
 | **M10.16** AI tools | a depth masks · b AI denoise · c content-aware remove |
 | **M10.17** merge | a HDR · b panorama |
