@@ -4,9 +4,9 @@
 //! reader rather than a dependency. It deliberately knows nothing about libraw or about our
 //! colour code: it turns bytes into numbers, which is the one part of C2 testable in CI.
 //!
-//! ⚠ `CameraCalibration` is **not** parsed or applied — the X-T4 profile has none, and applying
-//! it is out of scope for C2. A profile that carries one renders as if it were the identity.
-//! Recorded rather than silently mis-rendered.
+//! ⚠ `CameraCalibration` is not a profile tag: it belongs to a DNG raw file (a per-body correction
+//! the camera writes), so no `.dcp` carries it — none of the 161 RawTherapee ships does (measured
+//! 2026-10-12). ⚠ `ProfileLookTable` is skipped: the author's X-T4 profile has none (M10.13d).
 
 use std::path::Path;
 

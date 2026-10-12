@@ -33,7 +33,7 @@ and a pointer, not deleted.
 | **M10.10** export | P-26's image watermark (a, ✅ 2026-10-11) and export sizing (b, ✅ 2026-10-11) |
 | **M10.11** Develop additions | *Film negative inversion* (a, ✅ 2026-10-11); P-26's Grain (b, ✅ 2026-10-12) |
 | **M10.12** the mask model | *Composites are one level deep* (a, ✅ 2026-10-12 — re-scoped: an op in place, Duplicate, Invert mask; nesting itself ⏸ parked on its table); masks' scene sliders as offsets (b, ✅ 2026-10-12 — Lightroom's model; a range or gating mask with an offset selects on the globally edited photo, its GPU cost is M10.14h); *Anchor strokes and spots in sensor space* + *Brush strokes shift…* (c, ⏸) |
-| **M10.13** colour & camera profiles | *C2/C3 have no independent oracle* (a, ⏸ parked 2026-10-12 — how to verify is the author's to settle); *`CameraCalibration`…* + `ProfileLookTable` (b); *Per-photo camera profile* (c); P-22 (d) |
+| **M10.13** colour & camera profiles | *C2/C3 have no independent oracle* (a, ⏸ parked 2026-10-12 — how to verify is the author's to settle); ~~*`CameraCalibration`…*~~ (b, ⛔ withdrawn 2026-10-12 — not a profile tag) + `ProfileLookTable` (b → folded into d); *Per-photo camera profile* (c → folded into d); P-22 (d) — **re-scoped 2026-10-12 by the author:** b's LookTable and c only matter once a profile that has a LookTable, or a second profile for one body, is in hand, which is d's question |
 | **M10.14** performance & verification | *What is left in `HslStage`* (a); P-21 (e); *incremental splatting*, *Two Oklab round trips* (f, ⏸); *the u8 wire*, `MAX_TILE_DABS` (g, ⏸); *The reference photo on the GPU* (h) |
 | **M10.15** Immich | the keychain, cached-original eviction, Immich's rating (a–c); *Two-way sync* (d, re-opened) |
 | **M10.16** AI tools | depth masks (a); P-23 (b); P-26's content-aware remove (c) |
@@ -251,6 +251,13 @@ a scene-referred pipeline?* Answering it once probably unblocks both.
 
 ### `ProfileLookTable` (DCP)
 
+→ **M10.13b → folded into M10.13d** (2026-10-12). **Measured then:** 72 of RawTherapee's 161 profiles carry a
+LookTable, the author's `FUJIFILM X-T4.dcp` does not (a 90×30×1 HueSatMap, an identity tone curve) — so
+building it now changes none of his photos and cannot be validated on one. Build it when d brings a
+profile that has one, and check it against that profile. ⚠ **Unverified:** the ordering claim below
+("after the tone curve") — the DNG SDK's `dng_render` is believed to apply the LookTable after the
+exposure ramp and *before* the tone curve; settle it from the spec or the SDK before building.
+
 *Deferred during C3.* Deferred for **ordering**, not effort — the spec applies it *after* the tone
 curve, so with no tone curve it would land in the wrong space, which is worse than not applying it.
 It is also absent from the X-T4 profile, so it could not be tested against the files this project
@@ -280,7 +287,8 @@ Seeded from the recorded follow-ups formerly in `CLAUDE.md`; **the sections are 
     spec — cheap, not independent. A free first step either way: `exiftool` reads the profile's values,
     an independent check of the parsing. The author's `FUJIFILM X-T4.dcp` is byte-identical to the one
     RawTherapee ships.
-- **Per-photo camera profile.** → **M10.13c**. C4 is per *camera*, keyed by `Session::make_model`. Per-photo is
+- **Per-photo camera profile.** → **M10.13c → folded into M10.13d** (2026-10-12): it matters only once one body has two
+  profiles, which is what d would bring. C4 is per *camera*, keyed by `Session::make_model`. Per-photo is
   what Lightroom does in its Calibration panel and becomes wanted the moment someone holds both
   "Camera Velvia" and "Adobe Standard" for one body. ⚠ It puts a *decode* parameter into `Edits`,
   which must then travel through the sidecar, presets, copy/paste, sync **and the buffer-cache
@@ -290,8 +298,12 @@ Seeded from the recorded follow-ups formerly in `CLAUDE.md`; **the sections are 
   this easier: tag the layer P3 and render P3.
 - ~~**Gamut mapping / rendering intents at export.**~~ ✅ **M6.4c, 2026-09-26.** The per-channel clip
   stays the default by the author's choice; perceptual and relative colorimetric are offered beside it.
-- **`CameraCalibration` is neither parsed nor applied.** → **M10.13b**, with `ProfileLookTable`. A profile carrying one renders as though it
-  were the identity. Recorded rather than silently mis-rendered.
+- ~~**`CameraCalibration` is neither parsed nor applied.**~~ ⛔ **Withdrawn 2026-10-12 (was M10.13b's first half) —
+  measured, not a profile tag at all.** `CameraCalibration1/2` belong to a **DNG raw file** (a per-body
+  correction the camera writes), never to a `.dcp`: **0 of the 161** profiles RawTherapee ships carry it,
+  and the author's catalog holds no DNG (2,914 RAFs, all X-T4; the ZV-1's photos are JPEGs). The old
+  note's *"a profile carrying one renders as though it were the identity"* described a case that
+  cannot occur. Re-open only if Rustroom ever reads a DNG's own embedded profile.
 - **Multi-monitor on Linux and Windows.** → **M11.2**. macOS hands the preview to Core Animation, which handles
   a display change for free. Elsewhere `display_space` is one global setting and nothing reacts to
   moving the window between monitors. Wayland's colour-management protocol is the eventual answer.
