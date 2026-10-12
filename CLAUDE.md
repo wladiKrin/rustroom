@@ -231,9 +231,8 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.12b** (table above).
 
-**▶ NEXT: M10.13a — C2/C3 have no independent oracle** (colour & camera profiles): an independent
-reference for the colour checks, `docs/BACKLOG.md`'s entry of that name. Start it when the author says
-to continue.
+**▶ NEXT: M10.13b — `CameraCalibration` + `ProfileLookTable`** (colour & camera profiles). M10.13a is
+⏸ parked until the author settles how to verify the camera colour.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
 release engineering, LAST.** The canonical list — every sub-item with its date, size and reasoning — is
@@ -244,7 +243,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | Milestone | Sub-items |
 |---|---|
 | **M10.12** the mask model | c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
-| **M10.13** colour & camera profiles | a an independent C2/C3 reference · b `CameraCalibration` + `ProfileLookTable` · c per-photo profile · d camera-matching colour out of the box (P-22) |
+| **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · b `CameraCalibration` + `ProfileLookTable` · c per-photo profile · d camera-matching colour out of the box (P-22) |
 | **M10.14** performance & verification | a HSL `cbrt`/`atan2` · b the prefix-cache eviction fix's picture half · c Clarity's coalescing · d the ~10–12 ms drag gap · e a 100k-photo catalog benchmark · f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h the reference photo on the GPU (M10.12b's range masks with an offset, 31 ms vs 7–9 at fit) |
 | **M10.15** Immich | a API keys in the keychain · b evict cached originals · c read Immich's rating · d two-way sync (re-opened) |
 | **M10.16** AI tools | a depth masks · b AI denoise · c content-aware remove |

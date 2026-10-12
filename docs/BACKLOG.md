@@ -33,7 +33,7 @@ and a pointer, not deleted.
 | **M10.10** export | P-26's image watermark (a, ✅ 2026-10-11) and export sizing (b, ✅ 2026-10-11) |
 | **M10.11** Develop additions | *Film negative inversion* (a, ✅ 2026-10-11); P-26's Grain (b, ✅ 2026-10-12) |
 | **M10.12** the mask model | *Composites are one level deep* (a, ✅ 2026-10-12 — re-scoped: an op in place, Duplicate, Invert mask; nesting itself ⏸ parked on its table); masks' scene sliders as offsets (b, ✅ 2026-10-12 — Lightroom's model; a range or gating mask with an offset selects on the globally edited photo, its GPU cost is M10.14h); *Anchor strokes and spots in sensor space* + *Brush strokes shift…* (c, ⏸) |
-| **M10.13** colour & camera profiles | *C2/C3 have no independent oracle* (a); *`CameraCalibration`…* + `ProfileLookTable` (b); *Per-photo camera profile* (c); P-22 (d) |
+| **M10.13** colour & camera profiles | *C2/C3 have no independent oracle* (a, ⏸ parked 2026-10-12 — how to verify is the author's to settle); *`CameraCalibration`…* + `ProfileLookTable` (b); *Per-photo camera profile* (c); P-22 (d) |
 | **M10.14** performance & verification | *What is left in `HslStage`* (a); P-21 (e); *incremental splatting*, *Two Oklab round trips* (f, ⏸); *the u8 wire*, `MAX_TILE_DABS` (g, ⏸); *The reference photo on the GPU* (h) |
 | **M10.15** Immich | the keychain, cached-original eviction, Immich's rating (a–c); *Two-way sync* (d, re-opened) |
 | **M10.16** AI tools | depth masks (a); P-23 (b); P-26's content-aware remove (c) |
@@ -263,10 +263,23 @@ validates on. The machinery is shared: a LookTable is the same 3-D HSV table as 
 Seeded from the recorded follow-ups formerly in `CLAUDE.md`; **the sections are now in
 `docs/JOURNAL.md`** (split out 2026-09-16) — `grep -n '^### ' docs/JOURNAL.md` for the index.
 
-- **C2/C3 have no independent oracle.** → **M10.13a**. `rawtherapee-cli` is installed but crashes on this machine
+- **C2/C3 have no independent oracle.** → **M10.13a** ⏸ **parked by the author 2026-10-12, until he settles
+  how to verify it.** `rawtherapee-cli` is installed but crashes on this machine
   (exit 133, SIGTRAP, no output). The dual-illuminant interpolation is therefore **bounded but not
   independently verified** — it is judged by construction and against libraw, not diffed against a
   reference DCP implementation. This is why `camera_profile` stays opt-in.
+  - **Why RawTherapee crashes (found 2026-10-12):** the cask's 5.12 CLI is signed with the **App Sandbox
+    entitlement**, and the sandbox's initialisation traps when it is started from a terminal
+    (`_libsecinit_appsandbox`) — in and out of Claude's shell sandbox alike. An ad-hoc re-signed copy
+    without the entitlement is killed inside Claude's sandbox, and running it outside was refused by the
+    auto-mode safety check. The author: RawTherapee has never worked on this Mac.
+  - **darktable is no oracle:** 5.4.1's `colorin` has no DCP support (no `ForwardMatrix`/`ProfileHueSatMap`).
+  - **The options weighed:** ① **Adobe's DNG SDK** — the reference implementation of both C2 and C3, built
+    from source, driven at the function level (same neutral and colours in, numbers compared) — the
+    recommendation; ② `colour-hdri` (Python) — independent, C2 only; ③ a second implementation from the
+    spec — cheap, not independent. A free first step either way: `exiftool` reads the profile's values,
+    an independent check of the parsing. The author's `FUJIFILM X-T4.dcp` is byte-identical to the one
+    RawTherapee ships.
 - **Per-photo camera profile.** → **M10.13c**. C4 is per *camera*, keyed by `Session::make_model`. Per-photo is
   what Lightroom does in its Calibration panel and becomes wanted the moment someone holds both
   "Camera Velvia" and "Adobe Standard" for one body. ⚠ It puts a *decode* parameter into `Edits`,
