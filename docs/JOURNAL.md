@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [The Library became slow: the rail's per-frame work (2026-10-12)](#2026-10-12--the-library-became-slow-the-rails-per-frame-work-branch-fix-library-rail-speed)
+- [The Library became slow: the rail's per-frame work (2026-10-12)](#2026-10-12--the-library-became-slow-the-rails-per-frame-work-branch-fix-library-rail-speed-merged-2026-10-12)
 - [M10.12a: the flat composite made usable, nesting parked (2026-10-12)](#2026-10-12--m1012a-the-flat-composite-made-usable-nesting-parked-branch-m1012a-mask-composites-merged-2026-10-12)
 - [Handover sweep: every summary re-measured, and what had drifted (2026-10-12)](#2026-10-12--handover-sweep-every-summary-re-measured-and-what-had-drifted)
 - [M10.11b: grain (2026-10-12)](#2026-10-12--m1011b-grain-branch-m1011b-grain-merged-2026-10-12)
@@ -166,7 +166,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
-### 2026-10-12 — The Library became slow: the rail's per-frame work (branch `fix-library-rail-speed`)
+### 2026-10-12 — The Library became slow: the rail's per-frame work (branch `fix-library-rail-speed`, merged 2026-10-12)
 
 **Reported in use:** *"Rustroom became extremely slow in the library view, but works fine in develop
 mode."* Read literally, and it was exact: the difference is the **rail**, which only the Library draws.
@@ -210,7 +210,7 @@ open, twelve scroll events, 8 s each time. Main-thread samples:
 - ⚠ The final GUI measurement could not be taken: the Mac locked (`loginwindow` frontmost) — hence the
   headless bench for the third fix.
 
-**Counts:** 3650 → **3660 tests**. Not merged; awaiting the author.
+**Counts:** 3650 → **3660 tests**. Merged 2026-10-12 at the author's call, before his own run of it (the Mac had locked); the 180 LightCraft folders were then forgotten from his catalog through `Catalog::forget_folder`, a backup taken first.
 
 ### 2026-10-12 — M10.12a: the flat composite made usable, nesting parked (branch `m10.12a-mask-composites`, merged 2026-10-12)
 
