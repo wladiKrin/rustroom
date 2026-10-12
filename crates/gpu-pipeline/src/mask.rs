@@ -200,6 +200,8 @@ pub struct GpuMaskStage {
     /// position zero" and "a base carrying an op" are both unrepresentable. `Composite`'s shape.
     base: Component,
     refine: Vec<(crate::mask_wgsl::Fold, Component)>,
+    /// The whole-mask Invert (M10.12a), folded into the shader text after the chain.
+    invert: bool,
     region: Option<Region>,
     cost: f32,
 }
@@ -262,6 +264,7 @@ impl GpuMaskStage {
             ),
             base,
             refine,
+            invert: masked.invert,
             region,
             cost,
         })
@@ -358,6 +361,7 @@ impl GpuMaskStage {
             crate::mask_wgsl::coverage_entry(
                 &self.base.expr(0),
                 &self.refine_exprs(),
+                self.invert,
                 self.facts()
             ),
             crate::mask_wgsl::BLEND,
@@ -1412,6 +1416,26 @@ mod tests {
             let (want, got, src) = both(&ctx, &m, 64, 48);
             assert_agrees(&format!("{op:?}"), &want, &got, &src);
         }
+    }
+
+    /// ⚠⚠ Parity alone cannot see a flag ignored on BOTH sides, so the inverted GPU picture must
+    /// also differ from the uninverted one before it is compared with the CPU's.
+    #[test]
+    fn an_inverted_composite_renders_the_same_picture() {
+        let Some(ctx) = ctx() else { return };
+        let plain = composite(
+            a_gradient(),
+            &[(edit_model::MaskOp::Subtract, an_ellipse())],
+        );
+        let mut inv = plain.clone();
+        inv.invert = true;
+        let (_, got_plain, _) = both(&ctx, &plain, 64, 48);
+        let (want, got, src) = both(&ctx, &inv, 64, 48);
+        assert!(
+            crate::compare(&got_plain, &got).worst_levels > 8.0,
+            "fixture check: inverting must change the GPU picture"
+        );
+        assert_agrees("inverted subtract", &want, &got, &src);
     }
 
     /// ⚠⚠ **Three folds rendering alike would pass the test above**, because each side would use

@@ -313,7 +313,14 @@ pub(crate) struct Facts {
 ///
 /// ⚠ The base is a separate parameter from the refinements, so "a refinement in position zero" is
 /// unrepresentable rather than guarded — the shape `Composite { base, refine }` already has.
-pub(crate) fn coverage_entry(base: &str, refine: &[(Fold, String)], facts: Facts) -> String {
+///
+/// `invert` is the whole-mask Invert (M10.12a): `1 − a` after the last fold.
+pub(crate) fn coverage_entry(
+    base: &str,
+    refine: &[(Fold, String)],
+    invert: bool,
+    facts: Facts,
+) -> String {
     let mut hoist = String::new();
     if facts.luma || facts.oklab {
         hoist.push_str(
@@ -350,6 +357,11 @@ pub(crate) fn coverage_entry(base: &str, refine: &[(Fold, String)], facts: Facts
             Fold::Subtract => format!("    a = a * (1.0 - clamp({expr}, 0.0, 1.0));\n"),
             Fold::Intersect => format!("    a = a * clamp({expr}, 0.0, 1.0);\n"),
         });
+    }
+    // ⚠ The whole-mask Invert (M10.12a): after the LAST fold, as `Composite::at` does. The flag is
+    // in the shader text, so an inverted mask is its own cached program.
+    if invert {
+        chain.push_str("    a = 1.0 - a;\n");
     }
 
     format!(
@@ -407,6 +419,7 @@ mod tests {
         let s = coverage_entry(
             &colour(0),
             &refine,
+            false,
             Facts {
                 luma: false,
                 oklab: true,
@@ -429,7 +442,7 @@ mod tests {
     /// only once a range joins the chain.
     #[test]
     fn a_chain_that_needs_no_pixel_never_reads_the_image() {
-        let s = coverage_entry("cov_radial(u, v, 0u)", &[], Facts::default());
+        let s = coverage_entry("cov_radial(u, v, 0u)", &[], false, Facts::default());
         assert!(
             !s.contains("img["),
             "an analytic-only chain must not touch `img`:\n{s}"
@@ -448,6 +461,7 @@ mod tests {
         let lum = coverage_entry(
             "cov_luminance(lum, 0u)",
             &[],
+            false,
             Facts {
                 luma: true,
                 oklab: false,
@@ -459,6 +473,7 @@ mod tests {
         let col = coverage_entry(
             &colour(0),
             &[],
+            false,
             Facts {
                 luma: false,
                 oklab: true,
@@ -474,7 +489,7 @@ mod tests {
     /// they are shown to differ.
     #[test]
     fn the_three_folds_emit_three_different_rules() {
-        let of = |op: Fold| coverage_entry("B", &[(op, "R".into())], Facts::default());
+        let of = |op: Fold| coverage_entry("B", &[(op, "R".into())], false, Facts::default());
         let (a, s, i) = (of(Fold::Add), of(Fold::Subtract), of(Fold::Intersect));
         assert_ne!(a, s);
         assert_ne!(a, i);
@@ -485,8 +500,28 @@ mod tests {
     /// `source_at`'s result. The ops are only order-preserving on `0..=1`.
     #[test]
     fn every_component_is_clamped_before_it_folds() {
-        let s = coverage_entry("B", &[(Fold::Add, "R".into())], Facts::default());
+        let s = coverage_entry("B", &[(Fold::Add, "R".into())], false, Facts::default());
         assert!(s.contains("clamp(B, 0.0, 1.0)"), "{s}");
         assert!(s.contains("clamp(R, 0.0, 1.0)"), "{s}");
+    }
+
+    #[test]
+    fn the_whole_mask_invert_flips_after_the_last_fold() {
+        let plain = coverage_entry(
+            "B",
+            &[(Fold::Subtract, "R".into())],
+            false,
+            Facts::default(),
+        );
+        let inv = coverage_entry("B", &[(Fold::Subtract, "R".into())], true, Facts::default());
+        assert!(
+            !plain.contains("a = 1.0 - a;"),
+            "an uninverted mask must not flip"
+        );
+        let flip = inv.find("a = 1.0 - a;").expect("the inverted mask flips");
+        let fold = inv
+            .find("a = a * (1.0 - clamp(R")
+            .expect("the fold is there");
+        assert!(flip > fold, "the flip must come after the last fold");
     }
 }
