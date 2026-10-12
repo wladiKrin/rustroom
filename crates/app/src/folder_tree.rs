@@ -150,6 +150,17 @@ pub fn subtree<'a>(rows: &'a [FolderRow], path: &'a Path) -> impl Iterator<Item 
         .filter(move |r| r.path == path || is_under(&r.path, path))
 }
 
+/// Every row in any of `paths`' subtrees, each ONCE, in `rows` order — what forgetting `paths`
+/// removes (M10.19c).
+///
+/// ⚠ A marked folder beneath another marked one is in both subtrees; counting it twice would
+/// inflate the confirmation's totals, and forgetting it twice would fail the second delete.
+pub fn subtrees<'a>(rows: &'a [FolderRow], paths: &[PathBuf]) -> Vec<&'a FolderRow> {
+    rows.iter()
+        .filter(|r| paths.iter().any(|p| r.path == *p || is_under(&r.path, p)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,6 +225,16 @@ mod tests {
         let ids: Vec<i64> = subtree(&rows(), Path::new("/Users/w/Pictures/fuji"))
             .map(|r| r.id)
             .collect();
+        assert_eq!(ids, vec![1, 2, 5]);
+    }
+
+    #[test]
+    fn subtrees_counts_a_nested_path_once() {
+        let ps = [
+            PathBuf::from("/Users/w/Pictures/fuji"),
+            PathBuf::from("/Users/w/Pictures/fuji/2026/09-27"),
+        ];
+        let ids: Vec<i64> = subtrees(&rows(), &ps).iter().map(|r| r.id).collect();
         assert_eq!(ids, vec![1, 2, 5]);
     }
 
