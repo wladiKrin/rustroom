@@ -289,8 +289,13 @@ impl MaskStage {
     /// Blend by the plane `SceneOffsetsStage` leaves in `slot` (M10.12b). `build.rs` chains it onto
     /// a mask that `reads_reference`; an empty slot — a tail run without its offsets stage — falls
     /// back to selecting from this stage's own base, as every mask did before.
+    ///
+    /// ⚠⚠ It also drops the deposit: this mask's gating map is the REFERENCE's, deposited by
+    /// `SceneOffsetsStage` under the key the brush cache gives it. A map from the fallback, gated on
+    /// this stage's own base, filed under that key would be served as a stale hit.
     pub fn with_coverage_from(mut self, slot: std::sync::Arc<crate::CoverageSlot>) -> Self {
         self.from_reference = Some(slot);
+        self.deposit = None;
         self
     }
 
@@ -872,6 +877,55 @@ mod tests {
                 assert!((got - want).abs() < 1e-6, "({x}, {y}): {got} vs {want}");
             }
         }
+    }
+
+    /// ⚠⚠ A slot-fed mask's gating map belongs to the REFERENCE, and `SceneOffsetsStage` deposits it.
+    /// Its fallback (an empty slot) gates on its own base, and a map from there filed under the
+    /// reference's key would be served as a stale hit — so it never deposits.
+    #[test]
+    fn a_slot_fed_mask_never_deposits() {
+        use edit_model::{Brush, BrushStroke};
+        let masked = MaskedAdjustment {
+            mask: Mask::Brush(Brush {
+                strokes: vec![BrushStroke {
+                    points: vec![[0.5, 0.5]],
+                    radius: 0.3,
+                    hardness: 100.0,
+                    flow: 100.0,
+                    auto_mask: true,
+                    tolerance: 35.0,
+                    ..Default::default()
+                }],
+                invert: false,
+            }),
+            adjustments: LocalAdjustments {
+                saturation: 30.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let stage = |slot: Option<std::sync::Arc<crate::CoverageSlot>>| {
+            let coverage = std::sync::Arc::new(crate::BrushCoverage::with_slots(&[1]));
+            let s = MaskStage::new_in_region(
+                &masked,
+                RenderScale::new(1.0),
+                None,
+                &Geometry::default(),
+                &[],
+                color::wb::Illuminant::default(),
+                Some((std::sync::Arc::clone(&coverage), 0)),
+            );
+            let s = match slot {
+                Some(slot) => s.with_coverage_from(slot),
+                None => s,
+            };
+            let _ = s.apply(flat(32, 24));
+            coverage.take_built(0, 0).is_some()
+        };
+        assert!(stage(None), "fixture check: unfed, the stage deposits");
+        assert!(!stage(Some(std::sync::Arc::new(
+            crate::CoverageSlot::default()
+        ))));
     }
 
     /// An empty slot — a tail run without its offsets stage — selects from the stage's own base,
