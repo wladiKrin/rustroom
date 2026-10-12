@@ -133,117 +133,16 @@ pub fn build_pipeline_split_tapped(
 
     // ⚠⚠ M10.12b: when any active mask carries a scene slider, ONE stage owns the global white
     // balance, exposure, contrast and tone regions together with every mask's offsets to them —
-    // and those four are passed neutral below, or they would apply twice. With no such mask it is
+    // and `global_look` builds those four neutral, or they would apply twice. With no such mask it is
     // `None` and the tail is built exactly as before, byte for byte.
     let offsets =
         crate::SceneOffsetsStage::new(edits, scale, region, &edits.geometry, brush, baseline);
-    let (wb, ev, con, regions) = if offsets.is_some() {
-        (edit_model::WhiteBalance::default(), 0.0, 0.0, [0.0; 4])
-    } else {
-        (
-            edits.white_balance,
-            edits.exposure,
-            edits.contrast,
-            [edits.highlights, edits.shadows, edits.whites, edits.blacks],
-        )
-    };
-    // ⚠ `saturation`/`vibrance` are passed as **zero** here, deliberately. In the global chain
-    // saturation runs *after* the tone curve and local contrast, not with the basic
-    // adjustments — so it stays where it is, further down this tail. Passing the real values
-    // would silently move it earlier and change every golden. Inside a mask there is no tone
-    // curve, so ordering within `per_pixel_stages` is the whole story and saturation belongs
-    // in it.
-    let mut tail: Vec<Box<dyn PipelineStage>> = adjustment_stages(
-        &edit_model::LocalAdjustments {
-            // ⚠⚠ **Neutral because these two do not run here at all** — unlike the five below,
-            // which this tail places itself further down. `noise_reduction` and `dehaze` are
-            // built by `capture_stages` and run in the **prefix**, where the global pair run.
-            // Passing them here would apply a capture correction after the tone curve, on a
-            // buffer that may be only the visible region — which for dehaze means an airlight
-            // that changes as you pan.
-            noise_reduction: edit_model::NoiseReduction::default(),
-            dehaze: edit_model::Dehaze::default(),
-            // ⚠ Likewise a prefix step (M9.6), after geometry — never a tail stage.
-            defringe: 0.0,
-            white_balance: wb,
-            // ⚠ A mask's relative shift (M10.12b); the global white balance above is absolute.
-            temp: 0.0,
-            tint: 0.0,
-            exposure: ev,
-            contrast: con,
-            highlights: regions[0],
-            shadows: regions[1],
-            whites: regions[2],
-            blacks: regions[3],
-            saturation: 0.0,
-            vibrance: 0.0,
-            // ⚠⚠ Neutral for the identical reason `saturation` above is zero: **this tail places
-            // each of these itself**, further down, at a position each has earned. Passing the
-            // real values would apply every one of them **twice** and move every golden.
-            //
-            // ⚠ Inside a mask there is no such second placement, so a mask passes its real
-            // values and the ordering within the shared builder is the whole story.
-            //
-            // ⚠ `ToneCurve::default()` is an empty point list, which inserts no stage at all —
-            // the same "be exactly neutral by inserting nothing rather than trusting the
-            // arithmetic to land on the identity" rule `white_balance` follows above.
-            tone_curve: edit_model::ToneCurve::default(),
-            local_contrast: edit_model::LocalContrast::default(),
-            hsl: edit_model::Hsl::default(),
-            color_grading: edit_model::ColorGrading::default(),
-            sharpening: edit_model::Sharpening::default(),
-        },
-        baseline,
-        scale,
-    );
+    // ⚠ The tap point: the global look is the first half, the grade begins the second.
+    let (mut before_grade, grade) = global_look(edits, scale, baseline, offsets.is_none());
     if let Some(o) = offsets {
-        tail.insert(0, Box::new(o));
+        before_grade.insert(0, Box::new(o));
     }
-    // ⚠⚠ **All four curves, not just the composite.** An `is_empty` guard naming one field of four
-    // would render a channel-only edit unchanged, with nothing failing — the regression this feature
-    // invites, and it has its own test.
-    // ⚠ Through `is_needed`/`from_edits`, never the fields directly: the parametric curve (M5.1c)
-    // is the fifth field, and a guard naming four would render it unchanged.
-    if ToneCurveStage::is_needed(edits) {
-        tail.push(Box::new(ToneCurveStage::from_edits(edits)));
-    }
-
-    // Local contrast, in two bands. After the tone curve is mandatory: a local contrast
-    // measured before it would then be re-mapped by it. Before the colour stages so they
-    // see final tonality — numerically near-irrelevant, since the gain is scalar and
-    // preserves r:g:b ratios, but the order should say what we mean.
-    if edits.local_contrast.is_active() {
-        tail.push(Box::new(LocalContrastStage::new(
-            &edits.local_contrast,
-            scale,
-        )));
-    }
-
-    if edits.saturation != 0.0 || edits.vibrance != 0.0 {
-        tail.push(Box::new(SaturationStage::new(
-            edits.saturation,
-            edits.vibrance,
-        )));
-    }
-
-    if edits.hsl != edit_model::Hsl::default() {
-        tail.push(Box::new(HslStage::new(&edits.hsl)));
-    }
-
-    // A look laid over the corrected photograph. After HSL because HSL corrects colours that
-    // are *in* the picture while a grade is applied on top — reversed, an HSL band tweak would
-    // act on the tint just added. After the tone curve and local contrast is forced rather than
-    // chosen: the ranges are selected on lightness, so anything remapping lightness later would
-    // slide pixels between ranges. Before the masks, which act on the global look.
-    //
-    // Per-pixel and position-independent, so it needs no `Region`, no `RenderScale` and no
-    // kernel margin — and being in the tail, no `PrefixStepKey`.
-    //
-    // ⚠ The tap point. Everything pushed so far is the first half.
-    let before_grade = std::mem::take(&mut tail);
-    if edits.color_grading.is_active() {
-        tail.push(Box::new(ColorGradingStage::new(&edits.color_grading)));
-    }
+    let mut tail: Vec<Box<dyn PipelineStage>> = grade.into_iter().collect();
 
     // ⚠ After the global per-pixel block because a mask is the same kind of operation,
     // localised — it should act on the global look rather than be re-mapped by it. Before the
@@ -379,6 +278,126 @@ pub fn build_pipeline_split_tapped(
             from_grade: Pipeline::new(tail),
         },
     )
+}
+
+/// The global look: the four scene stages, the tone curve, local contrast, saturation and HSL — and
+/// the grade, returned apart because the tail is tapped between them (`TailHalves`).
+///
+/// ⚠⚠ `scene`: whether the global white balance, exposure, contrast and tone regions run here —
+/// `false` when `SceneOffsetsStage` does them together with the masks' offsets (M10.12b), `true` for a
+/// tail without offsets and for that stage's reference photo. ONE builder, so the reference IS the
+/// global look rather than a second list that could drift from it.
+fn global_look(
+    edits: &Edits,
+    scale: RenderScale,
+    baseline: color::wb::Illuminant,
+    scene: bool,
+) -> (Vec<Box<dyn PipelineStage>>, Option<Box<dyn PipelineStage>>) {
+    let (wb, ev, con, regions) = if scene {
+        (
+            edits.white_balance,
+            edits.exposure,
+            edits.contrast,
+            [edits.highlights, edits.shadows, edits.whites, edits.blacks],
+        )
+    } else {
+        (edit_model::WhiteBalance::default(), 0.0, 0.0, [0.0; 4])
+    };
+    // ⚠ `saturation`/`vibrance` are passed as **zero** here, deliberately. In the global chain
+    // saturation runs *after* the tone curve and local contrast, not with the basic
+    // adjustments — so it stays where it is, further down this tail. Passing the real values
+    // would silently move it earlier and change every golden. Inside a mask there is no tone
+    // curve, so ordering within `per_pixel_stages` is the whole story and saturation belongs
+    // in it.
+    let mut tail: Vec<Box<dyn PipelineStage>> = adjustment_stages(
+        &edit_model::LocalAdjustments {
+            // ⚠⚠ **Neutral because these two do not run here at all** — unlike the five below,
+            // which this tail places itself further down. `noise_reduction` and `dehaze` are
+            // built by `capture_stages` and run in the **prefix**, where the global pair run.
+            // Passing them here would apply a capture correction after the tone curve, on a
+            // buffer that may be only the visible region — which for dehaze means an airlight
+            // that changes as you pan.
+            noise_reduction: edit_model::NoiseReduction::default(),
+            dehaze: edit_model::Dehaze::default(),
+            // ⚠ Likewise a prefix step (M9.6), after geometry — never a tail stage.
+            defringe: 0.0,
+            white_balance: wb,
+            // ⚠ A mask's relative shift (M10.12b); the global white balance above is absolute.
+            temp: 0.0,
+            tint: 0.0,
+            exposure: ev,
+            contrast: con,
+            highlights: regions[0],
+            shadows: regions[1],
+            whites: regions[2],
+            blacks: regions[3],
+            saturation: 0.0,
+            vibrance: 0.0,
+            // ⚠⚠ Neutral for the identical reason `saturation` above is zero: **this tail places
+            // each of these itself**, further down, at a position each has earned. Passing the
+            // real values would apply every one of them **twice** and move every golden.
+            //
+            // ⚠ Inside a mask there is no such second placement, so a mask passes its real
+            // values and the ordering within the shared builder is the whole story.
+            //
+            // ⚠ `ToneCurve::default()` is an empty point list, which inserts no stage at all —
+            // the same "be exactly neutral by inserting nothing rather than trusting the
+            // arithmetic to land on the identity" rule `white_balance` follows above.
+            tone_curve: edit_model::ToneCurve::default(),
+            local_contrast: edit_model::LocalContrast::default(),
+            hsl: edit_model::Hsl::default(),
+            color_grading: edit_model::ColorGrading::default(),
+            sharpening: edit_model::Sharpening::default(),
+        },
+        baseline,
+        scale,
+    );
+    // ⚠⚠ **All four curves, not just the composite.** An `is_empty` guard naming one field of four
+    // would render a channel-only edit unchanged, with nothing failing — the regression this feature
+    // invites, and it has its own test.
+    // ⚠ Through `is_needed`/`from_edits`, never the fields directly: the parametric curve (M5.1c)
+    // is the fifth field, and a guard naming four would render it unchanged.
+    if ToneCurveStage::is_needed(edits) {
+        tail.push(Box::new(ToneCurveStage::from_edits(edits)));
+    }
+
+    // Local contrast, in two bands. After the tone curve is mandatory: a local contrast
+    // measured before it would then be re-mapped by it. Before the colour stages so they
+    // see final tonality — numerically near-irrelevant, since the gain is scalar and
+    // preserves r:g:b ratios, but the order should say what we mean.
+    if edits.local_contrast.is_active() {
+        tail.push(Box::new(LocalContrastStage::new(
+            &edits.local_contrast,
+            scale,
+        )));
+    }
+
+    if edits.saturation != 0.0 || edits.vibrance != 0.0 {
+        tail.push(Box::new(SaturationStage::new(
+            edits.saturation,
+            edits.vibrance,
+        )));
+    }
+
+    if edits.hsl != edit_model::Hsl::default() {
+        tail.push(Box::new(HslStage::new(&edits.hsl)));
+    }
+
+    // A look laid over the corrected photograph. After HSL because HSL corrects colours that
+    // are *in* the picture while a grade is applied on top — reversed, an HSL band tweak would
+    // act on the tint just added. After the tone curve and local contrast is forced rather than
+    // chosen: the ranges are selected on lightness, so anything remapping lightness later would
+    // slide pixels between ranges. Before the masks, which act on the global look.
+    //
+    // Per-pixel and position-independent, so it needs no `Region`, no `RenderScale` and no
+    // kernel margin — and being in the tail, no `PrefixStepKey`.
+    //
+    // ⚠ The tap point: everything above is the first half, the grade begins the second.
+    let grade = edits
+        .color_grading
+        .is_active()
+        .then(|| Box::new(ColorGradingStage::new(&edits.color_grading)) as Box<dyn PipelineStage>);
+    (tail, grade)
 }
 
 /// As [`build_pipeline_split_in_region`], with brush coverage the caller has already rasterized.
