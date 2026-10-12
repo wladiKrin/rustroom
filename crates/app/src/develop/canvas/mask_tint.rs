@@ -35,6 +35,8 @@ struct TintCache {
     /// shows where a mask reaches, and moving its exposure does not move that.
     mask: edit_model::Mask,
     refine: Vec<edit_model::Refinement>,
+    /// The whole-mask Invert (M10.12a) — part of the shape the tint shows.
+    invert: bool,
     geometry: edit_model::Geometry,
     w: usize,
     h: usize,
@@ -63,6 +65,24 @@ struct TintCache {
     /// which grew as more was painted. Found in use, and the same omission the coverage map
     /// itself had.
     outside: u8,
+}
+
+impl TintCache {
+    /// Whether this entry was drawn for `m`'s **shape**.
+    ///
+    /// ⚠⚠ An exhaustive destructure, so a field added to `MaskedAdjustment` is a compile error
+    /// here and whether it moves the tint is decided rather than forgotten — `invert` arrived and
+    /// the old `mask == && refine ==` comparison went on serving the uninverted tint (M10.12a).
+    fn same_shape(&self, m: &edit_model::MaskedAdjustment) -> bool {
+        let edit_model::MaskedAdjustment {
+            mask,
+            refine,
+            invert,
+            adjustments: _,
+            disabled: _,
+        } = m;
+        self.mask == *mask && self.refine == *refine && self.invert == *invert
+    }
 }
 
 thread_local! {
@@ -192,6 +212,19 @@ fn coverage(
     // bbox bounds.
     if m.refine.is_empty() {
         if let edit_model::Mask::Brush(b) = &m.mask {
+            // ⚠ Under the whole-mask Invert (M10.12a), the brush with its own Invert flipped: for
+            // one shape the two are the same coverage, and this keeps the box and the `outside`
+            // surround an inverted brush already uses.
+            let flipped;
+            let b = if m.invert {
+                flipped = edit_model::Brush {
+                    invert: !b.invert,
+                    ..b.clone()
+                };
+                &flipped
+            } else {
+                b
+            };
             return pipeline::brush::rasterize_in(b, geometry, tw, th, None, as_base);
         }
     }
@@ -311,6 +344,10 @@ fn coverage(
                 let b = at(&r.mask, j + 1, &mut light, &mut hc).clamp(0.0, 1.0);
                 a = r.op.combine(a, b);
             }
+            // ⚠ The whole-mask Invert, after the last fold — `Composite::at`'s order.
+            if m.invert {
+                a = 1.0 - a.clamp(0.0, 1.0);
+            }
             *slot = (a.clamp(0.0, 1.0) * 255.0).round() as u8;
         }
     });
@@ -366,8 +403,7 @@ pub(super) fn paint_tint(
             c.w == w
                 && c.h == h
                 && c.geometry == *geometry
-                && c.mask == m.mask
-                && c.refine == m.refine
+                && c.same_shape(m)
                 // ⚠ The displayed frame matters only to a mask that READS it (a gating brush, a
                 // range). Keyed for every mask, each pan's new frame missed — and an AI component's
                 // rebuild made that sluggish (M9.13 follow-up).
@@ -411,6 +447,7 @@ pub(super) fn paint_tint(
             slot.push(TintCache {
                 mask: m.mask.clone(),
                 refine: m.refine.clone(),
+                invert: m.invert,
                 geometry: *geometry,
                 w,
                 h,
@@ -798,5 +835,88 @@ mod tests {
         };
         let cov = plane(&m, 32, 32);
         assert!(cov.data.iter().all(|&a| a == 0));
+    }
+
+    /// The whole-mask Invert flips the composite plane at every pixel (M10.12a).
+    #[test]
+    fn an_inverted_composite_tints_the_inverse() {
+        let mut m = everything();
+        m.refine.push(edit_model::Refinement {
+            op: edit_model::MaskOp::Subtract,
+            mask: edit_model::Mask::Radial(edit_model::RadialGradient {
+                center: [0.5, 0.5],
+                radius: [0.3, 0.3],
+                feather: 0.0,
+                invert: false,
+            }),
+        });
+        let plain = plane(&m, 64, 64);
+        m.invert = true;
+        let inv = plane(&m, 64, 64);
+        for (x, y) in [(32, 32), (1, 1), (20, 32)] {
+            let (p, q) = (plain.at(x, y) as i32, inv.at(x, y) as i32);
+            assert!((p + q - 255).abs() <= 1, "({x},{y}): {p} + {q} is not 255");
+        }
+    }
+
+    /// ⚠ A lone brush under the whole-mask Invert keeps its fast path — the box — and covers its
+    /// surround, exactly as the brush's own Invert does.
+    #[test]
+    fn a_lone_brush_inverted_as_a_mask_tints_its_surround_and_keeps_its_box() {
+        let brush = edit_model::Brush {
+            strokes: vec![edit_model::BrushStroke {
+                points: vec![[0.5, 0.5]],
+                radius: 0.05,
+                hardness: 100.0,
+                flow: 100.0,
+                ..Default::default()
+            }],
+            invert: false,
+        };
+        let m = edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Brush(brush),
+            invert: true,
+            ..Default::default()
+        };
+        let cov = plane(&m, 128, 128);
+        assert!(
+            cov.w < 128 && cov.h < 128,
+            "the box was lost: {}x{}",
+            cov.w,
+            cov.h
+        );
+        assert_eq!(cov.outside, 255, "the surround must be covered");
+    }
+
+    /// ⚠⚠ The cache trap: an entry drawn for a mask must not serve the same mask inverted, and must
+    /// still serve it with only an adjustment moved — the memo's whole purpose.
+    #[test]
+    fn the_tint_cache_tells_an_inverted_shape_apart_and_ignores_the_adjustments() {
+        let m = everything();
+        let entry = TintCache {
+            mask: m.mask.clone(),
+            refine: m.refine.clone(),
+            invert: m.invert,
+            geometry: edit_model::Geometry::default(),
+            w: 1,
+            h: 1,
+            drawn: None,
+            base: None,
+            ai_gen: 0,
+            outside: 0,
+        };
+        assert!(entry.same_shape(&m));
+        let mut brighter = m.clone();
+        brighter.adjustments.exposure = 1.0;
+        assert!(
+            entry.same_shape(&brighter),
+            "an adjustment does not move the tint"
+        );
+        let mut inverted = m.clone();
+        inverted.invert = true;
+        assert!(
+            !entry.same_shape(&inverted),
+            "an inverted mask must re-tint"
+        );
     }
 }
