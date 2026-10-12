@@ -222,6 +222,60 @@ fixture check now requires both masks to be stages. The hover sweep's scope list
 
 **Counts (b1):** 3674 → **3703 tests**.
 
+**b2, built — the reference photo** (plan `2026-10-12-m10.12b2-mask-reference.md`):
+- **`pipeline::reads_reference(m)`** — on, reads the photograph (`MaskedAdjustment::reads_pixels`: a
+  range or a gating brush, base or refinement, an exhaustive match) and carries a scene offset. ONE
+  predicate for the stage and the brush cache.
+- **`SceneOffsetsStage`** runs the **global look** (`build.rs`' `global_look`, now one builder for the
+  tail and the reference — the four scene stages at the global values, curve, local contrast,
+  saturation, HSL, grade) on a copy **only when such a mask exists**; that mask's coverage is computed
+  on it, drives its offsets, and goes through a **`CoverageSlot`** to the same mask's look `MaskStage`,
+  which blends by it (`with_coverage_from`; an empty slot falls back to its own base). One coverage
+  for both halves: nothing chases its own effect. Its gating brush's map is deposited from there.
+- **GPU:** both decline — the twin (`duplicate()` is `None` with a reference) and that mask's
+  `GpuMaskStage` (`takes_reference_coverage`); the CPU stages run. The twin's parity test lost its two
+  range cases to `a_stage_with_a_reference_declines` (a range with an offset never reaches it now).
+- **The brush cache** (`brush_cache::base_id`) — ⚠⚠ **a b1 hazard fixed:** since b1 every mask's
+  offsets run at the head of the tail, so a LATER mask's offset reaches an earlier gating brush's base,
+  and the key — the masks before it, truncated — would have served a map gated on pixels that no
+  longer existed. Now: a reference-reading mask is keyed on the global edits alone; any other on the
+  earlier masks whole plus every later one's **scene part** (`pipeline::scene_only`).
+- **Golden:** exactly `mask_luminance_inverted_highlights` (48 levels) — the bright greens its −0.5 EV
+  had moved into the inverted band are now desaturated too; b1 kept that chase.
+
+**The cost, measured** (`examples/bench_mask_reference.rs`, DSCF6291, M2, best of 5 warm frames):
+
+| rung | case | CPU ms | GPU ms |
+|---|---|---|---|
+| 1600 | global only | 19.6 | 6.1 |
+| 1600 | + range, Saturation (no offset) | 29.0 | 9.3 |
+| 1600 | + linear, Exposure (offsets only) | 28.1 | 6.9 |
+| 1600 | + range, Exposure (**reference**) | 39.7 | **31.0** |
+| 1600 | + range, Exposure + Saturation | 41.7 | **34.8** |
+| 3200 | + linear, Exposure (offsets only) | 110.9 | 21.9 |
+| 3200 | + range, Exposure (**reference**) | 148.3 | **107.1** |
+| 3200 | + range, Exposure + Saturation | 156.9 | **129.5** |
+
+⚠⚠ **Paid only by a range or gating mask carrying a scene offset — but there it is 4–5× on the GPU
+path**: the CPU runs the global look a second time, and the tail splits around two CPU stages (two
+downloads, two uploads). The fix is the spec's *out of scope*: the GPU computing the reference itself
+(the global look's twins all exist) — recorded in `docs/BACKLOG.md`, *The reference photo on the GPU*.
+
+**Sabotages (b2), every one red** — after four were made to be: `reads_reference` without `disabled`;
+the plane from the input instead of the reference; `MaskStage` ignoring its slot; `slot_for` returning
+the first slot; no deposit; the reference's coverage built without the region; the GPU decline removed
+(names, and the picture alone: 3.0 levels); `duplicate` ignoring the reference; the old truncating key;
+later masks keyed whole. ⚠ **Four tests passed against the bug they named until strengthened:** a
+uniform plane could not see an off-by-one read (now a ramp); the GPU fixture's wide default band
+selected the same pixels from either base (now a narrow band, +2 EV); the reference-key test put the
+brush at mask 0, where truncation already meant "no mask" (now mask 1); and a later mask without an
+offset is filtered before `scene_only` matters (now one with both).
+
+**Not changed, and why:** the canvas tint still evaluates a range on the displayed frame with this mask
+held out — other masks remain in it, as before; exact needs the render worker's reference.
+
+**Counts (b2):** 3703 → **3720 tests**.
+
 ### 2026-10-12 — M10.19c: mark several folders, forget them from a right-click menu (branch `m10.19c-folder-marks`, merged 2026-10-12)
 
 **Input:** found in use the same day — 180 LightCraft thumbnail folders, each its own rail row, took one ×

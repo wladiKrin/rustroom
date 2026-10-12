@@ -1321,6 +1321,16 @@ render-during-interaction pattern the app already applies elsewhere. **Do not sc
 `MaskStage` work**: at 1600 the whole masked delta is 2.8 ms, and no amount of optimising it moves
 a 53 ms frame meaningfully.
 
+### ⚠ The reference photo on the GPU (recorded 2026-10-12, from M10.12b2) → not yet placed — the author's call
+
+A luminance/colour range or gating brush that carries a **scene offset** selects on the globally edited
+photo (M10.12b2). `SceneOffsetsStage` computes that reference on the **CPU**, and both it and the mask's
+look stage decline their GPU twins, so the tail splits around two CPU stages. Measured on DSCF6291 (M2):
+**31 ms against 7–9 at the 1600 rung, 107–130 against 22–30 at 3200**; every other mask pays nothing.
+The fix: run the global look's twins (all exist) on a copy on the GPU, compute those masks' coverage
+there, and hand the plane to `GpuMaskStage` as a prebuilt raster (the AI-mask path). Spec *Out of scope*;
+`grep -n 'M10.12b' docs/JOURNAL.md`.
+
 ### ⚠ What is left in `HslStage` after the hue LUT (recorded 2026-09-05) → M10.14a
 
 The LUT took the stage from ~29–34 ms to ~20 ms above a harness floor (1.47–1.66×). **What remains
