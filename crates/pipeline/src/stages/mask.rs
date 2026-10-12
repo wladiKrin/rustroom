@@ -293,6 +293,9 @@ impl MaskStage {
         }
         let aspect = fw as f32 / fh as f32;
         let maps = self.coverage_maps(image);
+        if self.composite.waits_for_a_map(&maps) {
+            return vec![0.0; w * h];
+        }
         let mut out = vec![0.0f32; w * h];
         use rayon::prelude::*;
         out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
@@ -480,6 +483,10 @@ impl PipelineStage for MaskStage {
         let t_cov = std::time::Instant::now();
         let maps = self.coverage_maps(&image);
         let d_cov = t_cov.elapsed();
+        // ⚠⚠ Inverted and waiting for an AI map: nothing, never everything (M10.12a's review).
+        if self.composite.waits_for_a_map(&maps) {
+            return image;
+        }
         // ⚠ An **optimisation, not a correctness guard** — verified by deleting it and watching
         // every test still pass. An empty coverage map reads 0 everywhere, and blending at
         // coverage 0 is bit-exactly the identity, so the output is already right without this.
@@ -842,6 +849,58 @@ mod tests {
         let stage = MaskStage::new(&ai_masked(), RenderScale::FULL, &Geometry::default());
         let out = stage.apply(flat(80, 60));
         assert_eq!(out.data(), flat(80, 60).data());
+    }
+
+    /// ⚠⚠ The rule above, under the whole-mask Invert (M10.12a's review). A missing map reads 0,
+    /// and inverted that 0 is EVERYTHING — the adjustment over the whole photo while the map loads,
+    /// and in an export whose cache lacks it. Waiting, an inverted composite covers nothing.
+    #[test]
+    fn an_inverted_composite_waiting_for_its_ai_map_changes_nothing() {
+        let mut m = ai_masked();
+        m.refine.push(edit_model::Refinement {
+            op: edit_model::MaskOp::Add,
+            mask: Mask::Linear(LinearGradient {
+                from: [0.0, 0.0],
+                to: [1.0, 0.0],
+                invert: false,
+            }),
+        });
+        m.invert = true;
+        let img = flat(80, 60);
+        let waiting = MaskStage::new(&m, RenderScale::FULL, &Geometry::default());
+        assert_eq!(
+            waiting.apply(img.clone()).data(),
+            img.data(),
+            "the photo changed while the map was missing"
+        );
+        assert!(
+            waiting.coverage_plane(&img).iter().all(|&c| c == 0.0),
+            "the defringe plane covered something while the map was missing"
+        );
+        // Positive control: once the network has answered — here, finding nothing — the same
+        // inverted composite renders.
+        let nothing = std::sync::Arc::new(crate::brush::CoverageMap {
+            x0: 0,
+            y0: 0,
+            w: 80,
+            h: 60,
+            data: vec![0; 80 * 60],
+            outside: 0,
+        });
+        let answered = MaskStage::new_in_region(
+            &m,
+            RenderScale::FULL,
+            None,
+            &Geometry::default(),
+            &[Some(nothing)],
+            color::wb::Illuminant::default(),
+            None,
+        );
+        assert_ne!(
+            answered.apply(img.clone()).data(),
+            img.data(),
+            "fixture: with its map the inverted composite renders"
+        );
     }
 
     fn masked(from: [f32; 2], to: [f32; 2]) -> MaskedAdjustment {

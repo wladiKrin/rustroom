@@ -228,6 +228,27 @@ impl Composite {
         }
     }
 
+    /// Whether this is an **inverted** composite still waiting for an AI map (M10.12a's review).
+    ///
+    /// ⚠⚠ A missing map reads 0 — *"a map not computed yet must cover NOTHING"*, M9.13's rule — and
+    /// inverted, that 0 is **everything**: the adjustment over the whole photograph while the map
+    /// loads, and in an export whose cache lacks it (another Subject model, a cleared cache). So
+    /// the whole mask covers nothing until every map has arrived. `maps` is indexed per component,
+    /// base first, as `PixelCtx::maps` is.
+    pub(super) fn waits_for_a_map(
+        &self,
+        maps: &[Option<std::sync::Arc<crate::brush::CoverageMap>>],
+    ) -> bool {
+        self.invert
+            && std::iter::once(&self.base)
+                .chain(self.refine.iter().map(|(_, src)| src))
+                .enumerate()
+                .any(|(j, src)| {
+                    matches!(src, CoverageSource::Raster { .. })
+                        && maps.get(j).is_none_or(|m| m.is_none())
+                })
+    }
+
     /// Whether an inert base map is enough to skip this mask entirely.
     ///
     /// ⚠⚠ **An inert base does NOT make an inert composite.** `Subtract` and `Intersect` preserve

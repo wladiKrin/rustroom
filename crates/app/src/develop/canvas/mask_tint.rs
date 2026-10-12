@@ -272,6 +272,24 @@ fn coverage(
             _ => None,
         })
         .collect();
+    // ⚠⚠ The render's rule (`Composite::waits_for_a_map`, M10.12a's review): an inverted
+    // composite whose AI map has not arrived tints nothing — inverted, the missing map's 0 would
+    // paint the whole frame.
+    if m.invert
+        && shapes
+            .iter()
+            .zip(&maps)
+            .any(|(k, c)| matches!(k, edit_model::Mask::Ai(_)) && c.is_none())
+    {
+        return pipeline::brush::CoverageMap {
+            x0: 0,
+            y0: 0,
+            w: tw,
+            h: th,
+            data: vec![0; tw * th],
+            outside: 0,
+        };
+    }
 
     // ⚠ The frame's aspect, not the tint grid's — they agree by construction, since the grid is
     // proportional to `frame_rect`, and saying which one is meant is what stops the next reader
@@ -835,6 +853,48 @@ mod tests {
         };
         let cov = plane(&m, 32, 32);
         assert!(cov.data.iter().all(|&a| a == 0));
+    }
+
+    /// ⚠ The render's rule (`Composite::waits_for_a_map`): an inverted composite whose AI map has
+    /// not arrived tints nothing, rather than the whole frame (M10.12a's review).
+    #[test]
+    fn an_inverted_composite_waiting_for_its_ai_map_tints_nothing() {
+        let mut m = edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Ai(edit_model::AiMask::default()),
+            invert: true,
+            ..Default::default()
+        };
+        m.refine.push(edit_model::Refinement {
+            op: edit_model::MaskOp::Add,
+            mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                from: [0.0, 0.0],
+                to: [1.0, 0.0],
+                invert: false,
+            }),
+        });
+        let waiting = plane(&m, 32, 32);
+        assert!(
+            waiting.data.iter().all(|&a| a == 0) && waiting.outside == 0,
+            "an inverted composite tinted while its map was missing"
+        );
+        // Positive control: with the map (here, the network found nothing) it tints.
+        let mut maps = rustroom_app::ai_coverage::AiMaps::default();
+        maps.insert(
+            edit_model::AiPrompt::Subject,
+            std::sync::Arc::new(ai_mask::ProbMap::from_fn(20, 10, |_, _| 0.0)),
+        );
+        let edits = edit_model::Edits::default();
+        let ai = AiTintSource {
+            maps: &maps,
+            edits: &edits,
+            lens: None,
+            decode: (32, 32),
+        };
+        let answered = coverage(&m, &edit_model::Geometry::default(), 32, 32, None, &ai);
+        assert!(
+            answered.data.iter().any(|&a| a > 0),
+            "fixture: with its map the inverted composite tints"
+        );
     }
 
     /// The whole-mask Invert flips the composite plane at every pixel (M10.12a).
