@@ -168,7 +168,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-10-12)
 
-**3621 tests** (7 ignored), **85 golden tests** (73 reference images — `cargo test --workspace --test golden`),
+**3650 tests** (7 ignored), **87 golden tests** (74 reference images — `cargo test --workspace --test golden`),
 gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
@@ -228,9 +228,11 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.11** (table above).
 
-**▶ NEXT: M10.12a — nested mask composites**, `radial ∩ (brush ∪ gradient)`; composites are one level
-deep today on purpose, and the backlog's *Composites are one level deep* holds why. Start it when the
-author says to continue.
+**▶ M10.12a — built on branch `m10.12a-mask-composites`, awaiting the author's use** (2026-10-12).
+Re-scoped on a measured table: the example `radial ∩ (brush ∪ gradient)` was already expressible since
+reordering, so it became a row's op changed by right-click, Duplicate / Duplicate and invert, and a
+whole-mask **Invert mask**; nesting ⏸ parked in `docs/BACKLOG.md` with the table (`grep -n 'M10.12a'
+docs/JOURNAL.md`). **Then M10.12b** — masks' scene sliders as offsets.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
 release engineering, LAST.** The canonical list — every sub-item with its date, size and reasoning — is
@@ -240,7 +242,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 
 | Milestone | Sub-items |
 |---|---|
-| **M10.12** the mask model | a nested composites · b scene sliders as offsets (Lightroom's model) · c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
+| **M10.12** the mask model | a the flat composite made usable (built; nesting ⏸ parked) · b scene sliders as offsets (Lightroom's model) · c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a an independent C2/C3 reference · b `CameraCalibration` + `ProfileLookTable` · c per-photo profile · d camera-matching colour out of the box (P-22) |
 | **M10.14** performance & verification | a HSL `cbrt`/`atan2` · b the prefix-cache eviction fix's picture half · c Clarity's coalescing · d the ~10–12 ms drag gap · e a 100k-photo catalog benchmark · f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) |
 | **M10.15** Immich | a API keys in the keychain · b evict cached originals · c read Immich's rating · d two-way sync (re-opened) |
@@ -307,6 +309,12 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
 - ⚠⚠ **A new `Edits` field is `#[serde(default, skip_serializing_if = "<T>::is_default")]`** (M10.11a/b),
   or the default's serialization changes and every rendered preview on disk misses at once.
   `the_fingerprint_is_stable_across_calls_and_pinned` catches it; re-pin only for a deliberate format change.
+- ⚠⚠ **A mask's coverage is folded in THREE places and keyed in THREE** (M10.12a): the folds are
+  `Composite::at` (CPU), `mask_wgsl::coverage_entry` (GPU) and the Show-mask tint; the shape keys are
+  `capture_projection`, `defringe_projection` (prefix) and `TintCache::same_shape`. A new field that
+  changes coverage must reach all six — `same_shape`'s exhaustive destructure forces the tint's choice,
+  the projections are literals without `..`. ⚠ And a missing AI map covers **nothing**, inverted too
+  (`Composite::waits_for_a_map`).
 - ⚠⚠ **A new TAIL stage needs a GPU twin with a `REPLACEABLE` row AND a field set in `accelerate.rs`'s
   `every_tail_stage()`.** That fixture is hand-built: a stage with neither is invisible to
   `every_tail_stage_is_replaceable_or_a_mask`, and the GPU tail silently splits at it.

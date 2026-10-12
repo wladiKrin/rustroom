@@ -32,7 +32,7 @@ and a pointer, not deleted.
 | **M10.9** presets & shortcuts | *Presets: no import/export…* (a, ✅ 2026-10-02); *No user-defined keyboard shortcuts* (b, ✅ 2026-10-10); Lightroom `.xmp` presets, split from (a) by the author 2026-10-02 (c, ✅ 2026-10-11 — the `lr-preset` crate) |
 | **M10.10** export | P-26's image watermark (a, ✅ 2026-10-11) and export sizing (b, ✅ 2026-10-11) |
 | **M10.11** Develop additions | *Film negative inversion* (a, ✅ 2026-10-11); P-26's Grain (b, ✅ 2026-10-12) |
-| **M10.12** the mask model | *Composites are one level deep* (a); masks' scene sliders as offsets (b, `CLAUDE.md`); *Anchor strokes and spots in sensor space* + *Brush strokes shift…* (c, ⏸) |
+| **M10.12** the mask model | *Composites are one level deep* (a — re-scoped 2026-10-12: an op in place, Duplicate, Invert mask, built and awaiting use; nesting itself ⏸ parked on its table); masks' scene sliders as offsets (b, `CLAUDE.md`); *Anchor strokes and spots in sensor space* + *Brush strokes shift…* (c, ⏸) |
 | **M10.13** colour & camera profiles | *C2/C3 have no independent oracle* (a); *`CameraCalibration`…* + `ProfileLookTable` (b); *Per-photo camera profile* (c); P-22 (d) |
 | **M10.14** performance & verification | *What is left in `HslStage`* (a); P-21 (e); *incremental splatting*, *Two Oklab round trips* (f, ⏸); *the u8 wire*, `MAX_TILE_DABS` (g, ⏸) |
 | **M10.15** Immich | the keychain, cached-original eviction, Immich's rating (a–c); *Two-way sync* (d, re-opened) |
@@ -431,11 +431,25 @@ above. Only *anchoring* wants the forward map.
   whether a reorder is one undo step. ⚠ Cheap, and **not** blocked on a design question, which is
   what distinguishes it from most of this file.
 
-- **Composites are one level deep.** → **M10.12a**, re-opened by the author 2026-09-29. A refinement is a *shape*, never another composite, so
-  `radial ∩ (brush ∪ gradient)` is not expressible. Deliberate — it is the nesting the rejected
-  recursive `Mask::Combine` variant would have bought, at the cost of a tree in the panel and a
-  path rather than an integer for every hit-test, drag and coverage-cache index. Revisit only with
-  a real photograph that needs it.
+- ⏸ **Composites are one level deep — PARKED 2026-10-12 on a measured table** (re-opened 2026-09-29 as
+  M10.12a, which the author then re-scoped on this evidence; spec
+  `2026-10-12-m10.12a-mask-composites-design.md`). A refinement is a *shape*, never another composite.
+  ⚠⚠ **The entry's own example was wrong:** since reordering (2026-09-29) `radial ∩ (brush ∪ gradient)`
+  is `brush`, Add `gradient`, Intersect `radial` — exact, partial coverage included, because Intersect
+  is a product. A brute-force search over every order, op and per-shape Invert:
+
+  | Expression | Flat composite |
+  |---|---|
+  | `R ∩ (B ∪ G)`, `A ∪ (B ∩ C)`, `A − (B ∪ C)`, `A ∩ (B − C)` | ✅ by ordering the rows |
+  | `A − (B ∩ C)`, `A − (B − C)` | ⚠ only by inverting every shape (De Morgan) — undiscoverable |
+  | `(A ∪ B) ∩ (C ∪ D)`, `(A ∩ B) ∪ (C ∩ D)`, `(A − B) ∪ (C − D)` | ❌ two compound operands at one op |
+
+  The gap is the last row — two separately refined areas sharing one adjustment — which two masks
+  already do (and Duplicate, M10.12a, now makes cheap). Lightroom is flat too, as far as found. What
+  M10.12a built instead: an op changed in place, Duplicate / Duplicate and invert, a whole-mask Invert.
+  ⚠ **If nesting is ever built, to ANY depth** (the author's call) — one level is a cap to lift later;
+  its cost is a tree in the panel and a path rather than an integer for every hit-test, drag and
+  coverage-cache index. Revisit with a real photograph in the ❌ row.
 - ~~**Auto-mask / edge detection** for the brush.~~ ✅ **2026-09-09, and M7.6 closes with it** — the last M7.6 gap; a dab paints only pixels similar to the one under its centre, gated in Oklab at render time. ⚠ Its coverage is **cached** since 2026-09-09, keyed on what produced the base — see the entry below.
 - ~~**Dehaze over-corrects bright achromatic subjects** — snow, white walls, a white cat read as haze.
   The classic dark-channel-prior artifact, inherent to the model; a real fix needs large-bright-
