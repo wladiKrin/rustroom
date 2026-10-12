@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M10.12b: a mask's scene sliders as offsets, Lightroom's model (2026-10-12)](#2026-10-12--m1012b-a-masks-scene-sliders-as-offsets-lightrooms-model-branch-m1012b-mask-offsets-in-progress)
+- [M10.12b: a mask's scene sliders as offsets, Lightroom's model (2026-10-12)](#2026-10-12--m1012b-a-masks-scene-sliders-as-offsets-lightrooms-model-branch-m1012b-mask-offsets-merged-2026-10-12)
 - [M10.19c: mark several folders, forget them from a right-click menu (2026-10-12)](#2026-10-12--m1019c-mark-several-folders-forget-them-from-a-right-click-menu-branch-m1019c-folder-marks-merged-2026-10-12)
 - [The Library became slow: the rail's per-frame work (2026-10-12)](#2026-10-12--the-library-became-slow-the-rails-per-frame-work-branch-fix-library-rail-speed-merged-2026-10-12)
 - [M10.12a: the flat composite made usable, nesting parked (2026-10-12)](#2026-10-12--m1012a-the-flat-composite-made-usable-nesting-parked-branch-m1012a-mask-composites-merged-2026-10-12)
@@ -168,7 +168,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
-### 2026-10-12 — M10.12b: a mask's scene sliders as offsets, Lightroom's model (branch `m10.12b-mask-offsets`, in progress)
+### 2026-10-12 — M10.12b: a mask's scene sliders as offsets, Lightroom's model (branch `m10.12b-mask-offsets`, merged 2026-10-12)
 
 **Asked for:** the author chose **Lightroom's model, true offsets** — a mask's White Balance, Exposure,
 Contrast and the four tone regions add to the global sliders per pixel, at the global stages' own
@@ -274,7 +274,10 @@ offset is filtered before `scene_only` matters (now one with both).
 **Not changed, and why:** the canvas tint still evaluates a range on the displayed frame with this mask
 held out — other masks remain in it, as before; exact needs the render worker's reference.
 
-**Counts (b2):** 3703 → **3720 tests**.
+**Counts (b2):** 3703 → **3720 tests**; the final review's fix (a slot-fed mask never deposits a gating
+map) made **3721**.
+
+✅ **Confirmed by the author ("works") and merged 2026-10-12.** `MIRED_PER_STEP` stays 1.0, still open to tuning on crops.
 
 ### 2026-10-12 — M10.19c: mark several folders, forget them from a right-click menu (branch `m10.19c-folder-marks`, merged 2026-10-12)
 
