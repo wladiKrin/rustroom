@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M10.12a: the flat composite made usable, nesting parked (2026-10-12)](#2026-10-12--m1012a-the-flat-composite-made-usable-nesting-parked-branch-m1012a-mask-composites)
+- [M10.12a: the flat composite made usable, nesting parked (2026-10-12)](#2026-10-12--m1012a-the-flat-composite-made-usable-nesting-parked-branch-m1012a-mask-composites-merged-2026-10-12)
 - [Handover sweep: every summary re-measured, and what had drifted (2026-10-12)](#2026-10-12--handover-sweep-every-summary-re-measured-and-what-had-drifted)
 - [M10.11b: grain (2026-10-12)](#2026-10-12--m1011b-grain-branch-m1011b-grain-merged-2026-10-12)
 - [M10.11a: film negative inversion (2026-10-11)](#2026-10-11--m1011a-film-negative-inversion-branch-m1011a-film-negative-merged-2026-10-11)
@@ -165,7 +165,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
-### 2026-10-12 — M10.12a: the flat composite made usable, nesting parked (branch `m10.12a-mask-composites`)
+### 2026-10-12 — M10.12a: the flat composite made usable, nesting parked (branch `m10.12a-mask-composites`, merged 2026-10-12)
 
 **Input:** Phase 10's M10.12a, *"Nested composites — `radial ∩ (brush ∪ gradient)`"*. Spec
 `docs/superpowers/specs/2026-10-12-m10.12a-mask-composites-design.md`, plan beside it.
@@ -222,6 +222,8 @@ hover (the sweep), and the right-click helper pressing Primary.
   already declines a missing map. Two tests, each with a positive control (the map answered: it renders).
 - ⚠ The `task-done` ledger line quotes the **last** crate's summary — `0 passed` from a doc-test crate —
   so every total here was summed from the saved log instead.
+
+✅ **Confirmed by the author and merged 2026-10-12.**
 
 **Counts:** 3621 → **3650 tests** (7 ignored), goldens 85 → **87** (74 reference images). Gate green on
 the tip. ⚠ `gpu-pipeline/src/mask.rs` is 712 lines of code (over the ~600 marker; +3 here).
