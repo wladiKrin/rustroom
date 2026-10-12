@@ -136,17 +136,26 @@ impl RustroomApp {
     ///
     /// ⚠ `None` rather than `Some((0, 0))`: "we do not know" and "there is nothing here" lead to
     /// different buttons, and collapsing them would hide the action that loads the list.
+    ///
+    /// ⚠⚠ **Every album row asks on EVERY Library frame**, so the assets are borrowed and counted
+    /// without touching the disk (`immich_source::downloaded_count`). It used to clone the list and
+    /// build catalog entries — a sidecar `stat` per asset — which over 12 albums of 3,538 assets
+    /// was 85% of the Library's UI time (2026-10-12).
     pub(crate) fn immich_downloaded_of(&self, id: &str) -> Option<(usize, usize)> {
-        let assets = self.immich_album_assets(id)?;
-        let paths = self.immich_paths_for(&assets);
-        let have = paths
-            .iter()
-            .filter(|p| {
-                p.file_name()
-                    .is_some_and(|n| self.immich_present.contains(n))
-            })
-            .count();
-        Some((have, paths.len()))
+        // ⚠ With no cache root nothing is downloaded or counted: `Some((0, 0))` for a list in hand,
+        // exactly what the empty path list gave before — never `None`, which means "not in hand".
+        let rooted = self.immich_cache_root().is_some();
+        let count = |assets: &[immich::Asset]| {
+            if rooted {
+                immich_source::downloaded_count(assets, &self.immich_present)
+            } else {
+                (0, 0)
+            }
+        };
+        match self.immich_assets.get(id) {
+            Some(assets) => Some(count(assets)),
+            None => self.immich_cached_album(id).map(|a| count(&a)),
+        }
     }
 
     /// An album's asset list if it is in hand — the session map, then the stored list.
@@ -498,6 +507,39 @@ impl RustroomApp {
 #[cfg(test)]
 mod tests {
     use rustroom_app::immich_list_cache as list_cache;
+
+    /// An image asset named `name` — the ten fields a list reply carries.
+    fn photo(id: &str, name: &str) -> immich::Asset {
+        immich::Asset {
+            id: id.to_string(),
+            asset_type: immich::AssetType::Image,
+            original_file_name: name.to_string(),
+            original_mime_type: None,
+            width: Some(100),
+            height: Some(100),
+            thumbhash: None,
+            file_modified_at: "2025-08-14T09:21:33.000Z".into(),
+            updated_at: "2026-01-01T00:00:00.000Z".into(),
+        }
+    }
+
+    /// The album row's count through the method the rail calls on every frame (2026-10-12): the
+    /// session's list borrowed, one of two photos present — and `None` for a list not in hand,
+    /// which the row turns into a different pair of buttons.
+    #[test]
+    fn an_album_row_counts_its_downloaded_photos() {
+        let mut app = crate::test_app::for_test();
+        app.settings.immich_url = "https://example.invalid".to_string();
+        let (a, b) = (photo("aaa", "A.JPG"), photo("bbb", "B.jpg"));
+        let root = app.immich_cache_root().expect("a URL gives a cache root");
+        let here = rustroom_app::immich_source::cache_path(&root, &a);
+        app.immich_present
+            .insert(here.file_name().unwrap().to_os_string());
+        app.immich_assets.insert("al".to_string(), vec![a, b]);
+
+        assert_eq!(app.immich_downloaded_of("al"), Some((1, 2)));
+        assert_eq!(app.immich_downloaded_of("not-in-hand"), None);
+    }
 
     fn album(id: &str, count: u32, modified: Option<&str>) -> immich::AlbumSummary {
         immich::AlbumSummary {
