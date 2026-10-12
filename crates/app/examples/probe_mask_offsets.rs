@@ -107,8 +107,13 @@ fn main() {
         .to_rgb8()
     };
     let (w, h) = (img.width(), img.height());
-    println!("{w}x{h}, global edit: contrast 25, highlights -50, shadows 30, saturation 15, an S curve");
-    println!("{:<32} {:>9} {:>9} {:>11} {:>9} {:>9}", "case", "mean Δ", "p99 Δ", "pixels >3", "clip G", "clip M");
+    println!(
+        "{w}x{h}, global edit: contrast 25, highlights -50, shadows 30, saturation 15, an S curve"
+    );
+    println!(
+        "{:<32} {:>9} {:>9} {:>11} {:>9} {:>9}",
+        "case", "mean Δ", "p99 Δ", "pixels >3", "clip G", "clip M"
+    );
     for (name, g, m) in &cases {
         let (a, b) = (render(g), render(m));
         let mut d: Vec<u8> = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).collect();

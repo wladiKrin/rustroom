@@ -258,6 +258,10 @@ fn sub_edits(a: &edit_model::LocalAdjustments) -> Edits {
         noise_reduction: _,
         dehaze: _,
         defringe: _,
+        // deliberately not carried — a relative white-balance shift is a scene OFFSET, applied by
+        // `SceneOffsetsStage` at the head of the tail, never one of a mask's sub-stages (M10.12b)
+        temp: _,
+        tint: _,
     } = a;
     Edits {
         exposure: *exposure,

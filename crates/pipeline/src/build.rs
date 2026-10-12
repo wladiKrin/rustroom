@@ -150,6 +150,9 @@ pub fn build_pipeline_split_tapped(
             // ⚠ Likewise a prefix step (M9.6), after geometry — never a tail stage.
             defringe: 0.0,
             white_balance: edits.white_balance,
+            // ⚠ A mask's relative shift (M10.12b); the global white balance above is absolute.
+            temp: 0.0,
+            tint: 0.0,
             exposure: edits.exposure,
             contrast: edits.contrast,
             highlights: edits.highlights,
