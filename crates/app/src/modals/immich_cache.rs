@@ -85,8 +85,16 @@ mod tests {
         let (_d, root) = root_with("clear-all", "a.jpg");
         std::fs::write(root.join("b.RAF"), b"raw").unwrap();
         let mut app = test_app::for_test();
+        app.immich_originals = Some(rustroom_app::immich_cache::Usage {
+            bytes: 7,
+            photos: 2,
+        });
         app.clear_immich_cache(&root);
         assert!(!root.join("a.jpg").exists() && !root.join("b.RAF").exists());
+        assert_eq!(
+            app.immich_originals, None,
+            "Settings would show the old size"
+        );
         assert!(
             rustroom_app::sidecar::path(&root.join("a.jpg")).exists(),
             "the edits went too"

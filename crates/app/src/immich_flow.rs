@@ -318,6 +318,7 @@ impl RustroomApp {
     pub(crate) fn clear_immich_cache(&mut self, root: &std::path::Path) {
         let paths = rustroom_app::immich_cache::downloads(root);
         self.remove_downloaded(&paths);
+        self.immich_originals = None;
     }
 
     /// Once, after bootstrap: offer to clear when Immich is connected, the warning is on and the

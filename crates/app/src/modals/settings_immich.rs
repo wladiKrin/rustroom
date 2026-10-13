@@ -16,6 +16,12 @@ pub(super) struct Tab<'a> {
     pub test: &'a mut Option<Result<String, String>>,
     pub key_home: rustroom_app::secrets::KeyHome,
     pub thumb_bytes: &'a mut Option<u64>,
+    /// The downloaded originals, measured once per opening (M10.15b).
+    pub originals: &'a mut Option<rustroom_app::immich_cache::Usage>,
+    /// Where this server's originals are cached; `None` with no server URL.
+    pub root: Option<std::path::PathBuf>,
+    /// For **Clear…**, which opens the Clear dialog in this window's place.
+    pub modal: &'a mut crate::Modal,
 }
 
 /// The tab's body.
@@ -152,5 +158,116 @@ pub(super) fn show(ui: &mut egui::Ui, d: &mut SettingsDraft, t: Tab<'_>) {
                 .text("MB budget"),
         )
         .hover("Sets how much disk space Immich thumbnails may use");
+        ui.add_space(GAP);
+        theme::sub_label(ui, "Downloaded originals");
+        // ⚠ Measured once per opening, never in the body's sixty-a-second redraw — the thumbnail
+        // row's rule.
+        let usage = match &t.root {
+            Some(r) => *t
+                .originals
+                .get_or_insert_with(|| rustroom_app::immich_cache::usage(r)),
+            None => rustroom_app::immich_cache::Usage::default(),
+        };
+        ui.horizontal(|ui| {
+            ui.label(rustroom_app::immich_cache::size_line(usage));
+            // ⚠ Asks first, unlike the thumbnails' Clear: an original costs a real download to get
+            // back.
+            if ui
+                .add_enabled(usage.photos > 0, egui::Button::new("Clear…"))
+                .hover("Asks before deleting the downloaded originals, which download again when opened")
+                .clicked()
+            {
+                if let Some(root) = t.root.clone() {
+                    *t.modal = crate::Modal::ImmichCache {
+                        startup: false,
+                        root,
+                        usage,
+                    };
+                }
+            }
+        });
+        ui.add(
+            egui::Slider::new(&mut d.immich_cache_limit_gb, 1..=1000)
+                .logarithmic(true)
+                .text("GB limit"),
+        )
+        .hover("Sets the download size past which Rustroom warns at startup");
+        ui.checkbox(
+            &mut d.immich_cache_warn,
+            "Warn at startup when downloads exceed the limit",
+        )
+        .hover("Offers to clear the downloads at startup once they pass the limit");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{test_app, test_ui, Modal};
+    use rustroom_app::immich_cache::Usage;
+
+    fn draw(
+        ui: &mut egui::Ui,
+        app: &mut crate::RustroomApp,
+        d: &mut SettingsDraft,
+        root: &std::path::Path,
+        modal: &mut Modal,
+        originals: &mut Option<Usage>,
+    ) {
+        show(
+            ui,
+            d,
+            Tab {
+                immich: &mut app.immich,
+                test: &mut app.immich_test,
+                key_home: app.settings_store.key_home(),
+                thumb_bytes: &mut app.immich_thumb_cache_bytes,
+                originals,
+                root: Some(root.to_path_buf()),
+                modal,
+            },
+        );
+    }
+
+    #[test]
+    fn clear_opens_the_dialog_with_what_was_measured() {
+        let dir = test_dir::TempDir::new("settings-immich-clear");
+        std::fs::write(dir.path().join("a.jpg"), b"jpeg").unwrap();
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        // ⚠ Pre-filled, so the thumbnail row does not size the real Immich thumbnail cache.
+        app.immich_thumb_cache_bytes = Some(0);
+        let mut d = SettingsDraft::from_settings(&app.settings);
+        assert!(
+            d.immich_enabled,
+            "fixture: the section shows only when Immich is on"
+        );
+        let (mut modal, mut originals) = (Modal::None, None);
+        test_ui::click(&ctx, "Clear…", |ui| {
+            draw(ui, &mut app, &mut d, dir.path(), &mut modal, &mut originals)
+        });
+        assert!(matches!(
+            &modal,
+            Modal::ImmichCache { startup: false, usage, .. } if usage.photos == 1
+        ));
+        assert!(
+            dir.path().join("a.jpg").exists(),
+            "Clear… must ask, not delete"
+        );
+    }
+
+    #[test]
+    fn with_nothing_downloaded_clear_opens_nothing() {
+        let dir = test_dir::TempDir::new("settings-immich-empty");
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        app.immich_thumb_cache_bytes = Some(0);
+        let mut d = SettingsDraft::from_settings(&app.settings);
+        let (mut modal, mut originals) = (Modal::None, None);
+        test_ui::click(&ctx, "Clear…", |ui| {
+            draw(ui, &mut app, &mut d, dir.path(), &mut modal, &mut originals)
+        });
+        assert!(matches!(modal, Modal::None));
+        assert_eq!(originals, Some(Usage::default()));
     }
 }

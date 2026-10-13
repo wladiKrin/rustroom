@@ -54,6 +54,8 @@ pub struct SettingsDraft {
     pub(super) immich_upload_key: String,
     thumb_budget_mb: u32,
     pub(super) immich_thumb_budget_mb: u32,
+    pub(super) immich_cache_limit_gb: u32,
+    pub(super) immich_cache_warn: bool,
     preview_demosaic: Option<raw_decode::Demosaic>,
     preview_budget_mb: u32,
     /// Settings → Keyboard (M10.9b).
@@ -124,6 +126,8 @@ impl SettingsDraft {
             immich_upload_key: s.immich_upload_key.clone(),
             thumb_budget_mb: s.thumb_budget_mb,
             immich_thumb_budget_mb: s.immich_thumb_budget_mb,
+            immich_cache_limit_gb: s.immich_cache_limit_gb,
+            immich_cache_warn: s.immich_cache_warn,
             preview_demosaic: s.preview_demosaic,
             preview_budget_mb: s.preview_budget_mb,
             keyboard: super::settings_keyboard::KeyboardDraft::from(&s.shortcuts),
@@ -253,6 +257,14 @@ impl SettingsDraft {
             app.settings.immich_thumb_budget_mb = self.immich_thumb_budget_mb;
             plain = true;
         }
+        if self.immich_cache_limit_gb != app.settings.immich_cache_limit_gb {
+            app.settings.immich_cache_limit_gb = self.immich_cache_limit_gb;
+            plain = true;
+        }
+        if self.immich_cache_warn != app.settings.immich_cache_warn {
+            app.settings.immich_cache_warn = self.immich_cache_warn;
+            plain = true;
+        }
         if self.preview_demosaic != app.settings.preview_demosaic {
             app.settings.preview_demosaic = self.preview_demosaic;
             plain = true;
@@ -308,6 +320,13 @@ impl SettingsDraft {
 
 /// The Settings window: preferences that survive a restart.
 pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
+    // ⚠ No draft means the window has just opened — from any route — so the downloads are measured
+    // afresh (M10.15b); a return from the Clear dialog keeps the draft and the measurement.
+    if app.settings_draft.is_none() {
+        app.immich_originals = None;
+    }
+    // Before the dialog: it holds `&mut app.settings`, and this reads them.
+    let immich_root = app.immich_cache_root();
     let mut d = app
         .settings_draft
         .take()
@@ -729,6 +748,9 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         test: &mut app.immich_test,
                         key_home: app.settings_store.key_home(),
                         thumb_bytes: &mut app.immich_thumb_cache_bytes,
+                        originals: &mut app.immich_originals,
+                        root: immich_root.clone(),
+                        modal: &mut app.modal,
                     },
                 ),
             }
@@ -802,6 +824,53 @@ mod tests {
             "Apply must close the dialog"
         );
         assert!(app.settings_draft.is_none(), "and drop the draft");
+    }
+
+    /// M10.15b: the download limit and its warning land on Apply, and reach the file.
+    #[test]
+    fn the_download_limit_and_its_warning_land_on_apply() {
+        let (ctx, mut app) = open_settings();
+        settle(&ctx, &mut app);
+        let d = app
+            .settings_draft
+            .as_mut()
+            .expect("the draft exists once shown");
+        d.immich_cache_limit_gb = 25;
+        d.immich_cache_warn = false;
+        assert_eq!(app.settings.immich_cache_limit_gb, 10, "not before Apply");
+        test_ui::click(&ctx, "Apply", |_| show(&mut app, &ctx));
+        assert_eq!(app.settings.immich_cache_limit_gb, 25);
+        assert!(!app.settings.immich_cache_warn);
+        assert_eq!(
+            app.settings_store.load().immich_cache_limit_gb,
+            25,
+            "not saved"
+        );
+    }
+
+    /// M10.15b: the downloads are measured afresh each time the window opens — not on a return from
+    /// the Clear dialog, which keeps the draft, and never per frame.
+    #[test]
+    fn opening_settings_drops_the_last_measurement_of_the_downloads() {
+        use rustroom_app::immich_cache::Usage;
+        let stale = Usage {
+            bytes: 1,
+            photos: 1,
+        };
+        let (ctx, mut app) = open_settings();
+        app.immich_originals = Some(stale);
+        settle(&ctx, &mut app);
+        assert_eq!(
+            app.immich_originals, None,
+            "a stale size survived the opening"
+        );
+        app.immich_originals = Some(stale);
+        settle(&ctx, &mut app);
+        assert_eq!(
+            app.immich_originals,
+            Some(stale),
+            "re-measured on a frame that was not an opening"
+        );
     }
 
     #[test]
