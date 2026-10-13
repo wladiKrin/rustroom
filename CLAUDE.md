@@ -166,9 +166,9 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 184 sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-10-12)
+### State (2026-10-13)
 
-**3731 tests** (8 ignored), **87 golden tests** (74 reference images — `cargo test --workspace --test golden`),
+**3747 tests** (9 ignored), **87 golden tests** (74 reference images — `cargo test --workspace --test golden`),
 gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
@@ -209,6 +209,10 @@ that had grown to ~170 lines by appending.)
   views but never an absent local one; `asset.upload` is a grant separate from `asset.update` (upload
   rides `immich_upload_key`); never delete a staged file on an upload *attempt*; no mtime fallback for
   the upload date; `Settings.immich_enabled` is read only through `immich_source::connection`.
+  ⚠⚠ **The two Immich keys live in the OS keychain** (M10.15a, `rustroom_app::secrets`): only
+  `SettingsStore::user_default()` reaches it — `new(path)`, every test's, never does; keys in the file
+  are always the newest; writes are on a background thread. On macOS `cargo run` signs `Rustroom` with
+  the local "Rustroom Dev" identity (`scripts/macos-run.sh`) so the keychain's access survives rebuilds.
   ⛔ Two-way sync was DECLINED 2026-09-24 with reasons; the author re-opened it as **M10.15d** on
   2026-09-29 — start from `docs/BACKLOG.md`'s reasons table. ⚠ The server is a **Tailscale Funnel**: a stopped
   Tailscale on the Mac is never the cause of an Immich error.
@@ -231,7 +235,7 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.12b** (table above).
 
-**▶ NEXT: M10.15a — the Immich API keys in the OS keychain.** M10.14: a, c ⛔ withdrawn; b, d, e ✅;
+**▶ IN REVIEW: M10.15a — the Immich API keys in the OS keychain**, branch `m10.15a-immich-keychain`; after it **M10.15b**. M10.14: a, c ⛔ withdrawn; b, d, e ✅;
 f, h ⏸ parked; g ⏸ blocked. M10.13 left open by the author (a ⏸, b/c folded into d).
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
@@ -245,7 +249,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | **M10.12** the mask model | c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · d camera-matching colour out of the box (P-22), **with b's `ProfileLookTable` and c's per-photo profile folded in** (re-scoped 2026-10-12: neither changes a photo until d brings such a profile; b's `CameraCalibration` ⛔ withdrawn — a DNG-file tag, never in a profile) |
 | **M10.14** performance & verification | a ⛔ HSL `cbrt`/`atan2` (withdrawn 2026-10-12: the preview runs HSL on the GPU; ~1% of an export) · b ✅ the prefix-cache eviction fix's picture half (a test, 2026-10-12) · c ⛔ Clarity's coalescing (withdrawn 2026-10-12: a tiled, coalesced pass measured no faster — the floor is not coalescing) · d ✅ the ~10–12 ms drag gap (2026-10-13: mostly the probe's tiny angle sweep, ~5 ms the window's drawing; the gather tiled 8×8) · e ✅ a 100k-photo catalog benchmark (2026-10-13: `catalog_scale`; All Photos 204 → 3.8 s at 100k) · f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h ⏸ the reference photo on the GPU (parked 2026-10-13 until a need shows — 1 of 74 photos; 111–125 ms at 3200, numbers in the backlog) |
-| **M10.15** Immich | a API keys in the keychain · b evict cached originals · c read Immich's rating · d two-way sync (re-opened) |
+| **M10.15** Immich | a ✅ API keys in the keychain (in review, 2026-10-13) · b evict cached originals · c read Immich's rating · d two-way sync (re-opened) |
 | **M10.16** AI tools | a depth masks · b AI denoise · c content-aware remove |
 | **M10.17** merge | a HDR · b panorama |
 | **M10.18** new modules | a tethering · b GPS and a map · c people tagging · d publish services · e print |

@@ -41,6 +41,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 dirs = { workspace = true }
 chrono = "0.4.45"
+# ⚠ M10.15a: the Immich keys in the OS credential store. The default `v1` feature is macOS Keychain,
+# Windows Credential Manager and a pure-Rust (zbus) Secret Service — no libdbus on Linux.
+keyring = "4.2"
 rayon.workspace = true
 # ⚠ Was a dev-dependency until M8.2. `thumb_store` encodes the cache payload as JPEG, which is
 # production code, so it moved up. No new crate enters the tree: `image` is already a dependency
