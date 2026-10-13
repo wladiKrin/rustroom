@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M10.15c: Immich's own rating and favourite, filled once (2026-10-13)](#2026-10-13--m1015c-immichs-own-rating-and-favourite-filled-once-branch-m1015c-immich-rating)
+- [M10.15c: Immich's own rating and favourite, filled once (2026-10-13)](#2026-10-13--m1015c-immichs-own-rating-and-favourite-filled-once-branch-m1015c-immich-rating-merged-2026-10-13)
 - [M10.15b: clear the Immich downloads, and a soft limit that warns at startup (2026-10-13)](#2026-10-13--m1015b-clear-the-immich-downloads-and-a-soft-limit-that-warns-at-startup-branch-m1015b-immich-cache-clear-merged-2026-10-13)
 - [M10.15a: the Immich API keys in the OS keychain (2026-10-13)](#2026-10-13--m1015a-the-immich-api-keys-in-the-os-keychain-branch-m1015a-immich-keychain-merged-2026-10-13)
 - [M10.14e: the catalog at 100,000 photos — measured, and two quadratic shapes removed (2026-10-13)](#2026-10-13--m1014e-the-catalog-at-100000-photos--measured-and-two-quadratic-shapes-removed-branch-m1014e-catalog-scale-merged-2026-10-13)
@@ -175,7 +175,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
-### 2026-10-13 — M10.15c: Immich's own rating and favourite, filled once (branch `m10.15c-immich-rating`)
+### 2026-10-13 — M10.15c: Immich's own rating and favourite, filled once (branch `m10.15c-immich-rating`, merged 2026-10-13)
 
 **The item:** stars and favourites set in Immich's own apps never reached Rustroom. The read half of the
 two-way sync (M10.15d stays open) — **never written back**. Spec and plan `2026-10-13-m10.15c-*`.
@@ -212,6 +212,7 @@ at 1. ⚠ Four fill tests passed against a stub that filled nothing — they ass
 proven by the sabotages instead.
 
 **Counts:** 3764 → **3781 tests** (9 ignored).
+✅ **Confirmed by the author ("works") and merged 2026-10-13.**
 
 ### 2026-10-13 — M10.15b: clear the Immich downloads, and a soft limit that warns at startup (branch `m10.15b-immich-cache-clear`, merged 2026-10-13)
 
