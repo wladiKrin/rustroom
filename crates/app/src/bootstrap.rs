@@ -252,6 +252,8 @@ impl RustroomApp {
         // file exists — a 350 KB read — and when it does not, the ~2.9 s happens on the worker while
         // the grid shows both halves.
         app.load_immich_stacks();
+        // M10.15b: the soft limit's warning — one directory listing, ~3 ms for 1,000 photos.
+        app.check_immich_cache_at_startup();
         app
     }
 }
