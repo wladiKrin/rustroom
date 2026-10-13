@@ -85,6 +85,7 @@ pub mod reveal;
 pub mod rule;
 pub mod rule_form;
 pub mod safe_name;
+pub mod secrets;
 pub mod selection;
 pub mod settings;
 pub mod shortcuts;
