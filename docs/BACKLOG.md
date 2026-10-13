@@ -1504,7 +1504,8 @@ its stack table; **neither has ever been added**, and that table now records so.
 *Two-way sync — declined* below before re-proposing anything that writes to the server. ⚠ **2026-09-29:
 the author re-opened two-way sync as M10.15d**, and brought the three smaller gaps into scope — the OS
 keychain (the API keys are **plaintext** in `settings.json`) **M10.15a**, **automatic** eviction of cached
-originals (slice 4 built the *manual* half) **M10.15b**, and reading Immich's own `rating`/`isFavorite`
+originals (slice 4 built the *manual* half) **M10.15b** — re-scoped 2026-10-13 by the author to a Clear
+cache and a soft limit, ⛔ no automatic eviction — and reading Immich's own `rating`/`isFavorite`
 **M10.15c**.
 
 The user self-hosts an **Immich** server holding all their photos, and wants to open them in
@@ -1766,8 +1767,9 @@ vanish. The downloaded folder **stays visible**, renamed *"Downloaded photos"*, 
 replaced too** — the path itself says "immich" and names the server. ⚠ That withholds where the files
 are, accepted because the requirement was explicit. `grep -n 'completely optional' docs/JOURNAL.md`.
 
-⬜ **Still open:** deleting or evicting caches on disable (nothing is deleted today) → **M10.15b**, and the
-OS keychain → **M10.15a**.
+✅ **Both closed (2026-10-13).** Caches on disable → **M10.15b**: they stay ("hide", as leaned above) —
+the author chose a **Clear cache** and a soft limit over any automatic deletion. The OS keychain →
+**M10.15a**.
 
 **Status:** ✅ built 2026-09-24 (the heading's). As first recorded — ⬜ wanted, unblocked, not specced. The user's words: *"the whole immich integration should in
 the end be completely optional … a toggle in the immich header in settings with which one can completely
@@ -1850,8 +1852,11 @@ the most time in this integration were both invisible in the OpenAPI schema.
   survives rebuilds. As recorded: Rustroom has never stored a secret.
   An API key in `settings.json` in plaintext is the easy path and probably not the right one; the
   OS keychain is right and is platform-specific work.
-- **Duplicated storage.** → **M10.15b**. A cached RAW is a second copy — fine for a working set, needs an eviction
-  policy if it becomes a library. `BufferCache`'s LRU is the precedent.
+- ✅ **Duplicated storage.** → **M10.15b**, done 2026-10-13 — **re-scoped by the author: ⛔ no automatic
+  eviction.** Instead Settings → Immich shows the downloaded originals' size with a **Clear…** (the
+  originals only — edits, marks and thumbnails stay), and a **soft limit** (default 10 GB) past which a
+  dialog at startup offers to clear, switchable off. As recorded: a cached RAW is a second copy — fine
+  for a working set, needs a policy if it becomes a library.
 - **It expands what Rustroom is.** Every planning note says "local files, originals never modified,
   Linux first". A network dependency is a genuine change of character — not wrong, but worth
   deciding deliberately rather than sliding into.
