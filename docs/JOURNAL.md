@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M10.15a: the Immich API keys in the OS keychain (2026-10-13)](#2026-10-13--m1015a-the-immich-api-keys-in-the-os-keychain-branch-m1015a-immich-keychain)
+- [M10.15a: the Immich API keys in the OS keychain (2026-10-13)](#2026-10-13--m1015a-the-immich-api-keys-in-the-os-keychain-branch-m1015a-immich-keychain-merged-2026-10-13)
 - [M10.14e: the catalog at 100,000 photos — measured, and two quadratic shapes removed (2026-10-13)](#2026-10-13--m1014e-the-catalog-at-100000-photos--measured-and-two-quadratic-shapes-removed-branch-m1014e-catalog-scale-merged-2026-10-13)
 - [M10.14d: the app-vs-probe drag gap, decomposed — and the geometry gather tiled (2026-10-13)](#2026-10-13--m1014d-the-app-vs-probe-drag-gap-decomposed--and-the-geometry-gather-tiled-branch-m1014d-geometry-tiles-merged-2026-10-13)
 - [M10.14c: Clarity's "coalescing" — a spike, withdrawn on its kill rule (2026-10-12)](#2026-10-12--m1014c-claritys-coalescing--a-spike-withdrawn-on-its-kill-rule)
@@ -173,7 +173,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
-### 2026-10-13 — M10.15a: the Immich API keys in the OS keychain (branch `m10.15a-immich-keychain`)
+### 2026-10-13 — M10.15a: the Immich API keys in the OS keychain (branch `m10.15a-immich-keychain`, merged 2026-10-13)
 
 **The item:** both Immich keys — the read-only browse key and the upload-capable one — sat in plaintext
 in `settings.json` (`-rw-r--r--`). The author chose the OS keychain, read once per launch (of three:
@@ -220,6 +220,8 @@ were already sent skips — each write may be one more password prompt.
 sabotaged (no lock → both red, no skip → the skip test red).
 
 **Counts:** 3731 → **3747 tests** (9 ignored — the real-keychain round trip the new one, run by hand).
+✅ **Confirmed by the author ("works") and merged 2026-10-13** — the first launch moved both keys into the
+keychain with no dialog (the app created the item), and the file's key fields are empty.
 
 ### 2026-10-13 — M10.14e: the catalog at 100,000 photos — measured, and two quadratic shapes removed (branch `m10.14e-catalog-scale`, merged 2026-10-13)
 
