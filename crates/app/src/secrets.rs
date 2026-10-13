@@ -110,6 +110,7 @@ pub struct Memory {
     fail_reads: AtomicBool,
     fail_writes: AtomicBool,
     writes: AtomicUsize,
+    attempts: AtomicUsize,
 }
 
 impl Memory {
@@ -136,6 +137,11 @@ impl Memory {
         self.writes.load(Ordering::SeqCst)
     }
 
+    /// How many writes were tried, refused ones included.
+    pub fn attempts(&self) -> usize {
+        self.attempts.load(Ordering::SeqCst)
+    }
+
     pub fn item(&self) -> Option<Keys> {
         self.item.lock().unwrap().clone()
     }
@@ -150,6 +156,7 @@ impl SecretStore for Memory {
     }
 
     fn write(&self, keys: &Keys) -> Result<(), SecretError> {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
         if self.fail_writes.load(Ordering::SeqCst) {
             return Err(SecretError("writing was refused".into()));
         }
