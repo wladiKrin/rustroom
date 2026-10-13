@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.15b: clear the Immich downloads, and a soft limit that warns at startup (2026-10-13)](#2026-10-13--m1015b-clear-the-immich-downloads-and-a-soft-limit-that-warns-at-startup-branch-m1015b-immich-cache-clear)
 - [M10.15a: the Immich API keys in the OS keychain (2026-10-13)](#2026-10-13--m1015a-the-immich-api-keys-in-the-os-keychain-branch-m1015a-immich-keychain-merged-2026-10-13)
 - [M10.14e: the catalog at 100,000 photos — measured, and two quadratic shapes removed (2026-10-13)](#2026-10-13--m1014e-the-catalog-at-100000-photos--measured-and-two-quadratic-shapes-removed-branch-m1014e-catalog-scale-merged-2026-10-13)
 - [M10.14d: the app-vs-probe drag gap, decomposed — and the geometry gather tiled (2026-10-13)](#2026-10-13--m1014d-the-app-vs-probe-drag-gap-decomposed--and-the-geometry-gather-tiled-branch-m1014d-geometry-tiles-merged-2026-10-13)
@@ -173,6 +174,42 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-10-13 — M10.15b: clear the Immich downloads, and a soft limit that warns at startup (branch `m10.15b-immich-cache-clear`)
+
+**The item, and the author's re-scope:** "a budget and eviction for cached originals" — opening an Immich
+photo or pressing Download keeps a full copy, and nothing removed them but Remove downloads on a
+selection. Measured first: **74 MB** — 21 originals, every one with a sidecar, plus 8 sidecars of
+removed ones; every file's access time read 2026-10-01 (a sweep had read them all), so an LRU would have
+had to keep its own record. The author then **declined automatic eviction** ⛔ and asked for a **Clear
+cache** and a **soft limit** warned about at startup, settable, the warning switchable. Choices, his:
+the originals only (not the list cache or thumbnails); a dialog rather than a status message; 10 GB.
+Spec and plan `2026-10-13-m10.15b-*`.
+
+**Built:**
+- **`immich_cache`** (lib): `Usage`, `usage` and `downloads` — one `read_dir`, `catalog::is_supported`
+  only, so a sidecar, a `.part` or a `.DS_Store` is never counted or removed (**~3 ms for 1,000 photos
+  and 500 sidecars**, measured); `warn_at_startup` (connected, on, **strictly** over); the size line and
+  the dialog's words, decimal units like `photo_info::format_bytes`.
+- **Settings:** `immich_cache_limit_gb` (10) and `immich_cache_warn` (true), no field-level serde
+  default — an old file gets 10 and true, pinned.
+- **One dialog, two ways in** (`modals/immich_cache.rs`): at startup *Don't warn again · Not now · Clear
+  cache*; from Settings *Cancel · Clear cache*, returning to Settings with its draft. **Clear goes through
+  `remove_downloaded`** — the open photo's edits saved, Develop emptied, the ↓ refreshed.
+- **Settings → Immich** moved to its own module (`settings.rs` **867 → 737** lines of code and doc; 31
+  comment lines out, 31 in) and gained *Downloaded originals*: the size, **Clear…** (disabled with nothing
+  downloaded), the GB-limit slider (1–1000, logarithmic) and the warning's tick box. Measured afresh when
+  the window opens — detected by the missing draft, so no list of openers — and dropped by a clear.
+- In passing: the two key fields' docs still said "stored in plaintext" — false since M10.15a.
+- ⚠ Its launch asked for the login password: M10.15a's signing does not survive a rebuild after all —
+  retracted in M10.15a's entry, and accepted by the author as one prompt per rebuild.
+
+**Sabotages, every one red:** `>=` for `>`; no `is_supported` filter; a field-level serde default (0 GB);
+the startup check ignoring "connected"; the clear bypassing `remove_downloaded` (the open photo kept);
+Don't warn again not saved; Apply forgetting the limit; Clear… enabled with nothing downloaded; no
+re-measure on opening; a clear keeping the old size.
+
+**Counts:** 3747 → **3764 tests** (9 ignored).
+
 ### 2026-10-13 — M10.15a: the Immich API keys in the OS keychain (branch `m10.15a-immich-keychain`, merged 2026-10-13)
 
 **The item:** both Immich keys — the read-only browse key and the upload-capable one — sat in plaintext
@@ -202,8 +239,12 @@ had mistyped the password once. Two consequences, both the author's option 2:
   certificate, **"Rustroom Dev"**, in Keychain Access (his step — a security setting); on macOS
   `cargo run` now goes through `scripts/macos-run.sh` (`.cargo/config.toml`), which signs the binary
   named `Rustroom` with it and the identifier `com.rustroom.dev`. Its designated requirement —
-  `identifier "com.rustroom.dev" and certificate leaf = H"17fa1b82…"` — does not change between builds,
-  so "Always Allow" survives rebuilds. Tests, examples, CI and a Mac without the identity run as before.
+  `identifier "com.rustroom.dev" and certificate leaf = H"17fa1b82…"` — does not change between builds.
+  Tests, examples, CI and a Mac without the identity run as before. ⚠⚠ **Retracted 2026-10-13, at
+  M10.15b's launch: rebuilds still prompt once.** The item's access list trusts that requirement, but its
+  *partition list* holds `cdhash:` entries — a self-signed certificate has no Team ID — so each rebuild's
+  new hash asks for the login password again (read from `security dump-keychain -a`). The author accepted
+  one prompt per rebuild; a Team ID (a free Apple Development certificate) would end it.
 
 **Sabotages, every one red** (after one was made to be): the keychain written on every save; a failed
 read writing an empty item; the file blanked before the keychain write — ⚠ **missed at first**, the save

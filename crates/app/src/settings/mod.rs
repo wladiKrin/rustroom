@@ -371,10 +371,9 @@ pub struct Settings {
     pub immich_url: String,
     /// The Immich API key.
     ///
-    /// ⚠⚠ **Stored in plaintext**, accepted deliberately for the first Immich slice with the OS
-    /// keychain as the named follow-up. Read and written only through
-    /// [`crate::immich_source::connection`] and [`crate::immich_source::set_connection`], so
-    /// moving it to a keychain is a change to one file.
+    /// ⚠⚠ **In the OS keychain, not this file** (M10.15a): `SettingsStore` moves it there and keeps
+    /// it in `settings.json` only where no keychain takes it — see `crate::secrets`. Read and written
+    /// only through [`crate::immich_source::connection`] and [`crate::immich_source::set_connection`].
     ///
     /// ⚠ The Settings field's help text tells the user to paste a **read-only** key
     /// (`asset.read`, `asset.view`, `asset.download`, `album.read`). A key that cannot write
@@ -390,8 +389,7 @@ pub struct Settings {
     /// ⚠ `asset.upload` is a grant *separate from* `asset.update` (verified against the 3.2.0
     /// permission enum, 168 values), so even this key **cannot modify or delete** existing assets.
     ///
-    /// ⚠ Plaintext, like [`Self::immich_key`]. The OS keychain remains out of scope by decision —
-    /// and a write-capable key in plaintext deserves the warning more, so the help text says so.
+    /// ⚠ Kept with [`Self::immich_key`] in the one keychain item (M10.15a).
     ///
     /// Empty means uploading is unavailable; see [`crate::immich_upload::availability`].
     pub immich_upload_key: String,
@@ -410,6 +408,15 @@ pub struct Settings {
     /// ⚠ A separate budget on a separate directory, so neither sweep can evict the other's
     /// entries.
     pub immich_thumb_budget_mb: u32,
+    /// The soft limit on the downloaded Immich originals, in whole GB of 10⁹ bytes (M10.15b): past
+    /// it, a dialog at startup offers to clear them. ⛔ Nothing is ever removed automatically.
+    ///
+    /// ⚠ No field-level `#[serde(default)]` — `thumb_budget_mb`'s trap: `u32`'s 0 would warn at
+    /// every launch.
+    pub immich_cache_limit_gb: u32,
+    /// Whether startup warns when the downloads exceed [`Self::immich_cache_limit_gb`]. ⚠ No
+    /// field-level default either: `bool`'s `false` would switch the warning off on upgrade.
+    pub immich_cache_warn: bool,
     /// Demosaic tier for **rendered previews** (M9.14). `None` follows [`Self::view_demosaic`],
     /// so a preview matches what Develop shows at 1:1; a lower tier is a cost choice — on an
     /// X-T4 a frame decodes in 16 s at Better, 7 s at Fast, 3 s at Fastest (measured 2026-09-28).
@@ -457,6 +464,8 @@ impl Default for Settings {
             immich_upload_key: String::new(),
             thumb_budget_mb: 5120,
             immich_thumb_budget_mb: 5120,
+            immich_cache_limit_gb: 10,
+            immich_cache_warn: true,
             preview_demosaic: None,
             preview_budget_mb: 10240,
             confirm_preset_delete: true,

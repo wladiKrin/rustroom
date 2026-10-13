@@ -34,12 +34,14 @@ pub mod edits;
 pub mod export;
 mod export_size;
 mod export_watermark;
+mod immich_cache;
 pub mod import;
 pub mod info;
 pub mod presets;
 pub mod rename;
 pub mod rule_edit;
 pub mod settings;
+mod settings_immich;
 mod settings_keyboard;
 mod settings_layout;
 
@@ -137,6 +139,13 @@ pub enum Modal {
         folders: usize,
         photos: i64,
     },
+    /// Clearing the downloaded Immich originals (M10.15b) — at startup over the soft limit, or asked
+    /// from Settings → Immich, which it returns to. `root` and `usage` are fixed when it opens.
+    ImmichCache {
+        startup: bool,
+        root: std::path::PathBuf,
+        usage: rustroom_app::immich_cache::Usage,
+    },
     /// Confirming a keyword deletion that would take descendants or assignments with it.
     ///
     /// ⚠ Opened **only** when it would; a bare leaf is deleted outright. See `DeleteKeyword`.
@@ -212,6 +221,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         ConfirmDelete,
         ConfirmDeleteFolder,
         ConfirmForget,
+        ImmichCache,
         ConfirmDeleteKeyword,
         ConfirmMergeKeyword,
         PhotoInfo,
@@ -236,6 +246,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::ConfirmDeletePreset { .. } => Which::ConfirmDelete,
         Modal::ConfirmDeletePresetFolder { .. } => Which::ConfirmDeleteFolder,
         Modal::ConfirmForgetFolders { .. } => Which::ConfirmForget,
+        Modal::ImmichCache { .. } => Which::ImmichCache,
         Modal::ConfirmDeleteKeyword { .. } => Which::ConfirmDeleteKeyword,
         Modal::ConfirmMergeKeyword { .. } => Which::ConfirmMergeKeyword,
         Modal::PhotoInfo { .. } => Which::PhotoInfo,
@@ -262,6 +273,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::ConfirmDelete => presets::confirm_delete(app, ctx),
         Which::ConfirmDeleteFolder => presets::confirm_delete_folder(app, ctx),
         Which::ConfirmForget => confirm_forget_folder(app, ctx),
+        Which::ImmichCache => immich_cache::show(app, ctx),
         Which::ConfirmDeleteKeyword => confirm_delete_keyword(app, ctx),
         Which::ConfirmMergeKeyword => confirm_merge_keyword(app, ctx),
         Which::PhotoInfo => info::show(app, ctx),

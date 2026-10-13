@@ -214,6 +214,7 @@ pub fn for_test() -> RustroomApp {
         modal: Modal::None,
         thumb_cache_bytes: None,
         immich_thumb_cache_bytes: None,
+        immich_originals: None,
         preview_cache_bytes: None,
         settings_draft: None,
         actions: ActionLog::default(),

@@ -120,7 +120,7 @@ impl SettingsStore {
     /// leaves the keys as the file has them, writing and deleting nothing.
     ///
     /// ⚠ The READ is synchronous: the keys are needed to connect, and on macOS its access prompt —
-    /// once per build of an ad-hoc-signed app — comes before the window. Writes are not; see `save`.
+    /// once per build of an app without a Team ID — comes before the window. Writes are not; see `save`.
     ///
     /// ⚠ With a keychain every call reads it or starts a write, so the app calls this ONCE, at
     /// startup (`bootstrap`); the other callers are tests, on `new`.

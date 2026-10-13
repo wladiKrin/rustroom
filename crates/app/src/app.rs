@@ -434,6 +434,9 @@ pub(crate) struct RustroomApp {
     /// ⚠ Its own field rather than a sum: the two caches have separate budgets, so a single number
     /// could not tell you which one is full.
     pub(crate) immich_thumb_cache_bytes: Option<u64>,
+    /// The downloaded Immich originals, measured when Settings opens (M10.15b) and dropped by a
+    /// clear, so the next look re-measures.
+    pub(crate) immich_originals: Option<rustroom_app::immich_cache::Usage>,
     /// The rendered-preview cache's size, computed when the Settings dialog opens (M9.14).
     pub(crate) preview_cache_bytes: Option<u64>,
     /// The Settings dialog's draft while it is open — applied on Apply, dropped on Cancel.

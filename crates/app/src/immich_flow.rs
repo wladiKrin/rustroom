@@ -313,6 +313,45 @@ impl RustroomApp {
         };
     }
 
+    /// Clear every downloaded original of the server cached at `root` — Remove downloads applied to
+    /// all of them (M10.15b), so the open photo, the sidecars and the grid's ↓ are handled the same.
+    pub(crate) fn clear_immich_cache(&mut self, root: &std::path::Path) {
+        let paths = rustroom_app::immich_cache::downloads(root);
+        self.remove_downloaded(&paths);
+        self.immich_originals = None;
+    }
+
+    /// Once, after bootstrap: offer to clear when Immich is connected, the warning is on and the
+    /// downloads are over the soft limit.
+    pub(crate) fn check_immich_cache_at_startup(&mut self) {
+        let connected = immich_source::connection(&self.settings).is_some();
+        if let Some(root) = self.immich_cache_root() {
+            self.check_immich_cache_in(connected, root);
+        }
+    }
+
+    /// [`Self::check_immich_cache_at_startup`] with the root given — what the tests drive.
+    pub(crate) fn check_immich_cache_in(&mut self, connected: bool, root: std::path::PathBuf) {
+        // ⚠ Not even measured while Immich is off: the integration shows no trace of itself then.
+        if !connected {
+            return;
+        }
+        let usage = rustroom_app::immich_cache::usage(&root);
+        let s = &self.settings;
+        if rustroom_app::immich_cache::warn_at_startup(
+            connected,
+            s.immich_cache_warn,
+            s.immich_cache_limit_gb,
+            usage,
+        ) {
+            self.modal = crate::Modal::ImmichCache {
+                startup: true,
+                root,
+                usage,
+            };
+        }
+    }
+
     /// Show one Immich album's photos, downloading nothing.
     ///
     /// ⚠⚠ Goes through `open_scan`, the one place a `Library` is constructed, exactly like a
