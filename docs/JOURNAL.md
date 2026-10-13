@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M10.15b: clear the Immich downloads, and a soft limit that warns at startup (2026-10-13)](#2026-10-13--m1015b-clear-the-immich-downloads-and-a-soft-limit-that-warns-at-startup-branch-m1015b-immich-cache-clear)
+- [M10.15b: clear the Immich downloads, and a soft limit that warns at startup (2026-10-13)](#2026-10-13--m1015b-clear-the-immich-downloads-and-a-soft-limit-that-warns-at-startup-branch-m1015b-immich-cache-clear-merged-2026-10-13)
 - [M10.15a: the Immich API keys in the OS keychain (2026-10-13)](#2026-10-13--m1015a-the-immich-api-keys-in-the-os-keychain-branch-m1015a-immich-keychain-merged-2026-10-13)
 - [M10.14e: the catalog at 100,000 photos — measured, and two quadratic shapes removed (2026-10-13)](#2026-10-13--m1014e-the-catalog-at-100000-photos--measured-and-two-quadratic-shapes-removed-branch-m1014e-catalog-scale-merged-2026-10-13)
 - [M10.14d: the app-vs-probe drag gap, decomposed — and the geometry gather tiled (2026-10-13)](#2026-10-13--m1014d-the-app-vs-probe-drag-gap-decomposed--and-the-geometry-gather-tiled-branch-m1014d-geometry-tiles-merged-2026-10-13)
@@ -174,7 +174,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
-### 2026-10-13 — M10.15b: clear the Immich downloads, and a soft limit that warns at startup (branch `m10.15b-immich-cache-clear`)
+### 2026-10-13 — M10.15b: clear the Immich downloads, and a soft limit that warns at startup (branch `m10.15b-immich-cache-clear`, merged 2026-10-13)
 
 **The item, and the author's re-scope:** "a budget and eviction for cached originals" — opening an Immich
 photo or pressing Download keeps a full copy, and nothing removed them but Remove downloads on a
@@ -209,6 +209,7 @@ Don't warn again not saved; Apply forgetting the limit; Clear… enabled with no
 re-measure on opening; a clear keeping the old size.
 
 **Counts:** 3747 → **3764 tests** (9 ignored).
+✅ **Confirmed by the author ("works") and merged 2026-10-13.**
 
 ### 2026-10-13 — M10.15a: the Immich API keys in the OS keychain (branch `m10.15a-immich-keychain`, merged 2026-10-13)
 
