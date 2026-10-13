@@ -22,7 +22,7 @@ use rustroom_app::settings::{
 };
 
 /// Air between two settings on a tab.
-const GAP: f32 = 8.0;
+pub(super) const GAP: f32 = 8.0;
 
 /// The preferences the dialog edits, held while it is open.
 #[derive(Clone, PartialEq, Debug)]
@@ -48,12 +48,12 @@ pub struct SettingsDraft {
     display_space: color::OutputSpace,
     stacking: rustroom_app::stack::Stacking,
     layout: rustroom_app::layout::Layout,
-    immich_enabled: bool,
-    immich_url: String,
-    immich_key: String,
-    immich_upload_key: String,
+    pub(super) immich_enabled: bool,
+    pub(super) immich_url: String,
+    pub(super) immich_key: String,
+    pub(super) immich_upload_key: String,
     thumb_budget_mb: u32,
-    immich_thumb_budget_mb: u32,
+    pub(super) immich_thumb_budget_mb: u32,
     preview_demosaic: Option<raw_decode::Demosaic>,
     preview_budget_mb: u32,
     /// Settings → Keyboard (M10.9b).
@@ -95,7 +95,7 @@ fn stack_format_chips(ui: &mut egui::Ui, s: &mut rustroom_app::stack::Stacking) 
 }
 
 impl SettingsDraft {
-    fn from_settings(s: &Settings) -> Self {
+    pub(super) fn from_settings(s: &Settings) -> Self {
         Self {
             confirm: s.confirm_preset_delete,
             write_xmp: s.write_xmp,
@@ -721,151 +721,16 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                 }
                 // M10.9b.
                 5 => super::settings_keyboard::show(ui, &mut d.keyboard),
-                _ => {
-                    // ⚠⚠ **The master toggle, above everything and outside the grid.** This tab is the
-                    // one place Immich is named when the integration is off — hiding the tab too would
-                    // leave no way back on. Everything below is hidden while it is unticked, so the
-                    // tab holds a switch and nothing else.
-                    // ⚠ A switch rather than a tick box: enabling or disabling a whole integration
-                    // is a decision, not one preference among many (user's call, 2026-09-24).
-                    // ⚠ What Immich is, and what switching it off does, are the switch's hover
-                    // (`docs/DESIGN.md` §8) — they were a paragraph above it.
-                    crate::segmented::switch(ui, &mut d.immich_enabled, "Enable Immich")
-                        .hover(
-                            "Shows your Immich server's albums in the Library and lets exports upload to it",
-                        );
-                    // ⚠ An `if` rather than an early `return`: the match happens to be the last
-                    // thing in this closure today, so a `return` works — and would silently skip
-                    // anything a later change added after it.
-                    if d.immich_enabled {
-                        ui.add_space(GAP);
-                        egui::Grid::new("settings_immich")
-                        .num_columns(2)
-                        .spacing([12.0, GAP])
-                        .show(ui, |ui| {
-                            // ⚠ Editing either field clears the last answer: a stale "Connected"
-                            // sitting under credentials it was never tested against is worse than no
-                            // message at all.
-                            let before = (d.immich_url.clone(), d.immich_key.clone());
-
-                            ui.label("Server");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut d.immich_url)
-                                    .hint_text("https://photos.example.com")
-                                    .desired_width(260.0),
-                            )
-                            .hover(
-                                "The address of your Immich server",
-                            );
-                            ui.end_row();
-
-                            ui.label("API key");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut d.immich_key)
-                                    .password(true)
-                                    .desired_width(260.0),
-                            )
-                            // ⚠ Says where the key is kept — the keychain, or the file where none works
-                            // (M10.15a); the sentences are `secrets::key_hover`'s, tested there.
-                            .hover(rustroom_app::secrets::key_hover(
-                                rustroom_app::secrets::KeyKind::Browse,
-                                app.settings_store.key_home(),
-                            ));
-                            ui.end_row();
-
-                            // ⚠⚠ Its own field on purpose. Browsing, thumbnails and the rail run
-                            // constantly and unattended; giving that traffic a write-capable key
-                            // would make "browsing cannot write" depend on our code being right
-                            // rather than on the credential. See `Settings::immich_upload_key`.
-                            ui.label("Upload key");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut d.immich_upload_key)
-                                    .password(true)
-                                    .desired_width(260.0),
-                            )
-                            .hover(rustroom_app::secrets::key_hover(
-                                rustroom_app::secrets::KeyKind::Upload,
-                                app.settings_store.key_home(),
-                            ));
-                            ui.end_row();
-
-                            if before != (d.immich_url.clone(), d.immich_key.clone()) {
-                                app.immich_test = None;
-                            }
-
-                            ui.label("");
-                            ui.horizontal(|ui| {
-                                // ⚠⚠ Tests what is **typed**, not what is saved — the whole point of
-                                // a test button is checking a key before committing to it, so the job
-                                // carries its own connection rather than reading `app.settings`.
-                                if ui
-                                    .button("Test")
-                                    .hover("Checks the connection by asking the server for its version")
-                                    .clicked()
-                                {
-                                    // ⚠ Cleared first, so the previous answer does not sit there
-                                    // looking like this one while the request is in flight.
-                                    app.immich_test = None;
-                                    let typed = (!d.immich_url.trim().is_empty()
-                                        && !d.immich_key.trim().is_empty())
-                                    .then(|| rustroom_app::immich_source::Connection {
-                                        url: d.immich_url.trim().to_string(),
-                                        key: d.immich_key.trim().to_string(),
-                                    });
-                                    app.immich.request(rustroom_app::immich_worker::Job::About {
-                                        conn: typed,
-                                    });
-                                }
-                                // ⚠⚠ **Beside the button, not in the status line** — the status line
-                                // is behind the modal, so the answer to a button you just pressed was
-                                // invisible. Reported in use.
-                                match &app.immich_test {
-                                    Some(Ok(v)) => {
-                                        ui.colored_label(
-                                            ui.visuals().selection.bg_fill,
-                                            format!("Connected to Immich {v}"),
-                                        );
-                                    }
-                                    Some(Err(e)) => {
-                                        ui.colored_label(ui.visuals().error_fg_color, e.as_str())
-                                            .hover(e.as_str());
-                                    }
-                                    None => {}
-                                }
-                            });
-                            ui.end_row();
-                        });
-                        ui.add_space(GAP);
-                        theme::sub_label(ui, "Thumbnail cache");
-                        ui.horizontal(|ui| {
-                            let store = rustroom_app::thumb_store::ThumbStore::immich_default(
-                                d.immich_thumb_budget_mb as u64 * 1024 * 1024,
-                            );
-                            // ⚠ `size_bytes()` walks the directory, so it is computed when the dialog
-                            // opens and cached — never in a body, which runs sixty times a second.
-                            let bytes = *app
-                                .immich_thumb_cache_bytes
-                                .get_or_insert_with(|| store.size_bytes());
-                            ui.label(format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0));
-                            if ui
-                            .button("Clear")
-                            .hover(
-                                "Deletes the cached Immich thumbnails, which are fetched again when needed",
-                            )
-                            .clicked()
-                        {
-                            store.clear();
-                            app.immich_thumb_cache_bytes = Some(0);
-                        }
-                        });
-                        ui.add(
-                            egui::Slider::new(&mut d.immich_thumb_budget_mb, 512..=51200)
-                                .step_by(512.0)
-                                .text("MB budget"),
-                        )
-                        .hover("Sets how much disk space Immich thumbnails may use");
-                    }
-                }
+                _ => super::settings_immich::show(
+                    ui,
+                    &mut d,
+                    super::settings_immich::Tab {
+                        immich: &mut app.immich,
+                        test: &mut app.immich_test,
+                        key_home: app.settings_store.key_home(),
+                        thumb_bytes: &mut app.immich_thumb_cache_bytes,
+                    },
+                ),
             }
         },
     );

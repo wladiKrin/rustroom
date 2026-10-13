@@ -40,6 +40,7 @@ pub mod presets;
 pub mod rename;
 pub mod rule_edit;
 pub mod settings;
+mod settings_immich;
 mod settings_keyboard;
 mod settings_layout;
 
