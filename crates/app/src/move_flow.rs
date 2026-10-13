@@ -424,6 +424,8 @@ mod tests {
             thumbhash: None,
             file_modified_at: "2025-01-01T00:00:00.000Z".into(),
             updated_at: "2025-01-02T00:00:00.000Z".into(),
+            is_favorite: false,
+            exif_info: None,
         }
     }
 
