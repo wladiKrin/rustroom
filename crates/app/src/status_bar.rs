@@ -374,7 +374,7 @@ fn more_menu(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context, show
         }
         stack_buttons(app, ui);
         // M10.15d: present only while a last send exists — read once per catalog change.
-        if app.last_send_count() > 0
+        if app.can_undo_send()
             && ui
                 .button("Undo last send")
                 .hover("Puts back what the last send of marks replaced in Immich")

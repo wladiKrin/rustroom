@@ -50,6 +50,9 @@ impl RustroomApp {
     /// **Send marks**: fetch the open album's or month's current list — never the cache — so the
     /// confirmation and the recorded prior values are the server's real ones.
     pub(crate) fn begin_send_marks(&mut self) {
+        if self.send_running() {
+            return;
+        }
         if self.write_connection().is_none() {
             self.status = "Send marks needs a Write key — set one in Settings → Immich".to_string();
             return;
@@ -218,10 +221,21 @@ impl RustroomApp {
 
     /// **Undo last send**: ask first.
     pub(crate) fn begin_undo_send(&mut self) {
-        let count = self.last_send_count();
-        if count > 0 {
-            self.modal = Modal::UndoSend { count };
+        if self.send_running() || !self.can_undo_send() {
+            return;
         }
+        let count = self.last_send_count();
+        self.modal = Modal::UndoSend { count };
+    }
+
+    /// Whether a send or an undo is still waiting for its reply — a second would overwrite its plan,
+    /// and the first reply would be recorded against the wrong photos (final review). Says so.
+    fn send_running(&mut self) -> bool {
+        let running = self.immich_send_pending.is_some();
+        if running {
+            self.status = "A send to Immich is still running".to_string();
+        }
+        running
     }
 
     /// The undo confirmation's button: write back what the last send replaced.
@@ -253,6 +267,12 @@ impl RustroomApp {
             groups,
             undo: true,
         });
+    }
+
+    /// Whether ⋯ offers **Undo last send**: a record exists **and Immich is on** — switched off, the
+    /// integration shows no trace of itself (final review).
+    pub(crate) fn can_undo_send(&mut self) -> bool {
+        immich_source::connection(&self.settings).is_some() && self.last_send_count() > 0
     }
 
     /// How many photos the last send holds — read once per catalog change, never per frame.
@@ -541,6 +561,43 @@ mod tests {
         app.on_marks_checked(album(), Ok(vec![a]));
         assert!(matches!(app.modal, crate::Modal::None));
         assert_eq!(app.status, "Immich already has these marks");
+    }
+
+    /// Final review: a second send started before the first's reply would overwrite the pending
+    /// plan, and the first reply would then be recorded against the wrong photos.
+    #[test]
+    fn a_second_send_waits_for_the_first() {
+        let a = asset("a", None, false);
+        let (_ctx, mut app, rec) = setup(std::slice::from_ref(&a));
+        set_marks(&app, &a, stars(5));
+        app.immich_send_selection = vec!["a".into()];
+        app.on_marks_checked(album(), Ok(vec![a]));
+        let crate::Modal::SendMarks { changes } = std::mem::take(&mut app.modal) else {
+            panic!("no confirmation")
+        };
+        app.confirm_send(changes);
+        let before = jobs(&rec, 1).len();
+        app.begin_send_marks();
+        app.begin_undo_send();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(rec.lock().unwrap().len(), before, "a second job went out");
+        assert!(matches!(app.modal, crate::Modal::None));
+        assert!(app.status.contains("still running"), "{}", app.status);
+    }
+
+    /// Final review: with Immich switched off the integration shows no trace of itself — ⋯ must not
+    /// offer to undo a send.
+    #[test]
+    fn undo_is_offered_only_with_immich_on() {
+        let (_ctx, mut app, _rec) = setup(&[asset("a", None, false)]);
+        app.catalog
+            .as_ref()
+            .unwrap()
+            .record_send(&[("a".to_string(), Some(3), false)])
+            .unwrap();
+        assert!(app.can_undo_send());
+        app.settings.immich_enabled = false;
+        assert!(!app.can_undo_send(), "offered with Immich off");
     }
 
     #[test]
