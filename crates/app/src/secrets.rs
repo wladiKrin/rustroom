@@ -51,10 +51,10 @@ pub fn key_hover(kind: KeyKind, home: KeyHome) -> &'static str {
             "A read-only Immich API key, kept in plain text in settings.json"
         }
         (KeyKind::Upload, KeyHome::Keychain) => {
-            "An optional Immich key allowed to upload, used only by exports, kept in your keychain"
+            "An optional Immich key that can upload and change marks, for Export and Send marks, kept in your keychain"
         }
         (KeyKind::Upload, KeyHome::File) => {
-            "An optional Immich key allowed to upload, used only by exports, kept in settings.json"
+            "An optional Immich key that can upload and change marks, for Export and Send marks, kept in settings.json"
         }
     }
 }
@@ -232,6 +232,15 @@ mod tests {
                 assert_eq!(crate::slider_help::sentence_fault(t), None, "{t}");
                 assert!(t.contains(place), "{t}");
             }
+        }
+    }
+
+    /// M10.15d: the upload key is the Write key — its hover names both deliberate uses.
+    #[test]
+    fn the_write_key_hover_names_both_uses() {
+        for home in [KeyHome::Keychain, KeyHome::File] {
+            let t = key_hover(KeyKind::Upload, home);
+            assert!(t.contains("Export") && t.contains("Send marks"), "{t}");
         }
     }
 

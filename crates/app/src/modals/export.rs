@@ -309,7 +309,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                     .add_enabled(ready, egui::Checkbox::new(&mut immich, "Immich"));
                                 if !ready {
                                     r.on_disabled_hover_text(
-                                        "Set an Upload key in Settings → Immich first. Browsing \
+                                        "Set a Write key in Settings → Immich first. Browsing \
                                          uses a read-only key, which cannot upload.",
                                     );
                                 }

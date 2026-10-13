@@ -76,7 +76,8 @@ pub(super) fn show(ui: &mut egui::Ui, d: &mut SettingsDraft, t: Tab<'_>) {
                 // constantly and unattended; giving that traffic a write-capable key
                 // would make "browsing cannot write" depend on our code being right
                 // rather than on the credential. See `Settings::immich_upload_key`.
-                ui.label("Upload key");
+                // M10.15d: the Write key — upload, and with `asset.update`, Send marks.
+                ui.label("Write key");
                 ui.add(
                     egui::TextEdit::singleline(&mut d.immich_upload_key)
                         .password(true)
