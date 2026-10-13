@@ -1,0 +1,8 @@
+# ⚠ M10.15a: on macOS, `cargo run` signs the Rustroom binary with the local "Rustroom Dev" identity so
+# the keychain's "Always Allow" survives rebuilds — see scripts/macos-run.sh. It changes nothing for a
+# test or an example binary, nor anywhere the identity is absent.
+[target.aarch64-apple-darwin]
+runner = "scripts/macos-run.sh"
+
+[target.x86_64-apple-darwin]
+runner = "scripts/macos-run.sh"
