@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.15d: Send marks to Immich, and Undo last send (2026-10-13)](#2026-10-13--m1015d-send-marks-to-immich-and-undo-last-send-branch-m1015d-immich-send-marks)
 - [M10.15c: Immich's own rating and favourite, filled once (2026-10-13)](#2026-10-13--m1015c-immichs-own-rating-and-favourite-filled-once-branch-m1015c-immich-rating-merged-2026-10-13)
 - [M10.15b: clear the Immich downloads, and a soft limit that warns at startup (2026-10-13)](#2026-10-13--m1015b-clear-the-immich-downloads-and-a-soft-limit-that-warns-at-startup-branch-m1015b-immich-cache-clear-merged-2026-10-13)
 - [M10.15a: the Immich API keys in the OS keychain (2026-10-13)](#2026-10-13--m1015a-the-immich-api-keys-in-the-os-keychain-branch-m1015a-immich-keychain-merged-2026-10-13)
@@ -174,6 +175,43 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-13 — M10.15d: Send marks to Immich, and Undo last send (branch `m10.15d-immich-send-marks`)
+
+**The item:** two-way sync, declined 2026-09-24 ("too dangerous") and re-opened 2026-09-29. Its reopening
+conditions were on record — **writes attended and reversible**, and a need uploads cannot serve — and this
+design meets both: the author wants his **Rustroom marks on the photos already in Immich** (an upload never
+changes those), and nothing is written except from a confirmation listing every change, with the replaced
+values kept for an undo. Spec and plan `2026-10-13-m10.15d-*`.
+
+**The author's choices:** marks only (★ → rating, pick → favourite, reject → −1; labels have no Immich
+equivalent); a deliberate **Send marks**; **Undo last send**; **never remove**; the upload key as the
+**Write key** with `asset.update`. Mine: stars + reject send −1.
+
+**Read first:** the published 3.2.0 schema — `PUT /assets` (`ids`, `rating`, `isFavorite`, …), permission
+`asset.update`, 204; a key's permissions can be edited; no bulk read by id, so the check refetches the
+album or month (~0.8 s per 1,000 with `withExif`).
+
+**Built:** `immich::Client::update_marks` (a body of only the fields being set, `rating: null` for an undo
+to unrated); `rustroom_app::immich_send` (every decision — `wanted`, `plan`, `groups`, `undo_groups`, the
+words; `selected_asset_ids`); catalog **v14** `immich_last_send`; worker `CheckMarks` (fresh, read-only
+key) and `SendMarks` (its **own** Write-key connection, groups in order, stopping at the first failure);
+`send_flow.rs`, `modals/send_marks.rs`; the Immich buttons moved to `status_immich.rs` (`status_bar.rs`
+**627 → 591**) with **Send marks**, and ⋯ **Undo last send**; "Upload key" → **Write key**.
+
+**Self-review found two, both fixed red first:** a second send started before the first's reply would
+overwrite the pending plan and record the first reply against the wrong photos (a send now waits —
+`a_second_send_waits_for_the_first`); and ⋯ offered **Undo last send** with Immich switched off, against the
+no-trace rule (`undo_is_offered_only_with_immich_on`).
+
+**Sabotages, every one red:** the body omitting `null`; the mapping un-favouriting an unflagged photo; the
+undo dropping `null`; `record_send` without its `DELETE`; a send on the browse connection; planning from the
+cache; the plan not stashed; recording regardless of what landed; the dialog's Cancel sending.
+
+⚠ **The first real send is the author's, on one photo of his choosing** — its reply is recorded here once
+it has happened.
+
+**Counts:** 3781 → **3811 tests** (9 ignored).
 
 ### 2026-10-13 — M10.15c: Immich's own rating and favourite, filled once (branch `m10.15c-immich-rating`, merged 2026-10-13)
 
