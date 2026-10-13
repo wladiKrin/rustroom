@@ -34,7 +34,7 @@ and a pointer, not deleted.
 | **M10.11** Develop additions | *Film negative inversion* (a, ✅ 2026-10-11); P-26's Grain (b, ✅ 2026-10-12) |
 | **M10.12** the mask model | *Composites are one level deep* (a, ✅ 2026-10-12 — re-scoped: an op in place, Duplicate, Invert mask; nesting itself ⏸ parked on its table); masks' scene sliders as offsets (b, ✅ 2026-10-12 — Lightroom's model; a range or gating mask with an offset selects on the globally edited photo, its GPU cost is M10.14h); *Anchor strokes and spots in sensor space* + *Brush strokes shift…* (c, ⏸) |
 | **M10.13** colour & camera profiles | *C2/C3 have no independent oracle* (a, ⏸ parked 2026-10-12 — how to verify is the author's to settle); ~~*`CameraCalibration`…*~~ (b, ⛔ withdrawn 2026-10-12 — not a profile tag) + `ProfileLookTable` (b → folded into d); *Per-photo camera profile* (c → folded into d); P-22 (d) — **re-scoped 2026-10-12 by the author:** b's LookTable and c only matter once a profile that has a LookTable, or a second profile for one body, is in hand, which is d's question |
-| **M10.14** performance & verification | ~~*What is left in `HslStage`*~~ (a, ⛔ withdrawn 2026-10-12 — superseded by the GPU port, ~1% of an export); P-21 (e); *incremental splatting*, *Two Oklab round trips* (f, ⏸); *the u8 wire*, `MAX_TILE_DABS` (g, ⏸); *The reference photo on the GPU* (h) |
+| **M10.14** performance & verification | ~~*What is left in `HslStage`*~~ (a, ⛔ withdrawn 2026-10-12 — superseded by the GPU port, ~1% of an export); P-21 (e); *incremental splatting*, *Two Oklab round trips* (f, ⏸); *the u8 wire*, `MAX_TILE_DABS` (g, ⏸); *The reference photo on the GPU* (h, ⏸ parked 2026-10-13 — 1 of 74 photos) |
 | **M10.15** Immich | the keychain, cached-original eviction, Immich's rating (a–c); *Two-way sync* (d, re-opened) |
 | **M10.16** AI tools | depth masks (a); P-23 (b); P-26's content-aware remove (c) |
 | **M10.17** merge | P-24 |
@@ -1352,7 +1352,18 @@ render-during-interaction pattern the app already applies elsewhere. **Do not sc
 `MaskStage` work**: at 1600 the whole masked delta is 2.8 ms, and no amount of optimising it moves
 a 53 ms frame meaningfully.
 
-### ⚠ The reference photo on the GPU (recorded 2026-10-12, from M10.12b2) → M10.14h
+### ⚠ The reference photo on the GPU (recorded 2026-10-12, from M10.12b2) → M10.14h ⏸ parked by the author 2026-10-13, until a need shows
+
+**Re-measured 2026-10-13** (`bench_mask_reference`, DSCF6291, GPU path): a range mask with Exposure is
+**34.7 ms at fit, 111–125 ms at 3200**, against 8.2–8.3 and 23.6–32.7 for the other mask cases. One
+frame: **105 ms of CPU tail + ~18 ms GPU** — the CPU runs `scene_offsets` (with the reference), then
+`tone_curve` and `saturation` (sandwiched between two CPU stages, so the walk's gate keeps them off the
+GPU), then the `mask`. A fix moves that whole stretch: the reference by the existing twins on a copy,
+the coverage computed there, and handed on the GPU to the offsets twin and the mask twin — a change to
+how GPU stages share data (spec + plan), est. 111 → 35–45 ms at 3200. **Parked because it is narrow:**
+1 of 74 photos with stored history has such a mask. Reopen from these numbers if that changes.
+
+*The original entry:*
 
 A luminance/colour range or gating brush that carries a **scene offset** selects on the globally edited
 photo (M10.12b2). `SceneOffsetsStage` computes that reference on the **CPU**, and both it and the mask's
