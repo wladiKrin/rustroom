@@ -10,7 +10,7 @@
 //!
 //! ⚠ **No egui.** A lib module, testable with no window and no server.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// What a removal did, for the status line to report.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -56,6 +56,104 @@ pub fn remove_downloads(paths: &[PathBuf]) -> Removed {
         }
     }
     out
+}
+
+/// How much the downloads take: the bytes and the number of photos.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Usage {
+    pub bytes: u64,
+    pub photos: usize,
+}
+
+/// Every downloaded original in `root`, sorted — what a clear removes (M10.15b).
+///
+/// ⚠ Only `catalog::is_supported` files — the test `remove_downloads` and `present_names` use — so a
+/// sidecar, a `.part` still being written or a `.DS_Store` is never counted or removed. A missing
+/// directory is nothing downloaded.
+pub fn downloads(root: &Path) -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = rd
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .map(|e| e.path())
+        .filter(|p| catalog::is_supported(p))
+        .collect();
+    out.sort();
+    out
+}
+
+/// The downloads' total size and count — one directory listing, ~3 ms for 1,000 photos (M10.15b).
+pub fn usage(root: &Path) -> Usage {
+    let mut u = Usage::default();
+    for p in downloads(root) {
+        if let Ok(m) = std::fs::metadata(&p) {
+            u.bytes += m.len();
+            u.photos += 1;
+        }
+    }
+    u
+}
+
+/// The soft limit in bytes — **decimal**, the units `photo_info::format_bytes` prints, so "12.4 GB"
+/// and "10 GB limit" are in the same unit.
+pub fn limit_bytes(gb: u32) -> u64 {
+    gb as u64 * 1_000_000_000
+}
+
+/// Whether startup opens the Clear dialog: Immich connected, the warning on, and the downloads
+/// **strictly** over the limit.
+pub fn warn_at_startup(connected: bool, warn: bool, limit_gb: u32, usage: Usage) -> bool {
+    connected && warn && usage.bytes > limit_bytes(limit_gb)
+}
+
+fn photos(n: usize) -> String {
+    if n == 1 {
+        "1 photo".to_string()
+    } else {
+        format!("{n} photos")
+    }
+}
+
+/// The Settings line: "74.0 MB · 21 photos", or "Nothing downloaded".
+pub fn size_line(usage: Usage) -> String {
+    if usage.photos == 0 {
+        return "Nothing downloaded".to_string();
+    }
+    format!(
+        "{} · {}",
+        crate::photo_info::format_bytes(usage.bytes),
+        photos(usage.photos)
+    )
+}
+
+/// The dialog's title — the size at startup, the verb when asked from Settings.
+pub fn dialog_title(usage: Usage, startup: bool) -> String {
+    if startup {
+        format!(
+            "Immich downloads use {}",
+            crate::photo_info::format_bytes(usage.bytes)
+        )
+    } else {
+        "Clear Immich downloads".to_string()
+    }
+}
+
+/// The dialog's body. ⚠ Always names the edits: what a clear keeps is the reason it is safe.
+pub fn dialog_body(usage: Usage, limit_gb: u32, startup: bool) -> String {
+    let n = match usage.photos {
+        1 => "1 downloaded photo".to_string(),
+        n => format!("{n} downloaded photos"),
+    };
+    let rest = format!(
+        "Clearing removes {n}; edits, marks and thumbnails stay, and a photo downloads again when you open it"
+    );
+    if startup {
+        format!("Over your {limit_gb} GB limit. {rest}")
+    } else {
+        rest
+    }
 }
 
 #[cfg(test)]
@@ -140,5 +238,103 @@ mod tests {
         let out = remove_downloads(&files);
         assert_eq!(out, Removed { removed: 5 });
         assert!(files.iter().all(|p| !p.exists()));
+    }
+
+    #[test]
+    fn usage_and_downloads_count_images_only() {
+        let d = temp_dir("usage");
+        std::fs::write(d.join("a.jpg"), b"jpeg").unwrap();
+        std::fs::write(d.join("a.jpg.json"), b"{}").unwrap();
+        std::fs::write(d.join("b.RAF.part"), b"half").unwrap();
+        std::fs::write(d.join(".DS_Store"), b"x").unwrap();
+        for f in ["a.jpg", "a.jpg.json", "b.RAF.part", ".DS_Store"] {
+            assert!(d.join(f).is_file(), "fixture: {f}");
+        }
+        assert_eq!(
+            usage(&d),
+            Usage {
+                bytes: 4,
+                photos: 1
+            }
+        );
+        assert_eq!(downloads(&d), vec![d.join("a.jpg")]);
+    }
+
+    #[test]
+    fn a_missing_or_sidecar_only_directory_is_nothing_downloaded() {
+        let d = temp_dir("usage-empty");
+        assert_eq!(usage(&d.join("absent")), Usage::default());
+        std::fs::write(d.join("gone.jpg.json"), b"{}").unwrap();
+        assert_eq!(usage(&d), Usage::default());
+        assert!(downloads(&d).is_empty());
+    }
+
+    #[test]
+    fn the_startup_warning_needs_all_three_and_strictly_over() {
+        let at = Usage {
+            bytes: 1_000_000_000,
+            photos: 1,
+        };
+        let over = Usage {
+            bytes: 1_000_000_001,
+            photos: 1,
+        };
+        assert!(!warn_at_startup(true, true, 1, at), "exactly at the limit");
+        assert!(warn_at_startup(true, true, 1, over));
+        assert!(!warn_at_startup(true, false, 1, over), "the warning is off");
+        assert!(
+            !warn_at_startup(false, true, 1, over),
+            "Immich is not connected"
+        );
+        assert_eq!(limit_bytes(10), 10_000_000_000);
+    }
+
+    #[test]
+    fn the_size_line_counts_photos_or_says_nothing() {
+        assert_eq!(
+            size_line(Usage {
+                bytes: 74_000_000,
+                photos: 21
+            }),
+            "74.0 MB · 21 photos"
+        );
+        assert_eq!(
+            size_line(Usage {
+                bytes: 1_200_000_000,
+                photos: 1
+            }),
+            "1.2 GB · 1 photo"
+        );
+        assert_eq!(size_line(Usage::default()), "Nothing downloaded");
+    }
+
+    #[test]
+    fn the_dialog_names_the_size_the_limit_the_count_and_the_edits() {
+        let u = Usage {
+            bytes: 12_400_000_000,
+            photos: 412,
+        };
+        assert_eq!(dialog_title(u, true), "Immich downloads use 12.4 GB");
+        assert_eq!(dialog_title(u, false), "Clear Immich downloads");
+        let at_start = dialog_body(u, 10, true);
+        assert!(
+            at_start.starts_with("Over your 10 GB limit. "),
+            "{at_start}"
+        );
+        let asked = dialog_body(u, 10, false);
+        assert!(!asked.contains("limit"), "{asked}");
+        for b in [&at_start, &asked] {
+            assert!(b.contains("412 downloaded photos;"), "{b}");
+            assert!(b.contains("edits"), "the reassurance went missing: {b}");
+        }
+        let one = dialog_body(
+            Usage {
+                bytes: 31_000_000,
+                photos: 1,
+            },
+            10,
+            false,
+        );
+        assert!(one.contains("1 downloaded photo;"), "{one}");
     }
 }
