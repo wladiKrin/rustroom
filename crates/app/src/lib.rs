@@ -47,6 +47,7 @@ pub mod immich_album_names;
 pub mod immich_cache;
 pub mod immich_catalog;
 pub mod immich_list_cache;
+pub mod immich_send;
 pub mod immich_source;
 pub mod immich_stack_cache;
 pub mod immich_upload;
