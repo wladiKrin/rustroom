@@ -232,6 +232,8 @@ pub(crate) struct RustroomApp {
     pub(crate) keyword_field: crate::keyword_field::FieldState,
     /// The selection's keyword suggestions, remembered until the selection or the catalog changes.
     pub(crate) keyword_suggest: rustroom_app::keyword_suggest::Cache,
+    /// What the Library rail shows from the catalog, re-read only when the catalog changes (M10.14e).
+    pub(crate) rail_data: rustroom_app::rail_data::RailData,
     /// Scratch text for the filename field, with **the photo it belongs to**.
     ///
     /// ⚠ A draft rather than writing through, so a half-typed name is never committed and a

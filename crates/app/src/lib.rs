@@ -79,6 +79,7 @@ pub mod preview_build;
 pub mod preview_key;
 pub mod preview_loader;
 pub mod preview_store;
+pub mod rail_data;
 pub mod render_engine;
 pub mod reveal;
 pub mod rule;

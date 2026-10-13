@@ -121,6 +121,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // borrows half of `app`, and writing the settings file per frame is the `apply_view_demosaic`
     // mistake in another costume.
     let mut sections = app.settings.panel_sections;
+    // ⚠⚠ Every catalog fact the rail shows, read once per catalog CHANGE rather than once per frame —
+    // six queries a frame, several over every photo, were 27.5 ms a frame at 100,000 photos (M10.14e).
+    app.rail_data.refresh(app.catalog.as_ref());
     // ⚠ Its own variable rather than another `Action` variant: the Immich section's outcomes are
     // enqueued jobs, not catalog operations, and folding them into the catalog `Action` enum would
     // put two unrelated concerns behind one match.
@@ -165,16 +168,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         let top = ui.cursor().top();
                         let grip = match sec {
                             PanelSection::Folders => {
-                                let all = app
-                                    .catalog
-                                    .as_ref()
-                                    .and_then(|c| c.photo_count().ok())
-                                    .unwrap_or(0);
-                                let folders = app
-                                    .catalog
-                                    .as_ref()
-                                    .and_then(|c| c.folders().ok())
-                                    .unwrap_or_default();
+                                let all = app.rail_data.all;
+                                let folders = std::sync::Arc::clone(&app.rail_data.folders);
                                 let n = folders.len().to_string();
                                 section(ui, &mut sections.folders, "sec_folders", "Folders", &n, |ui| {
                                     let showing_all = matches!(
@@ -226,11 +221,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 })
                             }
                             PanelSection::Collections => {
-                                let rows = app
-                                    .catalog
-                                    .as_ref()
-                                    .and_then(|c| c.collections().ok())
-                                    .unwrap_or_default();
+                                let rows = std::sync::Arc::clone(&app.rail_data.collections);
                                 let n = rows.len().to_string();
                                 section(
                                     ui,
@@ -260,7 +251,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                         // can never be ambiguous about what it is about to do.
                                         let add_hover = format!("Add {picked} selected");
                                         let remove_hover = format!("Remove {picked} selected");
-                                        for c in &rows {
+                                        for c in rows.iter() {
                                             let r = list_row::row(
                                                 ui,
                                                 RowSpec {
@@ -306,11 +297,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 )
                             }
                             PanelSection::Smart => {
-                                let smarts = app
-                                    .catalog
-                                    .as_ref()
-                                    .and_then(|c| c.smart_collections().ok())
-                                    .unwrap_or_default();
+                                let smarts = std::sync::Arc::clone(&app.rail_data.smarts);
                                 let n = smarts.len().to_string();
                                 section(
                                     ui,
@@ -334,7 +321,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                         if smarts.is_empty() {
                                             crate::theme::hint(ui, "No smart collections yet.");
                                         }
-                                        for sc in &smarts {
+                                        for sc in smarts.iter() {
                                             let selected = matches!(
                                                 app.library.as_ref().map(|l| &l.source),
                                                 Some(crate::LibrarySource::Smart { id, .. }) if *id == sc.id
@@ -390,11 +377,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 )
                             }
                             PanelSection::Keywords => {
-                                let kws = app
-                                    .catalog
-                                    .as_ref()
-                                    .and_then(|c| c.keywords().ok())
-                                    .unwrap_or_default();
+                                let kws = std::sync::Arc::clone(&app.rail_data.keywords);
                                 let n = kws.len().to_string();
                                 section(
                                     ui,
@@ -507,11 +490,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             // ⚠ A tree built from a `GROUP BY` over what is actually in the catalog — which is
                             // what makes this need **no date picker**, since egui has none. It shows the days you
                             // have rather than asking you to type a range.
-                            let days = app
-                                .catalog
-                                .as_ref()
-                                .and_then(|c| c.capture_days().ok())
-                                .unwrap_or_default();
+                            let days = std::sync::Arc::clone(&app.rail_data.days);
                             if days.is_empty() {
                                 crate::theme::hint(ui, "No capture dates yet.");
                             }
@@ -1011,6 +990,34 @@ mod tests {
     ///
     /// ⚠ The sample: counts from a header, a one-action row, a two-action row, a no-action row and
     /// a tree row, or "one x" could be the same kind of row five times.
+    /// ⚠⚠ M10.14e: the rail reads the catalog once per CHANGE (`RailData`), so the wiring has to
+    /// prove a write made between two frames is on the next one — a keyword, and a photo's count.
+    #[test]
+    fn a_catalog_change_between_frames_shows_on_the_next() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        app.library = Some(crate::test_app::library_of(3));
+        crate::test_app::catalog_library(&mut app);
+        app.settings.panel_sections.keywords = true;
+        let labels = |app: &mut crate::RustroomApp| -> Vec<String> {
+            crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| super::show(app, ui, &ctx))
+                .into_iter()
+                .map(|(l, _)| l)
+                .collect()
+        };
+        let before = labels(&mut app);
+        assert!(!before.iter().any(|l| l == "Zanzibar"), "fixture check");
+        app.catalog
+            .as_ref()
+            .unwrap()
+            .create_keyword("Zanzibar", None)
+            .unwrap();
+        assert!(
+            labels(&mut app).iter().any(|l| l == "Zanzibar"),
+            "the keyword written between frames is not in the rail"
+        );
+    }
+
     #[test]
     fn every_count_in_the_rail_ends_at_one_x() {
         let ctx = crate::test_ui::ctx();

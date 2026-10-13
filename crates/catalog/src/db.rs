@@ -84,6 +84,9 @@ pub use stacks::HandMember;
 
 pub struct Catalog {
     conn: Connection,
+    /// Which opened catalog this is — distinct for every `open`, so a cache keyed on
+    /// [`Self::change_count`] can tell two catalogs at the same count apart (M10.14e).
+    instance: u64,
 }
 
 impl Catalog {
@@ -116,7 +119,9 @@ impl Catalog {
         // this, deleting a folder would leave orphaned photo rows and orphaned collection
         // memberships pointing at nothing.
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-        let cat = Self { conn };
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let instance = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let cat = Self { conn, instance };
         cat.migrate()?;
         Ok(cat)
     }
@@ -126,6 +131,12 @@ impl Catalog {
     /// refreshes the suggestions without a list of call sites to keep in step.
     pub fn change_count(&self) -> u64 {
         self.conn.total_changes()
+    }
+
+    /// This opened catalog's identity, distinct from every other `open` in the process. With
+    /// [`Self::change_count`] it says whether anything read from a catalog may have changed.
+    pub fn instance(&self) -> u64 {
+        self.instance
     }
 
     pub fn version(&self) -> Result<i64, CatalogError> {
@@ -168,6 +179,16 @@ pub(super) fn file_facts(f: &CatalogEntry) -> (Option<i64>, Option<i64>) {
 mod tests {
     use super::*;
     use crate::db::test_support::TempDb;
+
+    /// M10.14e: the rail's cache keys on (instance, change count) — two catalogs never share an
+    /// instance, and one keeps its own.
+    #[test]
+    fn each_open_catalog_has_its_own_instance() {
+        let a = Catalog::open_in_memory().unwrap();
+        let b = Catalog::open_in_memory().unwrap();
+        assert_ne!(a.instance(), b.instance());
+        assert_eq!(a.instance(), a.instance());
+    }
 
     #[test]
     fn an_in_memory_catalog_opens_and_reports_its_version() {
