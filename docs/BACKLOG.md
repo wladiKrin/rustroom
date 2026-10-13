@@ -1506,7 +1506,9 @@ the author re-opened two-way sync as M10.15d**, and brought the three smaller ga
 keychain (the API keys are **plaintext** in `settings.json`) **M10.15a**, **automatic** eviction of cached
 originals (slice 4 built the *manual* half) **M10.15b** — re-scoped 2026-10-13 by the author to a Clear
 cache and a soft limit, ⛔ no automatic eviction — and reading Immich's own `rating`/`isFavorite`
-**M10.15c**.
+**M10.15c** — ✅ 2026-10-13: filled once into a photo's rating and flag where Rustroom has none
+(favourite → pick, −1 → reject), never written back; measured first: 1 favourite and 0 ratings on the
+author's server, `withExif` +55% bytes / ~180 ms per 1,000 assets. Two-way sync (M10.15d) remains.
 
 The user self-hosts an **Immich** server holding all their photos, and wants to open them in
 Rustroom by giving a URL and credentials.
