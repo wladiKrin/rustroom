@@ -388,6 +388,8 @@ fn settings_round_trip_carries_the_export_options() {
         // Non-default so a field re-defaulted on load cannot pass.
         thumb_budget_mb: 2048,
         immich_thumb_budget_mb: 1024,
+        immich_cache_limit_gb: 25,
+        immich_cache_warn: false,
         preview_demosaic: Some(Demosaic::Fastest),
         preview_budget_mb: 4096,
         export: ExportOptions {
@@ -439,6 +441,18 @@ fn a_settings_file_from_before_the_thumbnail_budgets_loads_them_at_5120() {
     assert!(!loaded.confirm_preset_delete, "the old field must survive");
     assert_eq!(loaded.thumb_budget_mb, 5120);
     assert_eq!(loaded.immich_thumb_budget_mb, 5120);
+}
+
+/// ⚠⚠ M10.15b: an old file must not get `u32`'s 0 (a warning at every launch) or `bool`'s false
+/// (the warning silently off) — the container-level default must supply 10 and true.
+#[test]
+fn a_settings_file_from_before_the_download_limit_gets_10_gb_and_the_warning() {
+    let f = TempFile::new("immich_cache_old");
+    std::fs::write(&f.0, r#"{"confirm_preset_delete": false}"#).unwrap();
+    let loaded = SettingsStore::new(f.0.clone()).load();
+    assert!(!loaded.confirm_preset_delete, "the old field must survive");
+    assert_eq!(loaded.immich_cache_limit_gb, 10);
+    assert!(loaded.immich_cache_warn);
 }
 
 #[test]
