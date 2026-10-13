@@ -528,6 +528,8 @@ impl RustroomApp {
                 // the modal, so the answer to the Test button was invisible.
                 Outcome::About(Ok(v)) => self.immich_test = Some(Ok(v)),
                 Outcome::About(Err(e)) => self.immich_test = Some(Err(e)),
+                // M10.15d: routed by `send_flow` (Task 5).
+                Outcome::CheckMarks { .. } | Outcome::SendMarks { .. } => {}
                 Outcome::Original { dest, result } => {
                     self.finish_immich_download(ctx, dest, result)
                 }

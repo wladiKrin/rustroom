@@ -43,6 +43,24 @@ pub enum Job {
     /// ⚠ `dest` is the **real** cache path. The worker writes to `dest.part` and renames; the
     /// fetcher is handed the `.part`.
     Original { asset_id: String, dest: PathBuf },
+    /// M10.15d: the **current** list of the album or month a send acts on — fetched fresh, never from
+    /// the cache, so the confirmation and the recorded prior values are the server's real ones.
+    CheckMarks { source: MarksSource },
+    /// M10.15d: `PUT /assets` per group, in order, on **its own** connection — the Write key, never
+    /// the browse key — stopping at the first failure.
+    SendMarks {
+        conn: crate::immich_source::Connection,
+        groups: Vec<crate::immich_send::Group>,
+        undo: bool,
+    },
+}
+
+/// Which list a send checks against (M10.15d).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MarksSource {
+    Album(String),
+    /// A month's `YYYY-MM-DD` bucket.
+    Bucket(String),
 }
 
 /// What came back.
@@ -64,6 +82,16 @@ pub enum Outcome {
     Original {
         dest: PathBuf,
         result: Result<(), String>,
+    },
+    CheckMarks {
+        source: MarksSource,
+        result: Result<Vec<immich::Asset>, String>,
+    },
+    /// The indices of the groups that landed, in order, and the first failure's message.
+    SendMarks {
+        landed: Vec<usize>,
+        error: Option<String>,
+        undo: bool,
     },
 }
 
@@ -220,7 +248,7 @@ impl ImmichWorker {
                 self.open_seq += 1;
                 None
             }
-            Job::About { .. } => None,
+            Job::About { .. } | Job::CheckMarks { .. } | Job::SendMarks { .. } => None,
         };
 
         let seq = matches!(job, Job::Album { .. } | Job::Bucket { .. }).then_some(self.open_seq);
@@ -369,11 +397,7 @@ fn run_download(fetch: &FetchFn, asset_id: &str, dest: &Path) -> Outcome {
 /// — testing the saved one would make the button useless for its only purpose.
 pub fn live_fetcher(conn: Option<crate::immich_source::Connection>) -> FetchFn {
     Arc::new(move |job: Job| {
-        let wanted = match &job {
-            Job::About { conn: typed } => typed.clone(),
-            _ => conn.clone(),
-        };
-        let client = match wanted
+        let client = match wanted_conn(&job, &conn)
             .as_ref()
             .ok_or_else(|| "no Immich server is configured — set one in Settings".to_string())
             .and_then(|c| immich::Client::new(&c.url, &c.key).map_err(|e| e.to_string()))
@@ -399,6 +423,15 @@ pub fn live_fetcher(conn: Option<crate::immich_source::Connection>) -> FetchFn {
                         dest,
                         result: Err(e),
                     },
+                    Job::CheckMarks { source } => Outcome::CheckMarks {
+                        source,
+                        result: Err(e),
+                    },
+                    Job::SendMarks { undo, .. } => Outcome::SendMarks {
+                        landed: vec![],
+                        error: Some(e),
+                        undo,
+                    },
                 }
             }
         };
@@ -414,22 +447,36 @@ pub fn live_fetcher(conn: Option<crate::immich_source::Connection>) -> FetchFn {
             Job::Buckets => Outcome::Buckets(client.buckets().map_err(|e| e.to_string())),
             Job::Stacks => Outcome::Stacks(client.stacks().map_err(|e| e.to_string())),
             Job::Bucket { bucket, label } => {
-                // ⚠ The bucket identifier is `YYYY-MM-DD`; the search wants the whole month.
-                let range = bucket
-                    .get(0..4)
-                    .and_then(|y| y.parse::<i32>().ok())
-                    .zip(bucket.get(5..7).and_then(|m| m.parse::<u32>().ok()))
-                    .and_then(|(y, m)| crate::immich_source::month_range(y, m));
-                let result = match range {
-                    Some((after, before)) => client
-                        .search(&immich::Filter::TakenBetween { after, before })
-                        .map_err(|e| e.to_string()),
-                    None => Err(format!("“{bucket}” is not a month this build understands")),
-                };
+                let result = month_search(&client, &bucket);
                 Outcome::Bucket {
                     bucket,
                     label,
                     result,
+                }
+            }
+            Job::CheckMarks { source } => {
+                let result = match &source {
+                    MarksSource::Album(id) => client.album(id).map_err(|e| e.to_string()),
+                    MarksSource::Bucket(bucket) => month_search(&client, bucket),
+                };
+                Outcome::CheckMarks { source, result }
+            }
+            Job::SendMarks { groups, undo, .. } => {
+                let mut landed = Vec::new();
+                let mut error = None;
+                for (i, g) in groups.iter().enumerate() {
+                    match client.update_marks(&g.ids, g.rating, g.favourite) {
+                        Ok(()) => landed.push(i),
+                        Err(e) => {
+                            error = Some(e.to_string());
+                            break;
+                        }
+                    }
+                }
+                Outcome::SendMarks {
+                    landed,
+                    error,
+                    undo,
                 }
             }
             Job::Original { asset_id, dest } => Outcome::Original {
@@ -438,6 +485,34 @@ pub fn live_fetcher(conn: Option<crate::immich_source::Connection>) -> FetchFn {
             },
         }
     })
+}
+
+/// Which connection a job travels on (M10.15d): the Settings Test its **typed** one, a send its
+/// **Write-key** one, everything else the browse connection the fetcher was built with.
+fn wanted_conn(
+    job: &Job,
+    default: &Option<crate::immich_source::Connection>,
+) -> Option<crate::immich_source::Connection> {
+    match job {
+        Job::About { conn: typed } => typed.clone(),
+        Job::SendMarks { conn, .. } => Some(conn.clone()),
+        _ => default.clone(),
+    }
+}
+
+/// One month of the timeline — `bucket` is `YYYY-MM-DD`; the search wants the whole month.
+fn month_search(client: &immich::Client, bucket: &str) -> Result<Vec<immich::Asset>, String> {
+    let range = bucket
+        .get(0..4)
+        .and_then(|y| y.parse::<i32>().ok())
+        .zip(bucket.get(5..7).and_then(|m| m.parse::<u32>().ok()))
+        .and_then(|(y, m)| crate::immich_source::month_range(y, m));
+    match range {
+        Some((after, before)) => client
+            .search(&immich::Filter::TakenBetween { after, before })
+            .map_err(|e| e.to_string()),
+        None => Err(format!("“{bucket}” is not a month this build understands")),
+    }
 }
 
 #[cfg(test)]
@@ -460,6 +535,84 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         panic!("the worker never produced a result");
+    }
+
+    /// M10.15d: a send goes out on **its own** connection — the Write key — and nothing else does;
+    /// the Settings Test keeps its typed one; everything else uses the browse connection.
+    #[test]
+    fn a_send_uses_its_own_connection_and_nothing_else_does() {
+        let browse = crate::immich_source::Connection {
+            url: "https://s".into(),
+            key: "browse".into(),
+        };
+        let write = crate::immich_source::Connection {
+            url: "https://s".into(),
+            key: "write".into(),
+        };
+        let send = Job::SendMarks {
+            conn: write.clone(),
+            groups: vec![],
+            undo: false,
+        };
+        assert_eq!(wanted_conn(&send, &Some(browse.clone())), Some(write));
+        let check = Job::CheckMarks {
+            source: MarksSource::Album("a".into()),
+        };
+        assert_eq!(
+            wanted_conn(&check, &Some(browse.clone())),
+            Some(browse.clone())
+        );
+        assert_eq!(
+            wanted_conn(&Job::Albums, &Some(browse.clone())),
+            Some(browse)
+        );
+    }
+
+    /// M10.15d: a check and a send are both dispatched — no list guard swallows either.
+    #[test]
+    fn a_check_and_a_send_are_both_dispatched() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let mut w = ImmichWorker::new(
+            Arc::new(move |job: Job| {
+                c.fetch_add(1, Ordering::SeqCst);
+                match job {
+                    Job::CheckMarks { source } => Outcome::CheckMarks {
+                        source,
+                        result: Ok(vec![]),
+                    },
+                    Job::SendMarks { groups, undo, .. } => Outcome::SendMarks {
+                        landed: (0..groups.len()).collect(),
+                        error: None,
+                        undo,
+                    },
+                    _ => unreachable!(),
+                }
+            }),
+            || {},
+        );
+        w.request(Job::CheckMarks {
+            source: MarksSource::Bucket("2026-08-01".into()),
+        });
+        w.request(Job::SendMarks {
+            conn: crate::immich_source::Connection {
+                url: "https://s".into(),
+                key: "w".into(),
+            },
+            groups: vec![],
+            undo: true,
+        });
+        let start = std::time::Instant::now();
+        let mut got = Vec::new();
+        while got.len() < 2 && start.elapsed() < std::time::Duration::from_secs(5) {
+            got.extend(w.poll());
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert!(got.iter().any(|o| matches!(o, Outcome::CheckMarks { .. })));
+        assert!(got
+            .iter()
+            .any(|o| matches!(o, Outcome::SendMarks { undo: true, .. })));
     }
 
     /// ⚠⚠ **The bug reported in use:** clicking a second album while the first was still loading
