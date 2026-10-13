@@ -231,9 +231,9 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.12b** (table above).
 
-**▶ IN REVIEW: M10.14d** — the geometry gather by 8×8 tiles, on branch `m10.14d-geometry-tiles`; try a
-big Straighten. **After it: M10.14e — a 100k-photo catalog benchmark.** M10.13 left open by the author
-(a ⏸, b/c folded into d); M10.14a and c ⛔ withdrawn on measurements, M10.14b closed by a test.
+**▶ NEXT: M10.14e — a 100k-photo catalog benchmark** (performance & verification). M10.13 left open by
+the author (a ⏸, b/c folded into d); M10.14a and c ⛔ withdrawn on measurements; M10.14b closed by a
+test; M10.14d ✅ merged (the geometry gather by 8×8 tiles).
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
 release engineering, LAST.** The canonical list — every sub-item with its date, size and reasoning — is

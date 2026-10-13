@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M10.14d: the app-vs-probe drag gap, decomposed — and the geometry gather tiled (2026-10-13)](#2026-10-13--m1014d-the-app-vs-probe-drag-gap-decomposed--and-the-geometry-gather-tiled-branch-m1014d-geometry-tiles)
+- [M10.14d: the app-vs-probe drag gap, decomposed — and the geometry gather tiled (2026-10-13)](#2026-10-13--m1014d-the-app-vs-probe-drag-gap-decomposed--and-the-geometry-gather-tiled-branch-m1014d-geometry-tiles-merged-2026-10-13)
 - [M10.14c: Clarity's "coalescing" — a spike, withdrawn on its kill rule (2026-10-12)](#2026-10-12--m1014c-claritys-coalescing--a-spike-withdrawn-on-its-kill-rule)
 - [M10.14b: the prefix-cache eviction fix's picture half, closed by a test (2026-10-12)](#2026-10-12--m1014b-the-prefix-cache-eviction-fixs-picture-half-closed-by-a-test-branch-m1014b-resume-picture-merged-2026-10-12)
 - [M10.12b: a mask's scene sliders as offsets, Lightroom's model (2026-10-12)](#2026-10-12--m1012b-a-masks-scene-sliders-as-offsets-lightrooms-model-branch-m1012b-mask-offsets-merged-2026-10-12)
@@ -171,7 +171,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
-### 2026-10-13 — M10.14d: the app-vs-probe drag gap, decomposed — and the geometry gather tiled (branch `m10.14d-geometry-tiles`)
+### 2026-10-13 — M10.14d: the app-vs-probe drag gap, decomposed — and the geometry gather tiled (branch `m10.14d-geometry-tiles`, merged 2026-10-13)
 
 **The item:** since 2026-09-26 a drag frame cost ~10–12 ms more GPU submit+wait in the app than in
 the headless `probe_straighten_drag`; CPU copies, the texture upload and a shared device were already
@@ -211,6 +211,7 @@ The author chose 8×8: the flattest curve, a predictable worst case over 1 ms at
 253 levels over 3.4 % of samples; tiles can outnumber the input's groups.
 
 **Counts:** 3722 tests, unchanged (the parity test covers it). ⚠ `geometry.rs` (gpu) is ~560 lines.
+✅ **Confirmed by the author ("works") and merged 2026-10-13.**
 
 ### 2026-10-12 — M10.14c: Clarity's "coalescing" — a spike, withdrawn on its kill rule
 
