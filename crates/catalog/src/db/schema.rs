@@ -283,6 +283,18 @@ impl Catalog {
                  COMMIT;",
             )?;
         }
+        if from < 13 {
+            // ⚠⚠ A **new gate** (M10.15c): whether Immich's rating and flag have filled this photo's
+            // marks once — the author's rule is "fill once, then the user's choice stands". On the
+            // photo's own row, so a move (`PER_FILE_TABLES` lists `photos`) carries them.
+            self.conn.execute_batch(
+                "BEGIN;
+                 ALTER TABLE photos ADD COLUMN filled_rating INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE photos ADD COLUMN filled_flag   INTEGER NOT NULL DEFAULT 0;
+                 PRAGMA user_version = 13;
+                 COMMIT;",
+            )?;
+        }
         Ok(())
     }
 }
@@ -326,7 +338,7 @@ mod tests {
                      ALTER TABLE photos DROP COLUMN rating;
                      ALTER TABLE photos DROP COLUMN flag;
                      ALTER TABLE photos DROP COLUMN label;
-                     PRAGMA user_version = 1;",
+                     ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; PRAGMA user_version = 1;",
                 )
                 .unwrap();
         }
@@ -377,7 +389,7 @@ mod tests {
                      DROP TABLE photo_keywords;
                      DROP TABLE keywords;
                      ALTER TABLE photos DROP COLUMN xmp_mtime;
-                     PRAGMA user_version = 2;",
+                     ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; PRAGMA user_version = 2;",
                 )
                 .unwrap();
         }
@@ -424,7 +436,7 @@ mod tests {
                      DROP TABLE photo_stacks;
                      DROP TABLE photo_description;
                      ALTER TABLE photos DROP COLUMN xmp_mtime;
-                     PRAGMA user_version = 5;",
+                     ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; PRAGMA user_version = 5;",
                 )
                 .unwrap();
         }
@@ -470,7 +482,7 @@ mod tests {
                      DROP TABLE immich_names;
                      DROP TABLE photo_stacks;
                      DROP TABLE photo_description;
-                     PRAGMA user_version = 6;",
+                     ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; PRAGMA user_version = 6;",
                 )
                 .unwrap();
         }
@@ -536,7 +548,7 @@ mod tests {
         // there (M9.7, Move to folder).
         cat.conn
             .execute_batch(
-                "DROP TABLE photo_history; DROP TABLE immich_names; DROP TABLE photo_stacks; PRAGMA user_version = 7;",
+                "DROP TABLE photo_history; DROP TABLE immich_names; DROP TABLE photo_stacks; ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; PRAGMA user_version = 7;",
             )
             .unwrap();
         cat.migrate().unwrap();
@@ -577,7 +589,7 @@ mod tests {
                      );
                      INSERT INTO photo_stacks SELECT id, 'b.RAF', 3, 1 FROM folders;
                      INSERT INTO photo_stacks SELECT id, 'a.RAF', 3, 0 FROM folders;
-                     PRAGMA user_version = 11;",
+                     ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; PRAGMA user_version = 11;",
                 )
                 .unwrap();
         }
@@ -604,5 +616,45 @@ mod tests {
             ],
             "the top first"
         );
+    }
+
+    /// M10.15c: v13 adds the two "filled" columns — every row kept, both at 0.
+    #[test]
+    fn a_version_twelve_catalog_gains_the_filled_columns_at_zero() {
+        let db = TempDb::new("v12v13");
+        {
+            let cat = Catalog::open(&db.0).unwrap();
+            cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+            cat.set_marks(
+                Path::new("/x/a.RAF"),
+                0,
+                Marks {
+                    rating: 2,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            cat.conn
+                .execute_batch(
+                    "ALTER TABLE photos DROP COLUMN filled_rating;
+                     ALTER TABLE photos DROP COLUMN filled_flag;
+                     PRAGMA user_version = 12;",
+                )
+                .unwrap();
+        }
+        let cat = Catalog::open(&db.0).expect("a v12 catalog must upgrade");
+        assert_eq!(cat.version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(
+            cat.marks(Path::new("/x/a.RAF"), 0).unwrap().rating,
+            2,
+            "a mark survived"
+        );
+        let filled: (i64, i64) = cat
+            .conn
+            .query_row("SELECT filled_rating, filled_flag FROM photos", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(filled, (0, 0));
     }
 }

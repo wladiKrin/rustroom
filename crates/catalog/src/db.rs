@@ -14,7 +14,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// The schema this build expects. Bump it whenever [`Catalog::migrate`] gains a step.
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
 
 /// What can go wrong talking to the catalog.
 ///
@@ -66,6 +66,7 @@ mod photos;
 mod restore;
 /// The schema's migrations, version 1 to [`SCHEMA_VERSION`].
 mod schema;
+mod server_fill;
 /// Smart collections.
 mod smart;
 /// Stacks made by hand (M10.8c).
@@ -79,6 +80,7 @@ pub use imported::Fingerprint;
 pub use keywords::{Change as KeywordChange, DayCounts, KeywordMerge, KeywordRow};
 pub use marks::{Flag, Marks};
 pub use photos::{FolderRow, PhotoRow};
+pub use server_fill::ServerFill;
 pub use smart::SmartRow;
 pub use stacks::HandMember;
 
