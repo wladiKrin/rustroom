@@ -8,6 +8,8 @@
 //! the same stage, the same cost.
 //!
 //! Run: `RUSTROOM_DEBUG_RENDER=1 cargo run --release -p app --example probe_straighten_drag <raw> [rung]`
+//! `PROBE_ANGLE_STEP=1.1` sweeps ~0.5°→43°, the range a real drag reaches; the default 0.05 stays
+//! under 2.45°, the cheapest corner (M10.14d).
 //! With `RUSTROOM_DEBUG_GPU_TIME=1` as well, every chain prints a `GPUTIME` block: the GPU time of
 //! each stage's pass and the quantise, the GPU span, and the wall's remainder as `copies+latency`.
 //! ⚠ A timed run opens one pass per stage, so quote its wall only beside the untimed one.
@@ -106,7 +108,14 @@ fn main() {
     // ⚠ Median of 40, not a mean of 12: single runs varied 30-41 ms on an idle machine, and a
     // mean is dragged by the occasional frame a warm-behind render collided with.
     let n = 40;
-    let mut all: Vec<f64> = (0..n).map(|i| frame(0.5 + 0.05 * i as f32)).collect();
+    // ⚠⚠ `PROBE_ANGLE_STEP` (M10.14d): the default 0.05° sweeps only 0.5°–2.45°, the CHEAPEST corner
+    // of a Straighten drag — the gather's cost rose 3.4× by 43° until it was tiled. `1.1` sweeps to
+    // ~43°, the range a real drag reaches; compare like with like before calling anything a gap.
+    let step = std::env::var("PROBE_ANGLE_STEP")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(0.05);
+    let mut all: Vec<f64> = (0..n).map(|i| frame(0.5 + step * i as f32)).collect();
     all.sort_by(|a, b| a.total_cmp(b));
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     if let Some(h) = load {

@@ -191,12 +191,22 @@ fn sample(sx: f32, sy: f32) -> vec3<f32> {{
     return acc;
 }}
 
+// ⚠⚠ One workgroup per 8×8 TILE of the output (M10.14d), not 64 pixels along a row: a rotated
+// row's 4×4 footprints run diagonally across the source, a tile's stay compact at any angle.
+// Measured at 3200×2136 on an M2 (`probe_straighten_drag`, `PROBE_ANGLE_STEP=1.1`): the gather went
+// 7.7 → 25.8 ms from 0.5° to 43° by rows, 9.0 → 13.5 ms by tiles; ~1 ms dearer at small angles.
+// 16×4 and 32×2 were measured too — 16.4 and 24.2 ms at 43°. Same per-pixel arithmetic, same bits.
 @compute @workgroup_size(64)
-fn gather(@builtin(global_invocation_id) id: vec3<u32>) {{
-    let i = index(id);
-    if (i >= params.out_pixels) {{ return; }}
-    let x = f32(i % params.ow);
-    let y = f32(i / params.ow);
+fn gather(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid: vec3<u32>) {{
+    let tiles_x = (params.ow + 7u) / 8u;
+    let oh = params.out_pixels / params.ow;
+    let tile = wid.y * params.row_groups + wid.x;
+    let xi = (tile % tiles_x) * 8u + lid.x % 8u;
+    let yi = (tile / tiles_x) * 8u + lid.x / 8u;
+    if (xi >= params.ow || yi >= oh) {{ return; }}
+    let i = yi * params.ow + xi;
+    let x = f32(xi);
+    let y = f32(yi);
     let s = source_of(x, y);
     let v = sample(s.x, s.y);
     let q = i * 3u;
@@ -289,8 +299,9 @@ impl GpuStage for GpuGeometryStage {
         scratch: &[wgpu::Buffer],
     ) {
         let device = &ctx.device;
-        // ⚠ One grid over the INPUT pixels serves both kernels: the output never has more pixels
-        // than the input, and `gather` returns early past `out_pixels`.
+        // ⚠ The seed's grid covers the INPUT pixels; the gather has its own, below — 8×8 tiles can
+        // outnumber the input's groups of 64 (partial edge tiles), and a shared grid leaves the
+        // last tiles undrawn (`every_case_renders_the_same_picture_as_the_cpu`, 253 levels).
         let total = img.pixels().div_ceil(WORKGROUP);
         let row_groups = total.min(MAX_GROUPS_PER_DIM);
         let col_groups = total.div_ceil(row_groups);
@@ -362,10 +373,18 @@ impl GpuStage for GpuGeometryStage {
             layout: &layout,
             entries: &entries,
         });
-        for p in pipelines.iter().take(2) {
+        // ⚠ The seed runs over the input; the gather over 8×8 output tiles, which can outnumber
+        // the input's groups of 64 when the output is nearly full size (partial edge tiles).
+        let (ow, oh) = self.output_dims(img.width(), img.height());
+        let tiles = (ow.div_ceil(8) * oh.div_ceil(8)) as u32;
+        let grids = [
+            (row_groups, col_groups),
+            (row_groups, tiles.div_ceil(row_groups)),
+        ];
+        for (p, (gx, gy)) in pipelines.iter().take(2).zip(grids) {
             pass.set_pipeline(p);
             pass.set_bind_group(0, &bind, &[]);
-            pass.dispatch_workgroups(row_groups, col_groups, 1);
+            pass.dispatch_workgroups(gx, gy, 1);
         }
     }
 
