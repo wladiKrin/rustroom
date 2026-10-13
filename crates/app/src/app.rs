@@ -437,6 +437,15 @@ pub(crate) struct RustroomApp {
     /// The downloaded Immich originals, measured when Settings opens (M10.15b) and dropped by a
     /// clear, so the next look re-measures.
     pub(crate) immich_originals: Option<rustroom_app::immich_cache::Usage>,
+    /// M10.15d: the asset ids a send is checking, in selection order.
+    pub(crate) immich_send_selection: Vec<String>,
+    /// The album or month the checked send acts on — whose cached list a landed send drops.
+    pub(crate) immich_send_source: Option<rustroom_app::immich_worker::MarksSource>,
+    /// A send or undo whose reply has not come back.
+    pub(crate) immich_send_pending: Option<crate::send_flow::PendingSend>,
+    /// How many photos the last send holds, read once per catalog change — the ⋯ menu draws every
+    /// frame, so never a query per frame.
+    pub(crate) immich_last_send_count: Option<((u64, u64), usize)>,
     /// The rendered-preview cache's size, computed when the Settings dialog opens (M9.14).
     pub(crate) preview_cache_bytes: Option<u64>,
     /// The Settings dialog's draft while it is open — applied on Apply, dropped on Cancel.

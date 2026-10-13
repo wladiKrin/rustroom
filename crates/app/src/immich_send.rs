@@ -191,6 +191,17 @@ pub fn summary(changes: &[Change]) -> String {
     s
 }
 
+/// The Immich assets a selection names, each once, in order — a virtual copy shares its original's
+/// cache path, and Immich has one asset for both.
+pub fn selected_asset_ids(paths: &[std::path::PathBuf]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    paths
+        .iter()
+        .filter_map(|p| crate::immich_source::asset_id_of(p))
+        .filter(|id| seen.insert(id.clone()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,6 +377,16 @@ mod tests {
             "3 photos: 2 ratings, 1 favourite — 1 replaces what Immich had"
         );
         assert_eq!(summary(&c[1..2]), "1 photo: 1 rating");
+    }
+
+    /// A virtual copy shares its original's path — one asset, counted once, in selection order.
+    #[test]
+    fn a_copy_counts_as_its_original_once() {
+        let p = |n: &str| std::path::PathBuf::from(format!("/cache/server/{n}.jpg"));
+        assert_eq!(
+            selected_asset_ids(&[p("a"), p("b"), p("a")]),
+            vec!["a".to_string(), "b".to_string()]
+        );
     }
 
     #[test]

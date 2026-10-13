@@ -14,7 +14,7 @@
 use crate::segmented;
 use crate::theme::Hover as _;
 use crate::theme::{self, tokens};
-use crate::{AppView, LibrarySource, RustroomApp};
+use crate::{LibrarySource, RustroomApp};
 use eframe::egui;
 use rustroom_app::bar_plan::{self, Form, Item};
 use rustroom_app::format_filter;
@@ -85,7 +85,11 @@ fn plan_library(app: &RustroomApp, ui: &egui::Ui, avail: f32) -> Shown {
         .map(|l| segmented::chip_width(ui, l, &caption) + gap)
         .sum();
     let immich = if immich_source(app) {
-        text_w(ui, "Download", &body) + text_w(ui, "Remove downloads", &body) + pad * 2.0 + gap
+        text_w(ui, "Download", &body)
+            + text_w(ui, "Remove downloads", &body)
+            + text_w(ui, "Send marks", &body)
+            + pad * 3.0
+            + gap * 2.0
     } else {
         0.0
     };
@@ -170,7 +174,7 @@ pub(crate) fn library_row(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::
                     }
                     sort_combo(app, ui, shown.sort_compact);
                     if shown.immich {
-                        immich_cache_buttons(app, ui);
+                        crate::status_immich::immich_buttons(app, ui);
                     }
                     if shown.chips {
                         format_chips(app, ui, true);
@@ -363,12 +367,22 @@ fn more_menu(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context, show
             ui.horizontal_wrapped(|ui| format_chips(app, ui, false));
         }
         if !shown.immich && immich_source(app) {
-            immich_cache_buttons(app, ui);
+            crate::status_immich::immich_buttons(app, ui);
         }
         if !shown.size || !shown.chips {
             ui.separator();
         }
         stack_buttons(app, ui);
+        // M10.15d: present only while a last send exists — read once per catalog change.
+        if app.last_send_count() > 0
+            && ui
+                .button("Undo last send")
+                .hover("Puts back what the last send of marks replaced in Immich")
+                .clicked()
+        {
+            app.begin_undo_send();
+            ui.close();
+        }
         let hover = reindex_hover(app);
         if ui.button("Reindex").hover(hover).clicked() {
             app.reindex(ctx);
@@ -376,58 +390,6 @@ fn more_menu(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context, show
         }
     });
     r.0.hover("Shows more actions, such as Reindex and the stack controls");
-}
-
-/// Download and Remove downloads, for the current selection.
-///
-/// ⚠ **Library only, Immich sources only, and only with a selection.** A local photo is always
-/// "downloaded", so these are meaningless on a folder — and drawing a disabled pair on every folder is
-/// worse than drawing none.
-///
-/// ⚠⚠ **"Remove downloads", never "Discard" or "Delete".** The action *cannot* reach the server — the API
-/// key is read-only by the Settings help text's own instruction — and "discard" beside a photograph reads
-/// as throwing the photograph away, with a hover as the only correction (user's call, 2026-09-24).
-fn immich_cache_buttons(app: &mut RustroomApp, ui: &mut egui::Ui) {
-    if app.view != AppView::Library {
-        return;
-    }
-    let immich = matches!(
-        app.library.as_ref().map(|l| &l.source),
-        Some(LibrarySource::ImmichAlbum { .. }) | Some(LibrarySource::ImmichBucket { .. })
-    );
-    if !immich {
-        return;
-    }
-    // ⚠ From the ordinary selection — the same question Export asks, so "these twelve" means one thing.
-    let picked: Vec<std::path::PathBuf> = app
-        .library
-        .as_ref()
-        .map(|l| {
-            l.selection
-                .iter()
-                .filter_map(|i| l.entries.get(i))
-                .map(|e| e.id.path.clone())
-                .collect()
-        })
-        .unwrap_or_default();
-    let any = !picked.is_empty();
-
-    if ui
-        .add_enabled(any, egui::Button::new("Download"))
-        .hover("Downloads the selected photos for offline use")
-        .clicked()
-    {
-        app.download_assets(&picked);
-    }
-    if ui
-        .add_enabled(any, egui::Button::new("Remove downloads"))
-        .hover(
-            "Deletes the local copies of the selected photos, keeping them on your Immich server",
-        )
-        .clicked()
-    {
-        app.remove_downloaded(&picked);
-    }
 }
 
 /// What Reindex will do, in the words of whatever is open.
