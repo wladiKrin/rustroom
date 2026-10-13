@@ -20,7 +20,9 @@ use std::path::{Path, PathBuf};
 ///
 /// ⚠ Bump this whenever `immich::Asset`'s shape changes. A mismatched version is a miss, so a bump
 /// invalidates cleanly instead of deserialising old fields into a new struct.
-const VERSION: u16 = 1;
+///
+/// 2 (M10.15c): `Asset` gained `is_favorite` and `exif_info` — every list is fetched once more.
+const VERSION: u16 = 2;
 
 /// Which list a file holds.
 pub enum Key {
@@ -322,11 +324,31 @@ mod tests {
         let path = only_file(&dir);
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(
-            text.contains("\"version\":1"),
+            text.contains("\"version\":2"),
             "the payload must carry its version: {text:.80}"
         );
-        std::fs::write(&path, text.replace("\"version\":1", "\"version\":99")).unwrap();
+        std::fs::write(&path, text.replace("\"version\":2", "\"version\":99")).unwrap();
         assert!(load(&dir, &key, &v).is_none());
+    }
+
+    /// M10.15c: lists cached before the favourite and the rating were read are fetched again.
+    #[test]
+    fn a_version_one_list_is_a_miss() {
+        let dir = temp_dir("version-one");
+        let key = Key::Album("abc".into());
+        let v = album_validator(1, "x");
+        store(&dir, &key, &v, &[asset("one")]);
+        let path = only_file(&dir);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            load(&dir, &key, &v).is_some(),
+            "fixture: the current version loads"
+        );
+        std::fs::write(&path, text.replace("\"version\":2", "\"version\":1")).unwrap();
+        assert!(
+            load(&dir, &key, &v).is_none(),
+            "a pre-M10.15c list was used"
+        );
     }
 
     /// ⚠ Storing twice replaces the file rather than accumulating, which is why no budget is needed.

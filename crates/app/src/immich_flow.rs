@@ -385,6 +385,11 @@ impl RustroomApp {
             if let Err(e) = rustroom_app::immich_catalog::record_assets(cat, &root, &scan) {
                 eprintln!("catalog: {e}");
             }
+            // M10.15c: Immich's own stars and favourite, filled once where Rustroom has none —
+            // before the grid is built, so they show as the album opens.
+            if let Err(e) = rustroom_app::immich_catalog::fill_marks(cat, &root, assets) {
+                eprintln!("catalog: {e}");
+            }
         }
         self.refresh_immich_present();
         let n = self.open_scan(
@@ -431,6 +436,10 @@ impl RustroomApp {
         // `immich_catalog::record_assets`, not repeated here.
         if let Some(cat) = &self.catalog {
             if let Err(e) = rustroom_app::immich_catalog::record_assets(cat, &root, &scan) {
+                eprintln!("catalog: {e}");
+            }
+            // M10.15c: as for an album.
+            if let Err(e) = rustroom_app::immich_catalog::fill_marks(cat, &root, assets) {
                 eprintln!("catalog: {e}");
             }
         }
