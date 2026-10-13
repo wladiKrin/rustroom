@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M10.14e: the catalog at 100,000 photos — measured, and two quadratic shapes removed (2026-10-13)](#2026-10-13--m1014e-the-catalog-at-100000-photos--measured-and-two-quadratic-shapes-removed-branch-m1014e-catalog-scale)
+- [M10.14e: the catalog at 100,000 photos — measured, and two quadratic shapes removed (2026-10-13)](#2026-10-13--m1014e-the-catalog-at-100000-photos--measured-and-two-quadratic-shapes-removed-branch-m1014e-catalog-scale-merged-2026-10-13)
 - [M10.14d: the app-vs-probe drag gap, decomposed — and the geometry gather tiled (2026-10-13)](#2026-10-13--m1014d-the-app-vs-probe-drag-gap-decomposed--and-the-geometry-gather-tiled-branch-m1014d-geometry-tiles-merged-2026-10-13)
 - [M10.14c: Clarity's "coalescing" — a spike, withdrawn on its kill rule (2026-10-12)](#2026-10-12--m1014c-claritys-coalescing--a-spike-withdrawn-on-its-kill-rule)
 - [M10.14b: the prefix-cache eviction fix's picture half, closed by a test (2026-10-12)](#2026-10-12--m1014b-the-prefix-cache-eviction-fixs-picture-half-closed-by-a-test-branch-m1014b-resume-picture-merged-2026-10-12)
@@ -172,7 +172,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
-### 2026-10-13 — M10.14e: the catalog at 100,000 photos — measured, and two quadratic shapes removed (branch `m10.14e-catalog-scale`)
+### 2026-10-13 — M10.14e: the catalog at 100,000 photos — measured, and two quadratic shapes removed (branch `m10.14e-catalog-scale`, merged 2026-10-13)
 
 **The item (P-21):** catalog scale was unproven past ~8,400 photos; the ask was a synthetic 100k-row
 benchmark of All Photos, search, smart collections and the folder tree, with the numbers written down.
@@ -216,6 +216,7 @@ photo's sidecar (2.4 s); a change costs the rail one 92 ms re-read; search re-fi
 (72 ms). At the author's ~8,400 photos All Photos now opens in roughly 0.13 s.
 
 **Counts:** 3722 → **3731 tests** (8 ignored, `catalog_scale` the new one).
+✅ **Confirmed by the author ("works") and merged 2026-10-13.**
 
 ### 2026-10-13 — M10.14d: the app-vs-probe drag gap, decomposed — and the geometry gather tiled (branch `m10.14d-geometry-tiles`, merged 2026-10-13)
 

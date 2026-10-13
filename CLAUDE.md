@@ -168,7 +168,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-10-12)
 
-**3722 tests** (7 ignored), **87 golden tests** (74 reference images — `cargo test --workspace --test golden`),
+**3731 tests** (8 ignored), **87 golden tests** (74 reference images — `cargo test --workspace --test golden`),
 gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
@@ -231,9 +231,8 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.12b** (table above).
 
-**▶ IN REVIEW: M10.14e** — the 100k catalog benchmark and its two fixes, on branch `m10.14e-catalog-scale`.
-**After it: M10.14f** (⏸ parked items) and **g** (⏸ blocked), then **M10.14h** (the reference photo on
-the GPU). M10.13 left open by the author (a ⏸, b/c folded into d); M10.14a and c ⛔ withdrawn.
+**▶ NEXT: M10.14h — the reference photo on the GPU** (M10.14f ⏸ parked until a need shows, g ⏸ blocked).
+M10.13 left open by the author (a ⏸, b/c folded into d); M10.14a and c ⛔ withdrawn; b, d, e ✅.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
 release engineering, LAST.** The canonical list — every sub-item with its date, size and reasoning — is
