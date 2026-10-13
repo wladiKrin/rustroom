@@ -188,12 +188,8 @@ pub fn write_for(cat: &Catalog, photo: &Path) -> bool {
 /// ⚠ De-duplicated to **files**: two copies of one photo are one sidecar, and writing it twice
 /// would be two identical merges.
 pub fn write_for_all(cat: &Catalog, photos: &[PathBuf]) {
-    let mut done: Vec<&Path> = Vec::new();
-    for p in photos {
-        if done.contains(&p.as_path()) {
-            continue;
-        }
-        done.push(p.as_path());
+    // ⚠ Through `unique::first_of_each`: a whole selection can arrive here (M10.14e).
+    for p in crate::unique::first_of_each(photos.iter().map(|p| p.as_path())) {
         write_for(cat, p);
     }
 }
@@ -266,26 +262,20 @@ pub fn apply(cat: &Catalog, photo: &Path, s: &xmp::Sidecar) {
 /// `set_xmp_mtime` silently does nothing. Correct: without a row there is nowhere to put the
 /// marks either.
 pub fn import_newer(cat: &Catalog, photos: &[PathBuf]) -> usize {
+    // ⚠ Folders and files through `unique` — a `Vec` searched per photo, twice, made this quadratic:
+    // 18.6 s on opening All Photos at 100,000 photos (M10.14e).
     let mut seen: HashMap<PathBuf, i64> = HashMap::new();
-    let mut folders: Vec<PathBuf> = Vec::new();
-    for p in photos {
-        if let Some(dir) = p.parent() {
-            if !folders.iter().any(|f| f == dir) {
-                folders.push(dir.to_path_buf());
-                if let Ok(rows) = cat.xmp_mtimes_in(dir) {
-                    seen.extend(rows);
-                }
-            }
+    for dir in crate::unique::folders_of(photos.iter().map(|p| p.as_path())) {
+        if let Ok(rows) = cat.xmp_mtimes_in(&dir) {
+            seen.extend(rows);
         }
     }
 
     let mut n = 0;
-    let mut done: Vec<&Path> = Vec::new();
-    for photo in photos {
-        if !takes_sidecar(photo) || done.contains(&photo.as_path()) {
+    for photo in crate::unique::first_of_each(photos.iter().map(|p| p.as_path())) {
+        if !takes_sidecar(photo) {
             continue;
         }
-        done.push(photo.as_path());
         let path = sidecar_path(photo);
         let Some(secs) = mtime_secs(&path) else {
             continue;

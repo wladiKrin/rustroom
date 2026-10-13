@@ -106,6 +106,7 @@ pub mod thumb_window;
 pub mod tile_layout;
 pub mod tone_curve_tool;
 pub mod tool;
+pub mod unique;
 pub mod view_region;
 pub mod visualize;
 pub mod watermark_store;
