@@ -25,21 +25,49 @@ pub enum SettingsError {
 pub struct SettingsStore {
     path: PathBuf,
     secrets: Option<Arc<dyn SecretStore>>,
-    /// The keys last written to the keychain — or last TRIED, when it refused: `save` writes only when
-    /// they change, because settings are saved on many ordinary changes, a keychain write may ask for
-    /// access, and a denied prompt must not come back on every save. The next launch tries again.
-    written: Mutex<Option<Keys>>,
-    home: Mutex<KeyHome>,
+    inner: Arc<Inner>,
+    /// The keychain writes in flight, for [`Self::flush`].
+    writers: Mutex<Vec<std::thread::JoinHandle<()>>>,
+}
+
+/// What the keychain writer threads share with the store.
+struct Inner {
+    path: PathBuf,
+    state: Mutex<KeyState>,
+}
+
+struct KeyState {
+    /// The keys the keychain is known to hold.
+    stored: Option<Keys>,
+    /// The keys last written OR TRIED, a refused write included — a save writes only when the keys
+    /// differ from these, because settings are saved on many ordinary changes, a keychain write may
+    /// ask for a password, and a denied prompt must not come back on every save. The next launch
+    /// tries again.
+    tried: Option<Keys>,
+    home: KeyHome,
+    /// Keychain writes not yet answered — while any is, the file keeps its keys.
+    pending: usize,
+    /// The settings last loaded or saved, which a finished write re-saves without its keys.
+    last: Option<Settings>,
 }
 
 impl SettingsStore {
     /// Settings at `path`, the keys in the file — every test's constructor.
     pub fn new(path: PathBuf) -> Self {
         Self {
+            inner: Arc::new(Inner {
+                path: path.clone(),
+                state: Mutex::new(KeyState {
+                    stored: None,
+                    tried: None,
+                    home: KeyHome::File,
+                    pending: 0,
+                    last: None,
+                }),
+            }),
             path,
             secrets: None,
-            written: Mutex::new(None),
-            home: Mutex::new(KeyHome::File),
+            writers: Mutex::new(Vec::new()),
         }
     }
 
@@ -69,12 +97,24 @@ impl SettingsStore {
 
     /// Where the Immich keys are kept now — what the Settings window's hover text says.
     pub fn key_home(&self) -> KeyHome {
-        *self.home.lock().unwrap_or_else(|e| e.into_inner())
+        self.inner.lock().home
+    }
+
+    /// Wait for the keychain writes in flight — what a test checks after; the app never needs to,
+    /// because the file keeps the keys until the keychain has them.
+    pub fn flush(&self) {
+        let writers = std::mem::take(&mut *self.writers.lock().unwrap_or_else(|e| e.into_inner()));
+        for w in writers {
+            let _ = w.join();
+        }
     }
 
     /// Read the settings. **Infallible**: a missing or malformed file yields the defaults,
     /// because a corrupt settings file must never brick the app — and a keychain that refuses
     /// leaves the keys as the file has them, writing and deleting nothing.
+    ///
+    /// ⚠ The READ is synchronous: the keys are needed to connect, and on macOS its access prompt —
+    /// once per build of an ad-hoc-signed app — comes before the window. Writes are not; see `save`.
     pub fn load(&self) -> Settings {
         let mut s: Settings = std::fs::read_to_string(&self.path)
             .ok()
@@ -86,75 +126,116 @@ impl SettingsStore {
         let file = keys_of(&s);
         if file != Keys::default() {
             // ⚠⚠ The one rule: the file's keys are the newest — move them in, and only then out.
-            if store.write(&file).is_ok() {
-                self.remember(Some(file), KeyHome::Keychain);
-                let _ = self.write_file(&s, true);
-            } else {
-                self.remember(Some(file), KeyHome::File);
+            {
+                let mut st = self.inner.lock();
+                st.last = Some(s.clone());
+                st.tried = Some(file.clone());
+                st.pending += 1;
             }
+            self.write_in_background(store, file);
             return s;
         }
+        let mut st = self.inner.lock();
         match store.read() {
             Ok(Some(k)) => {
                 s.immich_key = k.browse.clone();
                 s.immich_upload_key = k.upload.clone();
-                self.remember(Some(k), KeyHome::Keychain);
+                st.stored = Some(k.clone());
+                st.tried = Some(k);
+                st.home = KeyHome::Keychain;
             }
-            Ok(None) => self.remember(None, KeyHome::Keychain),
+            Ok(None) => st.home = KeyHome::Keychain,
             // ⚠ Denied or unavailable: Immich is simply not connected this session.
-            Err(_) => self.remember(None, KeyHome::File),
+            Err(_) => st.home = KeyHome::File,
         }
+        st.last = Some(s.clone());
         s
     }
 
     /// Write the settings, creating the directory if needed — the keys to the keychain when they
-    /// changed and it takes them, otherwise to the file.
+    /// changed, **in the background**, the file keeping them until the keychain has them.
     ///
-    /// Called on change rather than on quit: it is one flag in a tiny file, and quitting is
-    /// not always graceful.
+    /// ⚠⚠ In the background because a keychain write can wait on a password dialog for as long as
+    /// the user takes — 39–91 s measured on the author's Mac (M10.15a); on the window's thread that
+    /// froze the app. Called on change rather than on quit: it is one flag in a tiny file, and
+    /// quitting is not always graceful.
     pub fn save(&self, s: &Settings) -> Result<(), SettingsError> {
         let Some(store) = &self.secrets else {
-            return self.write_file(s, false);
+            return write_file(&self.path, s, false);
         };
         let keys = keys_of(s);
-        let known = self
-            .written
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let unchanged =
-            known.as_ref() == Some(&keys) || (known.is_none() && keys == Keys::default());
-        if !unchanged {
-            match store.write(&keys) {
-                Ok(()) => self.remember(Some(keys), KeyHome::Keychain),
-                Err(_) => self.remember(Some(keys), KeyHome::File),
+        let changed = {
+            let mut st = self.inner.lock();
+            st.last = Some(s.clone());
+            let unchanged =
+                st.tried.as_ref() == Some(&keys) || (st.tried.is_none() && keys == Keys::default());
+            if !unchanged {
+                st.tried = Some(keys.clone());
+                st.pending += 1;
             }
-        }
-        self.write_file(s, self.key_home() == KeyHome::Keychain)
-    }
-
-    fn remember(&self, written: Option<Keys>, home: KeyHome) {
-        *self.written.lock().unwrap_or_else(|e| e.into_inner()) = written;
-        *self.home.lock().unwrap_or_else(|e| e.into_inner()) = home;
-    }
-
-    /// The file, with both key fields blank when the keychain holds them.
-    fn write_file(&self, s: &Settings, blank_keys: bool) -> Result<(), SettingsError> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let text = if blank_keys {
-            serde_json::to_string_pretty(&Settings {
-                immich_key: String::new(),
-                immich_upload_key: String::new(),
-                ..s.clone()
-            })?
-        } else {
-            serde_json::to_string_pretty(s)?
+            let blank = st.pending == 0
+                && st.home == KeyHome::Keychain
+                && st.stored.as_ref() == Some(&keys);
+            write_file(&self.path, s, blank)?;
+            !unchanged
         };
-        std::fs::write(&self.path, text)?;
+        if changed {
+            self.write_in_background(store, keys);
+        }
         Ok(())
     }
+
+    fn write_in_background(&self, store: &Arc<dyn SecretStore>, keys: Keys) {
+        let (store, inner) = (Arc::clone(store), Arc::clone(&self.inner));
+        let handle = std::thread::spawn(move || {
+            let ok = store.write(&keys).is_ok();
+            let mut st = inner.lock();
+            st.pending -= 1;
+            if ok {
+                st.stored = Some(keys);
+                st.home = KeyHome::Keychain;
+            } else if st.tried.as_ref() == Some(&keys) {
+                st.home = KeyHome::File;
+            }
+            // ⚠⚠ The file loses the keys only now, and only if the keychain holds exactly the ones
+            // last saved — a newer change still in flight keeps them in the file.
+            if st.pending == 0 && st.home == KeyHome::Keychain {
+                if let Some(last) = st.last.clone() {
+                    if Some(keys_of(&last)) == st.stored {
+                        let _ = write_file(&inner.path, &last, true);
+                    }
+                }
+            }
+        });
+        self.writers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(handle);
+    }
+}
+
+impl Inner {
+    fn lock(&self) -> std::sync::MutexGuard<'_, KeyState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// The file, with both key fields blank when the keychain holds them.
+fn write_file(path: &Path, s: &Settings, blank_keys: bool) -> Result<(), SettingsError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let text = if blank_keys {
+        serde_json::to_string_pretty(&Settings {
+            immich_key: String::new(),
+            immich_upload_key: String::new(),
+            ..s.clone()
+        })?
+    } else {
+        serde_json::to_string_pretty(s)?
+    };
+    std::fs::write(path, text)?;
+    Ok(())
 }
 
 /// The two keys a settings value carries.
@@ -209,6 +290,7 @@ mod tests {
         let st = store(&dir, &m);
         let _ = st.load();
         st.save(&with_keys(&keys("b", "u"))).unwrap();
+        st.flush();
         assert_eq!(
             file_keys(&st.path),
             Some(Keys::default()),
@@ -238,6 +320,7 @@ mod tests {
         let m = Arc::new(Memory::new());
         let st = store(&dir, &m);
         let s = st.load();
+        st.flush();
         assert_eq!(
             (s.immich_key.as_str(), s.immich_upload_key.as_str()),
             ("old-b", "old-u")
@@ -270,7 +353,14 @@ mod tests {
             Some(keys("b", "u")),
             "the load dropped them"
         );
+        st.flush();
+        assert_eq!(
+            file_keys(&path),
+            Some(keys("b", "u")),
+            "the refused write dropped them"
+        );
         st.save(&s).unwrap();
+        st.flush();
         assert_eq!(file_keys(&path), Some(keys("b", "u")), "never dropped");
         assert_eq!(store(&dir, &m).load().immich_upload_key, "u");
         assert_eq!(st.key_home(), KeyHome::File);
@@ -291,6 +381,7 @@ mod tests {
             s.panel_sections.folders = i % 2 == 0;
             st.save(&s).unwrap();
         }
+        st.flush();
         assert_eq!(m.attempts(), 1, "the refused write was retried");
     }
 
@@ -311,6 +402,7 @@ mod tests {
             ("", "")
         );
         st.save(&s).unwrap();
+        st.flush();
         assert_eq!(m.writes(), 0, "nothing written");
         assert_eq!(m.item(), Some(keys("b", "u")), "the item is untouched");
         assert_eq!(
@@ -328,7 +420,9 @@ mod tests {
             .save(&with_keys(&keys("new-b", "new-u")))
             .unwrap();
         let m = Arc::new(Memory::with_item(keys("old-b", "old-u")));
-        let s = store(&dir, &m).load();
+        let st = store(&dir, &m);
+        let s = st.load();
+        st.flush();
         assert_eq!(s.immich_key, "new-b");
         assert_eq!(m.item(), Some(keys("new-b", "new-u")));
         assert_eq!(file_keys(&path), Some(Keys::default()));
@@ -345,6 +439,7 @@ mod tests {
             s.panel_sections.folders = i % 2 == 0;
             st.save(&s).unwrap();
         }
+        st.flush();
         assert_eq!(
             m.writes(),
             writes,
@@ -361,12 +456,39 @@ mod tests {
         assert_eq!(s.immich_key, "b", "fixture check");
         s.immich_key.clear();
         st.save(&s).unwrap();
+        st.flush();
         let back = store(&dir, &m).load();
         assert_eq!(
             back.immich_key, "",
             "the keychain resurrected a cleared key"
         );
         assert_eq!(back.immich_upload_key, "u");
+    }
+
+    /// ⚠⚠ A keychain write can wait on a password dialog for as long as the user takes — measured at
+    /// 39–91 s on the author's Mac. A save must return at once, the keys staying in the file until the
+    /// keychain has them.
+    #[test]
+    fn a_slow_keychain_does_not_hold_up_a_save() {
+        let dir = test_dir::TempDir::new("keys-slow");
+        let m = Arc::new(Memory::new());
+        m.set_delay(std::time::Duration::from_millis(400));
+        let st = store(&dir, &m);
+        let _ = st.load();
+        let t = std::time::Instant::now();
+        st.save(&with_keys(&keys("b", "u"))).unwrap();
+        assert!(
+            t.elapsed() < std::time::Duration::from_millis(200),
+            "the save waited for the keychain"
+        );
+        assert_eq!(
+            file_keys(&st.path),
+            Some(keys("b", "u")),
+            "kept in the file meanwhile"
+        );
+        st.flush();
+        assert_eq!(file_keys(&st.path), Some(Keys::default()));
+        assert_eq!(m.item(), Some(keys("b", "u")));
     }
 
     #[test]

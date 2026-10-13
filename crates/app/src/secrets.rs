@@ -111,6 +111,8 @@ pub struct Memory {
     fail_writes: AtomicBool,
     writes: AtomicUsize,
     attempts: AtomicUsize,
+    /// How long a write takes — a keychain waiting on a password dialog, in miniature.
+    delay: Mutex<std::time::Duration>,
 }
 
 impl Memory {
@@ -142,6 +144,10 @@ impl Memory {
         self.attempts.load(Ordering::SeqCst)
     }
 
+    pub fn set_delay(&self, d: std::time::Duration) {
+        *self.delay.lock().unwrap() = d;
+    }
+
     pub fn item(&self) -> Option<Keys> {
         self.item.lock().unwrap().clone()
     }
@@ -157,6 +163,7 @@ impl SecretStore for Memory {
 
     fn write(&self, keys: &Keys) -> Result<(), SecretError> {
         self.attempts.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(*self.delay.lock().unwrap());
         if self.fail_writes.load(Ordering::SeqCst) {
             return Err(SecretError("writing was refused".into()));
         }
