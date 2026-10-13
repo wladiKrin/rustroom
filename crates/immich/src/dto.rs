@@ -154,6 +154,31 @@ pub struct Asset {
     /// refetch, which is the deliberate trade against `thumbhash`, whose perceptual hash could
     /// survive a re-encode unchanged.
     pub updated_at: String,
+    /// Whether the asset is a favourite in Immich (M10.15c) — in **every** search reply, a plain
+    /// bool (captured 2026-10-13, `withExif` or not).
+    ///
+    /// ⚠ `default`: the lists cached before M10.15c lack it, and must still parse.
+    #[serde(default)]
+    pub is_favorite: bool,
+    /// The asset's EXIF block — sent only when a search asks `withExif: true` (M10.15c).
+    ///
+    /// ⚠ Only the rating is modelled: the rest — GPS among it — has no use here, and a narrow DTO
+    /// is one the next server version cannot break with a field it reshapes.
+    #[serde(default)]
+    pub exif_info: Option<ExifInfo>,
+}
+
+/// The part of an asset's `exifInfo` Rustroom reads.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExifInfo {
+    /// Stars 1–5, or `null` when unrated.
+    ///
+    /// ⚠⚠ **−1 means rejected** where the server's schema lets a client *write* a rating, while the
+    /// reply's schema says 1–5 only — a contradiction no real reply has settled, so the reader
+    /// (`app`'s `immich_catalog::server_marks`) handles −1 rather than trusting it away.
+    #[serde(default)]
+    pub rating: Option<i32>,
 }
 
 /// The reply to `POST /assets`.
@@ -227,6 +252,50 @@ mod tests {
     /// `GET /albums/{id}` returns an `assets` array, which it does not, and the test passed because
     /// it was checking my assumption against itself rather than against a server.
     const ALBUMS_REAL: &str = include_str!("../tests/fixtures/albums_real.json");
+    /// ⚠⚠ **Captured**, 2026-10-13, from the author's server (v3.2.0): `POST /search/metadata` with
+    /// `isFavorite: true, withExif: true` — his one favourite — trimmed to the fields this DTO reads
+    /// plus a few it does not; the location and the rest of `exifInfo` removed.
+    const SEARCH_MARKS_REAL: &str = include_str!("../tests/fixtures/search_marks_real.json");
+
+    #[test]
+    fn a_real_favourite_reads_its_heart_and_its_null_rating() {
+        let r: SearchResponse = serde_json::from_str(SEARCH_MARKS_REAL).expect("must parse");
+        let a = &r.assets.items[0];
+        assert!(a.is_favorite);
+        assert_eq!(a.exif_info.as_ref().map(|e| e.rating), Some(None));
+    }
+
+    /// ⚠ **Constructed**: no captured asset carries stars or a reject. The shapes follow the
+    /// server's schema (`ExifResponseDto.rating`: integer, nullable).
+    #[test]
+    fn a_rating_and_a_reject_are_read_from_exif() {
+        let with = |rating: i32| -> Asset {
+            serde_json::from_value(serde_json::json!({
+                "id": "a", "type": "IMAGE", "originalFileName": "a.jpg", "originalMimeType": null,
+                "width": 1, "height": 1, "thumbhash": null,
+                "fileModifiedAt": "2025-01-01T00:00:00.000Z",
+                "updatedAt": "2025-01-01T00:00:00.000Z",
+                "isFavorite": false, "exifInfo": {"rating": rating}
+            }))
+            .unwrap()
+        };
+        assert_eq!(with(3).exif_info.unwrap().rating, Some(3));
+        assert_eq!(with(-1).exif_info.unwrap().rating, Some(-1));
+    }
+
+    /// ⚠⚠ The lists cached before M10.15c lack both fields — they must still parse.
+    #[test]
+    fn an_old_cached_asset_without_the_new_fields_parses() {
+        let a: Asset = serde_json::from_value(serde_json::json!({
+            "id": "a", "type": "IMAGE", "originalFileName": "a.jpg", "originalMimeType": null,
+            "width": 1, "height": 1, "thumbhash": null,
+            "fileModifiedAt": "2025-01-01T00:00:00.000Z",
+            "updatedAt": "2025-01-01T00:00:00.000Z"
+        }))
+        .unwrap();
+        assert!(!a.is_favorite);
+        assert_eq!(a.exif_info, None);
+    }
 
     #[test]
     fn about_reads_the_version() {

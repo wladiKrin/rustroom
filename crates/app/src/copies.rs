@@ -640,6 +640,8 @@ mod tests {
             thumbhash: None,
             file_modified_at: "2025-01-01T00:00:00.000Z".into(),
             updated_at: "2025-01-02T00:00:00.000Z".into(),
+            is_favorite: false,
+            exif_info: None,
         }
     }
 
@@ -673,6 +675,46 @@ mod tests {
             app.immich_assets.contains_key("other"),
             "another album's list must be left alone — the open album, not all of them"
         );
+    }
+
+    /// M10.15c: opening an album fills Immich's marks into the catalog before the grid is built.
+    #[test]
+    fn opening_an_immich_album_fills_its_marks() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        with_server(&mut app);
+        let fav = immich::Asset {
+            is_favorite: true,
+            exif_info: Some(immich::ExifInfo { rating: Some(4) }),
+            ..one_asset("f")
+        };
+        app.open_immich_album(&ctx, "al".into(), "Al".into(), std::slice::from_ref(&fav));
+        let root = rustroom_app::immich_source::cache_root("https://example.invalid");
+        let path = rustroom_app::immich_source::cache_path(&root, &fav);
+        let m = app.catalog.as_ref().unwrap().marks(&path, 0).unwrap();
+        assert_eq!((m.rating, m.flag), (4, catalog::db::Flag::Pick));
+    }
+
+    /// M10.15c: a Timeline month fills the same way — its own call, so its own test.
+    #[test]
+    fn opening_an_immich_month_fills_its_marks() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        with_server(&mut app);
+        let rejected = immich::Asset {
+            exif_info: Some(immich::ExifInfo { rating: Some(-1) }),
+            ..one_asset("r")
+        };
+        app.open_immich_bucket(
+            &ctx,
+            "2026-08-01".into(),
+            "August 2026".into(),
+            std::slice::from_ref(&rejected),
+        );
+        let root = rustroom_app::immich_source::cache_root("https://example.invalid");
+        let path = rustroom_app::immich_source::cache_path(&root, &rejected);
+        let m = app.catalog.as_ref().unwrap().marks(&path, 0).unwrap();
+        assert_eq!((m.rating, m.flag), (0, catalog::db::Flag::Reject));
     }
 
     #[test]

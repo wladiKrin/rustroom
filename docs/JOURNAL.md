@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.15c: Immich's own rating and favourite, filled once (2026-10-13)](#2026-10-13--m1015c-immichs-own-rating-and-favourite-filled-once-branch-m1015c-immich-rating)
 - [M10.15b: clear the Immich downloads, and a soft limit that warns at startup (2026-10-13)](#2026-10-13--m1015b-clear-the-immich-downloads-and-a-soft-limit-that-warns-at-startup-branch-m1015b-immich-cache-clear-merged-2026-10-13)
 - [M10.15a: the Immich API keys in the OS keychain (2026-10-13)](#2026-10-13--m1015a-the-immich-api-keys-in-the-os-keychain-branch-m1015a-immich-keychain-merged-2026-10-13)
 - [M10.14e: the catalog at 100,000 photos — measured, and two quadratic shapes removed (2026-10-13)](#2026-10-13--m1014e-the-catalog-at-100000-photos--measured-and-two-quadratic-shapes-removed-branch-m1014e-catalog-scale-merged-2026-10-13)
@@ -173,6 +174,44 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-13 — M10.15c: Immich's own rating and favourite, filled once (branch `m10.15c-immich-rating`)
+
+**The item:** stars and favourites set in Immich's own apps never reached Rustroom. The read half of the
+two-way sync (M10.15d stays open) — **never written back**. Spec and plan `2026-10-13-m10.15c-*`.
+
+**Measured before designing — real replies, the author's script** (it read the key from the keychain
+itself; the key never passed through me): `POST /search/metadata`, behind every album and month, carries
+**`isFavorite` on every asset**, a plain bool; the rating lives at **`exifInfo.rating`, sent only with
+`withExif: true`** — **858 → 1,327 KB (+55%), 0.60–0.65 → 0.78–0.83 s** for a 1,000-asset page. On his
+server: **1 favourite, 0 ratings** in the 1,022-photo album. He builds it for the marks he will set.
+⚠ The server's schema (v3.2.0, published at `/api/spec.json`) lets a client *write* −1 = rejected while
+the *reply* says 1–5 — a contradiction no real reply settled, so −1 is handled rather than trusted away.
+
+**The author's rules:** fill only where Rustroom has nothing; each mark at most once per photo (a filled
+mark he clears stays cleared); favourite → **pick**, −1 → **reject**, both → pick; stars and favourites.
+
+**Built:**
+- **`immich`:** `Asset::is_favorite` and `exif_info: Option<ExifInfo { rating }>`, all `serde(default)`
+  (the lists cached before lack them); both search bodies send `withExif: true`; a **captured** fixture
+  (his one favourite, trimmed — no location) and **constructed** 3-star and −1 cases, each saying so.
+- **`catalog` v13:** `photos.filled_rating` / `filled_flag`; `fill_from_server` keeps **the whole rule in
+  the SQL** (`… WHERE copy = 0 AND rating = 0 AND filled_rating = 0`), so a no-op fill changes no row and
+  moves no `change_count`. ⚠ Six older upgrade-test fixtures had to drop the two columns too — each fakes
+  an older catalog by removing what later versions add, and v13's `ADD COLUMN` met them as duplicates.
+- **App:** `immich_catalog::server_marks` (the mapping) and `fill_marks`, called after `record_assets` in
+  both `open_immich_album` and `open_immich_bucket`, before the grid; `immich_list_cache::VERSION` 2.
+- ⚠ **When a mark arrives:** on a list's fetch — every list once now (the version bump), then when an
+  album's count or last change, or a month's count, moves. A later rating on a photo in an unchanged
+  cached month waits. Accepted in the design.
+
+**Sabotages, every one red:** no `withExif` on the album body; no default on `is_favorite`; no
+`rating = 0`; no `filled_rating = 0`; no `copy = 0`; a fill updating every time (the counter test);
+the album's fill call removed; the month's (its own test, beyond the plan); no −1 arm; the version left
+at 1. ⚠ Four fill tests passed against a stub that filled nothing — they assert absence — and were
+proven by the sabotages instead.
+
+**Counts:** 3764 → **3781 tests** (9 ignored).
 
 ### 2026-10-13 — M10.15b: clear the Immich downloads, and a soft limit that warns at startup (branch `m10.15b-immich-cache-clear`, merged 2026-10-13)
 

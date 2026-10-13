@@ -79,6 +79,8 @@ mod tests {
             thumbhash: None,
             file_modified_at: "2025-08-14T09:21:33.000Z".into(),
             updated_at: "2026-01-01T00:00:00.000Z".into(),
+            is_favorite: false,
+            exif_info: None,
         }
     }
 

@@ -16,7 +16,7 @@ pub enum Flag {
 }
 
 impl Flag {
-    fn to_i64(self) -> i64 {
+    pub(super) fn to_i64(self) -> i64 {
         match self {
             Flag::None => 0,
             Flag::Pick => 1,

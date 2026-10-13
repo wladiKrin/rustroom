@@ -8,8 +8,8 @@ pub mod error;
 pub mod multipart;
 
 pub use dto::{
-    About, AlbumSummary, Asset, AssetType, Bucket, NextPage, SearchAssets, SearchResponse, Stack,
-    StackMember, Upload, UploadStatus,
+    About, AlbumSummary, Asset, AssetType, Bucket, ExifInfo, NextPage, SearchAssets,
+    SearchResponse, Stack, StackMember, Upload, UploadStatus,
 };
 pub use error::Error;
 
@@ -68,11 +68,16 @@ impl Filter {
     /// ⚠ Crate-visible so the two shapes can be asserted without a server.
     pub(crate) fn body(&self, size: u32) -> serde_json::Value {
         match self {
-            Filter::Album(id) => serde_json::json!({ "albumIds": [id], "size": size }),
+            // ⚠ `withExif` (M10.15c): Immich's rating lives in `exifInfo`, which a search returns
+            // only when asked — 55% more bytes, ~180 ms per 1,000 assets, measured 2026-10-13.
+            Filter::Album(id) => {
+                serde_json::json!({ "albumIds": [id], "size": size, "withExif": true })
+            }
             Filter::TakenBetween { after, before } => serde_json::json!({
                 "takenAfter": after,
                 "takenBefore": before,
                 "size": size,
+                "withExif": true,
             }),
         }
     }
@@ -444,6 +449,9 @@ mod tests {
         assert_eq!(db["takenBefore"], "2025-12-01T00:00:00.000Z");
         assert!(db.get("albumIds").is_none());
         assert_eq!(db["size"], PAGE_SIZE);
+        // M10.15c: the rating lives in `exifInfo`, which a search returns only when asked.
+        assert_eq!(ab["withExif"], true, "an album asks for the rating");
+        assert_eq!(db["withExif"], true, "a month asks for the rating");
     }
 
     /// ⚠⚠ The size values are Immich's `AssetMediaSize` spelling. A typo here is a 400 at runtime

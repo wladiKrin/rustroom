@@ -46,6 +46,51 @@ pub fn record_assets(
     cat.set_original_names(root, &names)
 }
 
+/// What Immich's own marks become in Rustroom (M10.15c, the author's mapping): 1–5 stars; a
+/// favourite → pick; −1 (rejected) → reject and no stars; a favourite rejected → pick, the heart
+/// being the more deliberate mark. Anything else is nothing.
+///
+/// ⚠ −1 is handled although the reply's schema says 1–5: writing a rating allows −1, and no real
+/// reply has settled what the server sends back.
+pub fn server_marks(a: &immich::Asset) -> (Option<u8>, Option<catalog::db::Flag>) {
+    use catalog::db::Flag;
+    let rating = a.exif_info.as_ref().and_then(|e| e.rating);
+    let stars = rating.filter(|r| (1..=5).contains(r)).map(|r| r as u8);
+    let flag = if a.is_favorite {
+        Some(Flag::Pick)
+    } else if rating == Some(-1) {
+        Some(Flag::Reject)
+    } else {
+        None
+    };
+    (stars, flag)
+}
+
+/// Fill the catalog's marks of `assets` (cached under `root`) from Immich's own — once each, never
+/// over the user's (`Catalog::fill_from_server` holds that rule). Only assets carrying a mark are
+/// passed on, so a list with none costs no query at all.
+pub fn fill_marks(
+    cat: &catalog::db::Catalog,
+    root: &Path,
+    assets: &[immich::Asset],
+) -> Result<usize, catalog::db::CatalogError> {
+    let fills: Vec<catalog::db::ServerFill> = assets
+        .iter()
+        .filter_map(|a| {
+            let (rating, flag) = server_marks(a);
+            (rating.is_some() || flag.is_some()).then(|| catalog::db::ServerFill {
+                photo: crate::immich_source::cache_path(root, a),
+                rating,
+                flag,
+            })
+        })
+        .collect();
+    if fills.is_empty() {
+        return Ok(0);
+    }
+    cat.fill_from_server(&fills)
+}
+
 /// Whether this grid cell should carry the downloaded indicator.
 ///
 /// ⚠ **Immich sources only** — asked for under the Immich header and nowhere else. A local photo is
@@ -135,7 +180,65 @@ mod tests {
             thumbhash: None,
             file_modified_at: "2025-01-01T00:00:00.000Z".into(),
             updated_at: "2025-01-02T00:00:00.000Z".into(),
+            is_favorite: false,
+            exif_info: None,
         }
+    }
+
+    fn marked(id: &str, favourite: bool, rating: Option<i32>) -> immich::Asset {
+        immich::Asset {
+            is_favorite: favourite,
+            exif_info: Some(immich::ExifInfo { rating }),
+            ..asset(id)
+        }
+    }
+
+    /// M10.15c: Immich's own marks as Rustroom's — the author's mapping.
+    #[test]
+    fn the_server_marks_map_to_stars_pick_and_reject() {
+        use catalog::db::Flag;
+        for (fav, rating, want) in [
+            (false, Some(3), (Some(3), None)),
+            (false, Some(5), (Some(5), None)),
+            (true, None, (None, Some(Flag::Pick))),
+            (false, Some(-1), (None, Some(Flag::Reject))),
+            (true, Some(-1), (None, Some(Flag::Pick))),
+            (true, Some(4), (Some(4), Some(Flag::Pick))),
+            (false, Some(0), (None, None)),
+            (false, Some(6), (None, None)),
+            (false, Some(-2), (None, None)),
+            (false, None, (None, None)),
+        ] {
+            assert_eq!(
+                server_marks(&marked("a", fav, rating)),
+                want,
+                "{fav} {rating:?}"
+            );
+        }
+        assert_eq!(
+            server_marks(&asset("plain")),
+            (None, None),
+            "no exifInfo at all"
+        );
+    }
+
+    #[test]
+    fn fill_marks_fills_the_listed_photos_once() {
+        let cat = catalog::db::Catalog::open_in_memory().unwrap();
+        let root = std::path::Path::new("/cache/server");
+        let assets = [marked("a", true, Some(3)), marked("b", false, None)];
+        let scan = crate::immich_source::entries_from_assets(&assets, root);
+        record_assets(&cat, root, &scan).unwrap();
+        assert_eq!(fill_marks(&cat, root, &assets).unwrap(), 2);
+        let a = cat
+            .marks(&crate::immich_source::cache_path(root, &assets[0]), 0)
+            .unwrap();
+        assert_eq!((a.rating, a.flag), (3, catalog::db::Flag::Pick));
+        assert_eq!(
+            fill_marks(&cat, root, &assets).unwrap(),
+            0,
+            "a second open fills nothing"
+        );
     }
 
     fn marks(rating: u8) -> catalog::db::Marks {
