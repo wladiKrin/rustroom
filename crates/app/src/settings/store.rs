@@ -34,16 +34,20 @@ pub struct SettingsStore {
 struct Inner {
     path: PathBuf,
     state: Mutex<KeyState>,
+    /// Held across a keychain write — one at a time, so the last to land is the newest.
+    writing: Mutex<()>,
 }
 
 struct KeyState {
     /// The keys the keychain is known to hold.
     stored: Option<Keys>,
-    /// The keys last written OR TRIED, a refused write included — a save writes only when the keys
-    /// differ from these, because settings are saved on many ordinary changes, a keychain write may
-    /// ask for a password, and a denied prompt must not come back on every save. The next launch
+    /// The keys last handed to the keychain, a refused write included — a save writes only when the
+    /// keys differ from these, because settings are saved on many ordinary changes, a keychain write
+    /// may ask for a password, and a denied prompt must not come back on every save. The next launch
     /// tries again.
     tried: Option<Keys>,
+    /// The keys the last write actually sent — a queued writer finding `tried` already sent skips.
+    attempted: Option<Keys>,
     home: KeyHome,
     /// Keychain writes not yet answered — while any is, the file keeps its keys.
     pending: usize,
@@ -60,10 +64,12 @@ impl SettingsStore {
                 state: Mutex::new(KeyState {
                     stored: None,
                     tried: None,
+                    attempted: None,
                     home: KeyHome::File,
                     pending: 0,
                     last: None,
                 }),
+                writing: Mutex::new(()),
             }),
             path,
             secrets: None,
@@ -115,6 +121,9 @@ impl SettingsStore {
     ///
     /// ⚠ The READ is synchronous: the keys are needed to connect, and on macOS its access prompt —
     /// once per build of an ad-hoc-signed app — comes before the window. Writes are not; see `save`.
+    ///
+    /// ⚠ With a keychain every call reads it or starts a write, so the app calls this ONCE, at
+    /// startup (`bootstrap`); the other callers are tests, on `new`.
     pub fn load(&self) -> Settings {
         let mut s: Settings = std::fs::read_to_string(&self.path)
             .ok()
@@ -132,7 +141,7 @@ impl SettingsStore {
                 st.tried = Some(file.clone());
                 st.pending += 1;
             }
-            self.write_in_background(store, file);
+            self.write_in_background(store);
             return s;
         }
         let mut st = self.inner.lock();
@@ -180,22 +189,43 @@ impl SettingsStore {
             !unchanged
         };
         if changed {
-            self.write_in_background(store, keys);
+            self.write_in_background(store);
         }
         Ok(())
     }
 
-    fn write_in_background(&self, store: &Arc<dyn SecretStore>, keys: Keys) {
+    /// Write the newest keys — `tried` when this writer's turn comes, not the keys of the save that
+    /// spawned it.
+    ///
+    /// ⚠⚠ **One write at a time** (M10.15a's review): two writers side by side — a second key change
+    /// while the first write waits on its dialog — could land in either order, leaving the keychain
+    /// with the older keys, and in the worst interleaving the file blanked against the newer: a key
+    /// lost. Serialized, and each writing the newest, the last write to land is the newest and
+    /// `stored` is what the keychain holds. A writer whose keys were already sent skips: each write
+    /// may be one more password prompt.
+    fn write_in_background(&self, store: &Arc<dyn SecretStore>) {
         let (store, inner) = (Arc::clone(store), Arc::clone(&self.inner));
         let handle = std::thread::spawn(move || {
-            let ok = store.write(&keys).is_ok();
+            let _one_at_a_time = inner.writing.lock().unwrap_or_else(|e| e.into_inner());
+            let keys = {
+                let st = inner.lock();
+                if st.attempted == st.tried {
+                    None
+                } else {
+                    st.tried.clone()
+                }
+            };
+            let ok = keys.as_ref().map(|k| store.write(k).is_ok());
             let mut st = inner.lock();
             st.pending -= 1;
-            if ok {
-                st.stored = Some(keys);
-                st.home = KeyHome::Keychain;
-            } else if st.tried.as_ref() == Some(&keys) {
-                st.home = KeyHome::File;
+            if let (Some(keys), Some(ok)) = (keys, ok) {
+                st.attempted = Some(keys.clone());
+                if ok {
+                    st.stored = Some(keys);
+                    st.home = KeyHome::Keychain;
+                } else if st.tried.as_ref() == Some(&keys) {
+                    st.home = KeyHome::File;
+                }
             }
             // ⚠⚠ The file loses the keys only now, and only if the keychain holds exactly the ones
             // last saved — a newer change still in flight keeps them in the file.
@@ -489,6 +519,59 @@ mod tests {
         st.flush();
         assert_eq!(file_keys(&st.path), Some(Keys::default()));
         assert_eq!(m.item(), Some(keys("b", "u")));
+    }
+
+    /// Wait until `m` has been asked to write `n` times.
+    fn wait_for_attempts(m: &Memory, n: usize) {
+        let t = std::time::Instant::now();
+        while m.attempts() < n {
+            assert!(t.elapsed().as_secs() < 5, "no write started");
+            std::thread::yield_now();
+        }
+    }
+
+    /// ⚠⚠ Two key changes in quick succession: the first write still waits on its dialog when the
+    /// second is asked for. Run side by side, the older could land last — the keychain holding the
+    /// older keys, and in the worst interleaving the file blanked against the newer: a key lost.
+    #[test]
+    fn a_slow_older_write_never_lands_after_a_newer_one() {
+        let dir = test_dir::TempDir::new("keys-order");
+        let m = Arc::new(Memory::new());
+        let st = store(&dir, &m);
+        let _ = st.load();
+        m.set_delay(std::time::Duration::from_millis(300));
+        st.save(&with_keys(&keys("a", "a"))).unwrap();
+        wait_for_attempts(&m, 1);
+        m.set_delay(std::time::Duration::ZERO);
+        st.save(&with_keys(&keys("b", "b"))).unwrap();
+        st.flush();
+        assert_eq!(
+            m.item(),
+            Some(keys("b", "b")),
+            "the older write landed last"
+        );
+        assert_eq!(file_keys(&st.path), Some(Keys::default()));
+        assert_eq!(st.key_home(), KeyHome::Keychain);
+    }
+
+    /// Keys replaced while their write waited in line are never written — each write may be one more
+    /// password prompt.
+    #[test]
+    fn a_superseded_write_is_skipped() {
+        let dir = test_dir::TempDir::new("keys-superseded");
+        let m = Arc::new(Memory::new());
+        let st = store(&dir, &m);
+        let _ = st.load();
+        m.set_delay(std::time::Duration::from_millis(300));
+        st.save(&with_keys(&keys("a", "a"))).unwrap();
+        wait_for_attempts(&m, 1);
+        m.set_delay(std::time::Duration::ZERO);
+        st.save(&with_keys(&keys("b", "b"))).unwrap();
+        st.save(&with_keys(&keys("c", "c"))).unwrap();
+        st.flush();
+        assert_eq!(m.item(), Some(keys("c", "c")));
+        assert_eq!(m.attempts(), 2, "the replaced keys were written too");
+        assert_eq!(file_keys(&st.path), Some(Keys::default()));
     }
 
     #[test]

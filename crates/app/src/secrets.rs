@@ -162,8 +162,11 @@ impl SecretStore for Memory {
     }
 
     fn write(&self, keys: &Keys) -> Result<(), SecretError> {
+        // ⚠ The delay is taken BEFORE the attempt is counted, so a test that sees the count knows
+        // this write's delay is fixed and may change it for the next.
+        let delay = *self.delay.lock().unwrap();
         self.attempts.fetch_add(1, Ordering::SeqCst);
-        std::thread::sleep(*self.delay.lock().unwrap());
+        std::thread::sleep(delay);
         if self.fail_writes.load(Ordering::SeqCst) {
             return Err(SecretError("writing was refused".into()));
         }
