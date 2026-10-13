@@ -231,9 +231,9 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.12b** (table above).
 
-**▶ NEXT: M10.14e — a 100k-photo catalog benchmark** (performance & verification). M10.13 left open by
-the author (a ⏸, b/c folded into d); M10.14a and c ⛔ withdrawn on measurements; M10.14b closed by a
-test; M10.14d ✅ merged (the geometry gather by 8×8 tiles).
+**▶ IN REVIEW: M10.14e** — the 100k catalog benchmark and its two fixes, on branch `m10.14e-catalog-scale`.
+**After it: M10.14f** (⏸ parked items) and **g** (⏸ blocked), then **M10.14h** (the reference photo on
+the GPU). M10.13 left open by the author (a ⏸, b/c folded into d); M10.14a and c ⛔ withdrawn.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
 release engineering, LAST.** The canonical list — every sub-item with its date, size and reasoning — is
@@ -245,7 +245,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 |---|---|
 | **M10.12** the mask model | c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · d camera-matching colour out of the box (P-22), **with b's `ProfileLookTable` and c's per-photo profile folded in** (re-scoped 2026-10-12: neither changes a photo until d brings such a profile; b's `CameraCalibration` ⛔ withdrawn — a DNG-file tag, never in a profile) |
-| **M10.14** performance & verification | a ⛔ HSL `cbrt`/`atan2` (withdrawn 2026-10-12: the preview runs HSL on the GPU; ~1% of an export) · b ✅ the prefix-cache eviction fix's picture half (a test, 2026-10-12) · c ⛔ Clarity's coalescing (withdrawn 2026-10-12: a tiled, coalesced pass measured no faster — the floor is not coalescing) · d ✅ the ~10–12 ms drag gap (2026-10-13: mostly the probe's tiny angle sweep, ~5 ms the window's drawing; the gather tiled 8×8) · e a 100k-photo catalog benchmark · f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h the reference photo on the GPU (M10.12b's range masks with an offset, 31 ms vs 7–9 at fit) |
+| **M10.14** performance & verification | a ⛔ HSL `cbrt`/`atan2` (withdrawn 2026-10-12: the preview runs HSL on the GPU; ~1% of an export) · b ✅ the prefix-cache eviction fix's picture half (a test, 2026-10-12) · c ⛔ Clarity's coalescing (withdrawn 2026-10-12: a tiled, coalesced pass measured no faster — the floor is not coalescing) · d ✅ the ~10–12 ms drag gap (2026-10-13: mostly the probe's tiny angle sweep, ~5 ms the window's drawing; the gather tiled 8×8) · e ✅ a 100k-photo catalog benchmark (2026-10-13: `catalog_scale`; All Photos 204 → 3.8 s at 100k) · f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h the reference photo on the GPU (M10.12b's range masks with an offset, 31 ms vs 7–9 at fit) |
 | **M10.15** Immich | a API keys in the keychain · b evict cached originals · c read Immich's rating · d two-way sync (re-opened) |
 | **M10.16** AI tools | a depth masks · b AI denoise · c content-aware remove |
 | **M10.17** merge | a HDR · b panorama |
@@ -316,6 +316,9 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   frame, and read changing state (`immich_present`) live rather than invalidating a cache from a list
   of writers. ⚠ **Find it with `sample <pid> 8`**, never by reading code — and re-sample after each
   fix: twice the next cost was hidden behind the last. `grep -n 'became slow' docs/JOURNAL.md`.
+  ⚠ The rail reads the catalog through `rail_data::RailData`, once per change (M10.14e) — a new
+  rail fact joins it, never a query in the draw. ⚠⚠ **De-duplicate through `rustroom_app::unique`**,
+  never a `Vec` searched per item: eight such loops made All Photos 204 s at 100k photos.
 - ⚠⚠ **A mask's scene sliders (WB, Temp/Tint, Exposure, Contrast, the four regions) are OFFSETS in
   `SceneOffsetsStage`** (M10.12b), never its `MaskStage` (`pipeline::look_only`). A new scene field joins
   `has_scene_offsets`, `look_only`, `scene_only`, the stage and its GPU twin. A range/gating mask with an

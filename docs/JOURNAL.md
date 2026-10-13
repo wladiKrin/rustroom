@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.14e: the catalog at 100,000 photos — measured, and two quadratic shapes removed (2026-10-13)](#2026-10-13--m1014e-the-catalog-at-100000-photos--measured-and-two-quadratic-shapes-removed-branch-m1014e-catalog-scale)
 - [M10.14d: the app-vs-probe drag gap, decomposed — and the geometry gather tiled (2026-10-13)](#2026-10-13--m1014d-the-app-vs-probe-drag-gap-decomposed--and-the-geometry-gather-tiled-branch-m1014d-geometry-tiles-merged-2026-10-13)
 - [M10.14c: Clarity's "coalescing" — a spike, withdrawn on its kill rule (2026-10-12)](#2026-10-12--m1014c-claritys-coalescing--a-spike-withdrawn-on-its-kill-rule)
 - [M10.14b: the prefix-cache eviction fix's picture half, closed by a test (2026-10-12)](#2026-10-12--m1014b-the-prefix-cache-eviction-fixs-picture-half-closed-by-a-test-branch-m1014b-resume-picture-merged-2026-10-12)
@@ -170,6 +171,51 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-13 — M10.14e: the catalog at 100,000 photos — measured, and two quadratic shapes removed (branch `m10.14e-catalog-scale`)
+
+**The item (P-21):** catalog scale was unproven past ~8,400 photos; the ask was a synthetic 100k-row
+benchmark of All Photos, search, smart collections and the folder tree, with the numbers written down.
+
+**The benchmark:** `catalog_scale` — an `#[ignore]`d test **in the binary**, so it drives the real
+`RustroomApp` methods (`open_all_photos`, `smart_members`, `refilter`, a rail frame, a grid frame)
+rather than a mirror of them. A synthetic catalog in a test directory: year/day folders of 70 photos
+(30 % RAF), a sidecar on 10 %, a keyword on 20 %, a rating on 30 %, capture facts on every photo, two
+collections, three smart rules. `cargo test --release --workspace catalog_scale -- --ignored --nocapture`.
+⚠ The filesystem cache is warm; a first open after a reboot is slower.
+
+**Found 1 — one coding shape, quadratic, in EIGHT places:** de-duplicating paths or folders by searching
+a `Vec` once per photo — `collections::scan_of` (paths), the marks, captures and metadata reloads and
+`smart_members` (folders), the XMP import (folders and files), the XMP writer (files), the move count.
+10× the photos cost ~95× the time. Now `rustroom_app::unique::{folders_of, first_of_each}`, first-seen
+order kept, guarded by a 200,000-item test.
+
+**Found 2 — the rail asked the catalog six questions every frame** (photo count, folders with counts,
+collections, smart collections, keywords with counts, capture days): 27.5 ms a frame at 100k. Now
+`rustroom_app::rail_data::RailData`, re-read when `(Catalog::instance, change_count)` moves — `instance`
+is new, so two catalogs at one count are told apart. **Sabotaged:** keyed on identity alone, both the
+cache's test and `a_catalog_change_between_frames_shows_on_the_next` fail.
+
+**Measured** (release, M2; before → after at 100k):
+
+| | 10k | 30k | 100k |
+|---|---|---|---|
+| open All Photos | 2.4 → 0.16 s | 18.6 → 0.68 s | **204 → 3.8 s** |
+| ↳ sidecar check (`scan_of`) | 1.9 s → 28 ms | 15.5 s → 88 ms | 179 → 0.28 s |
+| ↳ sidecar loads (`entries::build`) | 59 ms | 0.51 s | 2.4 s — now the largest part |
+| ↳ XMP import / marks / captures | | | 18.6 / 2.1 / 2.1 → 0.19 / 0.14 / 0.20 s |
+| open a smart collection | 2.0 → 0.13 s | 17.4 → 0.48 s | **~190 → 1.6 s** |
+| search (per keystroke) | 6 ms | 18 ms | 72 ms |
+| catalog read / folder tree | 3 / 0.3 ms | 10 / 0.5 ms | 60 / 1.7 ms |
+| rail, per frame | 2.7 → 0.01 ms | 7.9 → 0.01 ms | **27.5 → 0.01 ms** |
+| rail frame after a change | 8.6 ms | 26 ms | 92 ms |
+| grid, per frame | 0.13 ms | 0.13 ms | 0.14 ms |
+
+**What is left at 100k**, recorded in `docs/BACKLOG.md` (P-21), not placed: every open loads every
+photo's sidecar (2.4 s); a change costs the rail one 92 ms re-read; search re-filters 100k per keystroke
+(72 ms). At the author's ~8,400 photos All Photos now opens in roughly 0.13 s.
+
+**Counts:** 3722 → **3731 tests** (8 ignored, `catalog_scale` the new one).
 
 ### 2026-10-13 — M10.14d: the app-vs-probe drag gap, decomposed — and the geometry gather tiled (branch `m10.14d-geometry-tiles`, merged 2026-10-13)
 
