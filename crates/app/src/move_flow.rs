@@ -271,19 +271,19 @@ fn shown(p: &Path) -> String {
 
 /// Photos, not files: a RAW+JPEG pair that moved together is one.
 fn photo_count(moves: &[(PathBuf, PathBuf)]) -> usize {
-    let mut seen: Vec<(Option<&Path>, String)> = Vec::new();
-    for (_, to) in moves {
-        let key = (
-            to.parent(),
-            to.file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-        );
-        if !seen.contains(&key) {
-            seen.push(key);
-        }
-    }
-    seen.len()
+    // ⚠ A hash set, not a `Vec` searched per move — a move can be the whole selection (M10.14e).
+    moves
+        .iter()
+        .map(|(_, to)| {
+            (
+                to.parent(),
+                to.file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect::<std::collections::HashSet<_>>()
+        .len()
 }
 
 /// What a move says in the status row.

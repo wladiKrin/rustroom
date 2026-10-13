@@ -32,13 +32,10 @@ pub fn scan_of(
     edited_at: impl Fn(&Path) -> Option<std::time::SystemTime>,
     modified_at: impl Fn(&Path) -> std::time::SystemTime,
 ) -> Vec<CatalogEntry> {
-    let mut seen: Vec<PathBuf> = Vec::new();
+    // ⚠ Through `unique::first_of_each` — a `Vec` searched per member made this quadratic: 179 s for
+    // All Photos at 100,000 photos (M10.14e, `catalog_scale`).
     let mut out = Vec::new();
-    for (path, _copy) in members {
-        if seen.contains(path) {
-            continue;
-        }
-        seen.push(path.clone());
+    for path in crate::unique::first_of_each(members.iter().map(|(p, _)| p.as_path())) {
         let file_name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -47,7 +44,7 @@ pub fn scan_of(
         // the collection had emptied itself.
         let modified = modified_at(path);
         out.push(CatalogEntry {
-            path: path.clone(),
+            path: path.to_path_buf(),
             file_name,
             modified,
             edited: edited_at(path),

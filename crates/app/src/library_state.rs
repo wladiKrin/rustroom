@@ -482,14 +482,9 @@ impl RustroomApp {
         let Some(lib) = self.library.as_ref() else {
             return;
         };
-        let mut folders: Vec<PathBuf> = Vec::new();
-        for e in &lib.entries {
-            if let Some(dir) = e.id.path.parent() {
-                if !folders.iter().any(|f| f == dir) {
-                    folders.push(dir.to_path_buf());
-                }
-            }
-        }
+        // ⚠ Through `unique::folders_of` — a `Vec` searched per photo was quadratic (M10.14e).
+        let folders =
+            rustroom_app::unique::folders_of(lib.entries.iter().map(|e| e.id.path.as_path()));
         let mut map = std::collections::HashMap::new();
         for dir in &folders {
             if let Ok(rows) = cat.marks_in(dir) {
@@ -520,14 +515,9 @@ impl RustroomApp {
         let Some(lib) = self.library.as_ref() else {
             return;
         };
-        let mut folders: Vec<PathBuf> = Vec::new();
-        for e in &lib.entries {
-            if let Some(dir) = e.id.path.parent() {
-                if !folders.iter().any(|f| f == dir) {
-                    folders.push(dir.to_path_buf());
-                }
-            }
-        }
+        // ⚠ Through `unique::folders_of` — a `Vec` searched per photo was quadratic (M10.14e).
+        let folders =
+            rustroom_app::unique::folders_of(lib.entries.iter().map(|e| e.id.path.as_path()));
         let mut map = std::collections::HashMap::new();
         for dir in &folders {
             if let Ok(rows) = cat.captures_in(dir) {

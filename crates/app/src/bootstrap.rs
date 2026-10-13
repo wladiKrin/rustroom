@@ -175,6 +175,7 @@ impl RustroomApp {
             new_keyword_parent: None,
             keyword_field: Default::default(),
             keyword_suggest: Default::default(),
+            rail_data: Default::default(),
             rename_draft: None,
             label_draft: None,
             snapshot_rename: None,

@@ -145,6 +145,12 @@ reviews measured so the deletion loses nothing. Ids are the professional review'
   and ~1,700 rows; the author's catalog holds 6,235 and opened a 398-photo folder without trouble. A
   working archive is 100k–1M. Ask: a synthetic 100k-row benchmark for All Photos, search, smart
   collections and the folder tree, with the numbers written down.
+  ✅ **Measured 2026-10-13 (M10.14e), `catalog_scale`:** at 100k, All Photos 204 → 3.8 s and a smart
+  collection ~190 → 1.6 s once eight quadratic de-duplications became a hash set; the rail 27.5 → 0.01 ms
+  a frame once it read the catalog per change. **Left, not placed:** every open still loads every
+  photo's sidecar (2.4 s at 100k — a lever: keep the edit summary in the catalog); a change costs the
+  rail one re-read (92 ms at 100k — `capture_days` and the folder counts over every photo); search
+  re-filters per keystroke (72 ms). `grep -n 'M10.14e' docs/JOURNAL.md`.
 - **P-22 · No camera-matching colour out of the box.** → **M10.13d**. No camera profiles ship; without a user `.dcp`
   a camera gets the matrix rendering, a Fuji shooter gets no film simulations, no LUTs ship. Ask: a
   legal route to profiles (community DCP/ICC sets, a ColorChecker workflow) — the *starter looks*

@@ -221,14 +221,8 @@ impl RustroomApp {
         let mut marks: std::collections::HashMap<PhotoId, catalog::db::Marks> = Default::default();
         let mut captures: std::collections::HashMap<PathBuf, core_image::Capture> =
             Default::default();
-        let mut folders: Vec<PathBuf> = Vec::new();
-        for e in &all {
-            if let Some(dir) = e.id.path.parent() {
-                if !folders.iter().any(|f| f == dir) {
-                    folders.push(dir.to_path_buf());
-                }
-            }
-        }
+        // ⚠ Through `unique::folders_of` — a `Vec` searched per photo was quadratic (M10.14e).
+        let folders = rustroom_app::unique::folders_of(all.iter().map(|e| e.id.path.as_path()));
         for dir in &folders {
             for (path, copy, m) in cat.marks_in(dir).unwrap_or_default() {
                 marks.insert(PhotoId::new(path, copy), m);
