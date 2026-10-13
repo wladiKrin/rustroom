@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.15a: the Immich API keys in the OS keychain (2026-10-13)](#2026-10-13--m1015a-the-immich-api-keys-in-the-os-keychain-branch-m1015a-immich-keychain)
 - [M10.14e: the catalog at 100,000 photos — measured, and two quadratic shapes removed (2026-10-13)](#2026-10-13--m1014e-the-catalog-at-100000-photos--measured-and-two-quadratic-shapes-removed-branch-m1014e-catalog-scale-merged-2026-10-13)
 - [M10.14d: the app-vs-probe drag gap, decomposed — and the geometry gather tiled (2026-10-13)](#2026-10-13--m1014d-the-app-vs-probe-drag-gap-decomposed--and-the-geometry-gather-tiled-branch-m1014d-geometry-tiles-merged-2026-10-13)
 - [M10.14c: Clarity's "coalescing" — a spike, withdrawn on its kill rule (2026-10-12)](#2026-10-12--m1014c-claritys-coalescing--a-spike-withdrawn-on-its-kill-rule)
@@ -171,6 +172,54 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-13 — M10.15a: the Immich API keys in the OS keychain (branch `m10.15a-immich-keychain`)
+
+**The item:** both Immich keys — the read-only browse key and the upload-capable one — sat in plaintext
+in `settings.json` (`-rw-r--r--`). The author chose the OS keychain, read once per launch (of three:
+a `0600` file and an item open to every app were rejected). Spec and plan `2026-10-13-m10.15a-*`.
+
+**Built:**
+- **`rustroom_app::secrets`** — `Keys`, a `SecretStore` trait, `Keychain` over the **`keyring` 4.2**
+  crate (default `v1`: macOS Keychain, Windows Credential Manager, pure-Rust zbus Secret Service — no
+  libdbus on Linux CI), `Memory` for tests, `key_hover` for the Settings fields. One item, service
+  `Rustroom`, account `immich`, both keys as JSON.
+- **`SettingsStore`** — `user_default()` (the app's only constructor) brings the keychain, `new(path)`
+  (every test's) none, so no test can reach the real keychain. ⚠⚠ **The one rule: keys in the file are
+  always the newest** — `load` moves them in and the file loses them only after the keychain took them;
+  a failed read writes and deletes nothing; a refused write is tried once per launch, not on every
+  save (a ruling, found by a test written red first); a cleared key stays cleared.
+- **The Settings window's** two key fields say where the key is kept (keychain / settings.json).
+
+**⚠⚠ Found by running it: a real keychain write waited 39–91 s** — the round trip on a throwaway item
+read **10 ms** but wrote in 39 s inside the shell's sandbox and **91 s / read 30 s** outside it: macOS
+had put up a **password dialog** (an ad-hoc-signed program, a new one with every build), and the author
+had mistyped the password once. Two consequences, both the author's option 2:
+- **The keychain write runs on its own thread** (`SettingsStore::flush` for tests): a dialog can never
+  freeze the window; the file keeps the keys until the keychain confirms. The read stays synchronous at
+  startup, before the window.
+- **A stable signature for development builds.** The author created a self-signed code-signing
+  certificate, **"Rustroom Dev"**, in Keychain Access (his step — a security setting); on macOS
+  `cargo run` now goes through `scripts/macos-run.sh` (`.cargo/config.toml`), which signs the binary
+  named `Rustroom` with it and the identifier `com.rustroom.dev`. Its designated requirement —
+  `identifier "com.rustroom.dev" and certificate leaf = H"17fa1b82…"` — does not change between builds,
+  so "Always Allow" survives rebuilds. Tests, examples, CI and a Mac without the identity run as before.
+
+**Sabotages, every one red** (after one was made to be): the keychain written on every save; a failed
+read writing an empty item; the file blanked before the keychain write — ⚠ **missed at first**, the save
+after `load` had written the keys back; the test now checks the file right after `load`; a synchronous
+write; the file blanked while a write is in flight.
+
+**⚠⚠ The self-review found one hole in the one rule, which the background thread had opened:** two key
+changes in quick succession — the second while the first write still waits on its dialog — ran two
+writers side by side, and the older could land last: the keychain holding the older keys, and in the
+worst interleaving the file blanked against the newer, **the newest key lost**. Now one write at a time
+(a lock held across `store.write`), each writing the keys newest *at its turn*, and a writer whose keys
+were already sent skips — each write may be one more password prompt.
+`a_slow_older_write_never_lands_after_a_newer_one` and `a_superseded_write_is_skipped`, red first;
+sabotaged (no lock → both red, no skip → the skip test red).
+
+**Counts:** 3731 → **3747 tests** (9 ignored — the real-keychain round trip the new one, run by hand).
 
 ### 2026-10-13 — M10.14e: the catalog at 100,000 photos — measured, and two quadratic shapes removed (branch `m10.14e-catalog-scale`, merged 2026-10-13)
 
