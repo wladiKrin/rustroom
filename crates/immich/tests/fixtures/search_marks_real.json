@@ -1,0 +1,37 @@
+{
+  "albums": {
+    "total": 0,
+    "count": 0,
+    "items": [],
+    "facets": []
+  },
+  "assets": {
+    "total": 1,
+    "count": 1,
+    "facets": [],
+    "nextPage": null,
+    "nextCursor": null,
+    "items": [
+      {
+        "id": "342b998c-07a8-4069-984a-c7c01b1fb62a",
+        "type": "IMAGE",
+        "originalFileName": "IMG-20250703-WA0001.jpg",
+        "originalMimeType": "image/jpeg",
+        "width": 1200,
+        "height": 1600,
+        "thumbhash": "nxgOFQRqeGt2+HOHmIeIe2+DyQWE",
+        "fileModifiedAt": "2025-07-03T08:54:47.000Z",
+        "updatedAt": "2026-04-27T12:33:00.925Z",
+        "isFavorite": true,
+        "isArchived": false,
+        "visibility": "timeline",
+        "exifInfo": {
+          "rating": null,
+          "make": null,
+          "model": null,
+          "iso": null
+        }
+      }
+    ]
+  }
+}
