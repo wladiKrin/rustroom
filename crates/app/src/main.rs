@@ -36,6 +36,8 @@ mod ai_flow;
 mod app;
 mod bootstrap;
 mod catalog_ops;
+#[cfg(test)]
+mod catalog_scale;
 mod collection_ops;
 mod collections_panel;
 mod commands;
