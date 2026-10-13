@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.14d: the app-vs-probe drag gap, decomposed — and the geometry gather tiled (2026-10-13)](#2026-10-13--m1014d-the-app-vs-probe-drag-gap-decomposed--and-the-geometry-gather-tiled-branch-m1014d-geometry-tiles)
 - [M10.14c: Clarity's "coalescing" — a spike, withdrawn on its kill rule (2026-10-12)](#2026-10-12--m1014c-claritys-coalescing--a-spike-withdrawn-on-its-kill-rule)
 - [M10.14b: the prefix-cache eviction fix's picture half, closed by a test (2026-10-12)](#2026-10-12--m1014b-the-prefix-cache-eviction-fixs-picture-half-closed-by-a-test-branch-m1014b-resume-picture-merged-2026-10-12)
 - [M10.12b: a mask's scene sliders as offsets, Lightroom's model (2026-10-12)](#2026-10-12--m1012b-a-masks-scene-sliders-as-offsets-lightrooms-model-branch-m1012b-mask-offsets-merged-2026-10-12)
@@ -169,6 +170,47 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-13 — M10.14d: the app-vs-probe drag gap, decomposed — and the geometry gather tiled (branch `m10.14d-geometry-tiles`)
+
+**The item:** since 2026-09-26 a drag frame cost ~10–12 ms more GPU submit+wait in the app than in
+the headless `probe_straighten_drag`; CPU copies, the texture upload and a shared device were already
+ruled out, the cause recorded as unidentified. Run as a spike (the author's call), then **A** (the
+window) and **B** (the angle), both measured; B shipped.
+
+**Ruled out, measured:** *thread priority* — the render worker runs at QoS `DEFAULT` (0x15) in the app
+and the probe alike (a lower class does hurt: `taskpolicy -c utility` +5 ms, `background` 2.3×);
+*the GPU clocking down between frames* — 16 and 33 ms idle gaps before each probe frame: 29.1–31.3 ms,
+unchanged; *the probe's synthetic window load* — the geometry pass 8.4 vs 8.2 ms.
+
+**⚠⚠ Found 1: the probe priced the CHEAPEST corner of a Straighten drag.** Its sweep is 0.5°–2.45°; a
+real drag runs to tens of degrees, and the geometry gather's GPU time rose **7.7 → 25.8 ms from 0.5°
+to 43°** (3200×2136, M2). The in-app drag, 0° → 45°, read 50.5 ms a frame against the probe's 30 —
+mostly angle. `PROBE_ANGLE_STEP=1.1` now sweeps the real range.
+
+**Found 2 (A): the window's own drawing is real contention, ~+5 ms a frame.** The probe run while the
+scratch app redrew its 5040×2798 window at ~50 Hz (a canvas drag at fit, 0 renders of its own):
+**34.5 → 39.6 ms** a frame (geometry +1.3, copies +1.7, tail +1.1). ⚠ Shrinking the window was not a
+clean test — the app renders to fit the window, so the work would shrink too. A lever, **unmeasured**:
+redraw the window only when a new frame arrives during a drag, not on every mouse event.
+
+**Built (B): the gather by 8×8 output tiles.** A workgroup was 64 pixels along an output row; rotated,
+their 4×4 footprints run diagonally across the source and a cache line is barely reused. Same
+arithmetic per pixel, so the same bits (`every_case_renders_the_same_picture_as_the_cpu`, a 97×61
+chart, partial edge tiles). Measured, geometry pass GPU ms:
+
+| shape | 0.5°–2.45° | 0.5°–43° median | at 43° | wall, small / large |
+|---|---|---|---|---|
+| rows (before) | 8.2–8.5 | 18.66 | 25.8 | 34–36 / 45.3 |
+| **8×8 (shipped)** | 9.45 | **12.82** | **13.5** | 35.1 / **39.4** |
+| 16×4 | 8.10 | 13.51 | 16.4 | 35.4 / 39.9 |
+| 32×2 | 8.04 | 17.36 | 24.2 | 34.0 / 44.9 |
+
+The author chose 8×8: the flattest curve, a predictable worst case over 1 ms at small angles.
+**Sabotage, red:** the gather on the seed's grid (input pixels / 64) leaves the last tiles undrawn —
+253 levels over 3.4 % of samples; tiles can outnumber the input's groups.
+
+**Counts:** 3722 tests, unchanged (the parity test covers it). ⚠ `geometry.rs` (gpu) is ~560 lines.
 
 ### 2026-10-12 — M10.14c: Clarity's "coalescing" — a spike, withdrawn on its kill rule
 
