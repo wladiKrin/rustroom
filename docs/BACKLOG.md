@@ -1848,8 +1848,9 @@ the most time in this integration were both invisible in the OpenAPI schema.
 ### ⚠ Three honest costs
 
 - ✅ **Credentials are a new kind of surface for this project.** → **M10.15a**, done 2026-10-13: both keys in the OS
-  keychain (`rustroom_app::secrets`), the file only as a fallback; dev builds signed "Rustroom Dev" so access
-  survives rebuilds. As recorded: Rustroom has never stored a secret.
+  keychain (`rustroom_app::secrets`), the file only as a fallback; dev builds signed "Rustroom Dev", which ⚠ does
+  not stop one password prompt per rebuild (no Team ID: the partition list keys on each build's cdhash;
+  accepted by the author). As recorded: Rustroom has never stored a secret.
   An API key in `settings.json` in plaintext is the easy path and probably not the right one; the
   OS keychain is right and is platform-specific work.
 - ✅ **Duplicated storage.** → **M10.15b**, done 2026-10-13 — **re-scoped by the author: ⛔ no automatic

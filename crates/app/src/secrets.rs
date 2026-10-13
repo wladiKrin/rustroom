@@ -1,8 +1,10 @@
 //! The Immich API keys in the OS credential store (M10.15a) — macOS Keychain, Windows Credential
 //! Manager, Linux Secret Service — instead of plaintext `settings.json`.
 //!
-//! ⚠⚠ **One item for both keys** (service `Rustroom`, account `immich`, the keys as JSON): on macOS an
-//! ad-hoc-signed build asks for access once per item after every rebuild, so one item is one prompt.
+//! ⚠⚠ **One item for both keys** (service `Rustroom`, account `immich`, the keys as JSON): on macOS a
+//! build without a Team ID asks for the login password once per item after every rebuild (the item's
+//! partition list keys on each build's cdhash — even the "Rustroom Dev" signing), so one item is one
+//! prompt.
 //! `settings::store::SettingsStore` is the only user, and only its `user_default()` — the app's —
 //! reaches the real keychain; every test's `SettingsStore::new` has no store at all.
 

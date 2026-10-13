@@ -212,7 +212,9 @@ that had grown to ~170 lines by appending.)
   ⚠⚠ **The two Immich keys live in the OS keychain** (M10.15a, `rustroom_app::secrets`): only
   `SettingsStore::user_default()` reaches it — `new(path)`, every test's, never does; keys in the file
   are always the newest; writes are on a background thread. On macOS `cargo run` signs `Rustroom` with
-  the local "Rustroom Dev" identity (`scripts/macos-run.sh`) so the keychain's access survives rebuilds.
+  the local "Rustroom Dev" identity (`scripts/macos-run.sh`); ⚠⚠ the first launch after a rebuild still
+  asks for the login password once — with no Team ID the item's partition list keys on each build's
+  cdhash (accepted by the author 2026-10-13; a Team ID would end it).
   ⛔ **Rustroom never evicts a download on its own** (M10.15b, the author's call): Settings → Immich's
   Clear… and the startup warning past the soft limit, both through `remove_downloaded`.
   ⛔ Two-way sync was DECLINED 2026-09-24 with reasons; the author re-opened it as **M10.15d** on

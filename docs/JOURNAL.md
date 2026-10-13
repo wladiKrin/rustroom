@@ -200,6 +200,8 @@ Spec and plan `2026-10-13-m10.15b-*`.
   downloaded), the GB-limit slider (1–1000, logarithmic) and the warning's tick box. Measured afresh when
   the window opens — detected by the missing draft, so no list of openers — and dropped by a clear.
 - In passing: the two key fields' docs still said "stored in plaintext" — false since M10.15a.
+- ⚠ Its launch asked for the login password: M10.15a's signing does not survive a rebuild after all —
+  retracted in M10.15a's entry, and accepted by the author as one prompt per rebuild.
 
 **Sabotages, every one red:** `>=` for `>`; no `is_supported` filter; a field-level serde default (0 GB);
 the startup check ignoring "connected"; the clear bypassing `remove_downloaded` (the open photo kept);
@@ -237,8 +239,12 @@ had mistyped the password once. Two consequences, both the author's option 2:
   certificate, **"Rustroom Dev"**, in Keychain Access (his step — a security setting); on macOS
   `cargo run` now goes through `scripts/macos-run.sh` (`.cargo/config.toml`), which signs the binary
   named `Rustroom` with it and the identifier `com.rustroom.dev`. Its designated requirement —
-  `identifier "com.rustroom.dev" and certificate leaf = H"17fa1b82…"` — does not change between builds,
-  so "Always Allow" survives rebuilds. Tests, examples, CI and a Mac without the identity run as before.
+  `identifier "com.rustroom.dev" and certificate leaf = H"17fa1b82…"` — does not change between builds.
+  Tests, examples, CI and a Mac without the identity run as before. ⚠⚠ **Retracted 2026-10-13, at
+  M10.15b's launch: rebuilds still prompt once.** The item's access list trusts that requirement, but its
+  *partition list* holds `cdhash:` entries — a self-signed certificate has no Team ID — so each rebuild's
+  new hash asks for the login password again (read from `security dump-keychain -a`). The author accepted
+  one prompt per rebuild; a Team ID (a free Apple Development certificate) would end it.
 
 **Sabotages, every one red** (after one was made to be): the keychain written on every save; a failed
 read writing an empty item; the file blanked before the keychain write — ⚠ **missed at first**, the save
