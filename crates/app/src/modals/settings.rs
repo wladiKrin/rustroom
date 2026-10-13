@@ -765,9 +765,12 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                     .password(true)
                                     .desired_width(260.0),
                             )
-                            .hover(
-                                "A read-only Immich API key, stored in plain text in settings.json",
-                            );
+                            // ⚠ Says where the key is kept — the keychain, or the file where none works
+                            // (M10.15a); the sentences are `secrets::key_hover`'s, tested there.
+                            .hover(rustroom_app::secrets::key_hover(
+                                rustroom_app::secrets::KeyKind::Browse,
+                                app.settings_store.key_home(),
+                            ));
                             ui.end_row();
 
                             // ⚠⚠ Its own field on purpose. Browsing, thumbnails and the rail run
@@ -780,9 +783,10 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                     .password(true)
                                     .desired_width(260.0),
                             )
-                            .hover(
-                                "An optional Immich API key allowed to upload, used only when an export uploads",
-                            );
+                            .hover(rustroom_app::secrets::key_hover(
+                                rustroom_app::secrets::KeyKind::Upload,
+                                app.settings_store.key_home(),
+                            ));
                             ui.end_row();
 
                             if before != (d.immich_url.clone(), d.immich_key.clone()) {
