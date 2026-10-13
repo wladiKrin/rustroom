@@ -8,7 +8,8 @@
 //! and a mirror measures what the app used to do. This drives the real methods on a headless app.
 //!
 //! ⚠ The synthetic catalog: year/day folders of 70 photos (30 % RAF), a sidecar on 10 %, a keyword
-//! on 20 % (50 keywords), a rating on 30 %, two collections of 1,000, three smart rules. The photo
+//! on 20 % (50 keywords), a rating on 30 %, capture facts on every photo (date, camera,
+//! lens, ISO), two collections of 1,000, three smart rules. The photo
 //! files themselves do not exist — a local file that is absent stays visible, and nothing here reads
 //! pixels. ⚠ The filesystem cache is warm (every sidecar was just written), so a first open after a
 //! reboot will be slower than these numbers.
@@ -110,6 +111,23 @@ fn populate(cat: &catalog::db::Catalog, root: &Path, n: usize) -> Ids {
                 cat.add_to_collection(collections[k % 2], &e.path, 0)
                     .unwrap();
             }
+            // ⚠ Every photo has its capture facts, as after the metadata scanner — the Dates section
+            // and the camera/lens filters read them.
+            let capture = core_image::Capture {
+                taken: Some(1_420_070_400 + (day as i64) * 86_400 + (k % 70) as i64 * 60),
+                camera: Some(
+                    if k % 3 == 0 {
+                        "SONY ZV-1"
+                    } else {
+                        "FUJIFILM X-T4"
+                    }
+                    .to_string(),
+                ),
+                lens: Some("XF16-80mmF4 R OIS WR".to_string()),
+                iso: Some(160 * (1 + (k % 8) as u32)),
+                ..Default::default()
+            };
+            cat.set_capture(&e.path, &capture).unwrap();
         }
         day += 1;
     }
@@ -206,6 +224,30 @@ fn one_size(n: usize) {
     });
     let grid = frame_ms(&ctx, 5, |ui| crate::library::show(&mut app, ui, &ctx));
     println!("  per frame: rail {rail:6.2} ms   grid {grid:6.2} ms");
+    // The rail re-reads the catalog once per CHANGE (M10.14e): the frame after a rating pays it.
+    let first = app.library.as_ref().unwrap().entries[0].id.path.clone();
+    let after_change = {
+        let cat = app.catalog.as_ref().unwrap();
+        cat.set_marks(
+            &first,
+            0,
+            catalog::db::Marks {
+                rating: 5,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let t = Instant::now();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(crate::test_ui::screen()),
+                ..Default::default()
+            },
+            |ui| crate::collections_panel::show(&mut app, ui, &ctx),
+        );
+        ms(t)
+    };
+    println!("  rail frame after a change (one re-read): {after_change:6.2} ms");
 }
 
 #[test]
