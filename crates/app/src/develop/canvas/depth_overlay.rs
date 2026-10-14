@@ -1,5 +1,6 @@
-//! A Depth range on the canvas (M10.16a): the picker — a drag sets the band to the depths under the
-//! dragged rectangle, live; a click, a narrow band around the depth under it.
+//! A Depth range on the canvas (M10.16a): the picker — a line dragged on the photo sets the band from
+//! the depth at its start to the depth at its end, live; a click, a narrow band around the depth under
+//! it.
 //!
 //! ⚠ The gesture only: the rule is `rustroom_app::depth_tool`, the sampling `ai_coverage::AiSource`.
 
@@ -55,25 +56,27 @@ pub(super) fn pick(
             let from = ui.input(|i| i.pointer.press_origin());
             match (from, resp.interact_pointer_pos()) {
                 (Some(a), Some(b)) => {
+                    // ⚠ A line, the author's design (2026-10-14): its start is one end of the band,
+                    // its end the other — the rectangle it replaced read as unintuitive.
                     let painter = ui.painter_at(img_rect);
-                    painter.rect_stroke(
-                        egui::Rect::from_two_pos(a, b),
-                        0.0,
-                        egui::Stroke::new(1.5, egui::Color32::WHITE),
-                        egui::StrokeKind::Middle,
-                    );
-                    let ([x0, y0], [x1, y1]) = (to_frame(a), to_frame(b));
-                    depth_tool::band(&mut depth_tool::samples(&lensed, &dm, [x0, y0, x1, y1]))
+                    let stroke = egui::Stroke::new(1.5, egui::Color32::WHITE);
+                    painter.line_segment([a, b], stroke);
+                    for end in [a, b] {
+                        painter.circle_filled(end, 3.5, stroke.color);
+                    }
+                    let at = |p| depth_tool::depth_at(&lensed, &dm, to_frame(p));
+                    match (at(a), at(b)) {
+                        (Some(p), Some(q)) => Some(depth_tool::band_between(p, q)),
+                        _ => None,
+                    }
                 }
                 _ => None,
             }
         } else if click.clicked() {
-            click.interact_pointer_pos().and_then(|p| {
-                let [x, y] = to_frame(p);
-                depth_tool::samples(&lensed, &dm, [x, y, x, y])
-                    .first()
-                    .map(|&v| depth_tool::band_at(v))
-            })
+            click
+                .interact_pointer_pos()
+                .and_then(|p| depth_tool::depth_at(&lensed, &dm, to_frame(p)))
+                .map(depth_tool::band_at)
         } else {
             None
         }
