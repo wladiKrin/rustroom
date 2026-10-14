@@ -337,6 +337,94 @@ pub fn guided_filter(p: &[f32], guide: &[f32], w: usize, h: usize, r: usize, eps
         .collect()
 }
 
+/// [`guided_filter`] with a **colour** guide (He et al. 2010, §3.5): `p` modelled per window as a linear
+/// function of the guide's three channels, so two colours of equal brightness still part an edge —
+/// green leaves behind brown hair, where a luminance guide sees nothing (M10.16a's edge spike: the
+/// depth map's halo −9 to −22 % against the luminance-guided snap).
+///
+/// ⚠ `eps` regularises each channel's variance; on a grey guide (`r = g = b`) this is exactly
+/// [`guided_filter`] at `eps / 3` (`a_grey_guide_is_the_grey_filter_at_a_third_of_eps`).
+///
+/// # Panics
+/// Panics if `p.len() != w * h` or `guide.len() != w * h`.
+pub fn guided_filter_rgb(
+    p: &[f32],
+    guide: &[[f32; 3]],
+    w: usize,
+    h: usize,
+    r: usize,
+    eps: f32,
+) -> Vec<f32> {
+    use rayon::prelude::*;
+    assert_eq!(p.len(), w * h, "p size mismatch");
+    assert_eq!(guide.len(), w * h, "guide size mismatch");
+    let channel = |c: usize| guide.iter().map(|g| g[c]).collect::<Vec<f32>>();
+    let ch = [channel(0), channel(1), channel(2)];
+    let product = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).collect::<Vec<f32>>();
+    let mean_i = [
+        box_blur(&ch[0], w, h, r),
+        box_blur(&ch[1], w, h, r),
+        box_blur(&ch[2], w, h, r),
+    ];
+    let mean_p = box_blur(p, w, h, r);
+    let mean_ip = [
+        box_blur(&product(&ch[0], p), w, h, r),
+        box_blur(&product(&ch[1], p), w, h, r),
+        box_blur(&product(&ch[2], p), w, h, r),
+    ];
+    // The covariance's six distinct entries: rr, rg, rb, gg, gb, bb.
+    let pairs = [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2)];
+    let mean_ii: Vec<Vec<f32>> = pairs
+        .iter()
+        .map(|&(i, j)| box_blur(&product(&ch[i], &ch[j]), w, h, r))
+        .collect();
+    // Per pixel: a = (Σ + eps·I)⁻¹ cov(I, p), b = mean(p) − a · mean(I).
+    let (slope, offset): (Vec<[f32; 3]>, Vec<f32>) = (0..w * h)
+        .into_par_iter()
+        .map(|k| {
+            let m = [mean_i[0][k], mean_i[1][k], mean_i[2][k]];
+            let s = |q: usize, i: usize, j: usize| mean_ii[q][k] - m[i] * m[j];
+            let (rr, rg, rb) = (s(0, 0, 0) + eps, s(1, 0, 1), s(2, 0, 2));
+            let (gg, gb, bb) = (s(3, 1, 1) + eps, s(4, 1, 2), s(5, 2, 2) + eps);
+            // The symmetric inverse by its adjugate — `eps` > 0 keeps the determinant positive.
+            let inv = [
+                gg * bb - gb * gb,
+                gb * rb - rg * bb,
+                rg * gb - gg * rb,
+                rr * bb - rb * rb,
+                rb * rg - rr * gb,
+                rr * gg - rg * rg,
+            ];
+            let det = rr * inv[0] + rg * inv[1] + rb * inv[2];
+            let cov = [
+                mean_ip[0][k] - m[0] * mean_p[k],
+                mean_ip[1][k] - m[1] * mean_p[k],
+                mean_ip[2][k] - m[2] * mean_p[k],
+            ];
+            let a = [
+                (inv[0] * cov[0] + inv[1] * cov[1] + inv[2] * cov[2]) / det,
+                (inv[1] * cov[0] + inv[3] * cov[1] + inv[4] * cov[2]) / det,
+                (inv[2] * cov[0] + inv[4] * cov[1] + inv[5] * cov[2]) / det,
+            ];
+            (a, mean_p[k] - a[0] * m[0] - a[1] * m[1] - a[2] * m[2])
+        })
+        .unzip();
+    let mean_slope = [
+        box_blur(&slope.iter().map(|a| a[0]).collect::<Vec<f32>>(), w, h, r),
+        box_blur(&slope.iter().map(|a| a[1]).collect::<Vec<f32>>(), w, h, r),
+        box_blur(&slope.iter().map(|a| a[2]).collect::<Vec<f32>>(), w, h, r),
+    ];
+    let mean_offset = box_blur(&offset, w, h, r);
+    (0..w * h)
+        .map(|k| {
+            mean_slope[0][k] * ch[0][k]
+                + mean_slope[1][k] * ch[1][k]
+                + mean_slope[2][k] * ch[2][k]
+                + mean_offset[k]
+        })
+        .collect()
+}
+
 /// Sliding-window minimum over one contiguous line, window `[i-r, i+r]` clamped to the ends.
 ///
 /// Monotonic deque: indices are held with strictly increasing values, so the front is always
@@ -894,6 +982,61 @@ mod tests {
                 base + (state as f32 / u32::MAX as f32 - 0.5) * 0.05
             })
             .collect()
+    }
+
+    /// The algebra's own check: a grey guide makes the 3 × 3 covariance `v·11ᵀ + eps·I`, whose solve
+    /// gives the grey filter's slope at `eps / 3`.
+    #[test]
+    fn a_grey_guide_is_the_grey_filter_at_a_third_of_eps() {
+        let (w, h) = (40, 24);
+        let g: Vec<f32> = (0..w * h)
+            .map(|i| {
+                0.2 + 0.6 * (((i % w) as f32 / 7.0).sin() * ((i / w) as f32 / 5.0).cos()).abs()
+            })
+            .collect();
+        let p: Vec<f32> = (0..w * h)
+            .map(|i| ((i % w) as f32 / w as f32).powi(2))
+            .collect();
+        let rgb: Vec<[f32; 3]> = g.iter().map(|&v| [v; 3]).collect();
+        let colour = guided_filter_rgb(&p, &rgb, w, h, 4, 3e-3);
+        let grey = guided_filter(&p, &g, w, h, 4, 1e-3);
+        let worst = colour
+            .iter()
+            .zip(&grey)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1e-4, "{worst}");
+    }
+
+    /// The point of the colour guide: green and magenta of EQUAL luminance still part an edge.
+    #[test]
+    fn a_colour_guide_parts_colours_of_equal_brightness() {
+        let (w, h) = (200, 12);
+        // Rec. 709 luma: 0.7152 × 0.3 = 0.2146; 0.2126 × 0.8 + 0.0722 × 0.62 = 0.2148.
+        let (green, magenta) = ([0.0, 0.3, 0.0], [0.8, 0.0, 0.62]);
+        let rgb: Vec<[f32; 3]> = (0..w * h)
+            .map(|i| if i % w < 100 { green } else { magenta })
+            .collect();
+        let luma: Vec<f32> = rgb
+            .iter()
+            .map(|c| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2])
+            .collect();
+        // A soft ramp across the colour edge — a network's blurred version of it.
+        let p: Vec<f32> = (0..w * h)
+            .map(|i| (((i % w) as f32 - 92.0) / 16.0).clamp(0.0, 1.0))
+            .collect();
+        // The share of the whole rise taken in the one step across the edge, on row 6.
+        let share = |q: &[f32]| (q[6 * w + 100] - q[6 * w + 99]) / (q[6 * w + w - 1] - q[6 * w]);
+        let by_luma = share(&guided_filter(&p, &luma, w, h, 8, 1e-3));
+        let by_colour = share(&guided_filter_rgb(&p, &rgb, w, h, 8, 1e-3));
+        assert!(
+            by_luma < 0.1,
+            "the control: luminance sees no edge here, {by_luma}"
+        );
+        assert!(
+            by_colour > 0.4,
+            "the colour guide did not part the edge: {by_colour}"
+        );
     }
 
     #[test]

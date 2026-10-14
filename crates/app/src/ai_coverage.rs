@@ -19,7 +19,8 @@ pub enum MapQuery {
 
 /// The depth map's query string in its cache key — its RECIPE's version (`depth_map::RECIPE`).
 /// ⚠ Bump it when the recipe changes, or every cached map keeps the old look.
-pub const DEPTH_QUERY: &str = "depth:v1";
+/// ⚠ `v2` (2026-10-14): inference at 1036 with the colour snap — every v1 map recomputes once.
+pub const DEPTH_QUERY: &str = "depth:v2";
 
 impl MapQuery {
     /// The map a component reads, or `None` for one that reads none.

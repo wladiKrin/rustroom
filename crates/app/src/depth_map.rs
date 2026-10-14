@@ -1,10 +1,11 @@
 //! A photo's depth map, finished (M10.16a): the network's depth upsampled to the stored size and its
 //! edges snapped to the photo's own.
 //!
-//! ⚠⚠ **The snap is Dehaze's trick, reused.** The network answers at ~770 px and its depth edges are
-//! soft; a mask across a person's outline would fade over a dozen pixels, and Lens Blur (M10.16d) would
-//! halo. `pipeline::spatial::guided_filter`, guided by the photo's luminance, pulls a soft map onto the
-//! photo's real edges — exactly what Dehaze does to its patch-blocky transmission map.
+//! ⚠⚠ **The snap is Dehaze's trick, reused — in colour.** The network's depth edges are soft; a mask
+//! across a person's outline would fade over a dozen pixels, and Lens Blur (M10.16d) would halo. A guided
+//! filter pulls a soft map onto the photo's real edges, as Dehaze does to its transmission map; since the
+//! edge spike (2026-10-14) it is guided by the photo's COLOUR (`pipeline::spatial::guided_filter_rgb`),
+//! because a luminance guide saw nothing between brown hair and green leaves of equal brightness.
 //!
 //! ⚠ Here, not in `ai-mask`: that crate keeps no `pipeline` dependency.
 
@@ -22,32 +23,28 @@ pub struct Recipe {
     pub store_long: u32,
     /// The guided filter's radius at the stored size, pixels; 0 = no snap.
     pub radius: usize,
-    /// The guided filter's regulariser, in squared luminance.
+    /// The guided filter's regulariser, per channel, in squared encoded values.
     pub eps: f32,
     pub scale: DepthScale,
 }
 
 /// ⚠⚠ The author's choices from the spike's sheets (2026-10-14, `examples/depth_probe.rs sheet`):
 /// **equalised** — linear disparity crushed the trees, the far shore and the sky into one black;
-/// **snap radius 8** — hair strands where the photo has contrast, slightly softer where it has none
-/// (r16 blurred everywhere, none left a blocky staircase); **stored at 1536** — no visible difference
-/// from 2048 at the network's resolution. Inference at **770** by the rule: the largest size under
-/// ~3 s (1.65 s on an M2; 1036 took 3.9 s).
+/// **snap radius 8** — hair strands where the photo has contrast (r16 blurred everywhere, none left a
+/// blocky staircase); **stored at 1536** — no visible difference from 2048.
+///
+/// ⚠⚠ And from the EDGE spike, after he saw the edges bleed (`depth_probe … edges`): inference at
+/// **1036** with the **colour** snap — the tightest outlines, best on people (the portrait's halo −22 %
+/// against 770 with a luminance snap), for **3.9 s** a photo instead of 1.65, computed once, and 2.0 GB
+/// peak instead of 1.1. A tighter eps bought nothing. ⚠ None of it removes the network's own soft edge;
+/// clean cut-outs around people are M10.16d's (Lens Blur) question. Recipe `depth:v2`.
 pub const RECIPE: Recipe = Recipe {
-    infer_long: 770,
+    infer_long: 1036,
     store_long: 1536,
     radius: 8,
     eps: 1e-3,
     scale: DepthScale::Equalised,
 };
-
-/// Rec.709 luma of the 8-bit sRGB `guide`, 0..1 — on the encoded values, as the eye sees edges.
-pub fn luma(guide: &RgbImage) -> Vec<f32> {
-    guide
-        .pixels()
-        .map(|p| (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0)
-        .collect()
-}
 
 /// `p` resampled to `w × h`, bilinear, pixel centres aligned, clamped at the edges.
 fn upsample(p: &Plane, w: u32, h: u32) -> Vec<f32> {
@@ -68,12 +65,17 @@ fn upsample(p: &Plane, w: u32, h: u32) -> Vec<f32> {
     out
 }
 
-/// `position` (0 nearest … 1 farthest) at `guide`'s size, snapped to its edges by `r`, as a map.
+/// `position` (0 nearest … 1 farthest) at `guide`'s size, snapped to its colour edges by `r`, as a map.
 pub fn finish(position: &Plane, guide: &RgbImage, r: &Recipe) -> ProbMap {
     let (w, h) = (guide.width(), guide.height());
     let p = upsample(position, w, h);
     let p = if r.radius > 0 {
-        pipeline::spatial::guided_filter(&p, &luma(guide), w as usize, h as usize, r.radius, r.eps)
+        // The guide's encoded values, 0..1 per channel — as the eye sees edges.
+        let rgb: Vec<[f32; 3]> = guide
+            .pixels()
+            .map(|c| [c[0], c[1], c[2]].map(|v| v as f32 / 255.0))
+            .collect();
+        pipeline::spatial::guided_filter_rgb(&p, &rgb, w as usize, h as usize, r.radius, r.eps)
     } else {
         p
     };
@@ -142,6 +144,33 @@ mod tests {
         );
     }
 
+    /// The author's choice from the edge spike (2026-10-14): the snap reads COLOUR, so an outline
+    /// between two colours of equal brightness — brown hair on green leaves — still holds the depth.
+    #[test]
+    fn the_snap_parts_colours_of_equal_brightness() {
+        let (w, h) = (200u32, 20u32);
+        // 8-bit green (0, 77, 0) and magenta (204, 0, 158): Rec. 709 luma 0.216 and 0.215.
+        let guide = RgbImage::from_fn(w, h, |x, _| {
+            if x < 100 {
+                image::Rgb([0, 77, 0])
+            } else {
+                image::Rgb([204, 0, 158])
+            }
+        });
+        let position = Plane {
+            w,
+            h,
+            data: (0..h)
+                .flat_map(|_| (0..w).map(|x| ((x as f32 - 92.0) / 16.0).clamp(0.0, 1.0)))
+                .collect(),
+        };
+        let snapped = share_at_the_edge(&finish(&position, &guide, &RECIPE), 10);
+        assert!(
+            snapped > 0.4,
+            "equal brightness, different colour: {snapped}"
+        );
+    }
+
     #[test]
     fn finish_has_the_guides_size_and_stays_in_range() {
         let position = Plane {
@@ -159,19 +188,5 @@ mod tests {
             m.data[0],
             m.data[64 * 48 - 1]
         );
-    }
-
-    #[test]
-    fn luma_reads_the_encoded_value() {
-        let g = RgbImage::from_fn(2, 1, |x, _| {
-            if x == 0 {
-                image::Rgb([255, 255, 255])
-            } else {
-                image::Rgb([0, 255, 0])
-            }
-        });
-        let l = luma(&g);
-        assert!((l[0] - 1.0).abs() < 1e-6);
-        assert!((l[1] - 0.7152).abs() < 1e-3);
     }
 }
