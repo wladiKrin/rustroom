@@ -1508,7 +1508,7 @@ originals (slice 4 built the *manual* half) **M10.15b** — re-scoped 2026-10-13
 cache and a soft limit, ⛔ no automatic eviction — and reading Immich's own `rating`/`isFavorite`
 **M10.15c** — ✅ 2026-10-13: filled once into a photo's rating and flag where Rustroom has none
 (favourite → pick, −1 → reject), never written back; measured first: 1 favourite and 0 ratings on the
-author's server, `withExif` +55% bytes / ~180 ms per 1,000 assets. Two-way sync (M10.15d) remains.
+author's server, `withExif` +55% bytes / ~180 ms per 1,000 assets. Two-way sync → **M10.15d**, ✅ 2026-10-13 (below).
 
 The user self-hosts an **Immich** server holding all their photos, and wants to open them in
 Rustroom by giving a URL and credentials.
@@ -1567,6 +1567,13 @@ a real response for every endpoint it touches** — see the fixture lesson in `C
 lessons.
 
 ### ⛔ Two-way sync — DECLINED 2026-09-24 (the user's call, with reasons) → re-opened 2026-09-29 as M10.15d
+
+> ✅ **2026-10-13 — built as M10.15d, on the reopening conditions recorded below.** Marks only (★ → rating,
+> pick → favourite, reject → −1), and only on a deliberate **Send marks** whose confirmation lists every
+> photo's change; **never removes** a mark in Immich; **Undo last send** restores what it replaced (the
+> prior values kept in the catalog, `rating: null` included). The upload key became the **Write key**
+> (`asset.update` added by the author). Keywords → tags and captions → descriptions stay out of scope. The
+> read half is M10.15c. `grep -n 'M10.15d' docs/JOURNAL.md`.
 
 > **2026-09-29:** the author put this back on the list as **M10.15d**. The reasons below stand as the
 > brainstorm's starting point — the decision to revisit is the author's, and it answers the warning below.

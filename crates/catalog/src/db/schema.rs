@@ -295,6 +295,20 @@ impl Catalog {
                  COMMIT;",
             )?;
         }
+        if from < 14 {
+            // ⚠⚠ A **new gate** (M10.15d): what the last send to Immich replaced, for its undo — keyed
+            // by Immich's asset id, not by file.
+            self.conn.execute_batch(
+                "BEGIN;
+                 CREATE TABLE immich_last_send (
+                     asset_id  TEXT PRIMARY KEY,
+                     rating    INTEGER,
+                     favourite INTEGER NOT NULL
+                 );
+                 PRAGMA user_version = 14;
+                 COMMIT;",
+            )?;
+        }
         Ok(())
     }
 }
@@ -338,7 +352,7 @@ mod tests {
                      ALTER TABLE photos DROP COLUMN rating;
                      ALTER TABLE photos DROP COLUMN flag;
                      ALTER TABLE photos DROP COLUMN label;
-                     ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; PRAGMA user_version = 1;",
+                     ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; DROP TABLE immich_last_send; PRAGMA user_version = 1;",
                 )
                 .unwrap();
         }
@@ -389,7 +403,7 @@ mod tests {
                      DROP TABLE photo_keywords;
                      DROP TABLE keywords;
                      ALTER TABLE photos DROP COLUMN xmp_mtime;
-                     ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; PRAGMA user_version = 2;",
+                     ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; DROP TABLE immich_last_send; PRAGMA user_version = 2;",
                 )
                 .unwrap();
         }
@@ -436,7 +450,7 @@ mod tests {
                      DROP TABLE photo_stacks;
                      DROP TABLE photo_description;
                      ALTER TABLE photos DROP COLUMN xmp_mtime;
-                     ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; PRAGMA user_version = 5;",
+                     ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; DROP TABLE immich_last_send; PRAGMA user_version = 5;",
                 )
                 .unwrap();
         }
@@ -482,7 +496,7 @@ mod tests {
                      DROP TABLE immich_names;
                      DROP TABLE photo_stacks;
                      DROP TABLE photo_description;
-                     ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; PRAGMA user_version = 6;",
+                     ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; DROP TABLE immich_last_send; PRAGMA user_version = 6;",
                 )
                 .unwrap();
         }
@@ -548,7 +562,7 @@ mod tests {
         // there (M9.7, Move to folder).
         cat.conn
             .execute_batch(
-                "DROP TABLE photo_history; DROP TABLE immich_names; DROP TABLE photo_stacks; ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; PRAGMA user_version = 7;",
+                "DROP TABLE photo_history; DROP TABLE immich_names; DROP TABLE photo_stacks; ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; DROP TABLE immich_last_send; PRAGMA user_version = 7;",
             )
             .unwrap();
         cat.migrate().unwrap();
@@ -589,7 +603,7 @@ mod tests {
                      );
                      INSERT INTO photo_stacks SELECT id, 'b.RAF', 3, 1 FROM folders;
                      INSERT INTO photo_stacks SELECT id, 'a.RAF', 3, 0 FROM folders;
-                     ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; PRAGMA user_version = 11;",
+                     ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; DROP TABLE immich_last_send; PRAGMA user_version = 11;",
                 )
                 .unwrap();
         }
@@ -638,7 +652,7 @@ mod tests {
                 .execute_batch(
                     "ALTER TABLE photos DROP COLUMN filled_rating;
                      ALTER TABLE photos DROP COLUMN filled_flag;
-                     PRAGMA user_version = 12;",
+                     DROP TABLE immich_last_send; PRAGMA user_version = 12;",
                 )
                 .unwrap();
         }
@@ -656,5 +670,22 @@ mod tests {
             })
             .unwrap();
         assert_eq!(filled, (0, 0));
+    }
+
+    /// M10.15d: v14 adds the last send — empty, every row kept.
+    #[test]
+    fn a_version_thirteen_catalog_gains_an_empty_last_send() {
+        let db = TempDb::new("v13v14");
+        {
+            let cat = Catalog::open(&db.0).unwrap();
+            cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+            cat.conn
+                .execute_batch("DROP TABLE immich_last_send; PRAGMA user_version = 13;")
+                .unwrap();
+        }
+        let cat = Catalog::open(&db.0).expect("a v13 catalog must upgrade");
+        assert_eq!(cat.version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(cat.photo_count().unwrap(), 1, "the photo survived");
+        assert!(cat.last_send().unwrap().is_empty());
     }
 }

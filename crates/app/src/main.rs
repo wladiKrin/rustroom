@@ -73,6 +73,7 @@ mod preset_ops;
 mod preview_flow;
 mod rename_flow;
 mod segmented;
+mod send_flow;
 mod session;
 mod session_flow;
 mod settings_apply;
@@ -84,6 +85,7 @@ mod source_refresh;
 mod sources;
 mod stack_ops;
 mod status_bar;
+mod status_immich;
 #[cfg(test)]
 mod test_app;
 #[cfg(test)]

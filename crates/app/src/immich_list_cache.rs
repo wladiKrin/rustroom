@@ -97,6 +97,12 @@ pub fn load(dir: &Path, key: &Key, want: &Validator) -> Option<Vec<immich::Asset
 ///
 /// ⚠ Silent on failure by design: the caller already has the list in hand, and a full disk must not
 /// turn into an error in the grid.
+/// Drop one stored list (M10.15d: a send changed it), so its next opening fetches the new state.
+/// ⚠ A list that is not there is not an error.
+pub fn forget(dir: &Path, key: &Key) {
+    let _ = std::fs::remove_file(dir.join(key.file_name()));
+}
+
 pub fn store(dir: &Path, key: &Key, validator: &Validator, assets: &[immich::Asset]) {
     if std::fs::create_dir_all(dir).is_err() {
         return;
@@ -329,6 +335,20 @@ mod tests {
         );
         std::fs::write(&path, text.replace("\"version\":2", "\"version\":99")).unwrap();
         assert!(load(&dir, &key, &v).is_none());
+    }
+
+    /// M10.15d: a send drops the list it changed, so its next opening fetches the new state.
+    #[test]
+    fn a_forgotten_list_is_a_miss_and_another_is_kept() {
+        let dir = temp_dir("forget");
+        let (k1, k2) = (Key::Album("one".into()), Key::Album("two".into()));
+        let v = album_validator(1, "x");
+        store(&dir, &k1, &v, &[asset("a")]);
+        store(&dir, &k2, &v, &[asset("b")]);
+        forget(&dir, &k1);
+        assert!(load(&dir, &k1, &v).is_none());
+        assert!(load(&dir, &k2, &v).is_some());
+        forget(&dir, &k1); // a second forget is not an error
     }
 
     /// M10.15c: lists cached before the favourite and the rating were read are fetched again.

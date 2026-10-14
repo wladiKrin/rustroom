@@ -21,6 +21,17 @@ impl RustroomApp {
         }
     }
 
+    /// At startup: say so when the keychain would not give up the Immich keys — only with Immich on,
+    /// which otherwise shows no trace of itself (found in use, 2026-10-14: blank key fields read as
+    /// "the keys are gone").
+    pub(crate) fn report_unread_keys(&mut self) {
+        if self.settings.immich_enabled
+            && self.settings_store.key_home() == rustroom_app::secrets::KeyHome::Unreadable
+        {
+            self.status = "Couldn’t read your Immich keys from the keychain — they are still there; restart Rustroom and allow access".to_string();
+        }
+    }
+
     /// The Settings window. One setting today; a modal is the right weight for that.
     /// Adopt new appearance settings: persist them and re-style immediately, so the change is
     /// visible rather than deferred to the next launch.
@@ -228,6 +239,33 @@ impl RustroomApp {
 mod tests {
     use crate::test_app::{for_test, open_test_photo, TestDir};
     use rustroom_app::settings::SettingsStore;
+
+    /// Found in use, 2026-10-14: a refused keychain read left the key fields blank with no word of
+    /// why, and read as "the Immich keys are gone". Startup now says so — with Immich on only.
+    #[test]
+    fn a_failed_keychain_read_says_so_at_startup() {
+        use rustroom_app::secrets::{Keys, Memory, SecretStore};
+        let dir = TestDir::new("apply_unread_keys");
+        let mut app = for_test();
+        let m = std::sync::Arc::new(Memory::with_item(Keys {
+            browse: "b".into(),
+            upload: "u".into(),
+        }));
+        m.fail_reads(true);
+        app.settings_store = SettingsStore::with_secrets(
+            dir.0.join("settings.json"),
+            m as std::sync::Arc<dyn SecretStore>,
+        );
+        let _ = app.settings_store.load();
+        app.settings.immich_url = "https://example.invalid".into();
+        app.settings.immich_enabled = false;
+        app.report_unread_keys();
+        assert!(app.status.is_empty(), "Immich is off, yet: {}", app.status);
+        app.settings.immich_enabled = true;
+        app.report_unread_keys();
+        assert!(app.status.contains("still there"), "{}", app.status);
+        assert!(app.status.contains("allow access"), "{}", app.status);
+    }
 
     /// ⚠⚠ **Three things at once, and the third is the one that shipped broken elsewhere.** The
     /// display-space setting looked inert for a day because it was written but nothing

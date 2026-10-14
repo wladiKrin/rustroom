@@ -232,6 +232,27 @@ impl Client {
         self.get_json("/timeline/buckets")
     }
 
+    /// `PUT /assets` — set the rating and/or favourite of several assets at once (M10.15d, Send marks).
+    ///
+    /// ⚠⚠ **The one call in this crate that changes an existing asset.** Permission `asset.update`;
+    /// the reply is 204 with no body, so nothing is read from it. From the published 3.2.0 schema — the
+    /// first real reply is recorded in M10.15d's journal entry.
+    pub fn update_marks(
+        &self,
+        ids: &[String],
+        rating: Option<Option<i32>>,
+        favourite: Option<bool>,
+    ) -> Result<(), Error> {
+        let body = marks_body(ids, rating, favourite);
+        self.agent
+            .put(self.url("/assets"))
+            .header("x-api-key", &self.key)
+            .header("Content-Type", "application/json")
+            .send(serde_json::to_string(&body).map_err(|e| Error::Decode(e.to_string()))?)
+            .map_err(map_ureq)?;
+        Ok(())
+    }
+
     /// Every asset matching `filter`, following the server's paging to the last page.
     ///
     /// ⚠⚠ **`POST /search/metadata`, not `GET /albums/{id}`.** `AlbumResponseDto` carries
@@ -394,6 +415,27 @@ fn content_type_of(filename: &str) -> &'static str {
     }
 }
 
+/// The body of `PUT /assets` (M10.15d): the ids, and only the fields being set.
+///
+/// ⚠ `rating: Some(None)` is an explicit `null` — an undo back to *unrated*; `None` leaves the field
+/// out, so the server keeps whatever it has. Nothing else `AssetBulkUpdateDto` allows (dates, location,
+/// description, visibility) can be expressed here, on purpose.
+pub(crate) fn marks_body(
+    ids: &[String],
+    rating: Option<Option<i32>>,
+    favourite: Option<bool>,
+) -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    m.insert("ids".into(), serde_json::json!(ids));
+    if let Some(r) = rating {
+        m.insert("rating".into(), serde_json::json!(r));
+    }
+    if let Some(f) = favourite {
+        m.insert("isFavorite".into(), serde_json::json!(f));
+    }
+    serde_json::Value::Object(m)
+}
+
 /// Map a `ureq` failure onto this crate's error, keeping the status distinction the UI needs.
 ///
 /// ⚠ `http_status_as_error` defaults to `true` in ureq 3, so a 4xx/5xx really does arrive here
@@ -452,6 +494,30 @@ mod tests {
         // M10.15c: the rating lives in `exifInfo`, which a search returns only when asked.
         assert_eq!(ab["withExif"], true, "an album asks for the rating");
         assert_eq!(db["withExif"], true, "a month asks for the rating");
+    }
+
+    /// M10.15d: only the fields being set travel — never a field this send does not mean to change.
+    #[test]
+    fn a_marks_body_carries_only_what_changes() {
+        let ids = vec!["a".to_string(), "b".to_string()];
+        let r = marks_body(&ids, Some(Some(5)), None);
+        assert_eq!(r, serde_json::json!({"ids": ["a", "b"], "rating": 5}));
+        let f = marks_body(&ids, None, Some(true));
+        assert_eq!(
+            f,
+            serde_json::json!({"ids": ["a", "b"], "isFavorite": true})
+        );
+        let both = marks_body(&ids, Some(Some(-1)), Some(false));
+        assert_eq!(
+            both,
+            serde_json::json!({"ids": ["a", "b"], "rating": -1, "isFavorite": false})
+        );
+        // ⚠ An undo to unrated sends an explicit null — omitting it would leave the stars in place.
+        let unrated = marks_body(&ids, Some(None), None);
+        assert_eq!(
+            unrated,
+            serde_json::json!({"ids": ["a", "b"], "rating": null})
+        );
     }
 
     /// ⚠⚠ The size values are Immich's `AssetMediaSize` spelling. A typo here is a 400 at runtime

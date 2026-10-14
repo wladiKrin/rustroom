@@ -241,6 +241,10 @@ impl RustroomApp {
             thumb_cache_bytes: None,
             immich_thumb_cache_bytes: None,
             immich_originals: None,
+            immich_send_selection: Vec::new(),
+            immich_send_source: None,
+            immich_send_pending: None,
+            immich_last_send_count: None,
             preview_cache_bytes: None,
             settings_draft: None,
             actions: ActionLog::default(),
@@ -255,6 +259,8 @@ impl RustroomApp {
         app.load_immich_stacks();
         // M10.15b: the soft limit's warning — one directory listing, ~3 ms for 1,000 photos.
         app.check_immich_cache_at_startup();
+        // Last, so no other startup message covers it.
+        app.report_unread_keys();
         app
     }
 }

@@ -14,7 +14,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// The schema this build expects. Bump it whenever [`Catalog::migrate`] gains a step.
-pub const SCHEMA_VERSION: i64 = 13;
+pub const SCHEMA_VERSION: i64 = 14;
 
 /// What can go wrong talking to the catalog.
 ///
@@ -56,6 +56,7 @@ mod immich_names;
 mod imported;
 /// Renaming, re-parenting and merging keywords (M9.8) — its own file for `history`'s reason.
 mod keywords;
+mod last_send;
 /// Flags, ratings, colour labels, and the XMP stamp.
 mod marks;
 /// Recognising a photo moved on disk between known folders (M9.9).

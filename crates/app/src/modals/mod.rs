@@ -40,6 +40,7 @@ pub mod info;
 pub mod presets;
 pub mod rename;
 pub mod rule_edit;
+mod send_marks;
 pub mod settings;
 mod settings_immich;
 mod settings_keyboard;
@@ -146,6 +147,14 @@ pub enum Modal {
         root: std::path::PathBuf,
         usage: rustroom_app::immich_cache::Usage,
     },
+    /// M10.15d: confirming a send of marks to Immich — every change, one line each.
+    SendMarks {
+        changes: Vec<rustroom_app::immich_send::Change>,
+    },
+    /// M10.15d: confirming an undo of the last send.
+    UndoSend {
+        count: usize,
+    },
     /// Confirming a keyword deletion that would take descendants or assignments with it.
     ///
     /// ⚠ Opened **only** when it would; a bare leaf is deleted outright. See `DeleteKeyword`.
@@ -222,6 +231,8 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         ConfirmDeleteFolder,
         ConfirmForget,
         ImmichCache,
+        SendMarks,
+        UndoSend,
         ConfirmDeleteKeyword,
         ConfirmMergeKeyword,
         PhotoInfo,
@@ -247,6 +258,8 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::ConfirmDeletePresetFolder { .. } => Which::ConfirmDeleteFolder,
         Modal::ConfirmForgetFolders { .. } => Which::ConfirmForget,
         Modal::ImmichCache { .. } => Which::ImmichCache,
+        Modal::SendMarks { .. } => Which::SendMarks,
+        Modal::UndoSend { .. } => Which::UndoSend,
         Modal::ConfirmDeleteKeyword { .. } => Which::ConfirmDeleteKeyword,
         Modal::ConfirmMergeKeyword { .. } => Which::ConfirmMergeKeyword,
         Modal::PhotoInfo { .. } => Which::PhotoInfo,
@@ -274,6 +287,8 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::ConfirmDeleteFolder => presets::confirm_delete_folder(app, ctx),
         Which::ConfirmForget => confirm_forget_folder(app, ctx),
         Which::ImmichCache => immich_cache::show(app, ctx),
+        Which::SendMarks => send_marks::show(app, ctx),
+        Which::UndoSend => send_marks::undo(app, ctx),
         Which::ConfirmDeleteKeyword => confirm_delete_keyword(app, ctx),
         Which::ConfirmMergeKeyword => confirm_merge_keyword(app, ctx),
         Which::PhotoInfo => info::show(app, ctx),
