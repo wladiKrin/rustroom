@@ -220,7 +220,10 @@ impl RustroomApp {
             self.ai.proposed = missing_models;
             self.modal = crate::modals::Modal::AiDownload;
         }
-        if to_request.is_empty() {
+        // ⚠⚠ Never from a ghost session's buffer — the 512-px thumbnail (M9.14) — whose map would be
+        // cached under the FILE's key for good: a soft Subject, a depth map stretched from 512 to 1536.
+        // Cached maps were loaded above; the request waits for the real decode, a frame or two away.
+        if to_request.is_empty() || s.buffer_is_ghost {
             return;
         }
         let turns = s.edits.geometry.orientation.rotate.turns();
@@ -433,6 +436,35 @@ mod tests {
         };
         app.pump_ai(&ctx);
         assert!(!held(&app), "the negative's map was kept on the positive");
+    }
+
+    /// ⚠⚠ M10.16a's review: a ghost session's buffer is the 512-px thumbnail (M9.14), and a map asked
+    /// of it would be cached under the FILE's key for good — a soft Subject, a depth map stretched from
+    /// 512 to 1536. Nothing is asked until the real decode lands; the model is made "present" (a
+    /// sparse file at its pinned size) so only the ghost can be what holds the request back.
+    #[test]
+    fn a_ghost_session_asks_the_network_for_nothing() {
+        let (mut app, ctx, _) = app_with_subject("ghost");
+        let (_, models) = app.ai.dirs.clone().unwrap();
+        std::fs::create_dir_all(&models).unwrap();
+        let spec = ModelId::IsNet.spec();
+        std::fs::File::create(models.join(spec.file))
+            .unwrap()
+            .set_len(spec.bytes)
+            .unwrap();
+        app.session.as_mut().unwrap().buffer_is_ghost = true;
+        app.pump_ai(&ctx);
+        assert!(
+            app.ai.pending.is_empty(),
+            "a map was asked of the 512-px ghost"
+        );
+        // The control: the real decode landed — now the map is asked for.
+        app.session.as_mut().unwrap().buffer_is_ghost = false;
+        app.pump_ai(&ctx);
+        assert!(
+            !app.ai.pending.is_empty(),
+            "with the real decode nothing was asked"
+        );
     }
 
     #[test]
