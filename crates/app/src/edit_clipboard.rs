@@ -216,6 +216,15 @@ mod tests {
                 size: 40.0,
                 roughness: 70.0,
             },
+            // M10.16d: every field off its default.
+            lens_blur: edit_model::LensBlur {
+                on: true,
+                amount: 70.0,
+                focus: edit_model::LensFocus::Point { point: [0.4, 0.6] },
+                focal_range: 20.0,
+                bokeh: edit_model::Bokeh::CatEye,
+                boost: 40.0,
+            },
             negative: edit_model::Negative {
                 on: true,
                 base: [0.8, 0.5, 0.3],

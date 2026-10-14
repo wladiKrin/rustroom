@@ -9,6 +9,7 @@ mod detail;
 mod geo_group;
 mod geometry;
 mod groups;
+mod lens_blur;
 mod local_group;
 mod mask_ops;
 mod mask_ranges;
@@ -24,9 +25,10 @@ pub use detail::{Defringe, Dehaze, Grain, LocalContrast, NoiseReduction, Sharpen
 pub use geo_group::GeoGroup;
 pub use geometry::{CropRect, Geometry, LensCorrection, Orientation, Perspective, Quarter};
 pub use groups::{
-    EditGroups, EDIT_GROUP_NAMES, GEOMETRY_GROUP, MASKS_GROUP, NEGATIVE_GROUP, RENDERING_GROUP,
-    RETOUCH_GROUP,
+    EditGroups, EDIT_GROUP_NAMES, GEOMETRY_GROUP, LENS_BLUR_GROUP, MASKS_GROUP, NEGATIVE_GROUP,
+    RENDERING_GROUP, RETOUCH_GROUP,
 };
+pub use lens_blur::{Bokeh, LensBlur, LensFocus};
 pub use local_group::LocalGroup;
 pub use mask_ops::{MaskOp, Refinement};
 pub use mask_ranges::{ColourRange, DepthRange, LuminanceRange};
@@ -144,6 +146,10 @@ pub struct Edits {
     /// key on disk.
     #[serde(default, skip_serializing_if = "Grain::is_default")]
     pub grain: Grain,
+    /// Lens Blur (M10.16d) — a synthetic shallow depth of field on the estimated depth map, its own
+    /// group. ⚠ Not written while default — `negative`'s reason.
+    #[serde(default, skip_serializing_if = "LensBlur::is_default")]
+    pub lens_blur: LensBlur,
 }
 
 impl Edits {
@@ -219,6 +225,7 @@ impl Edits {
             eyes,
             negative,
             grain,
+            lens_blur,
         } = src;
 
         if groups.white_balance {
@@ -284,6 +291,9 @@ impl Edits {
         }
         if groups.negative {
             self.negative = *negative;
+        }
+        if groups.lens_blur {
+            self.lens_blur = *lens_blur;
         }
     }
 
@@ -547,6 +557,34 @@ mod tests {
     /// digital photo's settings must never switch a negative's inversion off.
     /// M10.11b: grain rides the vignette's group, shown as Effects; a default is not written, so no
     /// sidecar or preview key changes for a photo without grain.
+    /// M10.16d: Lens Blur travels only with its own group (off by default), and off is never written.
+    #[test]
+    fn lens_blur_rides_its_own_group_and_off_is_not_written() {
+        let src = Edits {
+            lens_blur: LensBlur {
+                on: true,
+                ..LensBlur::default()
+            },
+            ..Edits::default()
+        };
+        assert!(
+            !EditGroups::default().lens_blur,
+            "off for Paste and Sync by default"
+        );
+        let mut a = Edits::default();
+        a.merge_from(&src, EditGroups::default());
+        assert_eq!(
+            a.lens_blur,
+            LensBlur::default(),
+            "a default paste carried it"
+        );
+        a.merge_from(&src, EditGroups::only(LENS_BLUR_GROUP));
+        assert_eq!(a.lens_blur, src.lens_blur);
+        let json = serde_json::to_string(&Edits::default()).unwrap();
+        assert!(!json.contains("lens_blur"), "{json}");
+        assert!(serde_json::to_string(&src).unwrap().contains("lens_blur"));
+    }
+
     #[test]
     fn grain_rides_the_effects_group_and_a_default_is_not_written() {
         let src = Edits {
@@ -932,6 +970,15 @@ mod tests {
                 amount: 30.0,
                 size: 40.0,
                 roughness: 70.0,
+            },
+            // M10.16d: every field off its default, so the Lens Blur group's sweep sees it.
+            lens_blur: LensBlur {
+                on: true,
+                amount: 70.0,
+                focus: LensFocus::Point { point: [0.4, 0.6] },
+                focal_range: 20.0,
+                bokeh: Bokeh::CatEye,
+                boost: 40.0,
             },
             negative: Negative {
                 on: true,

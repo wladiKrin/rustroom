@@ -1759,9 +1759,17 @@ mod tests {
             .filter(|n| !shown.contains(n))
             .collect();
         // ⚠ Negative (M10.11a) too: a block above the sections, like Profile — the conversion.
+        // ⚠ Lens Blur (M10.16d) only until its section lands — that task takes it off this list.
         assert_eq!(
             missing,
-            vec!["Geometry", "Masks", "Retouch", "Rendering", "Negative"]
+            vec![
+                "Geometry",
+                "Masks",
+                "Retouch",
+                "Rendering",
+                "Negative",
+                "Lens Blur"
+            ]
         );
     }
 
@@ -1826,9 +1834,17 @@ mod tests {
         //
         // ⚠ Negative (M10.11a) for Rendering's reason: no section, so a reset of a scanned negative
         // starts over from the positive instead of handing back the negative.
+        // ⚠ Lens Blur (M10.16d) only until its section lands — that task takes it off this list.
         assert_eq!(
             untouched,
-            vec!["Geometry", "Masks", "Retouch", "Rendering", "Negative"]
+            vec![
+                "Geometry",
+                "Masks",
+                "Retouch",
+                "Rendering",
+                "Negative",
+                "Lens Blur"
+            ]
         );
     }
 
