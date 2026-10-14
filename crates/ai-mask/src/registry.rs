@@ -25,14 +25,17 @@ pub enum ModelId {
     BiRefNetLite,
     SamEncoder,
     SamDecoder,
+    /// M10.16a — the Depth range mask's network.
+    DepthAnythingV2Small,
 }
 
 impl ModelId {
-    pub const ALL: [ModelId; 4] = [
+    pub const ALL: [ModelId; 5] = [
         Self::IsNet,
         Self::BiRefNetLite,
         Self::SamEncoder,
         Self::SamDecoder,
+        Self::DepthAnythingV2Small,
     ];
 
     pub const fn spec(self) -> ModelSpec {
@@ -70,6 +73,18 @@ impl ModelId {
                 sha256: "43b5e1bc840d97ff4a08db991a9cd6cc33831c0bf2c70c0a48f5eba891ec9a46",
                 licence: "Apache-2.0 (Segment Anything)",
                 licence_url: "https://github.com/facebookresearch/segment-anything",
+            },
+            // ⚠ M10.16a: the hash and size measured from the file downloaded 2026-10-14 (`shasum -a 256`,
+            // `stat`), copied verbatim. The licence verified at the source: the official README gives
+            // Small Apache-2.0 (Base/Large/Giant are CC-BY-NC-4.0 — never offer them); the ONNX export's
+            // repository is Apache-2.0. The DYNAMIC export, so any input size multiple of 14 runs.
+            Self::DepthAnythingV2Small => ModelSpec {
+                file: "depth_anything_v2_vits_dynamic.onnx",
+                url: "https://github.com/fabio-sim/Depth-Anything-ONNX/releases/download/v2.0.0/depth_anything_v2_vits_dynamic.onnx",
+                bytes: 99_092_268,
+                sha256: "46c4e8eeda3a27f34701831b6a2ec7753d7b38779b215acb5633424703deed8f",
+                licence: "Apache-2.0 (Depth Anything V2 Small, code and weights)",
+                licence_url: "https://github.com/DepthAnything/Depth-Anything-V2",
             },
         }
     }
@@ -109,6 +124,35 @@ pub const CLICK_MODELS: [ModelId; 2] = [ModelId::SamEncoder, ModelId::SamDecoder
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⚠⚠ `ALL` is a hand-written list — the shape *"a guard that enumerates a list stops guarding the
+    /// moment the list grows"*: `every_model_is_pinned_and_licensed` sweeps `ALL`, so a model missing
+    /// from it would ship unpinned and unswept. The exhaustive `match` makes a new variant a compile
+    /// error here, and the loop makes leaving it out of `ALL` a failure.
+    #[test]
+    fn every_variant_is_in_all() {
+        let index = |id: ModelId| match id {
+            ModelId::IsNet => 0,
+            ModelId::BiRefNetLite => 1,
+            ModelId::SamEncoder => 2,
+            ModelId::SamDecoder => 3,
+            ModelId::DepthAnythingV2Small => 4,
+        };
+        let every = [
+            ModelId::IsNet,
+            ModelId::BiRefNetLite,
+            ModelId::SamEncoder,
+            ModelId::SamDecoder,
+            ModelId::DepthAnythingV2Small,
+        ];
+        for id in every {
+            assert_eq!(
+                ModelId::ALL.get(index(id)),
+                Some(&id),
+                "{id:?} is not in ALL"
+            );
+        }
+    }
 
     #[test]
     fn every_model_is_pinned_and_licensed() {

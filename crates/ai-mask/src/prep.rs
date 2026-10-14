@@ -10,11 +10,16 @@ pub const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
 /// `img` resized to `side × side`, as NCHW `(p/255 − mean) / std`.
 pub fn nchw(img: &RgbImage, side: u32, mean: [f32; 3], std: [f32; 3]) -> Vec<f32> {
-    let small = image::imageops::resize(img, side, side, image::imageops::FilterType::Triangle);
-    let plane = (side * side) as usize;
+    nchw_wh(img, side, side, mean, std)
+}
+
+/// `img` resized to `w × h`, as NCHW `(p/255 − mean) / std` — [`nchw`] without the square.
+pub fn nchw_wh(img: &RgbImage, w: u32, h: u32, mean: [f32; 3], std: [f32; 3]) -> Vec<f32> {
+    let small = image::imageops::resize(img, w, h, image::imageops::FilterType::Triangle);
+    let plane = (w * h) as usize;
     let mut out = vec![0f32; 3 * plane];
     for (x, y, p) in small.enumerate_pixels() {
-        let i = (y * side + x) as usize;
+        let i = (y * w + x) as usize;
         for c in 0..3 {
             out[c * plane + i] = (p[c] as f32 / 255.0 - mean[c]) / std[c];
         }
@@ -81,6 +86,28 @@ mod tests {
         assert!((v[0] - 1.0).abs() < 1e-6, "R plane: (1 − 0.5)/0.5");
         assert!((v[4] + 1.0).abs() < 1e-6, "G plane: (0 − 0.5)/0.5");
         assert!(v[8].abs() < 0.01, "B plane: ~0");
+    }
+
+    /// M10.16a: the depth network takes the photo at its own aspect, not squashed to a square.
+    #[test]
+    fn nchw_wh_resizes_to_a_non_square_size_in_planes() {
+        // Left half white, right half black.
+        let img = RgbImage::from_fn(40, 20, |x, _| {
+            if x < 20 {
+                image::Rgb([255, 255, 255])
+            } else {
+                image::Rgb([0, 0, 0])
+            }
+        });
+        let v = nchw_wh(&img, 4, 2, [0.0; 3], [1.0; 3]);
+        assert_eq!(v.len(), 3 * 4 * 2);
+        // Plane 0, row 1: white … black, the two middle columns blended by the Triangle filter
+        // (measured 0.87 / 0.13) — so the layout is asserted on the outer columns and the order.
+        let r = &v[4..8];
+        assert!(r[0] > 0.95 && r[3] < 0.05, "{r:?}");
+        assert!(r[1] > r[2] + 0.5, "{r:?}");
+        // The blue plane starts at 2·w·h and repeats the pattern.
+        assert!(v[16] > 0.95 && v[19] < 0.05);
     }
 
     #[test]
