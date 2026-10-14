@@ -55,8 +55,12 @@ pub(super) enum CoverageSource {
     /// `BrushCoverage`, already resampled to the frame with its threshold and invert applied.
     /// ⚠⚠ **No map means coverage 0** — the network has not answered yet (or its model is missing),
     /// and a mask that silently covered everything would be the worse failure.
+    ///
+    /// ⚠ M10.16a: or `lazy` — in the PREFIX, where no frame-sized map can exist in advance, a source
+    /// resolved at the stage's own frame size when it runs (`crate::RasterSource`).
     Raster {
         prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
+        lazy: Option<std::sync::Arc<dyn crate::RasterSource>>,
     },
 }
 

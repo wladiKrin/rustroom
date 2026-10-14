@@ -95,7 +95,9 @@ pub(super) fn render_cached_with(
         source_scale,
     );
 
-    let walk = super::prefix::plan(edits, buffer, lens, scale, &spec, cache);
+    // ⚠ A snapshot of the maps — a handful of `Arc`s — so the read guard is not held across the render.
+    let ai_maps = brush_cache.ai.read().expect("ai maps").clone();
+    let walk = super::prefix::plan(edits, buffer, lens, scale, &spec, cache, &ai_maps);
     let debug_steps = walk.debug_steps;
     // ⚠⚠ **When the last step may run WITHOUT a download.** A whole-frame render, sRGB display,
     // and none of the views that need float pixels (proof, visualize, grade range). Its output

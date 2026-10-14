@@ -65,7 +65,7 @@ fn main() {
         disabled: false,
         invert: false,
     };
-    let stage = MaskStage::new_capture(&m, scale, &edit_model::Geometry::default(), &[], None);
+    let stage = MaskStage::new_capture(&m, scale, &edit_model::Geometry::default(), &[], &[], None);
     let with_mask = DefringeStage::new(global, vec![(stage, -100.0)], scale);
     println!(
         "global + 1 mask:    {:>7.1} ms",

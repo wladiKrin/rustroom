@@ -129,7 +129,7 @@ fn main() {
     ];
 
     let air = pipeline::prefix_airlight(&base, &buf, res, shot.clone());
-    let base_steps = pipeline::build_prefix_steps(&base, sc, shot.clone(), res, Some(air));
+    let base_steps = pipeline::build_prefix_steps(&base, sc, shot.clone(), res, Some(air), None);
     let names: Vec<&str> = base_steps.iter().map(|s| s.stage.name()).collect();
     println!("prefix: {names:?}\n");
 
@@ -147,7 +147,7 @@ fn main() {
     );
     for (label, e) in &drags {
         let air_e = pipeline::prefix_airlight(e, &buf, res, shot.clone());
-        let steps = pipeline::build_prefix_steps(e, sc, shot.clone(), res, Some(air_e));
+        let steps = pipeline::build_prefix_steps(e, sc, shot.clone(), res, Some(air_e), None);
         // ⚠ The resume point exactly as the cache finds it: the deepest checkpoint whose key both
         // edit sets share.
         let mut resume = 0;

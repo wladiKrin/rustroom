@@ -201,3 +201,28 @@ mod tests {
         );
     }
 }
+
+/// A map-reading component's coverage — an AI mask's or a depth range's (M10.16a) — resolved at the
+/// frame size the stage RUNS at.
+///
+/// ⚠⚠ **Why lazy, and only in the prefix:** a mask's Noise reduction, Dehaze and Defringe are prefix
+/// steps, built before the prefix has produced the frame they run on, so no frame-sized map can be
+/// handed to them in advance — the reason `build_prefix_steps` gave them NONE, and an AI component
+/// covered nothing there until M10.16a. A brush answers the same problem by rasterising itself when
+/// handed none; this is that shape for a raster the app owns. The tail keeps its prebuilt maps.
+pub trait RasterSource: Send + Sync {
+    /// Coverage over a whole `frame_w × frame_h` frame.
+    fn coverage(&self, frame_w: usize, frame_h: usize) -> brush::CoverageMap;
+}
+
+/// Where `build_prefix_steps` finds each map-reading component's [`RasterSource`] — the app's maps
+/// (M10.16a). Injected the way `lens` and `airlight` are; `None` everywhere a caller has no maps (the
+/// CLI, the goldens, the airlight replay).
+pub trait AiRasters {
+    /// The source for `mask` — an `Ai` or `Depth` component — and its map's identity, or `None` when
+    /// its map has not arrived (it then covers nothing, `CoverageSource::Raster`'s rule).
+    ///
+    /// ⚠⚠ The identity goes into the step's cache key: without it a map arriving after a checkpoint
+    /// was cached would leave the stale, uncovered picture standing. It must follow the map's CONTENT.
+    fn source(&self, mask: &edit_model::Mask) -> Option<(std::sync::Arc<dyn RasterSource>, u64)>;
+}

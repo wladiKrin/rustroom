@@ -42,7 +42,14 @@ fn mean(img: &ImageBuf, cx: f32, cy: f32, lo: f32, hi: f32) -> [f32; 3] {
 
 fn run(edits: &Edits, src: &ImageBuf) -> ImageBuf {
     let mut img = src.clone();
-    for step in build_prefix_steps(edits, RenderScale::FULL, None, Resampler::default(), None) {
+    for step in build_prefix_steps(
+        edits,
+        RenderScale::FULL,
+        None,
+        Resampler::default(),
+        None,
+        None,
+    ) {
         img = step.stage.apply(img);
     }
     img

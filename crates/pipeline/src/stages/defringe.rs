@@ -320,6 +320,7 @@ mod tests {
                 RenderScale::FULL,
                 &edit_model::Geometry::default(),
                 &[],
+                &[],
                 None,
             );
             vec![(stage, amount)]

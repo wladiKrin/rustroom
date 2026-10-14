@@ -83,11 +83,12 @@ fn main() {
 
         // The MASKED one: estimated from the stage's own input, which is the prefix image at the
         // masked-capture step. Run the prefix up to that step and estimate there.
-        let steps = pipeline::build_prefix_steps(&e, scale, None, Resampler::default(), Some(g));
+        let steps =
+            pipeline::build_prefix_steps(&e, scale, None, Resampler::default(), Some(g), None);
         let mut img = buffer.clone();
         let mut found = false;
         for s in &steps {
-            if matches!(s.key, PrefixStepKey::MaskedCapture(_)) {
+            if matches!(s.key, PrefixStepKey::MaskedCapture(..)) {
                 masked.push(pipeline::dehaze_airlight(&img));
                 found = true;
                 break;

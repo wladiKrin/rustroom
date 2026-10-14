@@ -49,12 +49,21 @@ pub enum PrefixStepKey {
     /// inline `MaskedAdjustment` would make **every** entry in a `PrefixKey`'s `Vec` that size —
     /// including the zero-sized ones. The same `large_enum_variant` answer `ActionKind::Sync`
     /// already gives.
-    MaskedCapture(Box<edit_model::MaskedAdjustment>),
+    ///
+    /// ⚠⚠ M10.16a: with each component's map identity (`AiRasters::source`, 0 for none) — a map
+    /// arriving or changing must miss the cache, or the step's checkpoint keeps the picture it had
+    /// without it.
+    MaskedCapture(Box<edit_model::MaskedAdjustment>, Vec<u64>),
     /// The one defringe step (M9.6): the global settings and the **projection** of every enabled
     /// mask carrying a local defringe — its shape, its refinements and its slider, nothing else,
     /// so a masked-exposure drag does not re-run it. ⚠ Geometry is not here and need not be: the
     /// key is cumulative and the geometry step precedes this one.
-    Defringe(edit_model::Defringe, Vec<edit_model::MaskedAdjustment>),
+    /// ⚠ M10.16a: and each local mask's component map identities, `MaskedCapture`'s reason.
+    Defringe(
+        edit_model::Defringe,
+        Vec<edit_model::MaskedAdjustment>,
+        Vec<Vec<u64>>,
+    ),
 }
 
 /// One prefix stage together with the key identifying its output, so the renderer can cache
@@ -71,9 +80,16 @@ pub struct PrefixStep {
 /// a future stage that changes size is predicted too; `every_prefix_stages_output_dims_match_what_
 /// it_produces` keeps each answer true. Built without the lens, which keeps the size.
 pub fn prefix_output_dims(edits: &Edits, w: usize, h: usize) -> (usize, usize) {
-    build_prefix_steps(edits, RenderScale::FULL, None, Resampler::default(), None)
-        .iter()
-        .fold((w, h), |(w, h), step| step.stage.output_dims(w, h))
+    build_prefix_steps(
+        edits,
+        RenderScale::FULL,
+        None,
+        Resampler::default(),
+        None,
+        None,
+    )
+    .iter()
+    .fold((w, h), |(w, h), step| step.stage.output_dims(w, h))
 }
 
 /// The prefix as an ordered list of `(key, stage)` pairs.
@@ -81,12 +97,17 @@ pub fn prefix_output_dims(edits: &Edits, w: usize, h: usize) -> (usize, usize) {
 /// An inactive stage produces no step — exactly as it produces no stage in the pipeline today.
 /// That is what makes the checkpoint after an inactive stage *be* the checkpoint before it:
 /// the cumulative keys are equal, so nothing extra is stored.
+///
+/// ⚠ M10.16a: `ai` hands a mask's map-reading components (Subject, Selection, Depth) their maps for the
+/// masked Noise reduction, Dehaze and Defringe; `None` where a caller has none, and those components
+/// then cover nothing — as they did everywhere in the prefix before M10.16a.
 pub fn build_prefix_steps(
     edits: &Edits,
     scale: RenderScale,
     lens: Option<lens_profile::LensShot>,
     resampler: Resampler,
     airlight: Option<[f32; 3]>,
+    ai: Option<&dyn crate::AiRasters>,
 ) -> Vec<PrefixStep> {
     let mut steps: Vec<PrefixStep> = Vec::new();
 
@@ -215,17 +236,20 @@ pub fn build_prefix_steps(
         .map(defringe_projection)
         .collect();
     if edits.defringe.is_active() || locals.iter().any(|m| m.adjustments.defringe > 0.0) {
+        let rasters: Vec<_> = locals.iter().map(|p| rasters_for(p, ai)).collect();
         let stages = locals
             .iter()
-            .map(|p| {
+            .zip(&rasters)
+            .map(|(p, (sources, _))| {
                 (
-                    MaskStage::new_capture(p, scale, &edits.geometry, &[], None),
+                    MaskStage::new_capture(p, scale, &edits.geometry, &[], sources, None),
                     p.adjustments.defringe,
                 )
             })
             .collect();
+        let ids = rasters.into_iter().map(|(_, ids)| ids).collect();
         steps.push(PrefixStep {
-            key: PrefixStepKey::Defringe(edits.defringe, locals),
+            key: PrefixStepKey::Defringe(edits.defringe, locals, ids),
             stage: Box::new(stages::defringe::DefringeStage::new(
                 edits.defringe,
                 stages,
@@ -248,10 +272,12 @@ pub fn build_prefix_steps(
         if !p.adjustments.noise_reduction.is_active() && !p.adjustments.dehaze.is_active() {
             continue;
         }
+        let (sources, ids) = rasters_for(&p, ai);
         steps.push(PrefixStep {
             // ⚠⚠ The key holds **the projection the stage was built from**, so the key and the
-            // stage cannot drift — the property this function exists to guarantee.
-            key: PrefixStepKey::MaskedCapture(Box::new(p.clone())),
+            // stage cannot drift — the property this function exists to guarantee. And since
+            // M10.16a the identities of the maps it was handed, for the same reason.
+            key: PrefixStepKey::MaskedCapture(Box::new(p.clone()), ids),
             // ⚠⚠ **`None` for the prebuilt coverage, and it must stay that way.** The render
             // engine's `BrushCache` is sized from the *prefix output's* dimensions, which do not
             // exist until the prefix has run — so a prebuilt map is unavailable here even in
@@ -264,6 +290,7 @@ pub fn build_prefix_steps(
                 scale,
                 &edits.geometry,
                 &[],
+                &sources,
                 airlight,
             )),
         });
@@ -300,7 +327,7 @@ impl PrefixKey {
         // because whether a corrector exists is constant for a photo and the engine is per photo.
         // ⚠ `None` for the airlight: it is derived from `edits`, which this key already covers,
         // so carrying it here would be a second copy of a fact the key already holds.
-        let steps = build_prefix_steps(edits, scale, None, resampler, None);
+        let steps = build_prefix_steps(edits, scale, None, resampler, None, None);
         Self::upto(&steps, steps.len(), scale)
     }
 
@@ -327,6 +354,25 @@ impl PrefixKey {
             scale: scale.get(),
         }
     }
+}
+
+/// Each component's map source from `ai` and its identity, 0 base first — `(None, 0)` for a
+/// component that reads no map or whose map has not arrived.
+type Rasters = (
+    Vec<Option<std::sync::Arc<dyn crate::RasterSource>>>,
+    Vec<u64>,
+);
+
+fn rasters_for(m: &edit_model::MaskedAdjustment, ai: Option<&dyn crate::AiRasters>) -> Rasters {
+    std::iter::once(&m.mask)
+        .chain(m.refine.iter().map(|r| &r.mask))
+        .map(
+            |k| match ai.filter(|_| k.reads_a_map()).and_then(|a| a.source(k)) {
+                Some((src, id)) => (Some(src), id),
+                None => (None, 0),
+            },
+        )
+        .unzip()
 }
 
 /// A mask as the defringe step reads it: its shape, its refinements and its local defringe.
@@ -399,6 +445,7 @@ mod tests {
             RenderScale::new(1.0),
             None,
             Resampler::default(),
+            None,
             None,
         );
         assert!(
@@ -619,6 +666,7 @@ mod tests {
                 RenderScale::FULL,
                 None,
                 Resampler::Bilinear,
+                None,
                 None
             )
             .is_empty(),
@@ -642,8 +690,22 @@ mod tests {
         let a = all_edits();
         let mut b = a.clone();
         b.masks[0].adjustments.noise_reduction.luminance = 95.0;
-        let steps_a = build_prefix_steps(&a, RenderScale::FULL, None, Resampler::default(), None);
-        let steps_b = build_prefix_steps(&b, RenderScale::FULL, None, Resampler::default(), None);
+        let steps_a = build_prefix_steps(
+            &a,
+            RenderScale::FULL,
+            None,
+            Resampler::default(),
+            None,
+            None,
+        );
+        let steps_b = build_prefix_steps(
+            &b,
+            RenderScale::FULL,
+            None,
+            Resampler::default(),
+            None,
+            None,
+        );
         assert_eq!(steps_a.len(), 8, "the negative (M10.11a) first");
 
         // Same up to and including the geometry and the defringe (M9.6)...
@@ -720,8 +782,14 @@ mod tests {
         // build_pipeline_split_in_region is defined through build_prefix_steps, so the two
         // cannot drift: a stage added to one appears in the other.
         for edits in [Edits::default(), all_edits()] {
-            let steps =
-                build_prefix_steps(&edits, RenderScale::FULL, None, Resampler::default(), None);
+            let steps = build_prefix_steps(
+                &edits,
+                RenderScale::FULL,
+                None,
+                Resampler::default(),
+                None,
+                None,
+            );
             let (prefix, _) =
                 build_pipeline_split(&edits, RenderScale::FULL, TailRendering::colorimetric());
             let from_steps: Vec<&'static str> = steps.iter().map(|s| s.stage.name()).collect();
@@ -844,7 +912,7 @@ mod tests {
     #[test]
     fn the_defringe_step_appears_exactly_when_it_can_change_a_pixel() {
         let has = |e: &Edits| {
-            build_prefix_steps(e, RenderScale::FULL, None, Resampler::default(), None)
+            build_prefix_steps(e, RenderScale::FULL, None, Resampler::default(), None, None)
                 .iter()
                 .any(|s| matches!(s.key, PrefixStepKey::Defringe(..)))
         };
@@ -890,7 +958,7 @@ mod tests {
         // stages shared a key, a checkpoint would be reused across a change that altered it.
         let base = all_edits();
         let keys = |e: &Edits| -> Vec<PrefixStepKey> {
-            build_prefix_steps(e, RenderScale::FULL, None, Resampler::default(), None)
+            build_prefix_steps(e, RenderScale::FULL, None, Resampler::default(), None, None)
                 .iter()
                 .map(|s| s.key.clone())
                 .collect()
@@ -1054,6 +1122,7 @@ mod tests {
             test_corrector(),
             Resampler::default(),
             None,
+            None,
         );
         let names: Vec<&'static str> = steps.iter().map(|s| s.stage.name()).collect();
         assert_eq!(names, vec!["lens_correction", "geometry"]);
@@ -1105,6 +1174,7 @@ mod tests {
             test_corrector(),
             Resampler::default(),
             None,
+            None,
         )
         .iter()
         .map(|s| s.stage.name())
@@ -1132,11 +1202,17 @@ mod tests {
             },
             ..Edits::default()
         };
-        let names: Vec<&'static str> =
-            build_prefix_steps(&edits, RenderScale::FULL, None, Resampler::default(), None)
-                .iter()
-                .map(|s| s.stage.name())
-                .collect();
+        let names: Vec<&'static str> = build_prefix_steps(
+            &edits,
+            RenderScale::FULL,
+            None,
+            Resampler::default(),
+            None,
+            None,
+        )
+        .iter()
+        .map(|s| s.stage.name())
+        .collect();
         assert_eq!(names, vec!["geometry"]);
     }
 
@@ -1150,10 +1226,15 @@ mod tests {
             }),
             ..Edits::default()
         };
-        assert!(
-            build_prefix_steps(&edits, RenderScale::FULL, None, Resampler::default(), None)
-                .is_empty()
-        );
+        assert!(build_prefix_steps(
+            &edits,
+            RenderScale::FULL,
+            None,
+            Resampler::default(),
+            None,
+            None
+        )
+        .is_empty());
     }
 
     #[test]
@@ -1170,6 +1251,7 @@ mod tests {
             RenderScale::FULL,
             test_corrector(),
             Resampler::default(),
+            None,
             None
         )
         .is_empty());
@@ -1180,7 +1262,14 @@ mod tests {
     #[test]
     fn no_spots_means_no_stage() {
         let edits = Edits::default();
-        let steps = build_prefix_steps(&edits, RenderScale::FULL, None, Resampler::default(), None);
+        let steps = build_prefix_steps(
+            &edits,
+            RenderScale::FULL,
+            None,
+            Resampler::default(),
+            None,
+            None,
+        );
         assert!(steps.is_empty());
         assert!(
             !build_pipeline(&edits, RenderScale::FULL, TailRendering::colorimetric())
@@ -1304,11 +1393,17 @@ mod output_dims_tests {
         let mut e = with_negative();
         e.noise_reduction.luminance = 30.0;
         e.dehaze.amount = 20.0;
-        let names: Vec<&str> =
-            build_prefix_steps(&e, RenderScale::FULL, None, Resampler::default(), None)
-                .iter()
-                .map(|s| s.stage.name())
-                .collect();
+        let names: Vec<&str> = build_prefix_steps(
+            &e,
+            RenderScale::FULL,
+            None,
+            Resampler::default(),
+            None,
+            None,
+        )
+        .iter()
+        .map(|s| s.stage.name())
+        .collect();
         assert_eq!(
             names,
             ["negative", "noise_reduction", "dehaze"],
@@ -1333,5 +1428,201 @@ mod output_dims_tests {
         let mut turned = Edits::default();
         turned.geometry.orientation.rotate = edit_model::Quarter::Cw90;
         assert_eq!(prefix_output_dims(&turned, 400, 200), (200, 400));
+    }
+}
+
+/// M10.16a: an AI or depth component in a mask's Noise reduction, Dehaze and Defringe.
+#[cfg(test)]
+mod ai_raster_tests {
+    use super::*;
+    use crate::{AiRasters, RasterSource};
+    use core_image::ImageBuf;
+    use std::sync::Arc;
+
+    /// Covers the left half of any frame.
+    struct LeftHalf;
+    impl RasterSource for LeftHalf {
+        fn coverage(&self, w: usize, h: usize) -> crate::brush::CoverageMap {
+            crate::brush::CoverageMap {
+                x0: 0,
+                y0: 0,
+                w,
+                h,
+                data: (0..w * h)
+                    .map(|i| if i % w < w / 2 { 255 } else { 0 })
+                    .collect(),
+                outside: 0,
+            }
+        }
+    }
+
+    /// Hands every map-reading component the left half, under `id`.
+    struct Maps(u64);
+    impl AiRasters for Maps {
+        fn source(&self, _: &edit_model::Mask) -> Option<(Arc<dyn RasterSource>, u64)> {
+            Some((Arc::new(LeftHalf), self.0))
+        }
+    }
+
+    /// No map has arrived.
+    struct NoMaps;
+    impl AiRasters for NoMaps {
+        fn source(&self, _: &edit_model::Mask) -> Option<(Arc<dyn RasterSource>, u64)> {
+            None
+        }
+    }
+
+    /// A low-contrast ripple — Dehaze on a flat grey changes nothing, its airlight IS the grey.
+    fn ripple() -> ImageBuf {
+        let mut img = ImageBuf::new(80, 40);
+        for y in 0..40 {
+            for x in 0..80 {
+                let v = 0.45 + 0.12 * ((x as f32 / 3.0).sin() * (y as f32 / 4.0).cos());
+                img.set_pixel(x, y, [v, v * 0.97, v * 0.94]);
+            }
+        }
+        img
+    }
+
+    fn subject_with(adj: edit_model::LocalAdjustments, invert: bool) -> Edits {
+        Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Ai(edit_model::AiMask::default()),
+                adjustments: adj,
+                invert,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn dehaze(invert: bool) -> Edits {
+        subject_with(
+            edit_model::LocalAdjustments {
+                dehaze: edit_model::Dehaze { amount: 60.0 },
+                ..Default::default()
+            },
+            invert,
+        )
+    }
+
+    fn run(edits: &Edits, ai: Option<&dyn AiRasters>) -> ImageBuf {
+        build_prefix_steps(
+            edits,
+            RenderScale::FULL,
+            None,
+            Resampler::default(),
+            None,
+            ai,
+        )
+        .iter()
+        .fold(ripple(), |img, s| s.stage.apply(img))
+    }
+
+    /// Mean absolute difference over the columns `x0..x1`.
+    fn diff(a: &ImageBuf, b: &ImageBuf, x0: usize, x1: usize) -> f32 {
+        let mut sum = 0.0;
+        for y in 0..a.height() {
+            for x in x0..x1 {
+                for c in 0..3 {
+                    sum += (a.pixel(x, y)[c] - b.pixel(x, y)[c]).abs();
+                }
+            }
+        }
+        sum / (a.height() * (x1 - x0) * 3) as f32
+    }
+
+    #[test]
+    fn an_ai_masked_dehaze_covers_its_map_and_only_it() {
+        let plain = run(&Edits::default(), None);
+        let masked = run(&dehaze(false), Some(&Maps(7)));
+        assert!(
+            diff(&masked, &plain, 0, 30) > 0.005,
+            "the covered half did not change"
+        );
+        assert_eq!(
+            diff(&masked, &plain, 50, 80),
+            0.0,
+            "the uncovered half changed"
+        );
+    }
+
+    #[test]
+    fn a_missing_map_covers_nothing_in_the_prefix() {
+        let plain = run(&Edits::default(), None);
+        for ai in [None, Some(&NoMaps as &dyn AiRasters)] {
+            assert_eq!(run(&dehaze(false), ai).data(), plain.data());
+        }
+    }
+
+    /// The render's rule (`Composite::waits_for_a_map`): inverted, a missing map's 0 would be the
+    /// whole frame — so a waiting composite covers nothing at all.
+    #[test]
+    fn an_inverted_composite_waiting_in_the_prefix_covers_nothing() {
+        let plain = run(&Edits::default(), None);
+        assert_eq!(run(&dehaze(true), Some(&NoMaps)).data(), plain.data());
+        // Positive control: with its map, inverted, it covers the RIGHT half.
+        let covered = run(&dehaze(true), Some(&Maps(7)));
+        assert!(diff(&covered, &plain, 50, 80) > 0.005);
+        assert_eq!(diff(&covered, &plain, 0, 30), 0.0);
+    }
+
+    /// ⚠⚠ The map's identity is in the step's key — a map arriving or changing must miss the cache.
+    #[test]
+    fn the_prefix_key_carries_the_maps_identity() {
+        let key = |e: &Edits, ai: &dyn AiRasters| {
+            let steps = build_prefix_steps(
+                e,
+                RenderScale::FULL,
+                None,
+                Resampler::default(),
+                None,
+                Some(ai),
+            );
+            PrefixKey::upto(&steps, steps.len(), RenderScale::FULL)
+        };
+        let defringe = subject_with(
+            edit_model::LocalAdjustments {
+                defringe: 40.0,
+                ..Default::default()
+            },
+            false,
+        );
+        for e in [dehaze(false), defringe] {
+            assert_eq!(
+                key(&e, &Maps(1)),
+                key(&e, &Maps(1)),
+                "the same map, the same key"
+            );
+            assert_ne!(key(&e, &Maps(1)), key(&e, &Maps(2)), "another map");
+            assert_ne!(key(&e, &NoMaps), key(&e, &Maps(1)), "a map arriving");
+        }
+    }
+
+    #[test]
+    fn an_ai_masked_defringe_reads_its_map() {
+        let e = subject_with(
+            edit_model::LocalAdjustments {
+                defringe: 40.0,
+                ..Default::default()
+            },
+            false,
+        );
+        let steps = |ai: &dyn AiRasters| {
+            build_prefix_steps(
+                &e,
+                RenderScale::FULL,
+                None,
+                Resampler::default(),
+                None,
+                Some(ai),
+            )
+        };
+        assert!(
+            steps(&Maps(1)).iter().any(
+                |s| matches!(&s.key, PrefixStepKey::Defringe(_, _, ids) if ids == &vec![vec![1]])
+            ),
+            "the defringe step was built without its map"
+        );
     }
 }

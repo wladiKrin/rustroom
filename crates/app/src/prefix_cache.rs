@@ -537,6 +537,7 @@ mod tests {
             None,
             pipeline::Resampler::Bilinear,
             None,
+            None,
         );
         assert!(
             steps.len() >= 3,

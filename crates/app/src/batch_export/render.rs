@@ -155,12 +155,21 @@ pub fn export_one(
         baseline: source.baseline,
         airlight: Some(airlight),
     };
+    // ⚠ M10.16a: the photo's AI and depth maps reach a mask's Noise reduction, Dehaze and Defringe
+    // too — through the same source the tail's coverage reads (`ai_coverage_for`).
+    let ai = crate::ai_coverage::AiSource {
+        maps: &source.ai,
+        edits,
+        lens: source.lens.as_ref(),
+        decode: (decode_w, decode_h),
+    };
     let steps = pipeline::build_prefix_steps(
         edits,
         scale,
         source.lens.clone(),
         render.resampler,
         Some(airlight),
+        Some(&ai),
     );
     // ⚠⚠ **This was `TailRendering::default()` until 2026-09-18, and that was the bug**: an
     // export rendered with the *built-in* curve and `BASELINE_EV` while the preview consulted the
@@ -475,6 +484,90 @@ mod tests {
             plain.as_raw(),
             "a mask without its map changed the file"
         );
+    }
+
+    /// ⚠⚠ M10.16a — **the gap, as a test that failed on the code before the fix:** a mask's Dehaze
+    /// (a prefix step) built its AI component with no coverage, so a Subject-masked Dehaze changed
+    /// NOTHING — the file was the unmasked one. Now it changes what the map covers, and only that.
+    #[test]
+    fn an_ai_masked_dehaze_changes_what_its_map_covers() {
+        // A low-contrast ripple — Dehaze on a flat grey changes nothing, its airlight IS the grey.
+        let ripple = |w: usize, h: usize| {
+            let mut img = ImageBuf::new(w, h);
+            for y in 0..h {
+                for x in 0..w {
+                    let v = 0.45 + 0.12 * ((x as f32 / 3.0).sin() * (y as f32 / 4.0).cos());
+                    img.set_pixel(x, y, [v, v * 0.97, v * 0.94]);
+                }
+            }
+            img
+        };
+        let export = |tag: &str, masked: bool| -> image::RgbImage {
+            let d = TempDir::new(tag);
+            let mut o = opts(&d, None);
+            o.format = ExportFormat::Tiff8;
+            let dest = d.0.join("out.tif");
+            let e = Edits {
+                masks: if masked {
+                    vec![edit_model::MaskedAdjustment {
+                        mask: edit_model::Mask::Ai(edit_model::AiMask::default()),
+                        adjustments: edit_model::LocalAdjustments {
+                            dehaze: edit_model::Dehaze { amount: 60.0 },
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }]
+                } else {
+                    Vec::new()
+                },
+                ..Default::default()
+            };
+            let mut src = source(ripple(80, 40));
+            // The subject is the LEFT half of the decode.
+            src.ai.insert(
+                crate::ai_coverage::MapQuery::Prompt(edit_model::AiPrompt::Subject),
+                std::sync::Arc::new(ai_mask::ProbMap::from_fn(40, 20, |x, _| {
+                    if x < 20 {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                })),
+            );
+            export_one(
+                src,
+                &e,
+                &dest,
+                &o,
+                CPU,
+                &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
+                None,
+                None,
+            )
+            .unwrap();
+            image::open(&dest).unwrap().to_rgb8()
+        };
+        let (with, plain) = (export("hz_on", true), export("hz_off", false));
+        let diff = |x0: u32, x1: u32| {
+            let mut sum = 0.0f64;
+            let mut n = 0.0f64;
+            for y in 0..40 {
+                for x in x0..x1 {
+                    for c in 0..3 {
+                        sum += (with.get_pixel(x, y)[c] as f64 - plain.get_pixel(x, y)[c] as f64)
+                            .abs();
+                        n += 1.0;
+                    }
+                }
+            }
+            sum / n
+        };
+        let (left, right) = (diff(0, 30), diff(50, 80));
+        assert!(
+            left > 2.0,
+            "the covered half did not change: {left:.2} levels"
+        );
+        assert!(right < 0.5, "the uncovered half changed: {right:.2} levels");
     }
 
     /// Export one photo with a given rendering and return the file's bytes.

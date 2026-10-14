@@ -119,7 +119,7 @@ impl MaskStage {
         deposit: Option<(std::sync::Arc<crate::BrushCoverage>, usize)>,
     ) -> Self {
         Self {
-            composite: Self::composite(masked, geometry, prebuilt),
+            composite: Self::composite(masked, geometry, prebuilt, &[]),
             stages: adjustment_stages(&masked.adjustments, baseline, scale),
             region,
             deposit,
@@ -142,15 +142,19 @@ impl MaskStage {
     ///
     /// ⚠ Identical to [`Self::new_in_region`] but for the sub-stage builder, and both go through
     /// one [`Self::coverage_source`], so a new `Mask` variant stays a compile error in one place.
+    ///
+    /// ⚠ M10.16a: `rasters` — per component, 0 the base — are the map-reading components' sources,
+    /// resolved at the prefix's frame size when the stage runs (`crate::RasterSource`).
     pub fn new_capture(
         masked: &MaskedAdjustment,
         scale: RenderScale,
         geometry: &Geometry,
         prebuilt: &[Option<std::sync::Arc<crate::brush::CoverageMap>>],
+        rasters: &[Option<std::sync::Arc<dyn crate::RasterSource>>],
         airlight: Option<[f32; 3]>,
     ) -> Self {
         Self {
-            composite: Self::composite(masked, geometry, prebuilt),
+            composite: Self::composite(masked, geometry, prebuilt, rasters),
             // ⚠ The frame-global airlight, threaded so a mask's dehaze is built exactly as the
             // global one is. `build_prefix_steps` already holds it at the call site.
             stages: crate::capture_stages(&masked.adjustments, scale, airlight),
@@ -201,9 +205,20 @@ impl MaskStage {
             CoverageSource::Painted {
                 prebuilt: Some(c), ..
             }
-            | CoverageSource::Raster { prebuilt: Some(c) } => Some(std::sync::Arc::clone(c)),
+            | CoverageSource::Raster {
+                prebuilt: Some(c), ..
+            } => Some(std::sync::Arc::clone(c)),
+            // ⚠ M10.16a: in the prefix, the map's source resolved at THIS frame's size — whole-frame,
+            // as the prefix always runs (`new_capture` has no region).
+            CoverageSource::Raster {
+                prebuilt: None,
+                lazy: Some(src),
+            } => Some(std::sync::Arc::new(src.coverage(fw, fh))),
             // ⚠ Nothing to rasterise from: the map comes from outside or not at all.
-            CoverageSource::Raster { prebuilt: None } => None,
+            CoverageSource::Raster {
+                prebuilt: None,
+                lazy: None,
+            } => None,
             CoverageSource::Painted {
                 brush, geometry, ..
             } => {
@@ -366,15 +381,22 @@ impl MaskStage {
         masked: &MaskedAdjustment,
         geometry: &Geometry,
         prebuilt: &[Option<std::sync::Arc<crate::brush::CoverageMap>>],
+        rasters: &[Option<std::sync::Arc<dyn crate::RasterSource>>],
     ) -> Composite {
         let at = |j: usize| prebuilt.get(j).cloned().flatten();
+        let lazy = |j: usize| rasters.get(j).cloned().flatten();
         Composite {
-            base: Self::source_for(&masked.mask, geometry, at(0)),
+            base: Self::source_for(&masked.mask, geometry, at(0), lazy(0)),
             refine: masked
                 .refine
                 .iter()
                 .enumerate()
-                .map(|(k, r)| (r.op, Self::source_for(&r.mask, geometry, at(k + 1))))
+                .map(|(k, r)| {
+                    (
+                        r.op,
+                        Self::source_for(&r.mask, geometry, at(k + 1), lazy(k + 1)),
+                    )
+                })
                 .collect(),
             invert: masked.invert,
         }
@@ -385,6 +407,7 @@ impl MaskStage {
         mask: &edit_model::Mask,
         geometry: &Geometry,
         prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
+        lazy: Option<std::sync::Arc<dyn crate::RasterSource>>,
     ) -> CoverageSource {
         match mask {
             edit_model::Mask::Brush(b) => CoverageSource::Painted {
@@ -397,7 +420,7 @@ impl MaskStage {
             // ⚠ M10.16a: a depth range is a raster too — its band applied on the CPU when the app
             // built the 8-bit coverage, exactly as an AI mask's threshold is.
             edit_model::Mask::Ai(_) | edit_model::Mask::Depth(_) => {
-                CoverageSource::Raster { prebuilt }
+                CoverageSource::Raster { prebuilt, lazy }
             }
             m @ (edit_model::Mask::Linear(_) | edit_model::Mask::Radial(_)) => {
                 CoverageSource::Analytic(m.clone())
@@ -1622,6 +1645,7 @@ mod tests {
             &masked,
             RenderScale::FULL,
             &edit_model::Geometry::default(),
+            &[],
             &[],
             // ⚠ `None` keeps this test's subject the stage's own estimate, which is what it
             // asserts about; the supplied-airlight path is covered where it is supplied.

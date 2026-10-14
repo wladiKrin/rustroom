@@ -126,7 +126,7 @@ pub fn build_pipeline_split_tapped(
     // Defined through `build_prefix_steps` so the pipeline and the cache keys cannot drift:
     // one list, two consumers.
     let prefix: Vec<Box<dyn PipelineStage>> =
-        build_prefix_steps(edits, scale, lens, resampler, airlight)
+        build_prefix_steps(edits, scale, lens, resampler, airlight, None)
             .into_iter()
             .map(|s| s.stage)
             .collect();

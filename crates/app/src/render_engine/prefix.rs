@@ -55,6 +55,8 @@ pub(super) struct PrefixOut {
 }
 
 /// Plan one render's prefix: the frame-global airlight, then the steps.
+///
+/// `ai` — the photo's AI and depth maps (M10.16a), for a mask's Noise reduction, Dehaze and Defringe.
 pub(super) fn plan<'a>(
     edits: &'a Edits,
     buffer: &Arc<ImageBuf>,
@@ -62,6 +64,7 @@ pub(super) fn plan<'a>(
     scale: RenderScale,
     spec: &FrameSpec,
     cache: &mut PrefixCache,
+    ai: &crate::ai_coverage::AiMaps,
 ) -> Walk<'a> {
     let FrameSpec {
         max_dim,
@@ -95,7 +98,20 @@ pub(super) fn plan<'a>(
     }
     // ⚠ Cloned rather than moved: the GPU seam below needs the same profile per step, and a
     // `LensShot` is a handful of bytes plus a shared profile handle.
-    let steps = build_prefix_steps(edits, scale, lens.clone(), resampler, Some(airlight));
+    let ai = crate::ai_coverage::AiSource {
+        maps: ai,
+        edits,
+        lens: lens.as_ref(),
+        decode: (buffer.width(), buffer.height()),
+    };
+    let steps = build_prefix_steps(
+        edits,
+        scale,
+        lens.clone(),
+        resampler,
+        Some(airlight),
+        Some(&ai),
+    );
     // ⚠ Per-step decomposition, env-gated and kept: `RUSTROOM_DEBUG_MASK`'s precedent. A whole-
     // render figure says a drag is slow; only this says WHICH stage is slow, and reasoning about
     // that from a sidecar has already been wrong once here.

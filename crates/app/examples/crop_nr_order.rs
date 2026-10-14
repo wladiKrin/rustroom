@@ -58,7 +58,7 @@ fn main() {
     let res = Resampler::default();
     let air = pipeline::prefix_airlight(&edits, &buf, res, shot.clone());
     let mut img = buf;
-    for s in pipeline::build_prefix_steps(&edits, sc, shot, res, Some(air)) {
+    for s in pipeline::build_prefix_steps(&edits, sc, shot, res, Some(air), None) {
         img = s.stage.apply(img);
     }
     let (_, tail) =

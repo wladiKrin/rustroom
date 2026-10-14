@@ -305,6 +305,57 @@ impl AiSource<'_> {
     }
 }
 
+/// A map-reading component in the PREFIX (M10.16a): its lens-warped map and its coverage rule,
+/// resolved at the frame size the masked Noise reduction, Dehaze or Defringe step runs at.
+struct MapRaster {
+    map: std::sync::Arc<ProbMap>,
+    cover: Box<dyn Fn(f32) -> f32 + Send + Sync>,
+    outside: u8,
+    geometry: edit_model::Geometry,
+    perspective: edit_model::Perspective,
+    decode: (usize, usize),
+}
+
+impl pipeline::RasterSource for MapRaster {
+    fn coverage(&self, frame_w: usize, frame_h: usize) -> CoverageMap {
+        let dm = DecodeMap::new(
+            &self.geometry,
+            self.perspective,
+            frame_w,
+            frame_h,
+            None,
+            self.decode.0,
+            self.decode.1,
+        );
+        to_frame(&self.map, &self.cover, self.outside, &dm, None)
+    }
+}
+
+/// ⚠⚠ The prefix's maps come through the SAME source the tail's do — one set of maps, one coverage
+/// rule — so a mask's Dehaze and its Exposure cannot disagree about where it is.
+impl pipeline::AiRasters for AiSource<'_> {
+    fn source(
+        &self,
+        mask: &edit_model::Mask,
+    ) -> Option<(std::sync::Arc<dyn pipeline::RasterSource>, u64)> {
+        let query = MapQuery::of(mask)?;
+        let map = self.maps.get(&query)?;
+        let id = self.maps.id(&query)?;
+        let (cover, outside) = cover_fn(mask)?;
+        Some((
+            std::sync::Arc::new(MapRaster {
+                map: self.lensed(map),
+                cover,
+                outside,
+                geometry: self.edits.geometry,
+                perspective: self.edits.perspective,
+                decode: self.decode,
+            }),
+            id,
+        ))
+    }
+}
+
 /// What a component's row says while its map is being computed, or `None` when it has its map or
 /// reads none.
 pub fn waiting_text(mask: &edit_model::Mask, maps: &AiMaps) -> Option<&'static str> {
