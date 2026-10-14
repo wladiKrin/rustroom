@@ -59,6 +59,7 @@ pub mod ingest;
 pub mod keyword_suggest;
 pub mod keyword_tool;
 pub mod layout;
+pub mod lens_blur_tool;
 pub mod library_filter;
 pub mod looks;
 pub mod marks;

@@ -105,16 +105,17 @@ impl AiMaps {
     }
 }
 
-/// Every map `edits` reads, in mask then component order, each once.
+/// Every map `edits` reads, in mask then component order, then Lens Blur's (M10.16d) — each once.
 pub fn queries(edits: &edit_model::Edits) -> Vec<MapQuery> {
     let mut out: Vec<MapQuery> = Vec::new();
-    for m in &edits.masks {
-        for mask in std::iter::once(&m.mask).chain(m.refine.iter().map(|r| &r.mask)) {
-            if let Some(q) = MapQuery::of(mask) {
-                if !out.contains(&q) {
-                    out.push(q);
-                }
-            }
+    let masks = edits
+        .masks
+        .iter()
+        .flat_map(|m| std::iter::once(&m.mask).chain(m.refine.iter().map(|r| &r.mask)))
+        .filter_map(MapQuery::of);
+    for q in masks.chain(crate::lens_blur_tool::queries(&edits.lens_blur)) {
+        if !out.contains(&q) {
+            out.push(q);
         }
     }
     out
@@ -342,10 +343,54 @@ impl pipeline::AiRasters for AiSource<'_> {
         &self,
         mask: &edit_model::Mask,
     ) -> Option<(std::sync::Arc<dyn pipeline::RasterSource>, u64)> {
-        let query = MapQuery::of(mask)?;
+        let (cover, outside) = cover_fn(mask)?;
+        self.raster(MapQuery::of(mask)?, cover, outside)
+    }
+
+    /// M10.16d: the depth raw — Lens Blur reads positions, not a band — and the Subject map through
+    /// the Refine curve at 0, the soft alpha the AI mask itself gives at its default.
+    fn plane(
+        &self,
+        which: pipeline::MapPlane,
+    ) -> Option<(std::sync::Arc<dyn pipeline::RasterSource>, u64)> {
+        match which {
+            pipeline::MapPlane::Depth => self.raster(MapQuery::Depth, Box::new(|p| p), 0),
+            pipeline::MapPlane::Subject => self.raster(
+                MapQuery::Prompt(edit_model::AiPrompt::Subject),
+                Box::new(|p| refine(p, 0.0, false)),
+                0,
+            ),
+        }
+    }
+
+    /// M10.16d: the focus from the decode-space maps — `lens_blur_tool`'s rules; `None` while a map
+    /// it is measured on has not arrived.
+    fn lens_focus(&self, lb: &edit_model::LensBlur) -> Option<f32> {
+        let depth = self.maps.get(&MapQuery::Depth)?;
+        match lb.focus {
+            edit_model::LensFocus::Point { .. } => {
+                crate::lens_blur_tool::focus_depth(lb, depth, None)
+            }
+            edit_model::LensFocus::Subject => {
+                let q = MapQuery::Prompt(edit_model::AiPrompt::Subject);
+                let subject = self.maps.get(&q)?;
+                let ids = (self.maps.id(&MapQuery::Depth)?, self.maps.id(&q)?);
+                Some(crate::lens_blur_tool::subject_focus(ids, depth, subject))
+            }
+        }
+    }
+}
+
+impl AiSource<'_> {
+    /// `query`'s map, lens-warped, as a prefix raster through `cover` — with its identity.
+    fn raster(
+        &self,
+        query: MapQuery,
+        cover: Cover,
+        outside: u8,
+    ) -> Option<(std::sync::Arc<dyn pipeline::RasterSource>, u64)> {
         let map = self.maps.get(&query)?;
         let id = self.maps.id(&query)?;
-        let (cover, outside) = cover_fn(mask)?;
         Some((
             std::sync::Arc::new(MapRaster {
                 map: self.lensed(map),
@@ -367,11 +412,16 @@ pub fn waiting_text(mask: &edit_model::Mask, maps: &AiMaps) -> Option<&'static s
     if maps.get(&q).is_some() {
         return None;
     }
-    Some(match q {
+    Some(waiting_for(&q))
+}
+
+/// What is said while `q`'s map computes — a mask row's and Lens Blur's section's one wording.
+pub fn waiting_for(q: &MapQuery) -> &'static str {
+    match q {
         MapQuery::Prompt(edit_model::AiPrompt::Subject) => "Finding the subject…",
         MapQuery::Prompt(edit_model::AiPrompt::Click { .. }) => "Outlining what you clicked…",
         MapQuery::Depth => "Estimating depth…",
-    })
+    }
 }
 
 /// `map` resampled over the frame (or the `clip` rectangle of it — `(x0, y0, w, h)` in frame
@@ -722,5 +772,150 @@ mod tests {
         );
         let (maps, _) = store_with(&depth, ProbMap::from_fn(2, 2, |_, _| 0.5));
         assert_eq!(waiting_text(&depth, &maps), None);
+    }
+}
+
+/// M10.16d: Lens Blur's maps — asked for while it is on, handed to the prefix whole, its focus from
+/// them.
+#[cfg(test)]
+mod lens_blur_tests {
+    use super::*;
+    use pipeline::{AiRasters, MapPlane};
+    use std::sync::Arc;
+
+    fn edits(lb: edit_model::LensBlur) -> edit_model::Edits {
+        edit_model::Edits {
+            lens_blur: lb,
+            ..Default::default()
+        }
+    }
+
+    fn on() -> edit_model::LensBlur {
+        edit_model::LensBlur {
+            on: true,
+            ..Default::default()
+        }
+    }
+
+    const SUBJECT: MapQuery = MapQuery::Prompt(edit_model::AiPrompt::Subject);
+
+    /// While on: the depth, and in Subject mode the Subject map too — after the masks' own, once each.
+    /// Off: nothing, whatever its other settings say.
+    #[test]
+    fn the_maps_are_asked_for() {
+        assert_eq!(queries(&edits(on())), vec![MapQuery::Depth, SUBJECT]);
+        let point = edit_model::LensBlur {
+            focus: edit_model::LensFocus::Point { point: [0.3, 0.3] },
+            ..on()
+        };
+        assert_eq!(queries(&edits(point)), vec![MapQuery::Depth]);
+        let off = edit_model::LensBlur {
+            on: false,
+            amount: 90.0,
+            ..on()
+        };
+        assert!(queries(&edits(off)).is_empty());
+        // A subject mask already asks for the Subject map: listed once, in the mask's place.
+        let e = edit_model::Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Ai(edit_model::AiMask::default()),
+                ..Default::default()
+            }],
+            ..edits(on())
+        };
+        assert_eq!(queries(&e), vec![SUBJECT, MapQuery::Depth]);
+    }
+
+    /// 40 × 20: 0.2 on the left half, 0.8 on the right.
+    fn halves() -> Arc<ProbMap> {
+        Arc::new(ProbMap::from_fn(
+            40,
+            20,
+            |x, _| if x < 20 { 0.2 } else { 0.8 },
+        ))
+    }
+
+    fn maps(subject: Option<ProbMap>) -> AiMaps {
+        let mut m = AiMaps::default();
+        m.insert(MapQuery::Depth, halves());
+        if let Some(s) = subject {
+            m.insert(SUBJECT, Arc::new(s));
+        }
+        m
+    }
+
+    fn source<'a>(maps: &'a AiMaps, e: &'a edit_model::Edits) -> AiSource<'a> {
+        AiSource {
+            maps,
+            edits: e,
+            lens: None,
+            decode: (40, 20),
+        }
+    }
+
+    /// The depth plane is the raw map (no band, no threshold); the Subject plane is the map through
+    /// the Refine curve at 0; each under its `AiMaps::id`.
+    #[test]
+    fn the_planes_are_the_raw_depth_and_the_refined_subject() {
+        let m = maps(Some(ProbMap::from_fn(40, 20, |x, _| {
+            if x < 20 {
+                0.9
+            } else {
+                0.3
+            }
+        })));
+        let e = edits(on());
+        let src = source(&m, &e);
+        let (depth, id) = src.plane(MapPlane::Depth).expect("depth");
+        assert_eq!(Some(id), m.id(&MapQuery::Depth));
+        let c = depth.coverage(80, 40);
+        assert!((c.at(5, 20) as i32 - 51).abs() <= 1, "{}", c.at(5, 20));
+        assert!((c.at(75, 20) as i32 - 204).abs() <= 1, "{}", c.at(75, 20));
+        let (subject, id) = src.plane(MapPlane::Subject).expect("subject");
+        assert_eq!(Some(id), m.id(&SUBJECT));
+        let c = subject.coverage(80, 40);
+        assert_eq!(c.at(5, 20), 255, "0.9 is well inside");
+        assert_eq!(c.at(75, 20), 0, "0.3 is outside the soft edge");
+        assert!(source(&maps(None), &e).plane(MapPlane::Subject).is_none());
+    }
+
+    /// Subject → the median under the subject; no subject in the map → the depth at the decode centre;
+    /// a map missing → no focus (the step waits).
+    #[test]
+    fn no_subject_focuses_at_the_centre() {
+        let e = edits(on());
+        let left = maps(Some(ProbMap::from_fn(40, 20, |x, _| {
+            if x < 10 {
+                0.9
+            } else {
+                0.1
+            }
+        })));
+        let f = source(&left, &e).lens_focus(&e.lens_blur).expect("focus");
+        assert!(
+            (f - 0.2).abs() < 0.01,
+            "{f}: the subject stands on the left"
+        );
+        // Nothing found: the centre — 0.8 here, (20, 10) being the right half's first column.
+        let none = maps(Some(ProbMap::from_fn(40, 20, |_, _| 0.1)));
+        let f = source(&none, &e).lens_focus(&e.lens_blur).expect("focus");
+        assert!((f - 0.8).abs() < 0.01, "{f}");
+        assert_eq!(source(&maps(None), &e).lens_focus(&e.lens_blur), None);
+        assert_eq!(
+            source(&AiMaps::default(), &e).lens_focus(&e.lens_blur),
+            None
+        );
+    }
+
+    /// Point → the depth there, the Subject map not needed.
+    #[test]
+    fn point_focus_reads_the_depth_at_the_point() {
+        let lb = edit_model::LensBlur {
+            focus: edit_model::LensFocus::Point { point: [0.1, 0.5] },
+            ..on()
+        };
+        let e = edits(lb);
+        let f = source(&maps(None), &e).lens_focus(&lb).expect("focus");
+        assert!((f - 0.2).abs() < 0.01, "{f}");
     }
 }
