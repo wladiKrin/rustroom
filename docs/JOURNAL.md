@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M10.16a: depth masks — an estimated depth map and the Depth range mask (2026-10-14)](#2026-10-14--m1016a-depth-masks--an-estimated-depth-map-and-the-depth-range-mask-branch-m1016a-depth-masks)
+- [M10.16a: depth masks — an estimated depth map and the Depth range mask (2026-10-14)](#2026-10-14--m1016a-depth-masks--an-estimated-depth-map-and-the-depth-range-mask-branch-m1016a-depth-masks-merged-2026-10-14)
 - [M10.15d: Send marks to Immich, and Undo last send (2026-10-13)](#2026-10-13--m1015d-send-marks-to-immich-and-undo-last-send-branch-m1015d-immich-send-marks-merged-2026-10-14)
 - [M10.15c: Immich's own rating and favourite, filled once (2026-10-13)](#2026-10-13--m1015c-immichs-own-rating-and-favourite-filled-once-branch-m1015c-immich-rating-merged-2026-10-13)
 - [M10.15b: clear the Immich downloads, and a soft limit that warns at startup (2026-10-13)](#2026-10-13--m1015b-clear-the-immich-downloads-and-a-soft-limit-that-warns-at-startup-branch-m1015b-immich-cache-clear-merged-2026-10-13)
@@ -177,7 +177,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
-### 2026-10-14 — M10.16a: depth masks — an estimated depth map and the Depth range mask (branch `m10.16a-depth-masks`)
+### 2026-10-14 — M10.16a: depth masks — an estimated depth map and the Depth range mask (branch `m10.16a-depth-masks`, merged 2026-10-14)
 
 **The item:** *"Depth masks (2026-08-26). L"* — nothing more on record. **The author's call in the
 brainstorm: Lightroom's Depth Range mask *and* Lens Blur — split:** M10.16a is the depth map + the mask;
@@ -277,7 +277,11 @@ primary drag (brush, crop, the depth picker) as well as panning — pre-existing
 `ai_masked_dehaze`). ⚠ Touched files over ~600 code lines: `gpu-pipeline/src/mask.rs` 735 (one arm + a
 test), `gpu-pipeline/src/accelerate.rs` 721 (appended arguments), `pipeline/src/stages/mask.rs` 621 (the
 lazy raster), `examples/bench_preview.rs` 840 (one argument).
-⏳ **Awaiting the author's confirmation by use.**
+**The drag, measured afterwards** in the author's last session (load average ~12 — busy, not saturated,
+so indicative): coverage builds median **0 ms** (cache hits), p90 **8.2 ms**, max 126 ms (a map arriving);
+renders median 20 ms — a band drag costs a few ms of coverage, as designed.
+
+✅ **Confirmed by the author ("works") and merged 2026-10-14.** Next: **M10.16d — Lens Blur**, on this map.
 
 ### 2026-10-13 — M10.15d: Send marks to Immich, and Undo last send (branch `m10.15d-immich-send-marks`, merged 2026-10-14)
 
