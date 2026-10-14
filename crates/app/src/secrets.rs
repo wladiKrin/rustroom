@@ -35,6 +35,9 @@ pub trait SecretStore: Send + Sync {
 pub enum KeyHome {
     Keychain,
     File,
+    /// The keychain would not answer this launch — a password dialog refused or unanswered, after
+    /// a rebuild (M10.15a). The keys are still in it; nothing was written or deleted.
+    Unreadable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +55,12 @@ pub fn key_hover(kind: KeyKind, home: KeyHome) -> &'static str {
         }
         (KeyKind::Upload, KeyHome::Keychain) => {
             "An optional Immich key that can upload and change marks, for Export and Send marks, kept in your keychain"
+        }
+        (KeyKind::Browse, KeyHome::Unreadable) => {
+            "A read-only Immich API key, in the keychain, which could not be read — restart Rustroom and allow access"
+        }
+        (KeyKind::Upload, KeyHome::Unreadable) => {
+            "The Write key for Export and Send marks, in the keychain, which could not be read — restart and allow access"
         }
         (KeyKind::Upload, KeyHome::File) => {
             "An optional Immich key that can upload and change marks, for Export and Send marks, kept in settings.json"
@@ -227,6 +236,7 @@ mod tests {
             for (home, place) in [
                 (KeyHome::Keychain, "keychain"),
                 (KeyHome::File, "settings.json"),
+                (KeyHome::Unreadable, "allow access"),
             ] {
                 let t = key_hover(kind, home);
                 assert_eq!(crate::slider_help::sentence_fault(t), None, "{t}");
@@ -238,7 +248,7 @@ mod tests {
     /// M10.15d: the upload key is the Write key — its hover names both deliberate uses.
     #[test]
     fn the_write_key_hover_names_both_uses() {
-        for home in [KeyHome::Keychain, KeyHome::File] {
+        for home in [KeyHome::Keychain, KeyHome::File, KeyHome::Unreadable] {
             let t = key_hover(KeyKind::Upload, home);
             assert!(t.contains("Export") && t.contains("Send marks"), "{t}");
         }

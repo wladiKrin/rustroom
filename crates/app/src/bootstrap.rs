@@ -259,6 +259,8 @@ impl RustroomApp {
         app.load_immich_stacks();
         // M10.15b: the soft limit's warning — one directory listing, ~3 ms for 1,000 photos.
         app.check_immich_cache_at_startup();
+        // Last, so no other startup message covers it.
+        app.report_unread_keys();
         app
     }
 }

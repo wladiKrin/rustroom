@@ -154,8 +154,9 @@ impl SettingsStore {
                 st.home = KeyHome::Keychain;
             }
             Ok(None) => st.home = KeyHome::Keychain,
-            // ⚠ Denied or unavailable: Immich is simply not connected this session.
-            Err(_) => st.home = KeyHome::File,
+            // ⚠ Denied or unavailable: Immich is simply not connected this session — and the window
+            // says so (`Unreadable`), because blank key fields alone read as "the keys are gone".
+            Err(_) => st.home = KeyHome::Unreadable,
         }
         st.last = Some(s.clone());
         s
@@ -440,6 +441,10 @@ mod tests {
             before,
             "the file is untouched"
         );
+        // ⚠ Not `File`: the keys are not in the file, they are in a keychain that would not answer —
+        // which is what the Settings window and the status row must say (found in use 2026-10-14:
+        // blank fields read as "the keys are gone").
+        assert_eq!(st.key_home(), KeyHome::Unreadable);
     }
 
     #[test]
