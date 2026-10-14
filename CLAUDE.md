@@ -169,7 +169,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 ### State (2026-10-14)
 
 **3812 tests** (9 ignored), **87 golden tests** (74 reference images — `cargo test --workspace --test golden`),
-gate green on `main`. ⚠⚠ **Run the git command above rather than
+gate green on `main`; **3860 / 89 goldens (76 references) on branch `m10.16a-depth-masks`**, gate green there. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -246,8 +246,10 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15** (table above).
 
-**▶ NEXT: M10.16a — depth masks** (the AI tools; the `ai-mask` crate's `tract` runtime and model registry
-are the shared half). Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸, d), M10.14 f–h ⏸.
+**▶ NOW: M10.16a — depth masks, built on branch `m10.16a-depth-masks`, awaiting the author's confirmation by
+use** (`grep -n 'M10.16a' docs/JOURNAL.md`). **▶ THEN: M10.16d — Lens Blur** (added 2026-10-14 by the author,
+split from a, ahead of b and c, on a's depth map; its own brainstorm). Left open behind them, by the author's
+call: M10.12c ⏸, M10.13 (a ⏸, d), M10.14 f–h ⏸.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
 release engineering, LAST.** The canonical list — every sub-item with its date, size and reasoning — is
@@ -260,7 +262,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | **M10.12** the mask model | c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · d camera-matching colour out of the box (P-22), **with b's `ProfileLookTable` and c's per-photo profile folded in** (re-scoped 2026-10-12: neither changes a photo until d brings such a profile; b's `CameraCalibration` ⛔ withdrawn — a DNG-file tag, never in a profile) |
 | **M10.14** performance & verification | f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h ⏸ the reference photo on the GPU (parked 2026-10-13 until a need shows — 1 of 74 photos; 111–125 ms at 3200, numbers in the backlog) |
-| **M10.16** AI tools | a depth masks · b AI denoise · c content-aware remove |
+| **M10.16** AI tools | a depth masks (🟡 on branch) · **d Lens Blur (next)** · b AI denoise · c content-aware remove |
 | **M10.17** merge | a HDR · b panorama |
 | **M10.18** new modules | a tethering · b GPS and a map · c people tagging · d publish services · e print |
 | **M10.19** found in use (added 2026-10-01) | a HEIC/HEIF photos — libraw cannot read them, so they never appear; needs a decoder · b Move to folder: download Immich assets first, then move (today skipped and counted) (c ✅ above) |
@@ -346,6 +348,12 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
 - ⚠⚠ **A new TAIL stage needs a GPU twin with a `REPLACEABLE` row AND a field set in `accelerate.rs`'s
   `every_tail_stage()`.** That fixture is hand-built: a stage with neither is invisible to
   `every_tail_stage_is_replaceable_or_a_mask`, and the GPU tail silently splits at it.
+- ⚠⚠ **A map-reading component (`Mask::Ai`, `Mask::Depth` — `Mask::reads_a_map`) turns into coverage through
+  ONE path, `ai_coverage::AiSource::component`** (M10.16a; the preview's brush cache, export and the tint all
+  call it), and reaches a mask's NR / Dehaze / Defringe through `build_prefix_steps`'s injected `AiRasters`,
+  each step's key carrying the map's CONTENT id — or a map arriving after a checkpoint was cached leaves the
+  stale picture. ⚠ **No AI request from a ghost session** (`buffer_is_ghost`): its map would be cached under
+  the file's key for good. ⚠ The Subject/Click cache keys are pinned as literal digests — maps on disk.
 - ⚠ **A new PREFIX step trips three tests in `prefix.rs` that count or index the steps** (truncated
   key, capture stages, own key) — on purpose: renumber them; the step's `PrefixStepKey` carries its whole setting.
 - ⚠⚠ **Every reader of the undeveloped decode (`Session.buffer`) sees the positive** (M10.11a): a pixel
