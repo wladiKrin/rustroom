@@ -9,6 +9,7 @@ pub mod geometry;
 pub mod grain;
 pub mod hsl;
 pub mod hue_table;
+pub mod lens_blur;
 pub mod lens_correction;
 pub mod local_contrast;
 pub mod mask;
