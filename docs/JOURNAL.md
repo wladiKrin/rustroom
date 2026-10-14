@@ -208,10 +208,21 @@ no-trace rule (`undo_is_offered_only_with_immich_on`).
 undo dropping `null`; `record_send` without its `DELETE`; a send on the browse connection; planning from the
 cache; the plan not stashed; recording regardless of what landed; the dialog's Cancel sending.
 
+**⚠⚠ Found in use before the first send, 2026-10-14: "the Immich API keys are gone."** They were not —
+the keychain item was intact, unmodified since the migration (`mdat` 2026-10-13 13:47:44Z) — but that
+launch's keychain read had been refused (a rebuild brings one password dialog; M10.15a's retraction), so
+Rustroom started without them and showed **blank key fields with no word of why**, which reads exactly as
+loss. A refused read now says so: `KeyHome::Unreadable` (it used to report `File`, which made the hover
+claim "kept in plain text in settings.json" — wrong twice), a startup status "Couldn't read your Immich
+keys from the keychain — they are still there; restart Rustroom and allow access" (Immich on only), and
+hover sentences to match. `a_failed_keychain_read_says_so_at_startup`, red first; sabotaged. ⚠ The lesson:
+**a safe failure that looks like data loss is still a defect** — "nothing was deleted" must be visible,
+not merely true.
+
 ⚠ **The first real send is the author's, on one photo of his choosing** — its reply is recorded here once
 it has happened.
 
-**Counts:** 3781 → **3811 tests** (9 ignored).
+**Counts:** 3781 → **3812 tests** (9 ignored).
 
 ### 2026-10-13 — M10.15c: Immich's own rating and favourite, filled once (branch `m10.15c-immich-rating`, merged 2026-10-13)
 
