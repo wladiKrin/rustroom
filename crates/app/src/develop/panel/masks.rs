@@ -340,20 +340,15 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
         // ⚠ An AI mask whose map has not landed yet says so on its own row, where the user is
         // looking, and keeps its sliders quiet until it has — the top bar's "Finding the
         // subject…" was thirteen seconds away from where the click happened (P-12).
-        let waiting = match &s.edits.masks[i].mask {
-            edit_model::Mask::Ai(a) => {
-                let store = s.engine.ai_maps();
-                let missing = store
-                    .read()
-                    .expect("ai maps")
-                    .get(&rustroom_app::ai_coverage::MapQuery::Prompt(a.prompt))
-                    .is_none();
-                missing.then_some(match a.prompt {
-                    edit_model::AiPrompt::Subject => "Finding the subject…",
-                    edit_model::AiPrompt::Click { .. } => "Outlining what you clicked…",
-                })
-            }
-            _ => None,
+        // ⚠ Any component, not only the base (M10.16a): a depth range refining a gradient waits
+        // for its map as much as one standing alone.
+        let waiting = {
+            let store = s.engine.ai_maps();
+            let maps = store.read().expect("ai maps");
+            let m = &s.edits.masks[i];
+            std::iter::once(&m.mask)
+                .chain(m.refine.iter().map(|r| &r.mask))
+                .find_map(|k| rustroom_app::ai_coverage::waiting_text(k, &maps))
         };
         if let Some(text) = waiting {
             ui.horizontal(|ui| {

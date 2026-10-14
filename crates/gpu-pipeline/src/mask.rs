@@ -955,12 +955,22 @@ mod tests {
     }
 
     /// M9.13: an AI mask's map, resampled on the CPU side, renders the same picture on the GPU —
-    /// and without one the GPU declines, so the CPU's "covers nothing" stands.
+    /// and without one the GPU declines, so the CPU's "covers nothing" stands. M10.16a: a depth
+    /// range's map, the same.
     #[test]
     fn an_ai_mask_with_its_map_renders_the_same_picture() {
         let Some(ctx) = ctx() else { return };
+        for kind in [
+            Mask::Ai(edit_model::AiMask::default()),
+            Mask::Depth(edit_model::DepthRange::default()),
+        ] {
+            raster_parity(&ctx, kind);
+        }
+    }
+
+    fn raster_parity(ctx: &Arc<GpuContext>, kind: Mask) {
         let (w, h) = (96, 64);
-        let m = with_mask(Mask::Ai(edit_model::AiMask::default()));
+        let m = with_mask(kind);
         let map = Arc::new(pipeline::brush::CoverageMap {
             x0: 10,
             y0: 8,
@@ -988,14 +998,14 @@ mod tests {
             RenderScale::FULL,
             color::wb::Illuminant::default(),
             &prebuilt,
-            subs_for(&ctx, &m),
-            &ctx,
+            subs_for(ctx, &m),
+            ctx,
         )
         .expect("an AI mask with its map must build");
         let got = crate::GpuChain::new(ctx.clone(), vec![Box::new(stage)]).apply(src.clone());
         assert_agrees("ai", &want, &got, &src);
         assert!(
-            gpu_stage(&ctx, &m).is_none(),
+            gpu_stage(ctx, &m).is_none(),
             "without a map the GPU must decline, leaving the CPU's zero coverage"
         );
     }

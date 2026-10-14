@@ -78,7 +78,7 @@ pub(super) fn draw_mask_overlay(
         // ⚠ Scoped: the read guard must end before anything below mutates the session.
         let maps = s.engine.ai_maps();
         let maps = maps.read().expect("ai maps");
-        let ai = super::mask_tint::AiTintSource {
+        let ai = rustroom_app::ai_coverage::AiSource {
             maps: &maps,
             edits: &s.edits,
             lens: s.lens.shot.as_ref(),

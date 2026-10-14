@@ -283,8 +283,8 @@ pub fn export_one(
     super::finish::write(rendered, dest, opts, logo, meta, &sizing.plan, render_space)
 }
 
-/// The brush side channel carrying `edits`' AI masks for a frame the size of `frame`, or `None`
-/// when there are no AI masks — every other mask builds its own coverage, as it always did.
+/// The brush side channel carrying `edits`' AI masks and depth ranges for a frame the size of
+/// `frame`, or `None` when there are none — every other mask builds its own coverage, as it always did.
 fn ai_coverage_for(
     edits: &Edits,
     maps: &crate::ai_coverage::AiMaps,
@@ -295,36 +295,21 @@ fn ai_coverage_for(
     if crate::ai_coverage::queries(edits).is_empty() {
         return None;
     }
-    let dm = crate::ai_space::DecodeMap::new(
-        &edits.geometry,
-        edits.perspective,
-        frame.width(),
-        frame.height(),
-        None,
-        decode.0,
-        decode.1,
-    );
-    let key = crate::ai_space::lens_key(lens, edits, decode.0, decode.1);
+    let src = crate::ai_coverage::AiSource {
+        maps,
+        edits,
+        lens,
+        decode,
+    };
+    let dm = src.decode_map(&edits.geometry, frame.width(), frame.height());
     let maps: Vec<Vec<Option<std::sync::Arc<pipeline::brush::CoverageMap>>>> = edits
         .masks
         .iter()
         .map(|m| {
             std::iter::once(&m.mask)
                 .chain(m.refine.iter().map(|r| &r.mask))
-                .map(|mask| match mask {
-                    edit_model::Mask::Ai(a) => maps
-                        .get(&crate::ai_coverage::MapQuery::Prompt(a.prompt))
-                        .map(|p| {
-                            let lensed = crate::ai_coverage::post_lens(p, key, decode, || {
-                                lens.and_then(|l| {
-                                    crate::ai_space::corrector_for(l, edits, decode.0, decode.1)
-                                })
-                            });
-                            std::sync::Arc::new(crate::ai_coverage::to_frame(&lensed, a, &dm, None))
-                        }),
-                    // ⚠ Every other component builds its own coverage exactly as before.
-                    _ => None,
-                })
+                // ⚠ Every other component builds its own coverage exactly as before.
+                .map(|mask| src.component(mask, &dm, None).map(std::sync::Arc::new))
                 .collect()
         })
         .collect();
