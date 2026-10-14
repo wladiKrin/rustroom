@@ -166,7 +166,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 184 sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-10-13)
+### State (2026-10-14)
 
 **3812 tests** (9 ignored), **87 golden tests** (74 reference images — `cargo test --workspace --test golden`),
 gate green on `main`. ⚠⚠ **Run the git command above rather than
@@ -226,7 +226,7 @@ that had grown to ~170 lines by appending.)
   2026-09-29 — start from `docs/BACKLOG.md`'s reasons table. ⚠ The server is a **Tailscale Funnel**: a stopped
   Tailscale on the Mac is never the cause of an Immich error.
 
-**Phase 10 so far — M10.6 to M10.12b and M10.19c, merged 2026-09-29 – 10-12, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`):
+**Phase 10 so far — M10.6 to M10.15 and M10.19c, merged 2026-09-29 – 10-14, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`; what stays open inside M10.12–14 is in the table below):
 
 | Id | What | The thing to remember |
 |---|---|---|
@@ -238,14 +238,16 @@ that had grown to ~170 lines by appending.)
 | M10.11b | Grain in Effects (the vignette's group; the field is still `vignette`) | `MAX_EV` 0.7 by the author's tuning; the noise sits at pixel corners in FRAME coordinates, so a ¼-scale preview reads exactly the export's pixel |
 | M10.12a | A row's op by right-click; Duplicate / Duplicate and invert; **Invert mask** for a composite — nesting ⏸ parked | the item's example was already expressible since reordering (measured table in the backlog); an inverted mask waiting for an AI map covers NOTHING (`Composite::waits_for_a_map`) |
 | M10.12b | A mask's WB, Exposure, Contrast and tone regions are **offsets** to the global sliders (Lightroom's model); Temp/Tint relative ±100 | `SceneOffsetsStage` heads the tail (*Warnings*); a range/gating mask with an offset selects once, on the globally edited photo — 31 ms vs 7–9 at fit on the GPU path, the reference on the CPU (M10.14h ⏸); `MIRED_PER_STEP` 1.0 untuned |
+| M10.14b/d/e | The prefix-cache eviction's picture half (a test); the drag gap decomposed and the geometry gather tiled 8×8; `catalog_scale` at 100k photos — All Photos 204 → 3.8 s | de-duplicate through `rustroom_app::unique`; the rail reads through `RailData` (*Warnings*); a and c ⛔ withdrawn on measurements |
+| M10.15a–d | Immich: the keys in the OS keychain; Clear… + a soft limit warned at startup; Immich's stars and favourite filled once; **Send marks** + **Undo last send** | the Immich-invariants lines above; a rebuild asks for the login password once (no Team ID); Immich shows stars only with its Ratings feature on |
 | M10.19c | ⌘/⇧-click marks folders in the rail; right-click forgets them, one confirmation, one undo step | marks keyed by PATH (rows move on collapse); `folder_tree::subtrees` lists a nested mark once, or its second delete fails mid-batch |
 
 ### ▶ Next action — Phase 10, top down
 
-✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.12b** (table above).
+✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15** (table above).
 
-**▶ NEXT: M10.16a — depth masks** (M10.16, the AI tools). ✅ M10.15 complete — a–d merged 2026-10-13/14. M10.14: a, c ⛔ withdrawn; b, d, e ✅;
-f, h ⏸ parked; g ⏸ blocked. M10.13 left open by the author (a ⏸, b/c folded into d).
+**▶ NEXT: M10.16a — depth masks** (the AI tools; the `ai-mask` crate's `tract` runtime and model registry
+are the shared half). Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸, d), M10.14 f–h ⏸.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
 release engineering, LAST.** The canonical list — every sub-item with its date, size and reasoning — is
@@ -257,12 +259,11 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 |---|---|
 | **M10.12** the mask model | c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · d camera-matching colour out of the box (P-22), **with b's `ProfileLookTable` and c's per-photo profile folded in** (re-scoped 2026-10-12: neither changes a photo until d brings such a profile; b's `CameraCalibration` ⛔ withdrawn — a DNG-file tag, never in a profile) |
-| **M10.14** performance & verification | a ⛔ HSL `cbrt`/`atan2` (withdrawn 2026-10-12: the preview runs HSL on the GPU; ~1% of an export) · b ✅ the prefix-cache eviction fix's picture half (a test, 2026-10-12) · c ⛔ Clarity's coalescing (withdrawn 2026-10-12: a tiled, coalesced pass measured no faster — the floor is not coalescing) · d ✅ the ~10–12 ms drag gap (2026-10-13: mostly the probe's tiny angle sweep, ~5 ms the window's drawing; the gather tiled 8×8) · e ✅ a 100k-photo catalog benchmark (2026-10-13: `catalog_scale`; All Photos 204 → 3.8 s at 100k) · f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h ⏸ the reference photo on the GPU (parked 2026-10-13 until a need shows — 1 of 74 photos; 111–125 ms at 3200, numbers in the backlog) |
-| **M10.15** Immich | a ✅ API keys in the keychain (2026-10-13) · b ✅ Clear the downloads + a soft limit (2026-10-13; ⛔ no automatic eviction, the author's re-scope) · c ✅ Immich's rating and favourite, filled once (2026-10-13) · d ✅ Send marks + Undo last send — the write half, attended and reversible (2026-10-14) |
+| **M10.14** performance & verification | f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h ⏸ the reference photo on the GPU (parked 2026-10-13 until a need shows — 1 of 74 photos; 111–125 ms at 3200, numbers in the backlog) |
 | **M10.16** AI tools | a depth masks · b AI denoise · c content-aware remove |
 | **M10.17** merge | a HDR · b panorama |
 | **M10.18** new modules | a tethering · b GPS and a map · c people tagging · d publish services · e print |
-| **M10.19** found in use (added 2026-10-01) | a HEIC/HEIF photos — libraw cannot read them, so they never appear; needs a decoder · b Move to folder: download Immich assets first, then move (today skipped and counted) · c ✅ mark several folders, forget them from a right-click menu (2026-10-12) |
+| **M10.19** found in use (added 2026-10-01) | a HEIC/HEIF photos — libraw cannot read them, so they never appear; needs a decoder · b Move to folder: download Immich assets first, then move (today skipped and counted) (c ✅ above) |
 
 **Phase 11, last:** M11.2 Windows + the Linux GUI (never run; the in-window menu bar never seen;
 multi-monitor), M11.3 contributor docs, M11.4 `v0.1` (with the welcome screen and the empty Library's
