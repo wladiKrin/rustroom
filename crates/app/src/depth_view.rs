@@ -18,10 +18,10 @@ pub fn image(map: &ProbMap, dm: &DecodeMap, w: usize, h: usize) -> Vec<u8> {
     out.par_chunks_mut((w * 4).max(1))
         .enumerate()
         .for_each(|(y, row)| {
-            for (x, px) in row.chunks_exact_mut(4).enumerate() {
+            for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let [u, v] = dm.frame_to_decode(x as f32 + 0.5, y as f32 + 0.5);
                 let grey = 255 - (map.at(u, v) * 255.0).round() as u8;
-                px.copy_from_slice(&[grey, grey, grey, 255]);
+                *px = [grey, grey, grey, 255];
             }
         });
     out

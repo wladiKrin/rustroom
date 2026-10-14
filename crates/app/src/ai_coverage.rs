@@ -232,10 +232,13 @@ pub fn post_lens(
 /// nothing but time — **123 ms** a full-resolution frame against a few ms on this grid.
 const GRID_LONG: usize = 1024;
 
+/// A map value (0..=1) → coverage (0..=1).
+pub type Cover = Box<dyn Fn(f32) -> f32 + Send + Sync>;
+
 /// How a map-reading component turns its map's value into coverage, and what it covers outside a
 /// clip: an AI mask's Refine threshold, a depth range's band (M10.16a) — each with its invert.
 /// `None` for a component that reads no map.
-pub fn cover_fn(mask: &edit_model::Mask) -> Option<(Box<dyn Fn(f32) -> f32 + Send + Sync>, u8)> {
+pub fn cover_fn(mask: &edit_model::Mask) -> Option<(Cover, u8)> {
     let outside = |invert: bool| if invert { 255 } else { 0 };
     match *mask {
         edit_model::Mask::Ai(a) => Some((
@@ -309,7 +312,7 @@ impl AiSource<'_> {
 /// resolved at the frame size the masked Noise reduction, Dehaze or Defringe step runs at.
 struct MapRaster {
     map: std::sync::Arc<ProbMap>,
-    cover: Box<dyn Fn(f32) -> f32 + Send + Sync>,
+    cover: Cover,
     outside: u8,
     geometry: edit_model::Geometry,
     perspective: edit_model::Perspective,

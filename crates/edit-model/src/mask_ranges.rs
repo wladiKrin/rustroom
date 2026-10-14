@@ -387,7 +387,7 @@ mod tests {
             assert!(c.is_finite(), "{i}");
         }
         // Out-of-range positions are clamped as selectors, never NaN.
-        assert_eq!(d(0.0, 100.0, 0.0).coverage(f32::NAN).is_nan(), false);
+        assert!(!d(0.0, 100.0, 0.0).coverage(f32::NAN).is_nan());
         assert_eq!(d(90.0, 100.0, 0.0).coverage(1.5), 1.0);
     }
 
