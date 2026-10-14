@@ -38,6 +38,8 @@ pub(super) struct BrushTool<'a> {
     pub(super) pan_drag: rustroom_app::settings::PanDrag,
     /// Which held button erases, if any. ⚠ The pan binding wins; see `EraseDrag::button`.
     pub(super) erase_drag: rustroom_app::settings::EraseDrag,
+    /// Show depth map (M10.16a) — `RustroomApp::show_depth_map`.
+    pub(super) show_depth: bool,
 }
 
 /// The displayed frame the tint's auto-mask gate reads, when one has landed.
@@ -72,6 +74,11 @@ pub(super) fn draw_mask_overlay(
         return false;
     }
     let painter = ui.painter_at(img_rect);
+    // ⚠ M10.16a: Show depth map, UNDER the tints — a mask's eye then shows its band against the
+    // depths. It draws only for a selected depth range with its map.
+    if brush.show_depth {
+        let _ = super::depth_overlay::paint(&painter, s, frame_rect);
+    }
     // ⚠ Every mask whose eye is on, before and independent of the selection: the tint is per
     // mask since 2026-09-19, and a mask can be shown without being the one edited.
     {

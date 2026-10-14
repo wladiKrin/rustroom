@@ -77,6 +77,8 @@ struct CanvasInputs {
     app_tint_frame: Option<mask_overlay::TintFrame>,
     app_crop_aspect: Option<f32>,
     app_brush_flow: f32,
+    /// Show depth map (M10.16a) — view state on the app.
+    app_show_depth_map: bool,
 }
 
 /// Copy out everything the canvas reads — with the **outer** `ui`, whose rect `press_on_canvas` asks about.
@@ -179,6 +181,7 @@ fn hoist(app: &RustroomApp, ui: &egui::Ui) -> CanvasInputs {
         app_tint_frame,
         app_crop_aspect: app.crop_aspect,
         app_brush_flow: app.brush_flow,
+        app_show_depth_map: app.show_depth_map,
     }
 }
 

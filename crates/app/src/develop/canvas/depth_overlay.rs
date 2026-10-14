@@ -99,6 +99,99 @@ pub(super) fn pick(
     false
 }
 
+/// The Show-depth-map view's grid, at most, on its long side — the maps themselves are at most
+/// ~1536 px long, and a screen-sized grid is what is seen (`ai_coverage`'s `GRID_LONG` reason).
+const VIEW_LONG: f32 = 1024.0;
+
+/// What a cached view was drawn for.
+#[derive(Clone, Copy, PartialEq)]
+struct ViewKey {
+    map: u64,
+    geometry: edit_model::Geometry,
+    perspective: edit_model::Perspective,
+    lens: u64,
+    w: usize,
+    h: usize,
+}
+
+thread_local! {
+    /// ⚠ Thread-local, the tint's own reason (`mask_tint::TINT`): reached from inside egui closures
+    /// that hold `&mut app`; egui is single-threaded per context.
+    static VIEW: std::cell::RefCell<Option<(ViewKey, egui::TextureHandle)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Show depth map (M10.16a): the selected depth range's map in grey over the frame, the nearest
+/// point white — through the render's own decode mapping, so it lines up through crop and rotation.
+/// Returns the texture it drew, `None` when there is nothing to show (no depth range selected, or
+/// its map not yet computed).
+///
+/// ⚠ Drawn UNDER the tints by `draw_mask_overlay`, so a mask's eye shows its band against the depths.
+pub(super) fn paint(
+    painter: &egui::Painter,
+    s: &Session,
+    frame_rect: egui::Rect,
+) -> Option<egui::TextureId> {
+    let selected = s
+        .selected_mask
+        .and_then(|i| s.edits.masks.get(i))
+        .and_then(|m| mask_components::component(m, s.component_index()));
+    if !matches!(selected, Some(edit_model::Mask::Depth(_))) {
+        return None;
+    }
+    let maps = s.engine.ai_maps().read().expect("ai maps").clone();
+    let map = maps.get(&MapQuery::Depth)?;
+    let k = (VIEW_LONG / frame_rect.width().max(frame_rect.height()).max(1.0)).min(1.0);
+    let (w, h) = (
+        (frame_rect.width() * k).round().max(1.0) as usize,
+        (frame_rect.height() * k).round().max(1.0) as usize,
+    );
+    let decode = (s.buffer.width(), s.buffer.height());
+    let key = ViewKey {
+        map: maps.id(&MapQuery::Depth).unwrap_or(0),
+        geometry: s.edits.geometry,
+        perspective: s.edits.perspective,
+        lens: rustroom_app::ai_space::lens_key(s.lens.shot.as_ref(), &s.edits, decode.0, decode.1),
+        w,
+        h,
+    };
+    let id = VIEW.with(|v| {
+        let mut v = v.borrow_mut();
+        if let Some((k, tex)) = v.as_ref() {
+            if *k == key {
+                return tex.id();
+            }
+        }
+        let src = AiSource {
+            maps: &maps,
+            edits: &s.edits,
+            lens: s.lens.shot.as_ref(),
+            decode,
+        };
+        let rgba = rustroom_app::depth_view::image(
+            &src.lensed(map),
+            &src.decode_map(&s.edits.geometry, w, h),
+            w,
+            h,
+        );
+        let tex = painter.ctx().load_texture(
+            "depth_view",
+            egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba),
+            egui::TextureOptions::LINEAR,
+        );
+        let id = tex.id();
+        *v = Some((key, tex));
+        id
+    });
+    painter.image(
+        id,
+        frame_rect,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
+    Some(id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_support::{canvas_centre, click_through, drag_through};
@@ -176,6 +269,76 @@ mod tests {
             "{r:?}"
         );
         assert_eq!(steps(&app), before + 1);
+    }
+
+    /// Draw `paint` once against `app`'s session, in a 400 × 200 frame.
+    fn painted(app: &RustroomApp, ctx: &egui::Context) -> Option<egui::TextureId> {
+        let mut out = None;
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 200.0));
+            out = super::paint(ui.painter(), app.session.as_ref().unwrap(), rect);
+        });
+        out
+    }
+
+    #[test]
+    fn the_depth_view_draws_only_a_selected_depth_ranges_map() {
+        let ctx = egui::Context::default();
+        let app = depth_app(&ctx, true);
+        assert!(
+            painted(&app, &ctx).is_some(),
+            "selected, with its map: drawn"
+        );
+        let waiting = depth_app(&ctx, false);
+        assert!(painted(&waiting, &ctx).is_none(), "no map yet: nothing");
+        let mut other = depth_app(&ctx, true);
+        other.session.as_mut().unwrap().selected_mask = None;
+        assert!(
+            painted(&other, &ctx).is_none(),
+            "no depth range selected: nothing"
+        );
+    }
+
+    /// ⚠ The toggle is what draws it: with Show depth map off the canvas never paints the view.
+    ///
+    /// ⚠ The texture is read from the cache AFTER the canvas's own passes: a `paint` at another size
+    /// keys another texture, and an id taken from it matched nothing — this test's first version.
+    /// Off and on get the same passes, so "on draws" is the positive control for "off does not".
+    #[test]
+    fn the_canvas_paints_the_view_only_with_the_toggle_on() {
+        let ctx = egui::Context::default();
+        let mut app = depth_app(&ctx, true);
+        let cached = || super::VIEW.with(|v| v.borrow().as_ref().map(|(_, t)| t.id()));
+        super::VIEW.with(|v| *v.borrow_mut() = None);
+        let run = |app: &mut RustroomApp| {
+            let mut shapes = Vec::new();
+            for _ in 0..2 {
+                let c = ctx.clone();
+                shapes = ctx
+                    .run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(super::super::test_support::screen()),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            super::super::show(app, ui, &c);
+                        },
+                    )
+                    .shapes;
+            }
+            shapes
+        };
+        let _ = run(&mut app);
+        assert!(cached().is_none(), "off: the view was drawn");
+        app.show_depth_map = true;
+        let shapes = run(&mut app);
+        let id = cached().expect("on: the view was not drawn");
+        assert!(
+            shapes
+                .iter()
+                .any(|s| matches!(&s.shape, egui::Shape::Mesh(m) if m.texture_id == id)),
+            "on: its texture is not on the canvas"
+        );
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub mod decode_worker;
 pub mod defringe_tool;
 pub mod depth_map;
 pub mod depth_tool;
+pub mod depth_view;
 pub mod description;
 pub mod edit_clipboard;
 pub mod edit_history;
