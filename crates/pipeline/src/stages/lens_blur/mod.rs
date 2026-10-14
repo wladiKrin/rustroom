@@ -4,3 +4,8 @@
 //! lens-blur-design.md`.
 
 pub mod aperture;
+pub mod gather;
+pub mod radius;
+
+pub use gather::render;
+pub use radius::{radius, Params};
