@@ -161,6 +161,11 @@ pub(super) fn draw_mask_overlay(
         }
     }
 
+    // ⚠ M10.16a: a Depth range is picked on the photo, a drag or a click — and has no handles.
+    if let edit_model::Mask::Depth(_) = mask {
+        return super::depth_overlay::pick(ui, s, resp, img_rect, frame_rect, i, j, tool);
+    }
+
     let aspect = canvas_geom::frame_aspect(frame_rect);
     let mut moved = false;
     if let Some(p) = resp.interact_pointer_pos() {
