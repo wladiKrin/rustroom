@@ -1,4 +1,4 @@
-//! The range masks: luminance and colour.
+//! The range masks: luminance, colour and (M10.16a) depth.
 
 use serde::{Deserialize, Serialize};
 
@@ -92,24 +92,94 @@ impl LuminanceRange {
     /// adjustment still applies to the untouched pixel, so a `high` of 100 correctly means "and
     /// everything brighter".
     pub fn coverage(&self, lightness: f32) -> f32 {
-        let l = lightness.clamp(0.0, 100.0);
-        // ⚠ Sorted rather than trusted. The sliders can be dragged past each other and the
-        // sidecar is hand-editable; an unsorted pair would silently make the band empty, which
-        // reads as the mask having stopped working rather than as a value being wrong.
-        let (lo, hi) = (self.low.min(self.high), self.low.max(self.high));
-        let w = (self.feather / 100.0).clamp(0.0, 1.0) * Self::FEATHER_SCALE;
-        let c = if w <= Self::FEATHER_EPS {
-            if l >= lo && l <= hi {
-                1.0
-            } else {
-                0.0
-            }
+        let c = band(
+            lightness.clamp(0.0, 100.0),
+            self.low,
+            self.high,
+            self.feather,
+        );
+        if self.invert {
+            1.0 - c
         } else {
-            let rising = ((l - (lo - w)) / w).clamp(0.0, 1.0);
-            let falling = (((hi + w) - l) / w).clamp(0.0, 1.0);
-            let t = rising.min(falling);
-            t * t * (3.0 - 2.0 * t)
+            c
+        }
+    }
+}
+
+/// Coverage of `x` (on the 0..=100 scale) by the band `[low, high]` with a `feather` 0..=100 ramp
+/// either side — the luminance range's band, and since M10.16a the depth range's too: ONE function,
+/// so the two sliders that look alike behave alike (`luminance_and_depth_share_one_band`).
+///
+/// ⚠ The luminance range's GPU twin transcribes this, substituting [`LuminanceRange::FEATHER_SCALE`]
+/// and [`LuminanceRange::FEATHER_EPS`]; a change here is a change there.
+fn band(x: f32, low: f32, high: f32, feather: f32) -> f32 {
+    // ⚠ Sorted rather than trusted. The sliders can be dragged past each other and the
+    // sidecar is hand-editable; an unsorted pair would silently make the band empty, which
+    // reads as the mask having stopped working rather than as a value being wrong.
+    let (lo, hi) = (low.min(high), low.max(high));
+    let w = (feather / 100.0).clamp(0.0, 1.0) * LuminanceRange::FEATHER_SCALE;
+    if w <= LuminanceRange::FEATHER_EPS {
+        if x >= lo && x <= hi {
+            1.0
+        } else {
+            0.0
+        }
+    } else {
+        let rising = ((x - (lo - w)) / w).clamp(0.0, 1.0);
+        let falling = (((hi + w) - x) / w).clamp(0.0, 1.0);
+        let t = rising.min(falling);
+        t * t * (3.0 - 2.0 * t)
+    }
+}
+
+/// A depth range mask (M10.16a): coverage is full for the distances inside `[near, far]` and ramps
+/// away outside them — over the photo's estimated depth map, which the app computes once with a
+/// depth network and caches outside the edits.
+///
+/// ⚠ **`near`/`far` are POSITIONS in this photo, 0..=100** — 0 its nearest point, 100 its farthest —
+/// not distances: the network's depth is relative, an order of nearer and farther with no metres.
+/// The band itself is the luminance range's ([`band`]), feather idiom and all.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DepthRange {
+    /// The nearest edge of the fully-covered band, 0 (the nearest point) ..= 100 (the farthest).
+    pub near: f32,
+    /// The farthest edge of the fully-covered band.
+    pub far: f32,
+    /// 0 = a hard edge at each end of the band, 100 = the widest ramp.
+    pub feather: f32,
+    /// Flip coverage, as every other shape does.
+    pub invert: bool,
+}
+
+/// ⚠ **Hand-written, not derived**, for [`LuminanceRange`]'s reason: the container-level
+/// `#[serde(default)]` fills a missing field from the *struct's* `Default`, so a derived one would give
+/// a partial sidecar a zero-width band at the nearest point.
+///
+/// The default selects **the far half with a soft shoulder** — a visibly-a-mask start aimed at the
+/// commonest use, the background; Invert is one click to the foreground.
+impl Default for DepthRange {
+    fn default() -> Self {
+        Self {
+            near: 50.0,
+            far: 100.0,
+            feather: 50.0,
+            invert: false,
+        }
+    }
+}
+
+impl DepthRange {
+    /// Coverage at a depth-map `position`, 0 (nearest) ..= 1 (farthest). ⚠ As the luminance range's,
+    /// only the selector is clamped — and a non-finite position selects as the nearest point rather
+    /// than turning the blend into a NaN.
+    pub fn coverage(&self, position: f32) -> f32 {
+        let x = if position.is_finite() {
+            (position * 100.0).clamp(0.0, 100.0)
+        } else {
+            0.0
         };
+        let c = band(x, self.near, self.far, self.feather);
         if self.invert {
             1.0 - c
         } else {
@@ -259,6 +329,85 @@ impl ColourRange {
 mod tests {
     use super::*;
     use crate::Mask;
+
+    /// M10.16a: ONE band function — a depth range at position `x / 100` covers exactly what a
+    /// luminance range covers at lightness `x`, for every band, feather and point.
+    #[test]
+    fn luminance_and_depth_share_one_band() {
+        let mut checked = 0;
+        for (low, high) in [(0.0, 50.0), (20.0, 80.0), (60.0, 60.0), (90.0, 10.0)] {
+            for feather in [0.0, 1e-5, 30.0, 100.0] {
+                let l = LuminanceRange {
+                    low,
+                    high,
+                    feather,
+                    invert: false,
+                };
+                let d = DepthRange {
+                    near: low,
+                    far: high,
+                    feather,
+                    invert: false,
+                };
+                for i in 0..=200 {
+                    let x = i as f32 / 2.0;
+                    // ⚠ The luminance range is asked at exactly the band point the depth range turns
+                    // `p` into (`p * 100`), so the two are compared bit for bit: `x / 100 * 100` is
+                    // not `x` in f32 (52.5 comes back 52.499996), and at a hard edge that ulp is a
+                    // whole step of coverage — a difference of input, not of band.
+                    let p = x / 100.0;
+                    assert_eq!(
+                        l.coverage(p * 100.0).to_bits(),
+                        d.coverage(p).to_bits(),
+                        "band {low}..{high} feather {feather} at {x}"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 3000);
+    }
+
+    /// Review Focus 5: the sliders dragged past each other, and a zero-width band at feather 0.
+    #[test]
+    fn a_depth_band_is_sorted_and_finite_at_its_edges() {
+        let d = |near, far, feather| DepthRange {
+            near,
+            far,
+            feather,
+            invert: false,
+        };
+        assert_eq!(
+            d(80.0, 20.0, 10.0).coverage(0.5),
+            d(20.0, 80.0, 10.0).coverage(0.5)
+        );
+        assert_eq!(d(50.0, 50.0, 0.0).coverage(0.5), 1.0);
+        for i in 0..=100 {
+            let c = d(50.0, 50.0, 0.0).coverage(i as f32 / 100.0);
+            assert!(c.is_finite(), "{i}");
+        }
+        // Out-of-range positions are clamped as selectors, never NaN.
+        assert_eq!(d(0.0, 100.0, 0.0).coverage(f32::NAN).is_nan(), false);
+        assert_eq!(d(90.0, 100.0, 0.0).coverage(1.5), 1.0);
+    }
+
+    /// The far half: a visibly-a-mask start aimed at the background.
+    #[test]
+    fn the_depth_default_is_the_far_half() {
+        let d = DepthRange::default();
+        assert_eq!(d.coverage(1.0), 1.0);
+        assert_eq!(d.coverage(0.0), 0.0);
+        assert_eq!(d.coverage(0.5), 1.0, "the band's own near edge");
+        assert!(
+            d.coverage(0.3) > 0.0 && d.coverage(0.3) < 1.0,
+            "the feathered shoulder"
+        );
+        let inv = DepthRange { invert: true, ..d };
+        assert_eq!(inv.coverage(1.0), 0.0);
+        // A partial sidecar fills from the hand-written default, not a derived zero.
+        let m: Mask = serde_json::from_str(r#"{"Depth":{}}"#).unwrap();
+        assert_eq!(m, Mask::Depth(DepthRange::default()));
+    }
 
     #[test]
     fn a_luminance_range_has_no_analytic_coverage() {

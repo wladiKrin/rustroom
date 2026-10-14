@@ -310,7 +310,10 @@ impl GpuMaskStage {
             // ⚠ Without one — the network has not answered yet — `None` leaves the CPU stage, whose
             // `CoverageSource::Raster` renders coverage 0: correct, and only for the seconds until the
             // map arrives. A zero-coverage GPU component would be a new shader path for that window.
-            edit_model::Mask::Ai(_) => prebuilt.map(|map| Component::Prebuilt { map }),
+            // ⚠ M10.16a: a depth range's band was applied on the CPU side too — the same upload.
+            edit_model::Mask::Ai(_) | edit_model::Mask::Depth(_) => {
+                prebuilt.map(|map| Component::Prebuilt { map })
+            }
             edit_model::Mask::Linear(g) => Some(Component::Analytic {
                 expr: "cov_linear(u, v, params.aspect, {j}u)",
                 a: [g.from[0], g.from[1], g.to[0], g.to[1]],

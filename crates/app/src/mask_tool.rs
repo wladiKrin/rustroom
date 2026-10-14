@@ -76,6 +76,9 @@ pub fn hit_test(m: &Mask, p: [f32; 2], aspect: f32, tol: f32) -> Option<Handle> 
         Mask::Colour(_) => None,
         // ⚠ An AI mask has no handles: a Select mask is re-aimed by a click, not a drag.
         Mask::Ai(_) => None,
+        // ⚠ A depth range has no position, as the luminance range has none — it selects distances.
+        // The picker (a drag over the photo) sets its band; nothing about it is dragged.
+        Mask::Depth(_) => None,
     }
 }
 

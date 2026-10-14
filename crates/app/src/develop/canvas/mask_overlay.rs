@@ -481,6 +481,8 @@ fn paint_mask(
         edit_model::Mask::Luminance(_) | edit_model::Mask::Colour(_) => {}
         // ⚠ M9.13: nothing to drag. A Select mask's click point is drawn by the AI click gesture.
         edit_model::Mask::Ai(_) => {}
+        // ⚠ M10.16a: no position, as a luminance range has none; the picker's drag draws its own box.
+        edit_model::Mask::Depth(_) => {}
     }
 }
 

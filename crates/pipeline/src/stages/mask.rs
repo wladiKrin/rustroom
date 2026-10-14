@@ -394,7 +394,11 @@ impl MaskStage {
             },
             edit_model::Mask::Luminance(r) => CoverageSource::Range(*r),
             edit_model::Mask::Colour(r) => CoverageSource::Colour(*r),
-            edit_model::Mask::Ai(_) => CoverageSource::Raster { prebuilt },
+            // ⚠ M10.16a: a depth range is a raster too — its band applied on the CPU when the app
+            // built the 8-bit coverage, exactly as an AI mask's threshold is.
+            edit_model::Mask::Ai(_) | edit_model::Mask::Depth(_) => {
+                CoverageSource::Raster { prebuilt }
+            }
             m @ (edit_model::Mask::Linear(_) | edit_model::Mask::Radial(_)) => {
                 CoverageSource::Analytic(m.clone())
             }

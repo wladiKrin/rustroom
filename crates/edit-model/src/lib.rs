@@ -29,7 +29,7 @@ pub use groups::{
 };
 pub use local_group::LocalGroup;
 pub use mask_ops::{MaskOp, Refinement};
-pub use mask_ranges::{ColourRange, LuminanceRange};
+pub use mask_ranges::{ColourRange, DepthRange, LuminanceRange};
 pub use mask_shapes::{Brush, BrushStroke, LinearGradient, RadialGradient};
 pub use masks::{AiMask, AiPrompt, LocalAdjustments, Mask, MaskedAdjustment};
 pub use negative::Negative;
@@ -836,6 +836,16 @@ mod tests {
                         mask: Mask::Ai(AiMask {
                             prompt: AiPrompt::Click { point: [0.4, 0.2] },
                             threshold: 20.0,
+                            invert: true,
+                        }),
+                    },
+                    // M10.16a: a depth range, every field off its default.
+                    Refinement {
+                        op: MaskOp::Intersect,
+                        mask: Mask::Depth(DepthRange {
+                            near: 30.0,
+                            far: 70.0,
+                            feather: 20.0,
                             invert: true,
                         }),
                     },

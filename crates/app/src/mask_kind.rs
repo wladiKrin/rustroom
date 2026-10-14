@@ -1,4 +1,4 @@
-//! The seven kinds of mask a user can add, with their menu labels and templates.
+//! The eight kinds of mask a user can add, with their menu labels and templates.
 //!
 //! ⚠ A lib module, not a panel detail: the Add mask menu and the three Refine menus all list
 //! these, and the canvas may one day too. One list, one set of defaults.
@@ -16,11 +16,13 @@ pub enum MaskKind {
     Subject,
     /// The region under a click, found by a network (M9.13).
     Select,
+    /// A band of the photo's estimated depth, from a network (M10.16a).
+    Depth,
 }
 
 impl MaskKind {
-    /// Menu order: the positional shapes first, then the two ranges, then the two AI masks.
-    pub const ALL: [MaskKind; 7] = [
+    /// Menu order: the positional shapes first, then the two ranges, then the three a network finds.
+    pub const ALL: [MaskKind; 8] = [
         MaskKind::Gradient,
         MaskKind::Radial,
         MaskKind::Brush,
@@ -28,12 +30,13 @@ impl MaskKind {
         MaskKind::Colour,
         MaskKind::Subject,
         MaskKind::Select,
+        MaskKind::Depth,
     ];
 
     /// Whether this kind is found by a network — it needs a model downloaded and a moment to
     /// compute.
     pub fn is_ai(self) -> bool {
-        matches!(self, MaskKind::Subject | MaskKind::Select)
+        matches!(self, MaskKind::Subject | MaskKind::Select | MaskKind::Depth)
     }
 
     /// What the menu item says.
@@ -49,6 +52,7 @@ impl MaskKind {
             MaskKind::Colour => "Colour range",
             MaskKind::Subject => "Subject",
             MaskKind::Select => "Select by click",
+            MaskKind::Depth => "Depth range",
         }
     }
 
@@ -65,6 +69,7 @@ impl MaskKind {
             MaskKind::Colour => "Adds a mask that selects colours by hue",
             MaskKind::Subject => "Adds a mask of the main subject, found automatically",
             MaskKind::Select => "Adds a mask of whatever you click, found automatically",
+            MaskKind::Depth => "Adds a mask that selects by distance from the camera",
         }
     }
 
@@ -81,6 +86,7 @@ impl MaskKind {
                 ..
             }) => MaskKind::Subject,
             Mask::Ai(_) => MaskKind::Select,
+            Mask::Depth(_) => MaskKind::Depth,
         }
     }
 
@@ -116,6 +122,8 @@ impl MaskKind {
                 prompt: edit_model::AiPrompt::Click { point: [0.5, 0.5] },
                 ..Default::default()
             }),
+            // ⚠ The hand-written `Default`: the far half with a soft shoulder — the background.
+            MaskKind::Depth => Mask::Depth(edit_model::DepthRange::default()),
         }
     }
 }
@@ -132,6 +140,17 @@ mod tests {
         for k in MaskKind::ALL {
             assert_eq!(MaskKind::of(&k.template()), k, "{k:?}");
         }
+    }
+
+    /// M10.16a: the depth range waits for a network, like Subject and Select, and starts at the far half.
+    #[test]
+    fn the_depth_range_is_found_by_a_network_and_starts_at_the_far_half() {
+        assert!(MaskKind::Depth.is_ai());
+        assert_eq!(
+            MaskKind::Depth.template(),
+            Mask::Depth(edit_model::DepthRange::default())
+        );
+        assert_eq!(MaskKind::Depth.menu_label(), "Depth range");
     }
 
     #[test]

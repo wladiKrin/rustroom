@@ -1,8 +1,9 @@
 //! Masks: the kinds, the AI prompts, and the adjustments a mask carries.
 
 use crate::{
-    Brush, ColorGrading, ColourRange, Dehaze, Hsl, LinearGradient, LocalContrast, LuminanceRange,
-    NoiseReduction, RadialGradient, Refinement, Sharpening, ToneCurve, WhiteBalance,
+    Brush, ColorGrading, ColourRange, Dehaze, DepthRange, Hsl, LinearGradient, LocalContrast,
+    LuminanceRange, NoiseReduction, RadialGradient, Refinement, Sharpening, ToneCurve,
+    WhiteBalance,
 };
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +30,10 @@ pub enum Mask {
     /// is a raster computed once from the unedited photo and cached **outside** the edits; this
     /// holds only what was asked and how to read the answer. **Appended**, rule 3 above.
     Ai(AiMask),
+    /// ⚠ A band of the photo's estimated DEPTH (M10.16a) — a raster like `Ai`, from a depth network,
+    /// computed once and cached outside the edits; this holds only the band. Not another `AiPrompt`:
+    /// an `AiMask`'s Refine threshold means nothing for depth. **Appended**, rule 3 above.
+    Depth(DepthRange),
 }
 
 /// What an AI mask asked for, and how its probability map becomes coverage.
@@ -91,7 +96,7 @@ impl Mask {
             // loop, exactly as the luminance range's does.
             Mask::Colour(_) => None,
             // A raster from outside the pipeline — `MaskStage`'s `CoverageSource::Raster` answers.
-            Mask::Ai(_) => None,
+            Mask::Ai(_) | Mask::Depth(_) => None,
         }
     }
 
@@ -108,6 +113,23 @@ impl Mask {
                 ..
             }) => "Subject",
             Mask::Ai(_) => "Selection",
+            Mask::Depth(_) => "Depth",
+        }
+    }
+
+    /// Whether this component's coverage comes from a map the app computes outside the edits — an AI
+    /// mask's or a depth range's — and so covers nothing until that map has arrived.
+    ///
+    /// ⚠ Exhaustive on purpose: the ONE answer to "does this wait for a map", which the render's,
+    /// the tint's and the panel's checks all ask (M10.16a).
+    pub fn reads_a_map(&self) -> bool {
+        match self {
+            Mask::Ai(_) | Mask::Depth(_) => true,
+            Mask::Linear(_)
+            | Mask::Radial(_)
+            | Mask::Brush(_)
+            | Mask::Luminance(_)
+            | Mask::Colour(_) => false,
         }
     }
 
@@ -124,6 +146,7 @@ impl Mask {
             Mask::Luminance(r) => &mut r.invert,
             Mask::Colour(r) => &mut r.invert,
             Mask::Ai(a) => &mut a.invert,
+            Mask::Depth(r) => &mut r.invert,
         }
     }
 }
@@ -328,7 +351,7 @@ impl MaskedAdjustment {
             .any(|k| match k {
                 Mask::Brush(b) => b.needs_base(),
                 Mask::Luminance(_) | Mask::Colour(_) => true,
-                Mask::Linear(_) | Mask::Radial(_) | Mask::Ai(_) => false,
+                Mask::Linear(_) | Mask::Radial(_) | Mask::Ai(_) | Mask::Depth(_) => false,
             })
     }
 }
@@ -337,6 +360,62 @@ impl MaskedAdjustment {
 mod tests {
     use super::*;
     use crate::{Edits, GradeWheel, HslBand, MaskOp};
+
+    /// M10.16a: a depth range travels, names itself, inverts, and is a raster — never analytic.
+    #[test]
+    fn a_depth_mask_round_trips_and_answers_as_a_raster() {
+        let r = crate::DepthRange {
+            near: 30.0,
+            far: 70.0,
+            feather: 20.0,
+            invert: false,
+        };
+        let mut m = Mask::Depth(r);
+        let back: Mask = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back, m);
+        assert_eq!(m.label(), "Depth");
+        assert_eq!(m.analytic_coverage(0.5, 0.5, 1.5), None);
+        *m.invert_mut() = true;
+        assert!(matches!(
+            m,
+            Mask::Depth(crate::DepthRange { invert: true, .. })
+        ));
+    }
+
+    /// ⚠ Every variant listed by hand, so a new one is a decision here rather than a default.
+    #[test]
+    fn exactly_the_ai_and_depth_components_read_a_map() {
+        let every = [
+            (Mask::Linear(LinearGradient::default()), false),
+            (Mask::Radial(RadialGradient::default()), false),
+            (Mask::Brush(Brush::default()), false),
+            (Mask::Luminance(LuminanceRange::default()), false),
+            (Mask::Colour(ColourRange::default()), false),
+            (Mask::Ai(AiMask::default()), true),
+            (Mask::Depth(crate::DepthRange::default()), true),
+        ];
+        for (m, reads) in &every {
+            assert_eq!(m.reads_a_map(), *reads, "{}", m.label());
+            // A label per variant — the exhaustive match below would not compile without each.
+            match m {
+                Mask::Linear(_)
+                | Mask::Radial(_)
+                | Mask::Brush(_)
+                | Mask::Luminance(_)
+                | Mask::Colour(_)
+                | Mask::Ai(_)
+                | Mask::Depth(_) => {}
+            }
+        }
+        let depth = MaskedAdjustment {
+            mask: Mask::Depth(crate::DepthRange::default()),
+            ..Default::default()
+        };
+        assert!(
+            !depth.reads_pixels(),
+            "a depth map is not the photo's pixels"
+        );
+    }
 
     /// ⚠ Both halves, and both on their own. A test setting both could not tell a wired field
     /// from an unwired one sitting beside a wired one.
