@@ -49,6 +49,8 @@ pub enum Scope {
     MaskWhiteBalance,
     /// A depth-range mask (M10.16a).
     DepthRange,
+    /// The Lens Blur section (M10.16d).
+    LensBlur,
 }
 
 /// The HSL bands' three tabs.
@@ -152,6 +154,18 @@ const GRAIN: &[(&str, &str)] = &[
     ("Amount", "Adds film grain, more as it rises"),
     ("Size", "Sets how large each grain is"),
     ("Roughness", "Makes the grain less even as it rises"),
+];
+
+const LENS_BLUR: &[(&str, &str)] = &[
+    ("Amount", "Sets how strongly what is out of focus blurs"),
+    (
+        "Focal range",
+        "Sets how deep the sharp zone around the focus reaches",
+    ),
+    (
+        "Boost",
+        "Makes bright out-of-focus highlights bloom into discs",
+    ),
 ];
 
 const VIGNETTE: &[(&str, &str)] = &[
@@ -273,6 +287,7 @@ fn table(scope: Scope) -> &'static [(&'static str, &'static str)] {
         Scope::Eye => EYE,
         Scope::MaskWhiteBalance => MASK_WHITE_BALANCE,
         Scope::DepthRange => DEPTH_RANGE,
+        Scope::LensBlur => LENS_BLUR,
     }
 }
 
@@ -327,7 +342,7 @@ pub fn text(scope: Scope, label: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    const SCOPES: [Scope; 19] = [
+    const SCOPES: [Scope; 20] = [
         Scope::Global,
         Scope::Parametric,
         Scope::Hsl(HslTab::Hue),
@@ -347,6 +362,7 @@ mod tests {
         Scope::Grain,
         Scope::MaskWhiteBalance,
         Scope::DepthRange,
+        Scope::LensBlur,
     ];
 
     /// Every sentence the table can produce, with where it came from.

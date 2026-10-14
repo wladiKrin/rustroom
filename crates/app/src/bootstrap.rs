@@ -168,6 +168,7 @@ impl RustroomApp {
             mask_grade_range: Default::default(),
             mask_add_mode: None,
             show_depth_map: false,
+            show_lens_depth: false,
             grade_range: Default::default(),
             new_collection: String::new(),
             new_smart: String::new(),

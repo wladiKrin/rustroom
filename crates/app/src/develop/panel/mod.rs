@@ -6,6 +6,7 @@ pub mod defringe;
 pub mod effects;
 pub mod geometry;
 pub mod hsl_bands;
+pub mod lens_blur;
 pub mod look;
 pub mod mask_adjust;
 pub mod mask_components;
@@ -246,14 +247,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                             |ui| {
                                 if ui
                                     .small_button("Reset adjustments")
-                                    .hover(format!(
-                                        "Resets {} to how a new photo opens, keeping the crop and masks",
-                                        adjustments::SECTIONS
-                                            .iter()
-                                            .map(|s| s.name())
-                                            .collect::<Vec<_>>()
-                                            .join(", ")
-                                    ))
+                                    // ⚠ No list of the sections: seven names passed the 110-character
+                                    // hover rule when Lens Blur (M10.16d) arrived.
+                                    .hover(
+                                        "Resets every section below to how a new photo opens, keeping the crop and masks",
+                                    )
                                     .clicked()
                                 {
                                     // ⚠ To how a new photo opens, never all-off: a ticked "Apply
@@ -323,6 +321,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     // decision about what the panel shows under it.
                     match tool {
                         Tool::Edit => {
+                            let lens_status = rustroom_app::lens_blur_tool::status(
+                                &s.edits.lens_blur,
+                                &s.engine.ai_maps().read().expect("ai maps"),
+                            );
+                            let armed = [s.picking_wb, s.picking_fringe, s.picking_focus];
                             adjustments::show(
                                 ui,
                                 &mut s.edits,
@@ -353,9 +356,24 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 adjustments::Pickers {
                                     wb: Some(&mut s.picking_wb),
                                     fringe: Some(&mut s.picking_fringe),
+                                    lens_blur: lens_blur::LensBlurUi {
+                                        picking: Some(&mut s.picking_focus),
+                                        visualize: Some(&mut app.show_lens_depth),
+                                        status: lens_status,
+                                    },
                                 },
                                 &mut ed,
                             );
+                            // ⚠ One eyedropper at a time — a click must mean one thing (the
+                            // negative block's rule): Pick focus armed disarms the rest, and the
+                            // rest armed disarm it.
+                            if s.picking_focus && !armed[2] {
+                                s.picking_wb = false;
+                                s.picking_fringe = false;
+                                s.picking_negative = false;
+                            } else if (s.picking_wb && !armed[0]) || (s.picking_fringe && !armed[1]) {
+                                s.picking_focus = false;
+                            }
                         }
                         Tool::Crop => {
                             let found = s.lens.shot.is_some();

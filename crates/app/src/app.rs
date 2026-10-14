@@ -219,6 +219,9 @@ pub(crate) struct RustroomApp {
     /// Whether the canvas shows a selected depth range's map in grey (M10.16a). ⚠ View state on the
     /// app, never `Edits`: it stays on from photo to photo until turned off.
     pub(crate) show_depth_map: bool,
+    /// Whether the canvas shows Lens Blur's depth with its sharp zone tinted (M10.16d) —
+    /// `show_depth_map`'s rule: view state on the app, never `Edits`.
+    pub(crate) show_lens_depth: bool,
     /// Which colour-grading range the wheel is showing. View state, like `hsl_channel`.
     pub(crate) grade_range: develop::panel::color_wheel::GradeRange,
     /// Scratch text for the new-collection field.

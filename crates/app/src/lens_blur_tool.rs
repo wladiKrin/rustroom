@@ -112,6 +112,19 @@ pub fn waiting(lb: &LensBlur, maps: &AiMaps) -> Option<&'static str> {
         .map(|q| crate::ai_coverage::waiting_for(&q))
 }
 
+/// What the section says when Subject mode found nobody — and focused at the centre instead.
+pub const NO_SUBJECT: &str = "No subject found — focusing at the centre";
+
+/// The section's one line: a map computing ([`waiting`]) or, in Subject mode, no subject in its map —
+/// `None` when there is nothing to say.
+pub fn status(lb: &LensBlur, maps: &AiMaps) -> Option<&'static str> {
+    if let Some(w) = waiting(lb, maps) {
+        return Some(w);
+    }
+    let subject = maps.get(&MapQuery::Prompt(edit_model::AiPrompt::Subject))?;
+    (lb.on && lb.focus == LensFocus::Subject && !subject_found(subject)).then_some(NO_SUBJECT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +194,29 @@ mod tests {
             (depth_near(&stray, at) - 0.8).abs() < 0.01,
             "the same rule, exposed for the centre fallback"
         );
+    }
+
+    /// Waiting first; then, in Subject mode, an empty Subject map says the focus fell back.
+    #[test]
+    fn the_section_says_when_there_is_no_subject() {
+        let mut maps = AiMaps::default();
+        assert_eq!(status(&on(), &maps), Some("Estimating depth…"));
+        maps.insert(MapQuery::Depth, Arc::new(halves()));
+        maps.insert(
+            MapQuery::Prompt(edit_model::AiPrompt::Subject),
+            Arc::new(ProbMap::from_fn(100, 50, |_, _| 0.1)),
+        );
+        assert_eq!(status(&on(), &maps), Some(NO_SUBJECT));
+        assert_eq!(
+            status(&point([0.5, 0.5]), &maps),
+            None,
+            "Point reads no subject"
+        );
+        maps.insert(
+            MapQuery::Prompt(edit_model::AiPrompt::Subject),
+            Arc::new(subject(10, 20)),
+        );
+        assert_eq!(status(&on(), &maps), None);
     }
 
     /// The depth first — nothing blurs without it — then the subject, in Subject mode only.

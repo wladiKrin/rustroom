@@ -95,7 +95,7 @@ impl Section {
     }
 }
 
-/// The edit groups this panel shows — exactly the five in [`SECTIONS`].
+/// The edit groups this panel shows — exactly those in [`SECTIONS`].
 ///
 /// ⚠ **Derived from `SECTIONS`, never listed a second time.** It is what "Reset adjustments"
 /// resets, so deriving it makes the button provably reset what the panel shows and nothing
@@ -108,7 +108,7 @@ pub fn edit_groups() -> edit_model::EditGroups {
     g
 }
 
-/// The five adjustment sections, in the order the decisions are made in.
+/// The adjustment sections, in the order the decisions are made in.
 ///
 /// ⚠ **Deliberately not pipeline order.** The pipeline runs noise reduction and dehaze
 /// *before* white balance, because that is where the maths wants them; NR is *judged* last,
@@ -117,16 +117,17 @@ pub fn edit_groups() -> edit_model::EditGroups {
 ///
 /// Geometry and Masks are absent because they are rail tools — see `GEOMETRY_GROUP` and
 /// `MASKS_GROUP` for their indices rather than writing numbers here.
-pub const SECTIONS: [Section; 6] = [
-    Section(0), // White Balance
-    Section(1), // Tone
-    Section(2), // Color
-    Section(3), // Detail
-    Section(4), // Lens
-    Section(5), // Vignette
+pub const SECTIONS: [Section; 7] = [
+    Section(0),  // White Balance
+    Section(1),  // Tone
+    Section(2),  // Color
+    Section(3),  // Detail
+    Section(4),  // Lens
+    Section(5),  // Vignette
+    Section(11), // Lens Blur (M10.16d) — `edit_model::LENS_BLUR_GROUP`
 ];
 
-/// Draw the five adjustment sections.
+/// Draw the adjustment sections.
 ///
 /// ⚠ Takes `hsl_channel` as its own parameter rather than reaching through the app: the
 /// caller holds `&mut app.session` at the same time, and Rust's disjoint field borrows make
@@ -494,6 +495,9 @@ pub struct Pickers<'a> {
     pub wb: Option<&'a mut bool>,
     /// The defringe eyedropper (M9.6).
     pub fringe: Option<&'a mut bool>,
+    /// Lens Blur's canvas side (M10.16d): its focus picker, its depth view and the line about its
+    /// maps — here rather than in `SourceInfo` so a test's `Pickers::default()` still says "none".
+    pub lens_blur: super::lens_blur::LensBlurUi<'a>,
 }
 
 pub fn show(
@@ -508,6 +512,7 @@ pub fn show(
     let Pickers {
         wb: picking,
         fringe: picking_fringe,
+        lens_blur,
     } = pickers;
     let Channels {
         hsl: hsl_channel,
@@ -776,6 +781,11 @@ pub fn show(
     // ⚠ M10.11b: shown as Effects — the post-crop vignette and grain, in `effects.rs`.
     section(ui, SECTIONS[5], false, fresh, edits, ed, |ui, edits, ed| {
         super::effects::body(ui, edits, ed);
+    });
+
+    // ⚠ M10.16d: its body in `lens_blur.rs` — this file held 778 lines of code.
+    section(ui, SECTIONS[6], false, fresh, edits, ed, |ui, edits, ed| {
+        super::lens_blur::body(ui, &mut edits.lens_blur, lens_blur, ed);
     });
 }
 
@@ -1143,6 +1153,7 @@ mod tests {
                 Pickers {
                     wb: None,
                     fringe: Some(&mut picking),
+                    ..Default::default()
                 },
                 &mut ed,
             );
@@ -1215,38 +1226,79 @@ mod tests {
             });
             *seen.borrow_mut() = edits.clone();
         };
-        for h in ["Color", "Detail", "Lens", "Effects"] {
-            crate::test_ui::click(&ctx, h, &mut body);
+        /// Open or close the section headed `h` — by its HEADER node, never its label alone:
+        /// "Detail" and "Color" are slider labels too.
+        fn toggle(ctx: &egui::Context, h: &str, body: &mut impl FnMut(&mut egui::Ui)) {
+            let at = crate::test_ui::nodes(ctx, &mut *body)
+                .into_iter()
+                .find(|n| n.label == h && n.expandable)
+                .unwrap_or_else(|| panic!("no section {h:?}"))
+                .rect
+                .center();
+            crate::test_ui::click_at(ctx, at, false, &mut *body);
         }
-        crate::test_ui::click(&ctx, "Advanced color", &mut body);
-        let sliders = crate::test_ui::slider_centres(&ctx, &mut body);
-        assert!(sliders.len() > 30, "only {} sliders found", sliders.len());
 
-        let mut moved = 0;
-        for (label, at) in &sliders {
-            // A third of the way from the rail's centre toward its right end: off any default
-            // at the centre or an end, and away from the handle so the click moves it.
-            let off = *at + egui::vec2(40.0, 0.0);
-            let before = seen.borrow().clone();
-            crate::test_ui::click_at(&ctx, off, false, &mut body);
-            moved += (*seen.borrow() != before) as usize;
-            crate::test_ui::click_at(&ctx, off, true, &mut body);
-            let mut e = seen.borrow().clone();
-            // ⚠ Touching Lens Scale DECIDES the lens corrections (`Some`), by design; decided
-            // at the default is the fresh photo's corrections.
-            if e.lens_correction == Some(edit_model::LensCorrection::default()) {
-                e.lens_correction = None;
+        // ⚠⚠ ONE SECTION AT A TIME. With every section open the panel outgrows the harness screen,
+        // and a slider off it takes no click — so it "reset" without being touched: SIXTEEN were
+        // never swept (Detail's, the defringe's, Lens Blur's) until a sabotage of Lens Blur's Amount
+        // default stayed green (M10.16d). Pass 0 is the sections open by default; then each
+        // collapsed one alone, those closed — all DERIVED from `SECTIONS`.
+        let collapsed: Vec<&str> = SECTIONS[2..].iter().map(|s| s.name()).collect();
+        let (mut swept, mut moved) = (0usize, 0usize);
+        for pass in 0..=collapsed.len() {
+            let h = pass.checked_sub(1).map(|i| collapsed[i]);
+            if pass == 1 {
+                for o in SECTIONS[..2].iter().map(|s| s.name()) {
+                    toggle(&ctx, o, &mut body);
+                }
             }
+            if let Some(h) = h {
+                toggle(&ctx, h, &mut body);
+                if h == "Color" {
+                    crate::test_ui::click(&ctx, "Advanced color", &mut body);
+                }
+            }
+            let at = h.unwrap_or("the sections open by default");
+            let sliders = crate::test_ui::slider_centres(&ctx, &mut body);
+            assert!(!sliders.is_empty(), "{at}: no slider drawn");
+            let off_screen: Vec<&str> = sliders
+                .iter()
+                .filter(|(_, p)| !crate::test_ui::screen().contains(*p + egui::vec2(40.0, 0.0)))
+                .map(|(l, _)| l.as_str())
+                .collect();
             assert!(
-                e == edit_model::Edits::default(),
-                "{label:?} did not reset to its default: {} parameter(s) differ",
-                e.changed_parameters(&edit_model::Edits::default())
+                off_screen.is_empty(),
+                "{at}: off the screen: {off_screen:?}"
             );
+            for (label, p) in &sliders {
+                // A third of the way from the rail's centre toward its right end: off any default
+                // at the centre or an end, and away from the handle so the click moves it.
+                let off = *p + egui::vec2(40.0, 0.0);
+                let before = seen.borrow().clone();
+                crate::test_ui::click_at(&ctx, off, false, &mut body);
+                moved += (*seen.borrow() != before) as usize;
+                crate::test_ui::click_at(&ctx, off, true, &mut body);
+                let mut e = seen.borrow().clone();
+                // ⚠ Touching Lens Scale DECIDES the lens corrections (`Some`), by design; decided
+                // at the default is the fresh photo's corrections.
+                if e.lens_correction == Some(edit_model::LensCorrection::default()) {
+                    e.lens_correction = None;
+                }
+                assert!(
+                    e == edit_model::Edits::default(),
+                    "{at}: {label:?} did not reset to its default: {} parameter(s) differ",
+                    e.changed_parameters(&edit_model::Edits::default())
+                );
+                swept += 1;
+            }
+            if let Some(h) = h {
+                toggle(&ctx, h, &mut body);
+            }
         }
+        assert!(swept > 30, "only {swept} sliders swept");
         assert!(
             moved > 25,
-            "only {moved} of {} single clicks moved anything",
-            sliders.len()
+            "only {moved} of {swept} single clicks moved anything"
         );
     }
 
@@ -1302,7 +1354,8 @@ mod tests {
                 );
             });
         };
-        for h in ["Color", "Detail", "Lens", "Effects"] {
+        // ⚠ Every collapsed section, DERIVED — a hand list missed Lens Blur (M10.16d) until its task.
+        for h in SECTIONS[2..].iter().map(|s| s.name()) {
             crate::test_ui::click(&ctx, h, &mut body);
         }
         crate::test_ui::click(&ctx, "Advanced color", &mut body);
@@ -1740,7 +1793,9 @@ mod tests {
                 "Detail",
                 "Lens",
                 // ⚠ M10.11b: shown as Effects — the vignette and grain, Lightroom's panel.
-                "Effects"
+                "Effects",
+                // ⚠ M10.16d: after Effects — the spec's place.
+                "Lens Blur"
             ]
         );
     }
@@ -1759,17 +1814,9 @@ mod tests {
             .filter(|n| !shown.contains(n))
             .collect();
         // ⚠ Negative (M10.11a) too: a block above the sections, like Profile — the conversion.
-        // ⚠ Lens Blur (M10.16d) only until its section lands — that task takes it off this list.
         assert_eq!(
             missing,
-            vec![
-                "Geometry",
-                "Masks",
-                "Retouch",
-                "Rendering",
-                "Negative",
-                "Lens Blur"
-            ]
+            vec!["Geometry", "Masks", "Retouch", "Rendering", "Negative"]
         );
     }
 
@@ -1834,17 +1881,9 @@ mod tests {
         //
         // ⚠ Negative (M10.11a) for Rendering's reason: no section, so a reset of a scanned negative
         // starts over from the positive instead of handing back the negative.
-        // ⚠ Lens Blur (M10.16d) only until its section lands — that task takes it off this list.
         assert_eq!(
             untouched,
-            vec![
-                "Geometry",
-                "Masks",
-                "Retouch",
-                "Rendering",
-                "Negative",
-                "Lens Blur"
-            ]
+            vec!["Geometry", "Masks", "Retouch", "Rendering", "Negative"]
         );
     }
 
