@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M10.15d: Send marks to Immich, and Undo last send (2026-10-13)](#2026-10-13--m1015d-send-marks-to-immich-and-undo-last-send-branch-m1015d-immich-send-marks)
+- [M10.15d: Send marks to Immich, and Undo last send (2026-10-13)](#2026-10-13--m1015d-send-marks-to-immich-and-undo-last-send-branch-m1015d-immich-send-marks-merged-2026-10-14)
 - [M10.15c: Immich's own rating and favourite, filled once (2026-10-13)](#2026-10-13--m1015c-immichs-own-rating-and-favourite-filled-once-branch-m1015c-immich-rating-merged-2026-10-13)
 - [M10.15b: clear the Immich downloads, and a soft limit that warns at startup (2026-10-13)](#2026-10-13--m1015b-clear-the-immich-downloads-and-a-soft-limit-that-warns-at-startup-branch-m1015b-immich-cache-clear-merged-2026-10-13)
 - [M10.15a: the Immich API keys in the OS keychain (2026-10-13)](#2026-10-13--m1015a-the-immich-api-keys-in-the-os-keychain-branch-m1015a-immich-keychain-merged-2026-10-13)
@@ -176,7 +176,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
-### 2026-10-13 — M10.15d: Send marks to Immich, and Undo last send (branch `m10.15d-immich-send-marks`)
+### 2026-10-13 — M10.15d: Send marks to Immich, and Undo last send (branch `m10.15d-immich-send-marks`, merged 2026-10-14)
 
 **The item:** two-way sync, declined 2026-09-24 ("too dangerous") and re-opened 2026-09-29. Its reopening
 conditions were on record — **writes attended and reversible**, and a need uploads cannot serve — and this
@@ -219,10 +219,16 @@ hover sentences to match. `a_failed_keychain_read_says_so_at_startup`, red first
 **a safe failure that looks like data loss is still a defect** — "nothing was deleted" must be visible,
 not merely true.
 
-⚠ **The first real send is the author's, on one photo of his choosing** — its reply is recorded here once
-it has happened.
+✅ **The first real send — the author's, 2026-10-14, three photos (all `000008.JPG`), read back from the
+server** with `GET /assets/{id}` (his script, the browse key from the keychain): ★5 + pick → rating 5,
+favourite; pick → favourite, no rating; ★4 → rating 4, no favourite — **every photo exactly its Rustroom
+marks**, one bulk `PUT` per distinct change accepted. ⚠ **Immich's web UI shows no stars until the user
+switches on Account Settings → Features → Ratings** (the per-user `ratings.enabled` preference, confirmed in
+the 3.2.0 schema) — the stars looked missing while they were stored. **Undo last send** then restored all
+three, confirmed by the author ("works").
 
 **Counts:** 3781 → **3812 tests** (9 ignored).
+✅ **Confirmed by the author ("works") and merged 2026-10-14. M10.15 is complete.**
 
 ### 2026-10-13 — M10.15c: Immich's own rating and favourite, filled once (branch `m10.15c-immich-rating`, merged 2026-10-13)
 
