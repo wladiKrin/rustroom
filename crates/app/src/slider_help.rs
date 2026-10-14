@@ -47,6 +47,8 @@ pub enum Scope {
     Eye,
     /// A mask's Temp and Tint — shifts relative to the photo's white balance (M10.12b).
     MaskWhiteBalance,
+    /// A depth-range mask (M10.16a).
+    DepthRange,
 }
 
 /// The HSL bands' three tabs.
@@ -200,6 +202,18 @@ const LUMINANCE_RANGE: &[(&str, &str)] = &[
     ("Feather", "Softens the ends of the tonal range"),
 ];
 
+const DEPTH_RANGE: &[(&str, &str)] = &[
+    (
+        "Near",
+        "Sets the nearest distance the mask selects, from 0 the nearest point to 100 the farthest",
+    ),
+    (
+        "Far",
+        "Sets the farthest distance the mask selects, from 0 the nearest point to 100 the farthest",
+    ),
+    ("Feather", "Softens the ends of the distance range"),
+];
+
 const COLOUR_RANGE: &[(&str, &str)] = &[
     (
         "Hue low",
@@ -258,6 +272,7 @@ fn table(scope: Scope) -> &'static [(&'static str, &'static str)] {
         Scope::Patch => PATCH,
         Scope::Eye => EYE,
         Scope::MaskWhiteBalance => MASK_WHITE_BALANCE,
+        Scope::DepthRange => DEPTH_RANGE,
     }
 }
 
@@ -312,7 +327,7 @@ pub fn text(scope: Scope, label: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    const SCOPES: [Scope; 18] = [
+    const SCOPES: [Scope; 19] = [
         Scope::Global,
         Scope::Parametric,
         Scope::Hsl(HslTab::Hue),
@@ -331,6 +346,7 @@ mod tests {
         Scope::Patch,
         Scope::Grain,
         Scope::MaskWhiteBalance,
+        Scope::DepthRange,
     ];
 
     /// Every sentence the table can produce, with where it came from.

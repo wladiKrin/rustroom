@@ -216,6 +216,9 @@ pub(crate) struct RustroomApp {
     ///
     /// `None` = New mask; `Some(op)` = the next kind button refines the selected mask.
     pub(crate) mask_add_mode: Option<edit_model::MaskOp>,
+    /// Whether the canvas shows a selected depth range's map in grey (M10.16a). ⚠ View state on the
+    /// app, never `Edits`: it stays on from photo to photo until turned off.
+    pub(crate) show_depth_map: bool,
     /// Which colour-grading range the wheel is showing. View state, like `hsl_channel`.
     pub(crate) grade_range: develop::panel::color_wheel::GradeRange,
     /// Scratch text for the new-collection field.
