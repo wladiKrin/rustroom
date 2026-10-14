@@ -148,6 +148,27 @@ pub trait AiRasters {
     /// ⚠⚠ The identity goes into the step's cache key: without it a map arriving after a checkpoint
     /// was cached would leave the stale, uncovered picture standing. It must follow the map's CONTENT.
     fn source(&self, mask: &edit_model::Mask) -> Option<(std::sync::Arc<dyn RasterSource>, u64)>;
+
+    /// A raw map read whole (M10.16d's Lens Blur) — its plane at the frame the step runs at, `0..=255`,
+    /// and its identity (`source`'s rule: it follows the CONTENT); `None` until it arrives.
+    fn plane(&self, _which: MapPlane) -> Option<(std::sync::Arc<dyn RasterSource>, u64)> {
+        None
+    }
+
+    /// Lens Blur's focal depth for `lb`, 0 (near) ..= 1 (far) — `None` while a map it is measured on
+    /// has not arrived.
+    fn lens_focus(&self, _lb: &edit_model::LensBlur) -> Option<f32> {
+        None
+    }
+}
+
+/// A raw map [`AiRasters::plane`] hands over whole, beside a mask component's coverage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MapPlane {
+    /// The depth positions — 0 nearest, 255 farthest.
+    Depth,
+    /// The Subject map's alpha — through the AI mask's Refine curve at 0, so hair keeps its partial cover.
+    Subject,
 }
 
 #[cfg(test)]

@@ -64,6 +64,10 @@ pub enum PrefixStepKey {
         Vec<edit_model::MaskedAdjustment>,
         Vec<Vec<u64>>,
     ),
+    /// M10.16d — Lens Blur: its settings, the focal depth's bits (resolved from the maps, so a moved
+    /// focus is not in the settings alone), the depth map's identity and the Subject map's (0 in
+    /// Point mode, which reads none).
+    LensBlur(edit_model::LensBlur, u32, u64, u64),
 }
 
 /// One prefix stage together with the key identifying its output, so the renderer can cache
@@ -296,7 +300,41 @@ pub fn build_prefix_steps(
         });
     }
 
+    // ⚠⚠ M10.16d: Lens Blur LAST — it blurs the corrected, cropped frame, a mask's Noise reduction and
+    // Dehaze included, and every tone and colour slider after it stays a tail drag on its cached
+    // checkpoint. It waits — no step, the picture unblurred — until the depth map (and in Subject
+    // mode the Subject map) has arrived; the section says so.
+    if let Some(step) = lens_blur_step(&edits.lens_blur, ai) {
+        steps.push(step);
+    }
+
     steps
+}
+
+/// The Lens Blur step, or `None` while it is off or a map it needs is missing.
+fn lens_blur_step(
+    lb: &edit_model::LensBlur,
+    ai: Option<&dyn crate::AiRasters>,
+) -> Option<PrefixStep> {
+    if !lb.is_active() {
+        return None;
+    }
+    let ai = ai?;
+    let (depth, depth_id) = ai.plane(crate::MapPlane::Depth)?;
+    let (subject, subject_id) = match lb.focus {
+        edit_model::LensFocus::Subject => {
+            let (s, id) = ai.plane(crate::MapPlane::Subject)?;
+            (Some(s), id)
+        }
+        edit_model::LensFocus::Point { .. } => (None, 0),
+    };
+    let focus = ai.lens_focus(lb)?;
+    Some(PrefixStep {
+        key: PrefixStepKey::LensBlur(*lb, focus.to_bits(), depth_id, subject_id),
+        stage: Box::new(stages::lens_blur::LensBlurStage::new(
+            lb, focus, depth, subject,
+        )),
+    })
 }
 
 /// Everything a cached prefix checkpoint depends on: the parameters of the prefix stages that
@@ -957,19 +995,29 @@ mod tests {
         // Each step's key must move with that step's parameters and with nothing else. If two
         // stages shared a key, a checkpoint would be reused across a change that altered it.
         let base = all_edits();
+        // ⚠ M10.16d: with the maps Lens Blur reads, or its step — which waits for them — would be
+        // invisible here, and this guard blind to it.
+        let maps = super::lens_blur_tests::MAPS;
         let keys = |e: &Edits| -> Vec<PrefixStepKey> {
-            build_prefix_steps(e, RenderScale::FULL, None, Resampler::default(), None, None)
-                .iter()
-                .map(|s| s.key.clone())
-                .collect()
+            build_prefix_steps(
+                e,
+                RenderScale::FULL,
+                None,
+                Resampler::default(),
+                None,
+                Some(&maps),
+            )
+            .iter()
+            .map(|s| s.key.clone())
+            .collect()
         };
         let base_keys = keys(&base);
         assert_eq!(
             base_keys.len(),
-            8,
-            "all eight prefix steps should be active — the negative (M10.11a), NR, dehaze, spots, red eye (M9.11), the geometry (with the \
-             keystone fused in since M7.3b), the defringe (M9.6) and the fixture's masked capture \
-             correction"
+            9,
+            "all nine prefix steps should be active — the negative (M10.11a), NR, dehaze, spots, red eye (M9.11), the geometry (with the \
+             keystone fused in since M7.3b), the defringe (M9.6), the fixture's masked capture \
+             correction and the lens blur (M10.16d)"
         );
 
         let variants = [
@@ -1067,10 +1115,16 @@ mod tests {
                 e.eyes[0].darken = 95.0;
                 e
             }),
+            // ⚠ M10.16d: the lens blur moves with its own settings and nothing else.
+            (8, {
+                let mut e = base.clone();
+                e.lens_blur.focal_range = 55.0;
+                e
+            }),
         ];
         for (moved, e) in variants {
             let ks = keys(&e);
-            for i in 0..8 {
+            for i in 0..9 {
                 if i == moved {
                     assert_ne!(ks[i], base_keys[i], "step {i} should have changed");
                 } else {
@@ -1624,5 +1678,257 @@ mod ai_raster_tests {
             ),
             "the defringe step was built without its map"
         );
+    }
+}
+
+/// M10.16d: Lens Blur as the prefix's last step, on the depth plane (and in Subject mode the Subject
+/// plane) the app's maps hand it.
+#[cfg(test)]
+pub(crate) mod lens_blur_tests {
+    use super::*;
+    use crate::{AiRasters, MapPlane, RasterSource};
+    use core_image::ImageBuf;
+    use std::sync::Arc;
+
+    /// Depth rising left (0, near) to right (255, far).
+    struct Ramp;
+    impl RasterSource for Ramp {
+        fn coverage(&self, w: usize, h: usize) -> crate::brush::CoverageMap {
+            crate::brush::CoverageMap {
+                x0: 0,
+                y0: 0,
+                w,
+                h,
+                data: (0..w * h)
+                    .map(|i| ((i % w) * 255 / (w - 1).max(1)) as u8)
+                    .collect(),
+                outside: 0,
+            }
+        }
+    }
+
+    /// No subject anywhere.
+    struct Nothing;
+    impl RasterSource for Nothing {
+        fn coverage(&self, w: usize, h: usize) -> crate::brush::CoverageMap {
+            crate::brush::CoverageMap {
+                x0: 0,
+                y0: 0,
+                w,
+                h,
+                data: vec![0; w * h],
+                outside: 0,
+            }
+        }
+    }
+
+    /// Each plane under its id (`None`: not arrived) and the focus the app would resolve.
+    #[derive(Clone, Copy)]
+    pub(crate) struct Planes {
+        pub depth: Option<u64>,
+        pub subject: Option<u64>,
+        pub focus: Option<f32>,
+    }
+
+    pub(crate) const MAPS: Planes = Planes {
+        depth: Some(1),
+        subject: Some(2),
+        focus: Some(0.2),
+    };
+
+    impl AiRasters for Planes {
+        fn source(&self, _: &edit_model::Mask) -> Option<(Arc<dyn RasterSource>, u64)> {
+            None
+        }
+        fn plane(&self, which: MapPlane) -> Option<(Arc<dyn RasterSource>, u64)> {
+            match which {
+                MapPlane::Depth => self
+                    .depth
+                    .map(|id| (Arc::new(Ramp) as Arc<dyn RasterSource>, id)),
+                MapPlane::Subject => self
+                    .subject
+                    .map(|id| (Arc::new(Nothing) as Arc<dyn RasterSource>, id)),
+            }
+        }
+        fn lens_focus(&self, _: &edit_model::LensBlur) -> Option<f32> {
+            self.focus
+        }
+    }
+
+    fn with(lb: edit_model::LensBlur) -> Edits {
+        Edits {
+            lens_blur: lb,
+            ..Default::default()
+        }
+    }
+
+    fn on() -> edit_model::LensBlur {
+        edit_model::LensBlur {
+            on: true,
+            amount: 80.0,
+            ..Default::default()
+        }
+    }
+
+    fn point() -> edit_model::LensBlur {
+        edit_model::LensBlur {
+            focus: edit_model::LensFocus::Point { point: [0.5, 0.5] },
+            ..on()
+        }
+    }
+
+    fn steps(e: &Edits, ai: Option<&dyn AiRasters>) -> Vec<PrefixStep> {
+        build_prefix_steps(e, RenderScale::FULL, None, Resampler::default(), None, ai)
+    }
+
+    /// Vertical stripes, which any blur visibly changes.
+    fn stripes() -> ImageBuf {
+        let mut img = ImageBuf::new(120, 40);
+        for y in 0..40 {
+            for x in 0..120 {
+                let v = if (x / 3) % 2 == 0 { 0.8 } else { 0.1 };
+                img.set_pixel(x, y, [v, v, v]);
+            }
+        }
+        img
+    }
+
+    fn render(e: &Edits, ai: Option<&dyn AiRasters>) -> ImageBuf {
+        steps(e, ai)
+            .iter()
+            .fold(stripes(), |img, s| s.stage.apply(img))
+    }
+
+    /// Off — or on with no blur — adds nothing, even with every map present.
+    #[test]
+    fn off_adds_no_step() {
+        let off = edit_model::LensBlur { on: false, ..on() };
+        let none = edit_model::LensBlur {
+            amount: 0.0,
+            ..on()
+        };
+        for lb in [off, none] {
+            assert!(steps(&with(lb), Some(&MAPS)).is_empty(), "{lb:?}");
+        }
+        assert_eq!(steps(&with(on()), Some(&MAPS)).len(), 1, "positive control");
+    }
+
+    /// On, but a map or the focus has not arrived: no step, and the picture is the input.
+    #[test]
+    fn no_maps_no_step() {
+        let waiting = [
+            Planes {
+                depth: None,
+                ..MAPS
+            },
+            Planes {
+                focus: None,
+                ..MAPS
+            },
+        ];
+        let plain = stripes();
+        assert!(steps(&with(on()), None).is_empty(), "no maps at all");
+        assert_eq!(render(&with(on()), None).data(), plain.data());
+        for ai in &waiting {
+            assert!(steps(&with(on()), Some(ai)).is_empty());
+            assert_eq!(render(&with(on()), Some(ai)).data(), plain.data());
+        }
+        assert_ne!(
+            render(&with(on()), Some(&MAPS)).data(),
+            plain.data(),
+            "positive control: with its maps the blur changes the stripes"
+        );
+    }
+
+    /// Subject mode waits for the Subject map; Point mode needs only the depth — and its key carries
+    /// no subject identity even when a Subject map exists, so that map arriving cannot miss its cache.
+    #[test]
+    fn subject_mode_waits_for_its_map_and_point_mode_does_not() {
+        let no_subject = Planes {
+            subject: None,
+            ..MAPS
+        };
+        assert!(steps(&with(on()), Some(&no_subject)).is_empty());
+        assert_eq!(steps(&with(point()), Some(&no_subject)).len(), 1);
+        let s = steps(&with(point()), Some(&MAPS));
+        assert!(
+            matches!(s[0].key, PrefixStepKey::LensBlur(_, _, 1, 0)),
+            "{:?}",
+            s[0].key
+        );
+    }
+
+    /// The prefix's last step: after geometry and after a mask's capture corrections, which it blurs.
+    #[test]
+    fn the_step_comes_after_the_masked_capture_steps() {
+        let e = Edits {
+            geometry: edit_model::Geometry {
+                angle: 3.0,
+                ..Default::default()
+            },
+            masks: vec![edit_model::MaskedAdjustment {
+                adjustments: edit_model::LocalAdjustments {
+                    noise_reduction: edit_model::NoiseReduction {
+                        luminance: 50.0,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..with(on())
+        };
+        let names: Vec<&str> = steps(&e, Some(&MAPS))
+            .iter()
+            .map(|s| s.stage.name())
+            .collect();
+        assert_eq!(names, ["geometry", "mask", "lens_blur"]);
+    }
+
+    /// ⚠⚠ The key moves with every input of the picture: a setting, the focus depth, either map.
+    #[test]
+    fn the_key_moves_with_the_settings_the_focus_and_both_maps() {
+        let key = |lb: edit_model::LensBlur, ai: Planes| {
+            steps(&with(lb), Some(&ai))
+                .last()
+                .expect("a step")
+                .key
+                .clone()
+        };
+        let base = key(on(), MAPS);
+        assert_eq!(base, key(on(), MAPS), "the same inputs, the same key");
+        let moved = [
+            key(
+                edit_model::LensBlur {
+                    amount: 60.0,
+                    ..on()
+                },
+                MAPS,
+            ),
+            key(
+                on(),
+                Planes {
+                    focus: Some(0.3),
+                    ..MAPS
+                },
+            ),
+            key(
+                on(),
+                Planes {
+                    depth: Some(9),
+                    ..MAPS
+                },
+            ),
+            key(
+                on(),
+                Planes {
+                    subject: Some(9),
+                    ..MAPS
+                },
+            ),
+        ];
+        for (i, k) in moved.iter().enumerate() {
+            assert_ne!(k, &base, "variant {i} kept the key");
+        }
     }
 }

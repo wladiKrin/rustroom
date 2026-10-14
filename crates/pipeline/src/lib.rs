@@ -134,7 +134,7 @@ pub use build::{
     build_pipeline_split_tapped, build_pipeline_to, build_pipeline_with, tail_kernel_radius,
     RenderSpec, TailHalves,
 };
-pub use coverage::{AiRasters, BrushCoverage, CoverageRasterizer, RasterSource};
+pub use coverage::{AiRasters, BrushCoverage, CoverageRasterizer, MapPlane, RasterSource};
 pub use pipeline_stage::{Pipeline, PipelineStage, RenderScale, SubStageAccelerator};
 pub use prefix::{build_prefix_steps, prefix_output_dims, PrefixKey, PrefixStep, PrefixStepKey};
 pub use prefix_airlight::{prefix_airlight, prefix_airlight_key, AirlightKey};
