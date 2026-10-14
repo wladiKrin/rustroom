@@ -2825,3 +2825,182 @@ fn golden_grain() {
         },
     );
 }
+
+/// M10.16a: a depth map's band as coverage, built the way the app builds it — `DepthRange::coverage`
+/// over the map's positions — handed to the tail through the brush side channel. A horizontal ramp
+/// stands in for the network: the left edge the nearest point, the right the farthest.
+fn depth_ramp_coverage(range: edit_model::DepthRange) -> std::sync::Arc<pipeline::BrushCoverage> {
+    let map = pipeline::brush::CoverageMap {
+        x0: 0,
+        y0: 0,
+        w: W,
+        h: H,
+        data: (0..W * H)
+            .map(|i| {
+                let position = (i % W) as f32 / (W - 1) as f32;
+                (range.coverage(position) * 255.0).round() as u8
+            })
+            .collect(),
+        outside: if range.invert { 255 } else { 0 },
+    };
+    std::sync::Arc::new(pipeline::BrushCoverage {
+        maps: vec![vec![Some(std::sync::Arc::new(map))]],
+        built: vec![vec![std::sync::Mutex::new(None)]],
+    })
+}
+
+/// The chart through the whole pipeline with `coverage` in the side channel.
+fn render_with_coverage(
+    edits: &Edits,
+    coverage: Option<&std::sync::Arc<pipeline::BrushCoverage>>,
+) -> ImageBuf {
+    let (prefix, tail) = pipeline::build_pipeline_split_in_region_with_brush(
+        edits,
+        RenderScale::FULL,
+        None,
+        coverage,
+        pipeline::RenderSpec {
+            resampler: RESAMPLER,
+            ..Default::default()
+        },
+        None,
+        TailRendering::colorimetric(),
+    );
+    tail.run(prefix.run(chart()))
+}
+
+#[test]
+fn golden_depth_band_exposure() {
+    // The far part of the scene, from 40 back, lifted a stop — the near left edge untouched.
+    let range = edit_model::DepthRange {
+        near: 40.0,
+        far: 100.0,
+        feather: 30.0,
+        invert: false,
+    };
+    let edits = Edits {
+        masks: vec![edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Depth(range),
+            adjustments: edit_model::LocalAdjustments {
+                exposure: 1.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        }],
+        ..Edits::default()
+    };
+    let rendered = render_with_coverage(&edits, Some(&depth_ramp_coverage(range)));
+    // ⚠ Shape (c): the reference must differ from the neutral render — on the far right — or a
+    // band that reached no pixel would pin a neutral chart and pass forever. And the nearest edge,
+    // outside the band, must be untouched.
+    let neutral = render_with_coverage(&Edits::default(), None);
+    let worst = |x0: usize, x1: usize| {
+        (0..H)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                (0..3)
+                    .map(|c| (rendered.pixel(x, y)[c] - neutral.pixel(x, y)[c]).abs())
+                    .fold(0.0f32, f32::max)
+            })
+            .fold(0.0f32, f32::max)
+    };
+    assert!(worst(W - 8, W) * 255.0 > 3.0, "the far band was not lifted");
+    assert!(worst(0, 4) * 255.0 < 0.5, "the near edge moved");
+    compare_or_update("depth_band_exposure", rendered);
+}
+
+/// M10.16a: an AI component in a mask's Dehaze — the prefix fix. The map's source is handed to
+/// `build_prefix_steps` as the app hands its maps; here it covers the left half.
+#[test]
+fn golden_ai_masked_dehaze() {
+    struct LeftHalf;
+    impl pipeline::RasterSource for LeftHalf {
+        fn coverage(&self, w: usize, h: usize) -> pipeline::brush::CoverageMap {
+            pipeline::brush::CoverageMap {
+                x0: 0,
+                y0: 0,
+                w,
+                h,
+                data: (0..w * h)
+                    .map(|i| if i % w < w / 2 { 255 } else { 0 })
+                    .collect(),
+                outside: 0,
+            }
+        }
+    }
+    struct Maps;
+    impl pipeline::AiRasters for Maps {
+        fn source(
+            &self,
+            _: &edit_model::Mask,
+        ) -> Option<(std::sync::Arc<dyn pipeline::RasterSource>, u64)> {
+            Some((std::sync::Arc::new(LeftHalf), 1))
+        }
+    }
+    let render = |edits: &Edits| {
+        let input = hazy_chart();
+        // The airlight definition that ships — `check_golden_with`'s reason.
+        let airlight = pipeline::prefix_airlight(edits, &input, RESAMPLER, None);
+        let img = pipeline::build_prefix_steps(
+            edits,
+            RenderScale::FULL,
+            None,
+            RESAMPLER,
+            Some(airlight),
+            Some(&Maps),
+        )
+        .iter()
+        .fold(input, |img, s| s.stage.apply(img));
+        let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
+            edits,
+            RenderScale::FULL,
+            None,
+            None,
+            pipeline::RenderSpec {
+                resampler: RESAMPLER,
+                airlight: Some(airlight),
+                ..Default::default()
+            },
+            None,
+            TailRendering::colorimetric(),
+        );
+        tail.run(img)
+    };
+    let edits = Edits {
+        masks: vec![edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Ai(edit_model::AiMask::default()),
+            adjustments: edit_model::LocalAdjustments {
+                dehaze: edit_model::Dehaze { amount: 70.0 },
+                ..Default::default()
+            },
+            ..Default::default()
+        }],
+        ..Edits::default()
+    };
+    let rendered = render(&edits);
+    // ⚠ Shape (c): against the same chart with the mask removed — the left half must change, the
+    // right must not.
+    let plain = render(&Edits::default());
+    // ⚠ The hazy chart's own size (256 × 192), never `W × H` — this test's first run measured a
+    // 64-pixel strip inside the covered half and called it "the uncovered half".
+    let (cw, ch) = (rendered.width(), rendered.height());
+    let worst = |x0: usize, x1: usize| {
+        (0..ch)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                (0..3)
+                    .map(|c| (rendered.pixel(x, y)[c] - plain.pixel(x, y)[c]).abs())
+                    .fold(0.0f32, f32::max)
+            })
+            .fold(0.0f32, f32::max)
+    };
+    assert!(
+        worst(0, cw / 2 - 2) * 255.0 > 3.0,
+        "the covered half was not dehazed"
+    );
+    assert!(
+        worst(cw / 2 + 2, cw) * 255.0 < 0.5,
+        "the uncovered half changed"
+    );
+    compare_or_update("ai_masked_dehaze", rendered);
+}
