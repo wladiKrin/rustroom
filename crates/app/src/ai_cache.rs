@@ -181,6 +181,29 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ M10.16a: the Subject and Click keys are pinned as LITERAL digests, taken from the code as it
+    /// stood before the map query widened the key's prompt to a `MapQuery` (2026-10-14). Every map
+    /// already on disk is filed under one of these; a key that drifts orphans them all, silently — the
+    /// user waits seconds for a map they already had. A missing file reads as size 0, mtime 0.
+    #[test]
+    fn the_subject_and_click_keys_are_pinned() {
+        let photo = std::path::Path::new("/nonexistent/pin.RAF");
+        let none = edit_model::Negative::default();
+        assert_eq!(
+            key(photo, ModelId::IsNet, &AiPrompt::Subject, &none),
+            "573994b1b13ff7f2097a4d5bf4e77900e50e04db10ba2db0e90a426c0e5a7e33"
+        );
+        assert_eq!(
+            key(
+                photo,
+                ModelId::SamDecoder,
+                &AiPrompt::Click { point: [0.25, 0.5] },
+                &none
+            ),
+            "a3eeb8d569c6add36d6f0c4b6f02072a3ef2953ef40eed6339b51b0456b2384e"
+        );
+    }
+
     #[test]
     fn a_stored_map_loads_back_and_leaves_no_partial() {
         let d = temp_dir("store");
