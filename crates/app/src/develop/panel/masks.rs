@@ -343,7 +343,11 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
         let waiting = match &s.edits.masks[i].mask {
             edit_model::Mask::Ai(a) => {
                 let store = s.engine.ai_maps();
-                let missing = store.read().expect("ai maps").get(&a.prompt).is_none();
+                let missing = store
+                    .read()
+                    .expect("ai maps")
+                    .get(&rustroom_app::ai_coverage::MapQuery::Prompt(a.prompt))
+                    .is_none();
                 missing.then_some(match a.prompt {
                     edit_model::AiPrompt::Subject => "Finding the subject…",
                     edit_model::AiPrompt::Click { .. } => "Outlining what you clicked…",

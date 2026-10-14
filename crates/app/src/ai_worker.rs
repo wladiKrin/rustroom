@@ -23,6 +23,9 @@ pub enum AiJob {
     Subject(SubjectModel),
     /// A click, decode-normalised.
     Click([f32; 2]),
+    /// The photo's depth (M10.16a) — the image is the upright model input at `depth_map::RECIPE`'s
+    /// stored size, which is also the snap's guide.
+    Depth,
 }
 
 pub struct AiRequest {
@@ -47,6 +50,8 @@ pub trait Runner: Send {
     fn subject(&mut self, model: SubjectModel, img: &RgbImage) -> Result<ProbMap, String>;
     /// `p` is normalised over `img` (upright).
     fn click(&mut self, photo: &Path, img: &RgbImage, p: [f32; 2]) -> Result<ProbMap, String>;
+    /// The finished depth map over `img` (upright), at `img`'s size — normalised and snapped.
+    fn depth(&mut self, img: &RgbImage) -> Result<ProbMap, String>;
 }
 
 /// The real networks through `ai_mask`, loaded on first use and kept.
@@ -56,6 +61,8 @@ pub struct TractRunner {
     sam: Option<ai_mask::Sam>,
     /// The last photo's embedding: a second click on it costs ~0.1 s instead of ~1.7 s.
     embedding: Option<(PathBuf, ai_mask::Embedding)>,
+    /// Depth Anything, loaded on first use (M10.16a).
+    depth: Option<ai_mask::depth::Depth>,
 }
 
 impl TractRunner {
@@ -65,6 +72,7 @@ impl TractRunner {
             subjects: Vec::new(),
             sam: None,
             embedding: None,
+            depth: None,
         }
     }
 
@@ -103,6 +111,25 @@ impl Runner for TractRunner {
         let (_, e) = self.embedding.as_ref().expect("just embedded");
         sam.click(e, p).map_err(|e| e.to_string())
     }
+
+    /// The network at `RECIPE.infer_long` (it resizes `img` itself), then normalised and snapped to
+    /// `img`'s edges at `img`'s own size — see `depth_map`.
+    fn depth(&mut self, img: &RgbImage) -> Result<ProbMap, String> {
+        if self.depth.is_none() {
+            let d = ai_mask::depth::Depth::load(&self.path(ai_mask::ModelId::DepthAnythingV2Small))
+                .map_err(|e| e.to_string())?;
+            self.depth = Some(d);
+        }
+        let r = crate::depth_map::RECIPE;
+        let raw = self
+            .depth
+            .as_mut()
+            .expect("just loaded")
+            .run(img, r.infer_long)
+            .map_err(|e| e.to_string())?;
+        let position = ai_mask::depth::normalise(&raw, r.scale);
+        Ok(crate::depth_map::finish(&position, img, &r))
+    }
 }
 
 /// A clockwise quarter turn of a normalised point: `(u, v) → (1 − v, u)`.
@@ -114,14 +141,20 @@ pub fn turn_point(p: [f32; 2], turns: u8) -> [f32; 2] {
     q
 }
 
-/// The decode as a network wants it: sRGB-encoded 8-bit, exposure normalised, long side ≤ 1024,
-/// turned upright by `turns` clockwise quarter turns.
+/// The decode as a network wants it: sRGB-encoded 8-bit, exposure normalised, long side ≤ `long`
+/// (1024 for Subject and Select; the depth recipe's stored size for Depth), turned upright by
+/// `turns` clockwise quarter turns.
 ///
 /// ⚠ Networks are trained on ordinary photographs, not linear sensor data — a linear RAW decode
 /// is dark and flat to them. So: ProPhoto → sRGB, scaled until the mean luminance is 0.18
 /// (bounded, so a black frame is not amplified into noise), encoded, clipped.
-pub fn model_input(buffer: &ImageBuf, turns: u8, negative: &edit_model::Negative) -> RgbImage {
-    let small = buffer.downscale_to(1024);
+pub fn model_input(
+    buffer: &ImageBuf,
+    long: usize,
+    turns: u8,
+    negative: &edit_model::Negative,
+) -> RgbImage {
+    let small = buffer.downscale_to(long);
     // ⚠ M10.11a: a film negative is shown to the model as its positive — a subject found on the
     // negative's inverted tones is not the subject of the photograph.
     let small = if negative.is_active() {
@@ -169,6 +202,7 @@ impl AiWorker {
                 let map = match r.job {
                     AiJob::Subject(m) => runner.subject(m, &r.image),
                     AiJob::Click(p) => runner.click(&r.photo, &r.image, turn_point(p, r.turns)),
+                    AiJob::Depth => runner.depth(&r.image),
                 }
                 // ⚠ Back to the decode's own orientation, the cache's only orientation.
                 .map(|m| m.rotate_back(r.turns));
@@ -230,8 +264,14 @@ mod tests {
         let (neg, n) = film_strip(120, 60);
         let pos = neg.map_pixels(|p| pipeline::negative::positive(p, &n));
         let none = edit_model::Negative::default();
-        assert_ne!(model_input(&neg, 0, &none), model_input(&pos, 0, &none));
-        assert_eq!(model_input(&neg, 0, &n), model_input(&pos, 0, &none));
+        assert_ne!(
+            model_input(&neg, 1024, 0, &none),
+            model_input(&pos, 1024, 0, &none)
+        );
+        assert_eq!(
+            model_input(&neg, 1024, 0, &n),
+            model_input(&pos, 1024, 0, &none)
+        );
     }
 
     /// A network that answers "the point it was given" as a single hot pixel on a 4×2 map, and
@@ -251,6 +291,9 @@ mod tests {
                     0.0
                 }
             }))
+        }
+        fn depth(&mut self, img: &RgbImage) -> Result<ProbMap, String> {
+            Ok(hot_corner(img.width(), img.height()))
         }
         fn click(&mut self, _: &Path, img: &RgbImage, p: [f32; 2]) -> Result<ProbMap, String> {
             self.seen
@@ -300,7 +343,7 @@ mod tests {
             }
         }
         b.set_pixel(3, 0, [0.9; 3]);
-        let img = model_input(&b, 1, &edit_model::Negative::default());
+        let img = model_input(&b, 1024, 1, &edit_model::Negative::default());
         assert_eq!(
             (img.width(), img.height()),
             (2, 4),
@@ -316,6 +359,44 @@ mod tests {
         assert!(
             (95..=130).contains(&grey),
             "mid-grey should encode near 118: {grey}"
+        );
+    }
+
+    /// A `w × h` map hot only at its top-left pixel.
+    fn hot_corner(w: u32, h: u32) -> ProbMap {
+        ProbMap::from_fn(w, h, |x, y| if (x, y) == (0, 0) { 1.0 } else { 0.0 })
+    }
+
+    /// Review Focus 2 (M10.16a): a portrait's depth map is stored in the DECODE's orientation.
+    #[test]
+    fn a_depth_map_comes_back_in_decode_orientation() {
+        let cache = temp_dir("depth");
+        let w = AiWorker::spawn(
+            Box::new(Fake {
+                seen: Default::default(),
+            }),
+            Some(cache.clone()),
+            || {},
+        );
+        // The decode is 4×2; the network saw it upright, 2×4, after one clockwise turn.
+        w.request(AiRequest {
+            key: "d".into(),
+            photo: PathBuf::from("/p/A.RAF"),
+            image: Arc::new(RgbImage::new(2, 4)),
+            turns: 1,
+            job: AiJob::Depth,
+        });
+        let out = wait(&w, 1);
+        let m = out[0].map.as_ref().expect("the fake answers depth");
+        assert_eq!((m.w, m.h), (4, 2), "turned back to the decode's landscape");
+        // A clockwise turn takes decode (0, 1) — the bottom-left — to the upright top-left. Asserted
+        // by position, not by calling `rotate_back` again, which would compare it with itself.
+        let hot: Vec<usize> = (0..m.data.len()).filter(|&i| m.data[i] == 255).collect();
+        assert_eq!(hot, vec![4], "the hot pixel is at decode (0, 1)");
+        assert_eq!(
+            crate::ai_cache::load(&cache, "d").as_ref(),
+            Some(&**m),
+            "cached as replied"
         );
     }
 

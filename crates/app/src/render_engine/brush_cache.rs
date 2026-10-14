@@ -184,9 +184,11 @@ impl BrushCache {
         // ⚠ The map's address is its identity: a new map for the same prompt is a new `Arc`.
         // No map is address 0 — cached as nothing, and missed the moment one arrives.
         let ai = match Self::mask_at(edits, i, j) {
-            Some(edit_model::Mask::Ai(a)) => {
-                Some((*a, ai.get(&a.prompt).map_or(0, |m| Arc::as_ptr(m) as usize)))
-            }
+            Some(edit_model::Mask::Ai(a)) => Some((
+                *a,
+                ai.get(&crate::ai_coverage::MapQuery::Prompt(a.prompt))
+                    .map_or(0, |m| Arc::as_ptr(m) as usize),
+            )),
             _ => None,
         };
         MaskCoverageKey {
@@ -273,30 +275,32 @@ impl BrushCache {
                     // threshold and invert — no map, no coverage (`CoverageSource::Raster`).
                     // ⚠ Warped through the lens ONCE per map and lens setting (`post_lens`), so a
                     // geometry drag pays only the geometry's inverse — see `post_lens`'s numbers.
-                    Some(edit_model::Mask::Ai(a)) => ai.get(&a.prompt).map(|map| {
-                        let lensed = crate::ai_coverage::post_lens(
-                            map,
-                            crate::ai_space::lens_key(lens, edits, decode.0, decode.1),
-                            decode,
-                            || {
-                                lens.and_then(|l| {
-                                    crate::ai_space::corrector_for(l, edits, decode.0, decode.1)
-                                })
-                            },
-                        );
-                        let dm = decode_map.get_or_insert_with(|| {
-                            crate::ai_space::DecodeMap::new(
-                                &edits.geometry,
-                                edits.perspective,
-                                spec.fw,
-                                spec.fh,
-                                None,
-                                decode.0,
-                                decode.1,
-                            )
-                        });
-                        Arc::new(crate::ai_coverage::to_frame(&lensed, a, dm, spec.region))
-                    }),
+                    Some(edit_model::Mask::Ai(a)) => ai
+                        .get(&crate::ai_coverage::MapQuery::Prompt(a.prompt))
+                        .map(|map| {
+                            let lensed = crate::ai_coverage::post_lens(
+                                map,
+                                crate::ai_space::lens_key(lens, edits, decode.0, decode.1),
+                                decode,
+                                || {
+                                    lens.and_then(|l| {
+                                        crate::ai_space::corrector_for(l, edits, decode.0, decode.1)
+                                    })
+                                },
+                            );
+                            let dm = decode_map.get_or_insert_with(|| {
+                                crate::ai_space::DecodeMap::new(
+                                    &edits.geometry,
+                                    edits.perspective,
+                                    spec.fw,
+                                    spec.fh,
+                                    None,
+                                    decode.0,
+                                    decode.1,
+                                )
+                            });
+                            Arc::new(crate::ai_coverage::to_frame(&lensed, a, dm, spec.region))
+                        }),
                     _ => None,
                 };
                 if let Some(built) = &built {

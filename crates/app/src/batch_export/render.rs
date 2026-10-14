@@ -292,7 +292,7 @@ fn ai_coverage_for(
     decode: (usize, usize),
     lens: Option<&lens_profile::LensShot>,
 ) -> Option<std::sync::Arc<pipeline::BrushCoverage>> {
-    if crate::ai_coverage::prompts(edits).is_empty() {
+    if crate::ai_coverage::queries(edits).is_empty() {
         return None;
     }
     let dm = crate::ai_space::DecodeMap::new(
@@ -312,14 +312,16 @@ fn ai_coverage_for(
             std::iter::once(&m.mask)
                 .chain(m.refine.iter().map(|r| &r.mask))
                 .map(|mask| match mask {
-                    edit_model::Mask::Ai(a) => maps.get(&a.prompt).map(|p| {
-                        let lensed = crate::ai_coverage::post_lens(p, key, decode, || {
-                            lens.and_then(|l| {
-                                crate::ai_space::corrector_for(l, edits, decode.0, decode.1)
-                            })
-                        });
-                        std::sync::Arc::new(crate::ai_coverage::to_frame(&lensed, a, &dm, None))
-                    }),
+                    edit_model::Mask::Ai(a) => maps
+                        .get(&crate::ai_coverage::MapQuery::Prompt(a.prompt))
+                        .map(|p| {
+                            let lensed = crate::ai_coverage::post_lens(p, key, decode, || {
+                                lens.and_then(|l| {
+                                    crate::ai_space::corrector_for(l, edits, decode.0, decode.1)
+                                })
+                            });
+                            std::sync::Arc::new(crate::ai_coverage::to_frame(&lensed, a, &dm, None))
+                        }),
                     // ⚠ Every other component builds its own coverage exactly as before.
                     _ => None,
                 })
@@ -450,7 +452,7 @@ mod tests {
             if map {
                 // The subject is the LEFT half of the decode.
                 src.ai.insert(
-                    edit_model::AiPrompt::Subject,
+                    crate::ai_coverage::MapQuery::Prompt(edit_model::AiPrompt::Subject),
                     std::sync::Arc::new(ai_mask::ProbMap::from_fn(40, 20, |x, _| {
                         if x < 20 {
                             1.0

@@ -10,6 +10,7 @@ use crate::RustroomApp;
 use ai_mask::ModelId;
 use edit_model::AiPrompt;
 use eframe::egui;
+use rustroom_app::ai_coverage::MapQuery;
 use rustroom_app::ai_worker::{AiJob, AiRequest, AiWorker, TractRunner};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -28,16 +29,23 @@ pub(crate) struct Download {
 #[derive(Default)]
 pub(crate) struct AiState {
     worker: Option<AiWorker>,
-    /// Requests in flight: cache key → (photo, prompt).
-    pending: HashMap<String, (PathBuf, AiPrompt)>,
+    /// Requests in flight: cache key → (photo, query).
+    pending: HashMap<String, (PathBuf, MapQuery)>,
     /// Cache keys that failed — not retried this run, or a broken model would loop forever.
     failed: HashSet<String>,
     /// The missing models the dialog was already offered for this run — it opens once, not every
     /// frame, and a Cancel is respected until something asks again.
     offered: HashSet<ModelId>,
-    /// The last photo's model input, so a second click does not re-render it — keyed on the film
-    /// negative too (M10.11a), since the model is shown the positive.
-    input: Option<(PathBuf, u8, edit_model::Negative, Arc<image::RgbImage>)>,
+    /// The last photo's model inputs, so a second click does not re-render one — keyed on the film
+    /// negative too (M10.11a), since the model is shown the positive, and on the long side (M10.16a):
+    /// Subject and Select read 1024 px, Depth the stored size of its recipe. Two at most.
+    input: Vec<(
+        PathBuf,
+        u8,
+        edit_model::Negative,
+        usize,
+        Arc<image::RgbImage>,
+    )>,
     /// The photo and film negative the session's maps were found for (M10.11a). A pick or a
     /// re-measure on the same photo makes them another positive's, and they are dropped.
     maps_for: Option<(PathBuf, edit_model::Negative)>,
@@ -61,11 +69,20 @@ impl AiState {
     }
 }
 
-/// The models `prompt` needs.
-fn needed(prompt: &AiPrompt, subject: ai_mask::SubjectModel) -> Vec<ModelId> {
-    match prompt {
-        AiPrompt::Subject => vec![subject.model()],
-        AiPrompt::Click { .. } => ai_mask::registry::CLICK_MODELS.to_vec(),
+/// The models `query` needs.
+fn needed(query: &MapQuery, subject: ai_mask::SubjectModel) -> Vec<ModelId> {
+    match query {
+        MapQuery::Prompt(AiPrompt::Subject) => vec![subject.model()],
+        MapQuery::Prompt(AiPrompt::Click { .. }) => ai_mask::registry::CLICK_MODELS.to_vec(),
+        MapQuery::Depth => vec![ModelId::DepthAnythingV2Small],
+    }
+}
+
+/// The long side of the image `query`'s network is handed.
+fn input_long(query: &MapQuery) -> usize {
+    match query {
+        MapQuery::Prompt(_) => 1024,
+        MapQuery::Depth => rustroom_app::depth_map::RECIPE.store_long as usize,
     }
 }
 
@@ -83,14 +100,15 @@ impl RustroomApp {
     fn pump_ai_results(&mut self) {
         let Some(w) = &self.ai.worker else { return };
         for r in w.poll() {
-            let Some((photo, prompt)) = self.ai.pending.remove(&r.key) else {
+            let Some((photo, query)) = self.ai.pending.remove(&r.key) else {
                 continue;
             };
             match r.map {
                 Ok(map) => {
-                    self.status = match prompt {
-                        AiPrompt::Subject => "Subject found".to_string(),
-                        AiPrompt::Click { .. } => "Selection found".to_string(),
+                    self.status = match query {
+                        MapQuery::Prompt(AiPrompt::Subject) => "Subject found".to_string(),
+                        MapQuery::Prompt(AiPrompt::Click { .. }) => "Selection found".to_string(),
+                        MapQuery::Depth => "Depth estimated".to_string(),
                     };
                     if let Some(s) = &self.session {
                         // ⚠ M10.11a: and only if it was found for the negative the photo has now —
@@ -98,10 +116,10 @@ impl RustroomApp {
                         let current = rustroom_app::ai_cache::key(
                             &photo,
                             rustroom_app::ai_coverage::model_for(
-                                &prompt,
+                                &query,
                                 self.settings.ai_subject_model,
                             ),
-                            &prompt,
+                            &query,
                             &s.edits.negative,
                         );
                         if s.path == photo && r.key == current {
@@ -109,7 +127,7 @@ impl RustroomApp {
                                 .ai_maps()
                                 .write()
                                 .expect("ai maps")
-                                .insert(prompt, map);
+                                .insert(query, map);
                             s.request(
                                 s.view_edits(self.tool),
                                 s.render_max_dim(),
@@ -126,12 +144,12 @@ impl RustroomApp {
         }
     }
 
-    /// Every prompt the open photo's edits ask must have its map — from the store, the disk cache,
-    /// or the worker. A model that is missing opens the download dialog, once.
+    /// Every map the open photo's edits read must be there — from the store, the disk cache, or the
+    /// worker. A model that is missing opens the download dialog, once.
     fn ensure_ai_maps(&mut self, ctx: &egui::Context) {
         let Some(s) = &self.session else { return };
-        let prompts = rustroom_app::ai_coverage::prompts(&s.edits);
-        if prompts.is_empty() {
+        let queries = rustroom_app::ai_coverage::queries(&s.edits);
+        if queries.is_empty() {
             return;
         }
         let Some((cache, models)) = self.ai.dirs() else {
@@ -149,9 +167,9 @@ impl RustroomApp {
         let photo = s.path.clone();
         let store = s.engine.ai_maps();
         let mut rendered_new = false;
-        let mut to_request: Vec<(String, AiPrompt)> = Vec::new();
+        let mut to_request: Vec<(String, MapQuery)> = Vec::new();
         let mut missing_models: Vec<ModelId> = Vec::new();
-        for p in prompts {
+        for p in queries {
             if store.read().expect("ai maps").get(&p).is_some() {
                 continue;
             }
@@ -206,20 +224,6 @@ impl RustroomApp {
             return;
         }
         let turns = s.edits.geometry.orientation.rotate.turns();
-        let input = match &self.ai.input {
-            Some((p, t, n, img)) if *p == photo && *t == turns && *n == s.edits.negative => {
-                Arc::clone(img)
-            }
-            _ => {
-                let img = Arc::new(rustroom_app::ai_worker::model_input(
-                    &s.buffer,
-                    turns,
-                    &s.edits.negative,
-                ));
-                self.ai.input = Some((photo.clone(), turns, s.edits.negative, Arc::clone(&img)));
-                img
-            }
-        };
         if self.ai.worker.is_none() {
             let repaint = ctx.clone();
             self.ai.worker = Some(AiWorker::spawn(
@@ -228,20 +232,49 @@ impl RustroomApp {
                 move || repaint.request_repaint(),
             ));
         }
-        let w = self.ai.worker.as_ref().expect("just spawned");
         for (key, p) in to_request {
-            self.status = match p {
-                AiPrompt::Subject => "Finding the subject…".to_string(),
-                AiPrompt::Click { .. } => "Selecting…".to_string(),
+            let long = input_long(&p);
+            let held = self.ai.input.iter().find(|(ph, t, n, l, _)| {
+                *ph == photo && *t == turns && *n == s.edits.negative && *l == long
+            });
+            let input = match held {
+                Some((.., img)) => Arc::clone(img),
+                None => {
+                    let img = Arc::new(rustroom_app::ai_worker::model_input(
+                        &s.buffer,
+                        long,
+                        turns,
+                        &s.edits.negative,
+                    ));
+                    self.ai.input.insert(
+                        0,
+                        (
+                            photo.clone(),
+                            turns,
+                            s.edits.negative,
+                            long,
+                            Arc::clone(&img),
+                        ),
+                    );
+                    self.ai.input.truncate(2);
+                    img
+                }
             };
+            self.status = match p {
+                MapQuery::Prompt(AiPrompt::Subject) => "Finding the subject…".to_string(),
+                MapQuery::Prompt(AiPrompt::Click { .. }) => "Selecting…".to_string(),
+                MapQuery::Depth => "Estimating depth…".to_string(),
+            };
+            let w = self.ai.worker.as_ref().expect("just spawned");
             w.request(AiRequest {
                 key: key.clone(),
                 photo: photo.clone(),
-                image: Arc::clone(&input),
+                image: input,
                 turns,
                 job: match p {
-                    AiPrompt::Subject => AiJob::Subject(subject),
-                    AiPrompt::Click { point } => AiJob::Click(point),
+                    MapQuery::Prompt(AiPrompt::Subject) => AiJob::Subject(subject),
+                    MapQuery::Prompt(AiPrompt::Click { point }) => AiJob::Click(point),
+                    MapQuery::Depth => AiJob::Depth,
                 },
             });
             self.ai.pending.insert(key, (photo.clone(), p));
@@ -338,7 +371,12 @@ mod tests {
         let (mut app, ctx, cache) = app_with_subject("negative_key");
         let photo = app.session.as_ref().unwrap().path.clone();
         let off = edit_model::Negative::default();
-        let key = rustroom_app::ai_cache::key(&photo, ModelId::IsNet, &AiPrompt::Subject, &off);
+        let key = rustroom_app::ai_cache::key(
+            &photo,
+            ModelId::IsNet,
+            &MapQuery::Prompt(AiPrompt::Subject),
+            &off,
+        );
         let map = ai_mask::ProbMap::from_fn(4, 2, |x, _| x as f32 / 3.0);
         rustroom_app::ai_cache::store(&cache, &key, &map).unwrap();
         app.session.as_mut().unwrap().edits.negative = edit_model::Negative {
@@ -353,7 +391,7 @@ mod tests {
             .ai_maps()
             .read()
             .unwrap()
-            .get(&AiPrompt::Subject)
+            .get(&MapQuery::Prompt(AiPrompt::Subject))
             .cloned();
         assert!(
             got.is_none(),
@@ -375,12 +413,16 @@ mod tests {
             .ai_maps()
             .write()
             .unwrap()
-            .insert(AiPrompt::Subject, map);
+            .insert(MapQuery::Prompt(AiPrompt::Subject), map);
         app.pump_ai(&ctx);
         let held = |app: &RustroomApp| {
             let s = app.session.as_ref().unwrap();
             let maps = s.engine.ai_maps();
-            let got = maps.read().unwrap().get(&AiPrompt::Subject).is_some();
+            let got = maps
+                .read()
+                .unwrap()
+                .get(&MapQuery::Prompt(AiPrompt::Subject))
+                .is_some();
             got
         };
         assert!(held(&app), "the control: an unchanged photo keeps its map");
@@ -413,7 +455,7 @@ mod tests {
         let key = rustroom_app::ai_cache::key(
             &photo,
             ModelId::IsNet,
-            &AiPrompt::Subject,
+            &MapQuery::Prompt(AiPrompt::Subject),
             &edit_model::Negative::default(),
         );
         let map = ai_mask::ProbMap::from_fn(4, 2, |x, _| x as f32 / 3.0);
@@ -421,7 +463,11 @@ mod tests {
         app.pump_ai(&ctx);
         let s = app.session.as_ref().unwrap();
         let store = s.engine.ai_maps();
-        let got = store.read().unwrap().get(&AiPrompt::Subject).cloned();
+        let got = store
+            .read()
+            .unwrap()
+            .get(&MapQuery::Prompt(AiPrompt::Subject))
+            .cloned();
         assert_eq!(got.as_deref(), Some(&map));
         assert!(
             app.modal == crate::modals::Modal::None,

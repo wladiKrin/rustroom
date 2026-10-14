@@ -242,33 +242,41 @@ fn coverage(
             // M9.13: the AI map on this grid, through the same decode mapping the render uses.
             // ⚠ The same once-per-map lens warp the render uses — a tint miss no longer builds a
             // lens corrector (43 ms) or looks one up per pixel.
-            edit_model::Mask::Ai(a) => ai.maps.get(&a.prompt).map(|p| {
-                let lensed = rustroom_app::ai_coverage::post_lens(
-                    p,
-                    rustroom_app::ai_space::lens_key(ai.lens, ai.edits, ai.decode.0, ai.decode.1),
-                    ai.decode,
-                    || {
-                        ai.lens.and_then(|l| {
-                            rustroom_app::ai_space::corrector_for(
-                                l,
-                                ai.edits,
-                                ai.decode.0,
-                                ai.decode.1,
-                            )
-                        })
-                    },
-                );
-                let dm = rustroom_app::ai_space::DecodeMap::new(
-                    geometry,
-                    ai.edits.perspective,
-                    tw,
-                    th,
-                    None,
-                    ai.decode.0,
-                    ai.decode.1,
-                );
-                rustroom_app::ai_coverage::to_frame(&lensed, a, &dm, None)
-            }),
+            edit_model::Mask::Ai(a) => ai
+                .maps
+                .get(&rustroom_app::ai_coverage::MapQuery::Prompt(a.prompt))
+                .map(|p| {
+                    let lensed = rustroom_app::ai_coverage::post_lens(
+                        p,
+                        rustroom_app::ai_space::lens_key(
+                            ai.lens,
+                            ai.edits,
+                            ai.decode.0,
+                            ai.decode.1,
+                        ),
+                        ai.decode,
+                        || {
+                            ai.lens.and_then(|l| {
+                                rustroom_app::ai_space::corrector_for(
+                                    l,
+                                    ai.edits,
+                                    ai.decode.0,
+                                    ai.decode.1,
+                                )
+                            })
+                        },
+                    );
+                    let dm = rustroom_app::ai_space::DecodeMap::new(
+                        geometry,
+                        ai.edits.perspective,
+                        tw,
+                        th,
+                        None,
+                        ai.decode.0,
+                        ai.decode.1,
+                    );
+                    rustroom_app::ai_coverage::to_frame(&lensed, a, &dm, None)
+                }),
             _ => None,
         })
         .collect();
@@ -677,7 +685,7 @@ mod tests {
         };
         let mut maps = rustroom_app::ai_coverage::AiMaps::default();
         maps.insert(
-            edit_model::AiPrompt::Subject,
+            rustroom_app::ai_coverage::MapQuery::Prompt(edit_model::AiPrompt::Subject),
             std::sync::Arc::new(ai_mask::ProbMap::from_fn(20, 10, |x, _| {
                 if x < 10 {
                     1.0
@@ -882,7 +890,7 @@ mod tests {
         // Positive control: with the map (here, the network found nothing) it tints.
         let mut maps = rustroom_app::ai_coverage::AiMaps::default();
         maps.insert(
-            edit_model::AiPrompt::Subject,
+            rustroom_app::ai_coverage::MapQuery::Prompt(edit_model::AiPrompt::Subject),
             std::sync::Arc::new(ai_mask::ProbMap::from_fn(20, 10, |_, _| 0.0)),
         );
         let edits = edit_model::Edits::default();
