@@ -39,6 +39,7 @@ pub(super) fn dispatch(
         ref app_tint_frame,
         app_crop_aspect,
         app_brush_flow,
+        app_show_depth_map,
         ..
     } = *inp;
     // ⚠ A behaviour change, and an intended one: mask handles and brush
@@ -117,6 +118,7 @@ pub(super) fn dispatch(
                     base: app_tint_frame.as_ref(),
                     pan_drag: app_pan_drag,
                     erase_drag: app_erase_drag,
+                    show_depth: app_show_depth_map,
                 },
                 tool,
             );

@@ -38,6 +38,8 @@ pub(super) struct BrushTool<'a> {
     pub(super) pan_drag: rustroom_app::settings::PanDrag,
     /// Which held button erases, if any. ⚠ The pan binding wins; see `EraseDrag::button`.
     pub(super) erase_drag: rustroom_app::settings::EraseDrag,
+    /// Show depth map (M10.16a) — `RustroomApp::show_depth_map`.
+    pub(super) show_depth: bool,
 }
 
 /// The displayed frame the tint's auto-mask gate reads, when one has landed.
@@ -72,13 +74,18 @@ pub(super) fn draw_mask_overlay(
         return false;
     }
     let painter = ui.painter_at(img_rect);
+    // ⚠ M10.16a: Show depth map, UNDER the tints — a mask's eye then shows its band against the
+    // depths. It draws only for a selected depth range with its map.
+    if brush.show_depth {
+        let _ = super::depth_overlay::paint(&painter, s, frame_rect);
+    }
     // ⚠ Every mask whose eye is on, before and independent of the selection: the tint is per
     // mask since 2026-09-19, and a mask can be shown without being the one edited.
     {
         // ⚠ Scoped: the read guard must end before anything below mutates the session.
         let maps = s.engine.ai_maps();
         let maps = maps.read().expect("ai maps");
-        let ai = super::mask_tint::AiTintSource {
+        let ai = rustroom_app::ai_coverage::AiSource {
             maps: &maps,
             edits: &s.edits,
             lens: s.lens.shot.as_ref(),
@@ -159,6 +166,11 @@ pub(super) fn draw_mask_overlay(
                 return s.history.push(s.edits.clone());
             }
         }
+    }
+
+    // ⚠ M10.16a: a Depth range is picked on the photo, a drag or a click — and has no handles.
+    if let edit_model::Mask::Depth(_) = mask {
+        return super::depth_overlay::pick(ui, s, resp, img_rect, frame_rect, i, j, tool);
     }
 
     let aspect = canvas_geom::frame_aspect(frame_rect);
@@ -481,6 +493,8 @@ fn paint_mask(
         edit_model::Mask::Luminance(_) | edit_model::Mask::Colour(_) => {}
         // ⚠ M9.13: nothing to drag. A Select mask's click point is drawn by the AI click gesture.
         edit_model::Mask::Ai(_) => {}
+        // ⚠ M10.16a: no position, as a luminance range has none; the picker's drag draws its own box.
+        edit_model::Mask::Depth(_) => {}
     }
 }
 

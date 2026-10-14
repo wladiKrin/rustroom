@@ -77,6 +77,7 @@ fn main() {
             None,
             Resampler::default(),
             None,
+            None,
         );
         let mut img = buffer.clone();
         for s in &steps {

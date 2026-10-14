@@ -167,6 +167,7 @@ impl RustroomApp {
             mask_hsl_channel: Default::default(),
             mask_grade_range: Default::default(),
             mask_add_mode: None,
+            show_depth_map: false,
             grade_range: Default::default(),
             new_collection: String::new(),
             new_smart: String::new(),

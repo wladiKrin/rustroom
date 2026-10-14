@@ -378,6 +378,7 @@ fn main() {
         Some(shot.clone()),
         Resampler::default(),
         Some(airlight),
+        None,
     );
     println!("\n  the real prefix chain, cold (resuming at 0)");
     println!(

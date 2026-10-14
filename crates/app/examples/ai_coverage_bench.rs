@@ -24,12 +24,16 @@ fn main() {
             6240,
             4160,
         );
-        let a = edit_model::AiMask::default();
-        let _ = rustroom_app::ai_coverage::to_frame(&map, &a, &dm, None);
+        let (cover, outside) =
+            rustroom_app::ai_coverage::cover_fn(&edit_model::Mask::Ai(Default::default()))
+                .expect("an AI mask reads a map");
+        let _ = rustroom_app::ai_coverage::to_frame(&map, &cover, outside, &dm, None);
         let t = Instant::now();
         let n = 5;
         for _ in 0..n {
-            std::hint::black_box(rustroom_app::ai_coverage::to_frame(&map, &a, &dm, None));
+            std::hint::black_box(rustroom_app::ai_coverage::to_frame(
+                &map, &cover, outside, &dm, None,
+            ));
         }
         println!(
             "{label}: {:.1} ms",
@@ -108,7 +112,8 @@ fn main() {
             );
             std::hint::black_box(rustroom_app::ai_coverage::to_frame(
                 &hit,
-                &edit_model::AiMask::default(),
+                |p| rustroom_app::ai_coverage::refine(p, 0.0, false),
+                0,
                 &dm,
                 None,
             ));

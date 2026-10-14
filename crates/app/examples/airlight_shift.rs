@@ -74,7 +74,14 @@ fn main() {
             let mut e = base.clone();
             e.geometry.angle = angle;
             e.geometry.crop = c;
-            let st = build_prefix_steps(&e, RenderScale::FULL, None, Resampler::CatmullRom, None);
+            let st = build_prefix_steps(
+                &e,
+                RenderScale::FULL,
+                None,
+                Resampler::CatmullRom,
+                None,
+                None,
+            );
             let d = st
                 .iter()
                 .position(|x| x.stage.name() == "dehaze")

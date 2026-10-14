@@ -154,16 +154,6 @@ impl pipeline::brush::BasePixels for TintBase<'_> {
     }
 }
 
-/// What the tint needs to draw an AI component (M9.13) — references only, so building one every
-/// frame costs nothing; the decode mapping is made on a cache miss.
-pub(super) struct AiTintSource<'a> {
-    pub maps: &'a rustroom_app::ai_coverage::AiMaps,
-    pub edits: &'a edit_model::Edits,
-    pub lens: Option<&'a lens_profile::LensShot>,
-    /// The decode buffer's size.
-    pub decode: (usize, usize),
-}
-
 /// Whether the composite needs the displayed frame to be evaluated.
 fn needs_base(m: &edit_model::MaskedAdjustment) -> bool {
     std::iter::once(&m.mask)
@@ -199,7 +189,7 @@ fn coverage(
     tw: usize,
     th: usize,
     view: Option<&TintBase<'_>>,
-    ai: &AiTintSource<'_>,
+    ai: &rustroom_app::ai_coverage::AiSource<'_>,
 ) -> pipeline::brush::CoverageMap {
     // ⚠ A plain binding rather than a closure: a closure taking and returning a reference needs
     // the two lifetimes tied, which is more ceremony than the one call site is worth.
@@ -239,47 +229,21 @@ fn coverage(
             edit_model::Mask::Brush(b) => Some(pipeline::brush::rasterize_in(
                 b, geometry, tw, th, None, as_base,
             )),
-            // M9.13: the AI map on this grid, through the same decode mapping the render uses.
-            // ⚠ The same once-per-map lens warp the render uses — a tint miss no longer builds a
-            // lens corrector (43 ms) or looks one up per pixel.
-            edit_model::Mask::Ai(a) => ai.maps.get(&a.prompt).map(|p| {
-                let lensed = rustroom_app::ai_coverage::post_lens(
-                    p,
-                    rustroom_app::ai_space::lens_key(ai.lens, ai.edits, ai.decode.0, ai.decode.1),
-                    ai.decode,
-                    || {
-                        ai.lens.and_then(|l| {
-                            rustroom_app::ai_space::corrector_for(
-                                l,
-                                ai.edits,
-                                ai.decode.0,
-                                ai.decode.1,
-                            )
-                        })
-                    },
-                );
-                let dm = rustroom_app::ai_space::DecodeMap::new(
-                    geometry,
-                    ai.edits.perspective,
-                    tw,
-                    th,
-                    None,
-                    ai.decode.0,
-                    ai.decode.1,
-                );
-                rustroom_app::ai_coverage::to_frame(&lensed, a, &dm, None)
-            }),
+            // M9.13: the AI map on this grid, through the same decode mapping the render uses — and
+            // since M10.16a a depth range's, through the same ONE path (`AiSource::component`), which
+            // also does the once-per-map lens warp: a tint miss never builds a lens corrector.
+            k if k.reads_a_map() => ai.component(k, &ai.decode_map(geometry, tw, th), None),
             _ => None,
         })
         .collect();
     // ⚠⚠ The render's rule (`Composite::waits_for_a_map`, M10.12a's review): an inverted
-    // composite whose AI map has not arrived tints nothing — inverted, the missing map's 0 would
+    // composite whose AI or depth map has not arrived tints nothing — inverted, the missing map's 0 would
     // paint the whole frame.
     if m.invert
         && shapes
             .iter()
             .zip(&maps)
-            .any(|(k, c)| matches!(k, edit_model::Mask::Ai(_)) && c.is_none())
+            .any(|(k, c)| k.reads_a_map() && c.is_none())
     {
         return pipeline::brush::CoverageMap {
             x0: 0,
@@ -344,7 +308,9 @@ fn coverage(
                     }
                     // ⚠ M9.13: an AI mask's raster sits in the same per-component slot as a brush's,
                     // resampled to this grid by whoever filled `maps`.
-                    edit_model::Mask::Brush(_) | edit_model::Mask::Ai(_) => {
+                    edit_model::Mask::Brush(_)
+                    | edit_model::Mask::Ai(_)
+                    | edit_model::Mask::Depth(_) => {
                         maps[j].as_ref().map_or(0.0, |c| c.at(x, y) as f32 / 255.0)
                     }
                     edit_model::Mask::Luminance(r) => {
@@ -387,7 +353,7 @@ pub(super) fn paint_tint(
     geometry: &edit_model::Geometry,
     frame_rect: egui::Rect,
     base: Option<&TintFrame>,
-    ai: &AiTintSource<'_>,
+    ai: &rustroom_app::ai_coverage::AiSource<'_>,
 ) {
     let (w, h) = (frame_rect.width() as usize, frame_rect.height() as usize);
     if w == 0 || h == 0 {
@@ -646,10 +612,10 @@ mod tests {
     }
 
     /// No AI maps — every tint test but the AI one's.
-    fn no_ai<R>(f: impl FnOnce(&AiTintSource<'_>) -> R) -> R {
+    fn no_ai<R>(f: impl FnOnce(&rustroom_app::ai_coverage::AiSource<'_>) -> R) -> R {
         let maps = rustroom_app::ai_coverage::AiMaps::default();
         let edits = edit_model::Edits::default();
-        f(&AiTintSource {
+        f(&rustroom_app::ai_coverage::AiSource {
             maps: &maps,
             edits: &edits,
             lens: None,
@@ -675,7 +641,7 @@ mod tests {
         };
         let mut maps = rustroom_app::ai_coverage::AiMaps::default();
         maps.insert(
-            edit_model::AiPrompt::Subject,
+            rustroom_app::ai_coverage::MapQuery::Prompt(edit_model::AiPrompt::Subject),
             std::sync::Arc::new(ai_mask::ProbMap::from_fn(20, 10, |x, _| {
                 if x < 10 {
                     1.0
@@ -685,7 +651,7 @@ mod tests {
             })),
         );
         let edits = edit_model::Edits::default();
-        let ai = AiTintSource {
+        let ai = rustroom_app::ai_coverage::AiSource {
             maps: &maps,
             edits: &edits,
             lens: None,
@@ -880,11 +846,11 @@ mod tests {
         // Positive control: with the map (here, the network found nothing) it tints.
         let mut maps = rustroom_app::ai_coverage::AiMaps::default();
         maps.insert(
-            edit_model::AiPrompt::Subject,
+            rustroom_app::ai_coverage::MapQuery::Prompt(edit_model::AiPrompt::Subject),
             std::sync::Arc::new(ai_mask::ProbMap::from_fn(20, 10, |_, _| 0.0)),
         );
         let edits = edit_model::Edits::default();
-        let ai = AiTintSource {
+        let ai = rustroom_app::ai_coverage::AiSource {
             maps: &maps,
             edits: &edits,
             lens: None,
@@ -894,6 +860,40 @@ mod tests {
         assert!(
             answered.data.iter().any(|&a| a > 0),
             "fixture: with its map the inverted composite tints"
+        );
+    }
+
+    /// M10.16a: the same rule for a depth range — waiting for its map, an inverted composite tints
+    /// nothing, rather than the whole frame.
+    #[test]
+    fn an_inverted_composite_waiting_for_its_depth_map_tints_nothing() {
+        let m = edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Depth(edit_model::DepthRange::default()),
+            invert: true,
+            ..Default::default()
+        };
+        let waiting = plane(&m, 32, 32);
+        assert!(
+            waiting.data.iter().all(|&a| a == 0) && waiting.outside == 0,
+            "an inverted composite tinted while its depth map was missing"
+        );
+        // Positive control: with a map — everything near, outside the far half — it tints.
+        let mut maps = rustroom_app::ai_coverage::AiMaps::default();
+        maps.insert(
+            rustroom_app::ai_coverage::MapQuery::Depth,
+            std::sync::Arc::new(ai_mask::ProbMap::from_fn(20, 10, |_, _| 0.0)),
+        );
+        let edits = edit_model::Edits::default();
+        let ai = rustroom_app::ai_coverage::AiSource {
+            maps: &maps,
+            edits: &edits,
+            lens: None,
+            decode: (32, 32),
+        };
+        let answered = coverage(&m, &edit_model::Geometry::default(), 32, 32, None, &ai);
+        assert!(
+            answered.data.iter().all(|&a| a == 255),
+            "inverted, the near pixels outside the far half are all covered"
         );
     }
 

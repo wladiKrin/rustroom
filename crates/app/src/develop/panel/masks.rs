@@ -47,6 +47,8 @@ pub struct MaskUi<'a> {
     pub add_mode: &'a mut Option<edit_model::MaskOp>,
     /// Whether the mask's tone curve is expanded — `Settings::tone_curve_open`, saved by the caller.
     pub curve_open: &'a mut bool,
+    /// Whether the canvas shows a depth range's map — `RustroomApp::show_depth_map` (M10.16a).
+    pub show_depth: &'a mut bool,
 }
 
 /// Draw the Masks tool's controls.
@@ -65,6 +67,7 @@ pub fn show(
         grade: mask_grade,
         add_mode,
         curve_open,
+        show_depth,
     } = ui_state;
     // Hoisted above every `&mut s.*` below: `Illuminant` is `Copy`, so reading it here costs
     // nothing and keeps the later mutable borrows disjoint.
@@ -123,7 +126,7 @@ pub fn show(
             true,
             section::Header::new("Shape").trailing(kind),
         );
-        out.show_body(ui, |ui| shape_block(ui, shape, &mut brush, ed));
+        out.show_body(ui, |ui| shape_block(ui, shape, &mut brush, show_depth, ed));
     }
 
     super::mask_adjust::show(
@@ -340,16 +343,15 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
         // ⚠ An AI mask whose map has not landed yet says so on its own row, where the user is
         // looking, and keeps its sliders quiet until it has — the top bar's "Finding the
         // subject…" was thirteen seconds away from where the click happened (P-12).
-        let waiting = match &s.edits.masks[i].mask {
-            edit_model::Mask::Ai(a) => {
-                let store = s.engine.ai_maps();
-                let missing = store.read().expect("ai maps").get(&a.prompt).is_none();
-                missing.then_some(match a.prompt {
-                    edit_model::AiPrompt::Subject => "Finding the subject…",
-                    edit_model::AiPrompt::Click { .. } => "Outlining what you clicked…",
-                })
-            }
-            _ => None,
+        // ⚠ Any component, not only the base (M10.16a): a depth range refining a gradient waits
+        // for its map as much as one standing alone.
+        let waiting = {
+            let store = s.engine.ai_maps();
+            let maps = store.read().expect("ai maps");
+            let m = &s.edits.masks[i];
+            std::iter::once(&m.mask)
+                .chain(m.refine.iter().map(|r| &r.mask))
+                .find_map(|k| rustroom_app::ai_coverage::waiting_text(k, &maps))
         };
         if let Some(text) = waiting {
             ui.horizontal(|ui| {
@@ -431,6 +433,7 @@ fn shape_block(
     ui: &mut egui::Ui,
     shape: &mut edit_model::Mask,
     brush: &mut BrushTool<'_>,
+    show_depth: &mut bool,
     ed: &mut Edited,
 ) {
     // ⚠ The shape decides what "Size" and "Feather" mean in the hover (`slider_help::Scope`).
@@ -439,9 +442,10 @@ fn shape_block(
         edit_model::Mask::Radial(_) => rustroom_app::slider_help::Scope::Radial,
         edit_model::Mask::Luminance(_) => rustroom_app::slider_help::Scope::LuminanceRange,
         edit_model::Mask::Colour(_) => rustroom_app::slider_help::Scope::ColourRange,
+        edit_model::Mask::Depth(_) => rustroom_app::slider_help::Scope::DepthRange,
         _ => rustroom_app::slider_help::Scope::Global,
     };
-    shape_controls(ui, shape, brush, ed);
+    shape_controls(ui, shape, brush, show_depth, ed);
     ed.help_scope = rustroom_app::slider_help::Scope::Global;
 }
 
@@ -450,6 +454,7 @@ fn shape_controls(
     ui: &mut egui::Ui,
     shape: &mut edit_model::Mask,
     brush: &mut BrushTool<'_>,
+    show_depth: &mut bool,
     ed: &mut Edited,
 ) {
     if matches!(shape, edit_model::Mask::Brush(_)) {
@@ -553,6 +558,17 @@ fn shape_controls(
             edit_model::ColourRange::default().min_chroma,
         );
     }
+    // M10.16a: a depth range — its band over the photo's estimated depth, and the view that shows
+    // that depth. The band can also be dragged out on the photo (the canvas's picker).
+    if let edit_model::Mask::Depth(r) = shape {
+        let d = edit_model::DepthRange::default();
+        ed.slider(ui, &mut r.near, 0.0..=100.0, "Near", d.near);
+        ed.slider(ui, &mut r.far, 0.0..=100.0, "Far", d.far);
+        ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather", d.feather);
+        // ⚠ A view, not an edit: no `ed.discrete()`, no history step.
+        ui.checkbox(show_depth, "Show depth map")
+            .hover("Shows the estimated distances in grey, the nearest in white");
+    }
     // M9.13: an AI mask's one control. The network's soft map is thresholded; Refine moves the
     // threshold, so the edge grows or shrinks without computing anything again.
     if let edit_model::Mask::Ai(a) = shape {
@@ -597,6 +613,7 @@ mod tests {
         channel: crate::develop::panel::adjustments::HslChannel,
         grade: crate::develop::panel::color_wheel::GradeRange,
         mode: Option<edit_model::MaskOp>,
+        show_depth: bool,
     }
 
     impl Panel {
@@ -619,6 +636,7 @@ mod tests {
                 channel: Default::default(),
                 grade: Default::default(),
                 mode: None,
+                show_depth: false,
             }
         }
 
@@ -631,6 +649,7 @@ mod tests {
                     grade: &mut self.grade,
                     add_mode: &mut self.mode,
                     curve_open: &mut true,
+                    show_depth: &mut self.show_depth,
                 },
                 BrushTool {
                     size: &mut self.size,
@@ -1025,6 +1044,49 @@ mod tests {
             shown.iter().any(|l| l == "Feather"),
             "but it keeps its own feather; got {shown:?}"
         );
+    }
+
+    /// M10.16a: a selected depth range offers its band, its Invert and the depth view.
+    #[test]
+    fn a_selected_depth_range_shows_its_band_and_the_depth_view() {
+        let mut p = Panel::new();
+        let ed = p.add(MaskKind::Depth);
+        assert!(ed.changed, "adding one is an edit");
+        assert_eq!(
+            p.s.edits.masks[0].mask,
+            edit_model::Mask::Depth(edit_model::DepthRange::default())
+        );
+        let shown = p.labels();
+        for want in ["Near", "Far", "Feather", "Invert", "Show depth map"] {
+            assert!(
+                shown.iter().any(|l| l == want),
+                "a selected depth range must offer {want}; got {shown:?}"
+            );
+        }
+        assert!(
+            shown.iter().any(|l| l == "Estimating depth…"),
+            "with no map yet the row says what it waits for; got {shown:?}"
+        );
+    }
+
+    #[test]
+    fn the_depth_sliders_edit_the_band_and_the_toggle_only_the_view() {
+        let mut p = Panel::new();
+        p.add(MaskKind::Depth);
+        let band = |p: &Panel| match p.s.edits.masks[0].mask {
+            edit_model::Mask::Depth(r) => r,
+            ref other => panic!("expected a depth range, got {other:?}"),
+        };
+        let before = band(&p);
+        let ed = p.drag("Near");
+        assert_ne!(band(&p).near, before.near, "Near moved the mask's own band");
+        assert_eq!(band(&p).far, before.far, "and only Near");
+        assert!(ed.changed);
+        let edits = p.s.edits.clone();
+        let ed = p.click("Show depth map");
+        assert!(p.show_depth, "the toggle turned the view on");
+        assert_eq!(p.s.edits, edits, "and changed no edit");
+        assert!(!ed.changed);
     }
 
     #[test]

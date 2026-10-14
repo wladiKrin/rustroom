@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.16a: depth masks — an estimated depth map and the Depth range mask (2026-10-14)](#2026-10-14--m1016a-depth-masks--an-estimated-depth-map-and-the-depth-range-mask-branch-m1016a-depth-masks)
 - [M10.15d: Send marks to Immich, and Undo last send (2026-10-13)](#2026-10-13--m1015d-send-marks-to-immich-and-undo-last-send-branch-m1015d-immich-send-marks-merged-2026-10-14)
 - [M10.15c: Immich's own rating and favourite, filled once (2026-10-13)](#2026-10-13--m1015c-immichs-own-rating-and-favourite-filled-once-branch-m1015c-immich-rating-merged-2026-10-13)
 - [M10.15b: clear the Immich downloads, and a soft limit that warns at startup (2026-10-13)](#2026-10-13--m1015b-clear-the-immich-downloads-and-a-soft-limit-that-warns-at-startup-branch-m1015b-immich-cache-clear-merged-2026-10-13)
@@ -175,6 +176,108 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-14 — M10.16a: depth masks — an estimated depth map and the Depth range mask (branch `m10.16a-depth-masks`)
+
+**The item:** *"Depth masks (2026-08-26). L"* — nothing more on record. **The author's call in the
+brainstorm: Lightroom's Depth Range mask *and* Lens Blur — split:** M10.16a is the depth map + the mask;
+Lens Blur becomes **M10.16d**, brainstormed next (ahead of b and c), on this map. Spec and plan
+`2026-10-14-m10.16a-depth-masks*`.
+
+**Why estimated:** Lightroom's Depth Range exists only for photos that carry a depth map (iPhone portrait
+HEIC); Rustroom reads no HEIC (M10.19a) and the author's cameras record none — so **Depth Anything V2
+Small** (Apache-2.0, verified at the source — Base/Large/Giant are CC-BY-NC-4.0 and excluded), the dynamic
+ONNX from `fabio-sim/Depth-Anything-ONNX` v2.0.0 (99,092,268 bytes, SHA-256 measured from the download).
+
+**⚠⚠ `tract` refused the export twice, each at load, and both are now in `ai_mask::depth`'s doc:** the graph
+keeps its symbolic dims (`batch_size`, `height`, `width`) all the way through, so a concrete input fact
+failed at the first convolution — the symbols are **bound per size** with `TypedModel::set_symbols`; and the
+exporter's own intermediate shape annotations (`ConvTranspose_1022_o0__d1`) contradicted the real 48
+channels — **ignored** (`with_ignore_value_info`, `with_ignore_output_shapes`). A plan builds in ~0.16 s.
+
+**The spike (M2, release, three of the author's photos — `examples/depth_probe.rs`, kept):** 518 →
+0.62 s / 0.81 GB, **770 → 1.65 s / 1.11 GB**, 1036 → 3.9 s / 2.0 GB; **770 by the rule** (largest under
+~3 s). ⚠ The first real-model test failed against a correct network: `image::open` ignores EXIF
+orientation, and "the bottom rows" were a side of the scene. **The author's choices from the sheets**
+(`depth_probe … sheet`): **equalised** (linear disparity crushed trees, far shore and sky into one black),
+**snap r8** (hair strands against contrast, slightly softer against none; r16 blurred), **stored at 1536**
+(1024/1536/2048 indistinguishable).
+
+**Built:**
+- `edit-model`: **`Mask::Depth(DepthRange { near, far, feather, invert })`**, appended; default the far half
+  (50–100, feather 50); the band is ONE function shared with `LuminanceRange` (`mask_ranges::band`, the
+  luminance goldens unchanged); `Mask::reads_a_map()` — the one "waits for a map" predicate.
+- `ai-mask`: `ModelId::DepthAnythingV2Small` (+ an exhaustive-match guard on the hand-written `ALL`);
+  `depth::{Depth, Plane, DepthScale, input_size, normalise}` — disparity → position between the 1st/99th
+  percentiles, a flat or NaN plane → 0.5; `prep::nchw_wh`.
+- app lib: `depth_map` (upsample + `guided_filter` snap, `RECIPE`); `ai_coverage::MapQuery { Prompt, Depth }`
+  (the store's key; the **Subject/Click cache keys pinned as literal digests first** and unchanged), content
+  ids in `AiMaps`; **`AiSource::component` — ONE path from a map to coverage** for the preview's brush
+  cache, export and the tint (three `Mask::Ai` matches before); `depth_tool` (the picker's 5th–95th
+  percentile band, a click's ±5); `depth_view`; the worker's `AiJob::Depth`.
+- GUI: **Depth range** in the add menu (a road-to-the-horizon glyph); Near / Far / Feather / Invert and
+  **Show depth map** (view state on the app, persists across photos); "Estimating depth…" on the row (any
+  component now, not only the base); the picker — a plain left-drag over the photo sets the band live, one
+  undo step; a click a narrow band; Show depth map drawn under the tints.
+
+**⚠⚠ The prefix gap, fixed for every AI kind:** a mask's **Noise reduction, Dehaze and Defringe** were built
+with no coverage for an AI component, so a Subject-masked Dehaze changed NOTHING — proven red first
+(`an_ai_masked_dehaze_changes_what_its_map_covers`: "the covered half did not change: 0.00 levels").
+`build_prefix_steps` takes an injected `AiRasters`; the capture `MaskStage` resolves a lazy
+`RasterSource` at its own frame size; **each step's key carries the map's content id**, or a map arriving
+after a checkpoint was cached leaves the stale picture. `AiSource` implements `AiRasters` itself — one
+source for tail and prefix.
+
+**Test fixtures I got wrong, each caught by its own measurement (lesson (d) four times):** a bit-exact band
+comparison broken by `x/100*100 ≠ x` (compared at the identical band input instead); a 40-px soft-edge
+fixture no network makes, and then a 10–90 % width that read the guided filter's tails as widening (the
+snap is a one-pixel step at the photo's edge — `scratchpad/gf.py`; the test measures that share); a
+`paint` texture id taken at another size; the hazy chart measured as `W × H` (it is 256 × 192).
+
+**Sabotages, every one red:** normalise without its span guard / without the flip; `ALL` missing the model;
+the band diverging; the Subject cache string capitalised; a depth range ignoring Invert in `cover_fn`; the
+prefix key without the ids (2 red); the lazy raster never resolved (2 red); the snap self-guided; Near
+wired to `far`; the picker without its history push (2 red); Show depth map ignoring its toggle; the view
+transposed; the depth direction flipped (the golden: "the far band was not lifted").
+
+**⚠⚠ Found in the final review (a self-review — no fresh reviewer was dispatched), fixed red first:** a photo
+opens as a **ghost session** on its 512-px thumbnail (M9.14), and `ensure_ai_maps` never asked whether — so
+a mask without a cached map was computed from the 512-px ghost and **cached under the file's key for good**.
+Latent for Subject since M9.14; for Depth a map stretched from 512 to 1536. The session code even said
+"nothing is cached from it". Requests now wait for the real decode; cached maps still load at once
+(`a_ghost_session_asks_the_network_for_nothing`, the model made "present" by a sparse file so only the
+ghost can hold it back; the control is the real decode).
+
+**⚠ Not measured, on purpose: the drag.** The GUI session's `RUSTROOM_DEBUG_RENDER` timings (coverage
+227–306 ms, `pack` 104 ms on a frame that packs in ~2) were taken at **load average 104** — the author's own
+Python, ffmpeg and Blender plus this gate — and mean nothing. To measure on a quiet machine before closing.
+Declined to judge, recorded: under `PanDrag::SpaceLeft`, Space+left-drag may drive the active tool's
+primary drag (brush, crop, the depth picker) as well as panning — pre-existing for every tool, not run.
+
+**The gate's clippy found four** (all fixed): a literal `false` in `assert_eq!`; the new traits placed after
+`coverage.rs`'s test module; a complex boxed-closure type (now `ai_coverage::Cover`); `chunks_exact_mut(4)`
+→ `as_chunks_mut::<4>()`.
+
+**Found in use by the author (2026-10-14, "works, a couple of things"):**
+- **The rectangle picker was unintuitive → a line:** its start's depth is one end of the band, its end's
+  the other (`depth_tool::{depth_at, band_between}`, each end the median of a 3 × 3 patch; sabotage —
+  one pixel, no median — red).
+- **"The edges bleed substantially."** An edge spike on five photos (`depth_probe … edges`): A today's
+  (770, luminance snap) · B colour snap · C eps 1e-4 · D 1036 · E 1036 + colour. The portrait's halo
+  3726 → 3382 (B) → **2900 (E)**; B never worse; C nothing; D/E's counts rose where they resolve real
+  background depth (a tunnel, a signpost's trees), which the count misreads — by eye they are sharpest.
+  ⚠ My first sheet was useless — a red overlay on a red wall, a crop on the wrong edge — fixed to cyan
+  and zoomed on the strongest depth edge. **The author chose E** → `pipeline::spatial::guided_filter_rgb`
+  (He et al.'s colour guide; exact on a grey guide to the grey filter at eps/3, and it parts green and
+  magenta of equal brightness where luminance gets 0.047 — both tests red first), inference at **1036**
+  (3.9 s a photo once, 2.0 GB peak), recipe **`depth:v2`**. The network's own soft edge remains:
+  Subject-assisted cut-outs belong to M10.16d.
+
+**Counts:** 3812 → **3862 tests** (10 ignored), **89 goldens** (76 references — `depth_band_exposure`,
+`ai_masked_dehaze`). ⚠ Touched files over ~600 code lines: `gpu-pipeline/src/mask.rs` 735 (one arm + a
+test), `gpu-pipeline/src/accelerate.rs` 721 (appended arguments), `pipeline/src/stages/mask.rs` 621 (the
+lazy raster), `examples/bench_preview.rs` 840 (one argument).
+⏳ **Awaiting the author's confirmation by use.**
 
 ### 2026-10-13 — M10.15d: Send marks to Immich, and Undo last send (branch `m10.15d-immich-send-marks`, merged 2026-10-14)
 

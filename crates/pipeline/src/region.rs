@@ -527,6 +527,7 @@ mod tests {
             None,
             crate::resample::Resampler::CatmullRom,
             None,
+            None,
         )
     }
 
@@ -806,6 +807,7 @@ mod tests {
             RenderScale::FULL,
             Some(test_lens()),
             crate::resample::Resampler::CatmullRom,
+            None,
             None,
         );
         assert_eq!(

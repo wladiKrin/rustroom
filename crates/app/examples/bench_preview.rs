@@ -320,7 +320,7 @@ fn main() {
             exposure: 0.5,
             ..Edits::default()
         };
-        let steps = build_prefix_steps(&heavy, sc, None, pipeline::Resampler::Bilinear, None);
+        let steps = build_prefix_steps(&heavy, sc, None, pipeline::Resampler::Bilinear, None, None);
         let (_, tail) = build_pipeline_split_in_region(
             &heavy,
             sc,
@@ -389,7 +389,7 @@ fn main() {
             exposure: 0.5,
             ..Edits::default()
         };
-        let steps = build_prefix_steps(&heavy, sc, None, pipeline::Resampler::Bilinear, None);
+        let steps = build_prefix_steps(&heavy, sc, None, pipeline::Resampler::Bilinear, None, None);
         let (_, tail) = build_pipeline_split_in_region(
             &heavy,
             sc,
@@ -738,6 +738,7 @@ fn main() {
             None,
             pipeline::Resampler::Bilinear,
             Some(airlight),
+            None,
         );
         let base = buf.downscale_to(buffer_long);
 

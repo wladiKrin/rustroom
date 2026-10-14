@@ -380,6 +380,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 grade: &mut app.mask_grade_range,
                                 add_mode: &mut app.mask_add_mode,
                                 curve_open: &mut app.settings.tone_curve_open,
+                                show_depth: &mut app.show_depth_map,
                             },
                             masks::BrushTool {
                                 size: &mut app.brush_size,

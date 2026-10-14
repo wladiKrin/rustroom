@@ -81,7 +81,7 @@ fn main() {
         airlight: None,
     };
     let airlight = pipeline::prefix_airlight(&e, &buffer, resampler, None);
-    let steps = pipeline::build_prefix_steps(&e, scale, None, resampler, Some(airlight));
+    let steps = pipeline::build_prefix_steps(&e, scale, None, resampler, Some(airlight), None);
     println!(
         "prefix steps: {:?}",
         steps.iter().map(|s| s.stage.name()).collect::<Vec<_>>()

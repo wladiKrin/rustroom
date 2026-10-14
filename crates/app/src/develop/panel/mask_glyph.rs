@@ -1,4 +1,4 @@
-//! Hand-painted glyphs for the five mask kinds, drawn into a small rect.
+//! Hand-painted glyphs for the mask kinds, drawn into a small rect.
 //!
 //! ⚠ Not the icon font. The Phosphor codepoints for these five are not known here, and a
 //! guessed one ships a tofu box — four features in this project have done exactly that. Five
@@ -88,6 +88,23 @@ pub fn paint(painter: &egui::Painter, rect: egui::Rect, kind: MaskKind, colour: 
         MaskKind::Select => {
             painter.circle_stroke(c, w * 0.4, stroke);
             painter.circle_filled(c, w * 0.12, colour);
+        }
+        // M10.16a: a road to the horizon — two lines converging on a faint horizon line: distance.
+        MaskKind::Depth => {
+            let horizon = r.top() + w * 0.25;
+            for (from, to) in [
+                (r.left_bottom(), egui::pos2(c.x - w * 0.08, horizon)),
+                (r.right_bottom(), egui::pos2(c.x + w * 0.08, horizon)),
+            ] {
+                painter.line_segment([from, to], stroke);
+            }
+            painter.line_segment(
+                [
+                    egui::pos2(r.left(), horizon),
+                    egui::pos2(r.right(), horizon),
+                ],
+                egui::Stroke::new(stroke.width, colour.gamma_multiply(0.5)),
+            );
         }
     }
 }

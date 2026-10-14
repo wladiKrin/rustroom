@@ -52,7 +52,7 @@ fn airlight_replay(
     resampler: Resampler,
 ) -> Vec<PrefixStep> {
     // ⚠ `None`, so the replay cannot recurse: dehaze is never constructed here.
-    let steps = build_prefix_steps(edits, scale, lens, resampler, None);
+    let steps = build_prefix_steps(edits, scale, lens, resampler, None, None);
     let upto = steps
         .iter()
         .position(|s| s.stage.name() == "dehaze")

@@ -20,9 +20,9 @@ pub(super) struct CoverageSpec {
 /// What one mask's cached coverage was built from.
 #[derive(PartialEq)]
 pub(super) struct MaskCoverageKey {
-    /// An AI component's mask and the identity of the map it was built from (M9.13) — a new map
-    /// arriving for the same prompt is a new key.
-    ai: Option<(edit_model::AiMask, usize)>,
+    /// A map-reading component — an AI mask or a depth range — and its map's content id (M9.13,
+    /// M10.16a): a new map arriving for the same query is a new key, and so is a moved band.
+    ai: Option<(edit_model::Mask, u64)>,
     /// This component's brush. `None` for an analytic shape, which is never cached here.
     brush: Option<edit_model::Brush>,
     geometry: edit_model::Geometry,
@@ -181,14 +181,14 @@ impl BrushCache {
         let base = brush
             .as_ref()
             .and_then(|b| Self::base_id(edits, i, b, spec.max_dim));
-        // ⚠ The map's address is its identity: a new map for the same prompt is a new `Arc`.
-        // No map is address 0 — cached as nothing, and missed the moment one arrives.
-        let ai = match Self::mask_at(edits, i, j) {
-            Some(edit_model::Mask::Ai(a)) => {
-                Some((*a, ai.get(&a.prompt).map_or(0, |m| Arc::as_ptr(m) as usize)))
-            }
-            _ => None,
-        };
+        // ⚠ The map's CONTENT id is its identity (M10.16a — it was the `Arc`'s address, which the
+        // next map can reuse). No map is 0 — cached as nothing, and missed the moment one arrives.
+        let ai = Self::mask_at(edits, i, j)
+            .filter(|m| m.reads_a_map())
+            .map(|m| {
+                let id = crate::ai_coverage::MapQuery::of(m).and_then(|q| ai.id(&q));
+                (m.clone(), id.unwrap_or(0))
+            });
         MaskCoverageKey {
             ai,
             brush,
@@ -270,33 +270,22 @@ impl BrushCache {
                         )))
                     }
                     // ⚠ M9.13: an AI component is its map, resampled into this frame with its
-                    // threshold and invert — no map, no coverage (`CoverageSource::Raster`).
-                    // ⚠ Warped through the lens ONCE per map and lens setting (`post_lens`), so a
-                    // geometry drag pays only the geometry's inverse — see `post_lens`'s numbers.
-                    Some(edit_model::Mask::Ai(a)) => ai.get(&a.prompt).map(|map| {
-                        let lensed = crate::ai_coverage::post_lens(
-                            map,
-                            crate::ai_space::lens_key(lens, edits, decode.0, decode.1),
+                    // threshold and invert — and since M10.16a a depth range with its band — no map,
+                    // no coverage (`CoverageSource::Raster`). ⚠ Warped through the lens ONCE per map
+                    // and lens setting (`post_lens`), so a geometry drag pays only the geometry's
+                    // inverse — see `post_lens`'s numbers.
+                    Some(m) if m.reads_a_map() => {
+                        let src = crate::ai_coverage::AiSource {
+                            maps: &ai,
+                            edits,
+                            lens,
                             decode,
-                            || {
-                                lens.and_then(|l| {
-                                    crate::ai_space::corrector_for(l, edits, decode.0, decode.1)
-                                })
-                            },
-                        );
+                        };
                         let dm = decode_map.get_or_insert_with(|| {
-                            crate::ai_space::DecodeMap::new(
-                                &edits.geometry,
-                                edits.perspective,
-                                spec.fw,
-                                spec.fh,
-                                None,
-                                decode.0,
-                                decode.1,
-                            )
+                            src.decode_map(&edits.geometry, spec.fw, spec.fh)
                         });
-                        Arc::new(crate::ai_coverage::to_frame(&lensed, a, dm, spec.region))
-                    }),
+                        src.component(m, dm, spec.region).map(Arc::new)
+                    }
                     _ => None,
                 };
                 if let Some(built) = &built {
@@ -318,6 +307,47 @@ impl BrushCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M10.16a: a depth component is cached like a brush — a moved band misses, a new map misses, an
+    /// unchanged one hits; with no map there is nothing to build.
+    #[test]
+    fn a_depth_band_change_rebuilds_and_a_map_arrival_rebuilds() {
+        let mut cache = BrushCache::default();
+        let spec = CoverageSpec {
+            fw: 80,
+            fh: 40,
+            region: None,
+            max_dim: 1600,
+        };
+        let depth = |near| Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Depth(edit_model::DepthRange {
+                    near,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let ramp = |f: fn(f32) -> f32| {
+            Arc::new(ai_mask::ProbMap::from_fn(8, 4, move |x, _| {
+                f(x as f32 / 7.0)
+            }))
+        };
+        let none = cache.get_or_build(&depth(50.0), spec, (80, 40), None);
+        assert!(none.get(0, 0).is_none(), "no map, no coverage");
+        let query = crate::ai_coverage::MapQuery::Depth;
+        cache.ai.write().unwrap().insert(query, ramp(|v| v));
+        let a = cache.get_or_build(&depth(50.0), spec, (80, 40), None);
+        assert!(a.get(0, 0).is_some(), "the map arrived: built");
+        let b = cache.get_or_build(&depth(50.0), spec, (80, 40), None);
+        assert!(same_map(&a, &b), "unchanged: a hit");
+        let c = cache.get_or_build(&depth(40.0), spec, (80, 40), None);
+        assert!(!same_map(&a, &c), "a moved band misses");
+        cache.ai.write().unwrap().insert(query, ramp(|v| 1.0 - v));
+        let d = cache.get_or_build(&depth(50.0), spec, (80, 40), None);
+        assert!(!same_map(&a, &d), "another map misses");
+    }
 
     #[test]
     fn the_brush_cache_never_builds_a_brush_that_needs_the_image() {
