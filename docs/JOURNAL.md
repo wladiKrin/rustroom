@@ -258,7 +258,22 @@ primary drag (brush, crop, the depth picker) as well as panning — pre-existing
 `coverage.rs`'s test module; a complex boxed-closure type (now `ai_coverage::Cover`); `chunks_exact_mut(4)`
 → `as_chunks_mut::<4>()`.
 
-**Counts:** 3812 → **3860 tests** (10 ignored), **89 goldens** (76 references — `depth_band_exposure`,
+**Found in use by the author (2026-10-14, "works, a couple of things"):**
+- **The rectangle picker was unintuitive → a line:** its start's depth is one end of the band, its end's
+  the other (`depth_tool::{depth_at, band_between}`, each end the median of a 3 × 3 patch; sabotage —
+  one pixel, no median — red).
+- **"The edges bleed substantially."** An edge spike on five photos (`depth_probe … edges`): A today's
+  (770, luminance snap) · B colour snap · C eps 1e-4 · D 1036 · E 1036 + colour. The portrait's halo
+  3726 → 3382 (B) → **2900 (E)**; B never worse; C nothing; D/E's counts rose where they resolve real
+  background depth (a tunnel, a signpost's trees), which the count misreads — by eye they are sharpest.
+  ⚠ My first sheet was useless — a red overlay on a red wall, a crop on the wrong edge — fixed to cyan
+  and zoomed on the strongest depth edge. **The author chose E** → `pipeline::spatial::guided_filter_rgb`
+  (He et al.'s colour guide; exact on a grey guide to the grey filter at eps/3, and it parts green and
+  magenta of equal brightness where luminance gets 0.047 — both tests red first), inference at **1036**
+  (3.9 s a photo once, 2.0 GB peak), recipe **`depth:v2`**. The network's own soft edge remains:
+  Subject-assisted cut-outs belong to M10.16d.
+
+**Counts:** 3812 → **3862 tests** (10 ignored), **89 goldens** (76 references — `depth_band_exposure`,
 `ai_masked_dehaze`). ⚠ Touched files over ~600 code lines: `gpu-pipeline/src/mask.rs` 735 (one arm + a
 test), `gpu-pipeline/src/accelerate.rs` 721 (appended arguments), `pipeline/src/stages/mask.rs` 621 (the
 lazy raster), `examples/bench_preview.rs` 840 (one argument).

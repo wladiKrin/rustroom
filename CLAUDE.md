@@ -169,7 +169,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 ### State (2026-10-14)
 
 **3812 tests** (9 ignored), **87 golden tests** (74 reference images — `cargo test --workspace --test golden`),
-gate green on `main`; **3860 / 89 goldens (76 references) on branch `m10.16a-depth-masks`**, gate green there. ⚠⚠ **Run the git command above rather than
+gate green on `main`; **3862 / 89 goldens (76 references) on branch `m10.16a-depth-masks`**, gate green there. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
