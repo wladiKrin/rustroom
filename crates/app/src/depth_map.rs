@@ -27,8 +27,12 @@ pub struct Recipe {
     pub scale: DepthScale,
 }
 
-/// ⚠ PROVISIONAL until the author's choice from the spike's sheets (Task 11): inference at 770 by the
-/// rule (the largest size under ~3 s — 1.65 s on an M2), the rest first values.
+/// ⚠⚠ The author's choices from the spike's sheets (2026-10-14, `examples/depth_probe.rs sheet`):
+/// **equalised** — linear disparity crushed the trees, the far shore and the sky into one black;
+/// **snap radius 8** — hair strands where the photo has contrast, slightly softer where it has none
+/// (r16 blurred everywhere, none left a blocky staircase); **stored at 1536** — no visible difference
+/// from 2048 at the network's resolution. Inference at **770** by the rule: the largest size under
+/// ~3 s (1.65 s on an M2; 1036 took 3.9 s).
 pub const RECIPE: Recipe = Recipe {
     infer_long: 770,
     store_long: 1536,
