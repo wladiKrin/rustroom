@@ -81,6 +81,21 @@ impl GpuDrunet {
     /// `rgb` (`w × h`, interleaved, 0…1) denoised at noise level `sigma` (0…255 units) — the same layout
     /// back; `tract`'s `Drunet::run` contract. Sides must be multiples of 8.
     pub fn run(&mut self, rgb: &[f32], w: usize, h: usize, sigma: f32) -> Result<Vec<f32>, String> {
+        self.run_map(rgb, w, h, &vec![sigma; w * h])
+    }
+
+    /// [`GpuDrunet::run`] with a noise level per pixel (`w × h`, 0…255 units) — DRUNet reads σ as a plane,
+    /// so the shadows may be given more than the highlights.
+    pub fn run_map(
+        &mut self,
+        rgb: &[f32],
+        w: usize,
+        h: usize,
+        sigma: &[f32],
+    ) -> Result<Vec<f32>, String> {
+        if sigma.len() != w * h {
+            return Err(format!("{} noise levels for a {w} × {h} tile", sigma.len()));
+        }
         if w == 0 || h == 0 || !w.is_multiple_of(8) || !h.is_multiple_of(8) {
             return Err(format!("a {w} × {h} tile: sides must be multiples of 8"));
         }
@@ -99,15 +114,16 @@ impl GpuDrunet {
         self.sized = None;
     }
 
-    fn run_inner(&mut self, rgb: &[f32], w: usize, h: usize, sigma: f32) -> Option<Vec<f32>> {
+    fn run_inner(&mut self, rgb: &[f32], w: usize, h: usize, sigma: &[f32]) -> Option<Vec<f32>> {
         if self.sized.as_ref().map(|s| (s.w, s.h)) != Some((w, h)) {
             self.sized = None;
             self.sized = Some(self.build(w, h));
         }
         let sized = self.sized.as_ref()?;
         let n = w * h;
-        let mut input = vec![sigma / 255.0; 4 * n];
+        let mut input = vec![0.0; 4 * n];
         for i in 0..n {
+            input[3 * n + i] = sigma[i] / 255.0;
             for c in 0..3 {
                 input[c * n + i] = rgb[i * 3 + c];
             }
@@ -315,6 +331,34 @@ mod tests {
             let worst = hwc_vs_chw(&got, &want, w, h);
             assert!(worst < 1e-4, "{w}×{h}: {worst}");
         }
+    }
+
+    /// A σ plane (M10.16b's strength spike): a constant one is exactly the scalar run, and a varying one
+    /// changes the picture where it varies.
+    #[test]
+    fn a_noise_map_is_the_scalar_run_when_constant() {
+        let Some(ctx) = ctx() else { return };
+        let arch = Arch {
+            widths: [4, 8, 16, 32],
+            blocks: 1,
+        };
+        let mut net = GpuDrunet::new(ctx, &random_weights(&arch, 4)).unwrap();
+        let (w, h) = (16, 16);
+        let rgb: Vec<f32> = rand(w * h * 3, 9).iter().map(|v| v + 0.5).collect();
+        let scalar = net.run(&rgb, w, h, 20.0).unwrap();
+        let flat = net.run_map(&rgb, w, h, &vec![20.0; w * h]).unwrap();
+        assert_eq!(scalar, flat);
+        let mut map = vec![20.0; w * h];
+        map[..w * h / 2].fill(60.0);
+        let varied = net.run_map(&rgb, w, h, &map).unwrap();
+        assert!(varied
+            .iter()
+            .zip(&scalar)
+            .any(|(a, b)| (a - b).abs() > 1e-4));
+        assert!(
+            net.run_map(&rgb, w, h, &[20.0; 3]).is_err(),
+            "a map of the wrong size"
+        );
     }
 
     #[test]
