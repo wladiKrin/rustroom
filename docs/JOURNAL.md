@@ -23,7 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
-- [M10.16d1: Lens Blur — the CPU reference, the section, Pick focus and Visualize (2026-10-15)](#2026-10-15--m1016d1-lens-blur--the-cpu-reference-the-section-pick-focus-and-visualize-branch-m1016d-lens-blur-not-merged)
+- [M10.16d1: Lens Blur — the CPU reference, the section, Pick focus and Visualize (2026-10-15)](#2026-10-15--m1016d1-lens-blur--the-cpu-reference-the-section-pick-focus-and-visualize-branch-m1016d-lens-blur-merged-2026-10-15)
 - [M10.16a: depth masks — an estimated depth map and the Depth range mask (2026-10-14)](#2026-10-14--m1016a-depth-masks--an-estimated-depth-map-and-the-depth-range-mask-branch-m1016a-depth-masks-merged-2026-10-14)
 - [M10.15d: Send marks to Immich, and Undo last send (2026-10-13)](#2026-10-13--m1015d-send-marks-to-immich-and-undo-last-send-branch-m1015d-immich-send-marks-merged-2026-10-14)
 - [M10.15c: Immich's own rating and favourite, filled once (2026-10-13)](#2026-10-13--m1015c-immichs-own-rating-and-favourite-filled-once-branch-m1015c-immich-rating-merged-2026-10-13)
@@ -178,7 +178,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
-### 2026-10-15 — M10.16d1: Lens Blur — the CPU reference, the section, Pick focus and Visualize (branch `m10.16d-lens-blur`, not merged)
+### 2026-10-15 — M10.16d1: Lens Blur — the CPU reference, the section, Pick focus and Visualize (branch `m10.16d-lens-blur`, merged 2026-10-15)
 
 **The item:** Lens Blur — split from M10.16a by the author, ahead of b and c, on its depth map. Spec
 `2026-10-14-m10.16d-lens-blur-design.md`; **one spec, two plans**: d1 (this — the CPU reference, the whole
@@ -235,8 +235,9 @@ storing the frame point → red ("not through the turn"); Visualize ignoring Off
 → two goldens red (41 and 176 levels). Inert: S1 (subject pixels weighted into the background) by
 construction.
 
-**Open:** the author's look (Amount's 3 %, the ramp, Boost) — the constants are first values; then d2, the
-GPU twin, its own plan.
+✅ **Confirmed by the author ("works") and merged 2026-10-15** — the constants stand as built (Amount's
+3 %, the 0.5 ramp, Boost from the 99th percentile). Next: **d2, the GPU twin** (live while dragging), its
+own plan under the same spec.
 
 ### 2026-10-14 — M10.16a: depth masks — an estimated depth map and the Depth range mask (branch `m10.16a-depth-masks`, merged 2026-10-14)
 
