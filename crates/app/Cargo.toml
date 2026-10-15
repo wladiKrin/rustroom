@@ -50,6 +50,10 @@ rayon.workspace = true
 # of `export`, `image-decode` and `raw-decode`, and a regular dependency is available to the
 # tests and examples that previously relied on the dev entry.
 image = { workspace = true }
+# ⚠ M10.16b: AI denoise's cache file — half-floats, deflated. Both already in the build (`half` through
+# wgpu's `naga`, `flate2` through `lensfun` — `cargo tree -i`), so no new crate is compiled.
+half = "2.7"
+flate2 = "1.1"
 
 # ⚠ macOS only, on purpose: muda's Linux backend needs GTK, which eframe/winit does not
 # provide. Linux CI therefore never builds it — see `native_menu.rs`.

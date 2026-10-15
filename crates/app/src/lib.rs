@@ -23,6 +23,7 @@ pub mod crop_tool;
 pub mod date_tree;
 pub mod decode_worker;
 pub mod defringe_tool;
+pub mod denoise_cache;
 pub mod depth_map;
 pub mod depth_tool;
 pub mod depth_view;
