@@ -613,8 +613,7 @@ fn run(
                             &src.image,
                             opts.demosaic,
                             render.denoise,
-                            (crate::denoise_cache::dir(), crate::ai_cache::models_dir()),
-                            crate::denoised::drunet,
+                            crate::denoised::Sources::user_default(),
                             || {
                                 let _ = events.send(ExportEvent::Denoising { name });
                             },

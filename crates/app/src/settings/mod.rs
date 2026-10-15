@@ -417,6 +417,13 @@ pub struct Settings {
     /// Whether startup warns when the downloads exceed [`Self::immich_cache_limit_gb`]. ⚠ No
     /// field-level default either: `bool`'s `false` would switch the warning off on upgrade.
     pub immich_cache_warn: bool,
+    /// The soft limit on AI denoise's results, in whole GB of 10⁹ bytes (M10.16b): past it, a dialog at
+    /// startup offers to clear them. ⛔ Nothing is ever removed automatically. ⚠ No field-level
+    /// `#[serde(default)]`, for `immich_cache_limit_gb`'s reason.
+    pub denoise_cache_limit_gb: u32,
+    /// Whether startup warns when the results exceed [`Self::denoise_cache_limit_gb`] — no field-level
+    /// default either, for `immich_cache_warn`'s.
+    pub denoise_cache_warn: bool,
     /// Demosaic tier for **rendered previews** (M9.14). `None` follows [`Self::view_demosaic`],
     /// so a preview matches what Develop shows at 1:1; a lower tier is a cost choice — on an
     /// X-T4 a frame decodes in 16 s at Better, 7 s at Fast, 3 s at Fastest (measured 2026-09-28).
@@ -466,6 +473,8 @@ impl Default for Settings {
             immich_thumb_budget_mb: 5120,
             immich_cache_limit_gb: 10,
             immich_cache_warn: true,
+            denoise_cache_limit_gb: 10,
+            denoise_cache_warn: true,
             preview_demosaic: None,
             preview_budget_mb: 10240,
             confirm_preset_delete: true,

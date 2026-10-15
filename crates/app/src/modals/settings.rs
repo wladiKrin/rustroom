@@ -56,6 +56,8 @@ pub struct SettingsDraft {
     pub(super) immich_thumb_budget_mb: u32,
     pub(super) immich_cache_limit_gb: u32,
     pub(super) immich_cache_warn: bool,
+    pub(super) denoise_cache_limit_gb: u32,
+    pub(super) denoise_cache_warn: bool,
     preview_demosaic: Option<raw_decode::Demosaic>,
     preview_budget_mb: u32,
     /// Settings → Keyboard (M10.9b).
@@ -128,6 +130,8 @@ impl SettingsDraft {
             immich_thumb_budget_mb: s.immich_thumb_budget_mb,
             immich_cache_limit_gb: s.immich_cache_limit_gb,
             immich_cache_warn: s.immich_cache_warn,
+            denoise_cache_limit_gb: s.denoise_cache_limit_gb,
+            denoise_cache_warn: s.denoise_cache_warn,
             preview_demosaic: s.preview_demosaic,
             preview_budget_mb: s.preview_budget_mb,
             keyboard: super::settings_keyboard::KeyboardDraft::from(&s.shortcuts),
@@ -265,6 +269,14 @@ impl SettingsDraft {
             app.settings.immich_cache_warn = self.immich_cache_warn;
             plain = true;
         }
+        if self.denoise_cache_limit_gb != app.settings.denoise_cache_limit_gb {
+            app.settings.denoise_cache_limit_gb = self.denoise_cache_limit_gb;
+            plain = true;
+        }
+        if self.denoise_cache_warn != app.settings.denoise_cache_warn {
+            app.settings.denoise_cache_warn = self.denoise_cache_warn;
+            plain = true;
+        }
         if self.preview_demosaic != app.settings.preview_demosaic {
             app.settings.preview_demosaic = self.preview_demosaic;
             plain = true;
@@ -324,9 +336,11 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     // afresh (M10.15b); a return from the Clear dialog keeps the draft and the measurement.
     if app.settings_draft.is_none() {
         app.immich_originals = None;
+        app.denoise.usage = None;
     }
     // Before the dialog: it holds `&mut app.settings`, and this reads them.
     let immich_root = app.immich_cache_root();
+    let denoise_dir = app.denoise.results_dir();
     let mut d = app
         .settings_draft
         .take()
@@ -663,6 +677,15 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         .hover(
                             "Chooses the network that finds Subject masks, BiRefNet lite being slower with crisper edges",
                         );
+                    super::settings_denoise::show(
+                        ui,
+                        &mut d,
+                        super::settings_denoise::Block {
+                            dir: denoise_dir.clone(),
+                            usage: &mut app.denoise.usage,
+                            modal: &mut app.modal,
+                        },
+                    );
                 }
                 // ⚠⚠ An explicit index, **not** `_`. This arm was the catch-all, so adding a sixth
                 // tab would have made Immich render Input's contents — it compiles and it looks

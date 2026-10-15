@@ -30,6 +30,8 @@ pub(crate) struct DenoiseState {
     offered: bool,
     /// `(cache, models)` directories — `None` means the real ones. ⚠ Set only by tests.
     pub dirs: Option<(PathBuf, PathBuf)>,
+    /// The results' total for Settings → Performance — measured once per opening, `None` after a clear.
+    pub usage: Option<rustroom_app::denoise_cache::Usage>,
 }
 
 impl DenoiseState {
@@ -40,6 +42,27 @@ impl DenoiseState {
                 rustroom_app::ai_cache::models_dir()?,
             ))
         })
+    }
+
+    /// Where the results are — the Settings block's and the Clear dialog's folder.
+    pub(crate) fn results_dir(&self) -> Option<PathBuf> {
+        self.dirs().map(|(cache, _)| cache)
+    }
+
+    /// The open photo's facts this frame, `key` its key.
+    fn facts(&self, s: &crate::Session, key: &str, cache: &Path, models: &Path) -> Facts {
+        Facts {
+            active: s.edits.ai_denoise.is_active(),
+            has_result: self.held.as_ref().is_some_and(|(k, _)| k == key),
+            cached: rustroom_app::denoise_cache::exists(cache, key),
+            full_decode: s.buffer_is_full_res && !s.buffer_is_ghost,
+            model_present: ai_mask::download::present(
+                &ai_mask::ModelId::DrunetColor.spec(),
+                models,
+            ),
+            running: self.pending.as_deref() == Some(key),
+            failed: self.failed.contains(key),
+        }
     }
 
     fn key_for(&mut self, photo: &Path, tier: Demosaic) -> String {
@@ -59,6 +82,17 @@ impl DenoiseState {
         let key = self.pending.as_ref()?;
         self.worker.as_ref()?.progress(key)
     }
+}
+
+/// The Detail block's line for the open photo — `denoise_tool::status` on this frame's facts, read with
+/// the key `pump_denoise` memoised this frame.
+pub(crate) fn status(st: &DenoiseState, s: &crate::Session) -> Option<String> {
+    let (photo, _, key) = st.key.as_ref()?;
+    if *photo != s.path {
+        return None;
+    }
+    let (cache, models) = st.dirs()?;
+    denoise_tool::status(&st.facts(s, key, &cache, &models), st.progress())
 }
 
 impl RustroomApp {
@@ -99,18 +133,7 @@ impl RustroomApp {
                 );
             }
         }
-        let facts = Facts {
-            active: true,
-            has_result: self.denoise.held.is_some(),
-            cached: rustroom_app::denoise_cache::exists(&cache, &key),
-            full_decode,
-            model_present: ai_mask::download::present(
-                &ai_mask::ModelId::DrunetColor.spec(),
-                &models,
-            ),
-            running: self.denoise.pending.as_ref() == Some(&key),
-            failed: self.denoise.failed.contains(&key),
-        };
+        let facts = self.denoise.facts(s, &key, &cache, &models);
         let image = match denoise_tool::next(&facts) {
             Next::Nothing | Next::WaitForDecode => None,
             Next::Load => Some(None),
@@ -271,6 +294,28 @@ mod tests {
         app.modal = crate::modals::Modal::None;
         app.pump_denoise(&ctx);
         assert!(app.modal == crate::modals::Modal::None, "offered again");
+    }
+
+    /// The Detail line follows the facts — waiting for the decode, then nothing once the result is in.
+    #[test]
+    fn the_line_says_why_nothing_shows_yet() {
+        let (mut app, ctx, _) = app_with_denoise("line", 100.0);
+        let models = app.denoise.dirs.as_ref().unwrap().1.clone();
+        let spec = ai_mask::ModelId::DrunetColor.spec();
+        std::fs::create_dir_all(&models).unwrap();
+        std::fs::File::create(models.join(spec.file))
+            .unwrap()
+            .set_len(spec.bytes)
+            .unwrap();
+        app.session.as_mut().unwrap().buffer_is_full_res = false;
+        app.pump_denoise(&ctx);
+        let line = status(&app.denoise, app.session.as_ref().unwrap());
+        assert_eq!(
+            line.as_deref(),
+            Some("Waiting for the full-resolution decode…")
+        );
+        app.session.as_mut().unwrap().edits.ai_denoise.amount = 0.0;
+        assert_eq!(status(&app.denoise, app.session.as_ref().unwrap()), None);
     }
 
     /// At Amount 0 nothing is asked for.

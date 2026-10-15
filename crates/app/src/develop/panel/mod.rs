@@ -1,6 +1,7 @@
 //! The right-hand adjustments panel: histogram, then every Develop control.
 
 pub mod adjustments;
+pub mod ai_denoise;
 pub mod color_wheel;
 pub mod defringe;
 pub mod effects;
@@ -326,6 +327,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 &s.engine.ai_maps().read().expect("ai maps"),
                             );
                             let armed = [s.picking_wb, s.picking_fringe, s.picking_focus];
+                            let denoise_status =
+                                crate::denoise_flow::status(&app.denoise, s);
                             adjustments::show(
                                 ui,
                                 &mut s.edits,
@@ -360,6 +363,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                         picking: Some(&mut s.picking_focus),
                                         visualize: Some(&mut app.show_lens_depth),
                                         status: lens_status,
+                                    },
+                                    ai_denoise: ai_denoise::AiDenoiseUi {
+                                        status: denoise_status,
                                     },
                                 },
                                 &mut ed,

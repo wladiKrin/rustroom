@@ -328,7 +328,7 @@ mod tests {
     impl TileNet for Lift {
         fn run(&mut self, rgb: &[f32], w: usize, h: usize, _: f32) -> Result<Vec<f32>, String> {
             assert!(
-                w % 8 == 0 && h % 8 == 0,
+                w.is_multiple_of(8) && h.is_multiple_of(8),
                 "a {w} × {h} tile reached the network"
             );
             Ok(rgb.iter().map(|v| v + 0.02).collect())

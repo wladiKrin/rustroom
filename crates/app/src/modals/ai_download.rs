@@ -21,7 +21,11 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         ctx,
         &mut app.settings,
         "ai_download",
-        "AI masks need a model",
+        if proposed.contains(&ai_mask::ModelId::DrunetColor) {
+            "AI denoise needs a model"
+        } else {
+            "AI masks need a model"
+        },
         theme::DialogSize::Standard,
         Footer::confirm(
             &primary,
@@ -37,8 +41,9 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         |ui| {
             theme::hint(
                 ui,
-                "These files are downloaded once from GitHub, checked against a pinned hash, and \
-                 kept for every photo. Everything runs on this computer — no photo leaves it.",
+                "These files are downloaded once from GitHub or Hugging Face, checked against a \
+                 pinned hash, and kept for every photo. Everything runs on this computer — no photo \
+                 leaves it.",
             );
             ui.add_space(6.0);
             egui::Grid::new("ai_models")

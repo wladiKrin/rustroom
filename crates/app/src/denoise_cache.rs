@@ -95,8 +95,10 @@ pub fn load(dir: &Path, key: &str) -> Option<ImageBuf> {
         return None;
     }
     let data = raw
-        .chunks_exact(2)
-        .map(|b| half::f16::from_le_bytes([b[0], b[1]]).to_f32())
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| half::f16::from_le_bytes(*b).to_f32())
         .collect();
     Some(ImageBuf::from_vec(w, h, data))
 }
@@ -137,6 +139,46 @@ pub fn remove_all(dir: &Path) -> usize {
         .count()
 }
 
+/// The Settings line: "1.2 GB · 9 photos", or "No results".
+pub fn size_line(usage: Usage) -> String {
+    match usage.photos {
+        0 => "No results".to_string(),
+        1 => format!("{} · 1 photo", crate::photo_info::format_bytes(usage.bytes)),
+        n => format!(
+            "{} · {n} photos",
+            crate::photo_info::format_bytes(usage.bytes)
+        ),
+    }
+}
+
+/// The Clear dialog's title — the size at startup, the verb when asked from Settings.
+pub fn dialog_title(usage: Usage, startup: bool) -> String {
+    if startup {
+        format!(
+            "AI denoise results use {}",
+            crate::photo_info::format_bytes(usage.bytes)
+        )
+    } else {
+        "Clear AI denoise results".to_string()
+    }
+}
+
+/// The dialog's body. ⚠ Always names what a clear keeps — the edits — and what it costs: a recompute.
+pub fn dialog_body(usage: Usage, limit_gb: u32, startup: bool) -> String {
+    let n = match usage.photos {
+        1 => "1 photo's result".to_string(),
+        n => format!("{n} photos' results"),
+    };
+    let rest = format!(
+        "Clearing removes {n}; edits stay, and a photo's result is computed again when you open it"
+    );
+    if startup {
+        format!("Over your {limit_gb} GB limit. {rest}")
+    } else {
+        rest
+    }
+}
+
 /// Whether startup offers the Clear dialog: the warning on and the results **strictly** over the limit
 /// (decimal gigabytes, `immich_cache::limit_bytes`'s units).
 pub fn warn_at_startup(warn: bool, limit_gb: u32, usage: Usage) -> bool {
@@ -155,6 +197,22 @@ mod tests {
             }
         }
         img
+    }
+
+    #[test]
+    fn the_texts_name_the_size_and_what_a_clear_keeps() {
+        let one = Usage {
+            bytes: 135_000_000,
+            photos: 1,
+        };
+        assert_eq!(size_line(Usage::default()), "No results");
+        assert!(size_line(one).ends_with("· 1 photo"), "{}", size_line(one));
+        assert!(dialog_title(one, true).starts_with("AI denoise results use"));
+        assert_eq!(dialog_title(one, false), "Clear AI denoise results");
+        let body = dialog_body(one, 10, true);
+        assert!(body.starts_with("Over your 10 GB limit."), "{body}");
+        assert!(body.contains("edits stay"), "{body}");
+        assert!(!dialog_body(one, 10, false).contains("limit"));
     }
 
     #[test]

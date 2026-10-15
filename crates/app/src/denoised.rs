@@ -100,20 +100,41 @@ pub enum DenoiseUse {
     Cached(Demosaic),
 }
 
-/// `image`'s denoised result for an export of `photo` decoded at `tier`, with its id — the cache in
-/// `dirs.0`, else (under [`DenoiseUse::Compute`]) the network from `dirs.1`, `on_compute` called first.
-/// `keep_going` answers `false` to cancel. A result is stored once computed.
-pub fn for_export(
+/// Where an export's result comes from: the results folder, and the models folder with the network
+/// made from it — on the export's own thread.
+pub struct Sources<F> {
+    pub cache: Option<PathBuf>,
+    pub models: Option<PathBuf>,
+    pub net: F,
+}
+
+impl Sources<fn(&Path) -> Result<Box<dyn TileNet + Send>, String>> {
+    /// The real folders and DRUNet.
+    pub fn user_default() -> Self {
+        Self {
+            cache: crate::denoise_cache::dir(),
+            models: crate::ai_cache::models_dir(),
+            net: drunet,
+        }
+    }
+}
+
+/// `image`'s denoised result for an export of `photo` decoded at `tier`, with its id — the cache, else
+/// (under [`DenoiseUse::Compute`]) the network, `on_compute` called first. `keep_going` answers `false` to
+/// cancel. A result is stored once computed.
+pub fn for_export<F>(
     photo: &Path,
     image: &ImageBuf,
     tier: Demosaic,
     using: DenoiseUse,
-    dirs: (Option<PathBuf>, Option<PathBuf>),
-    net: impl FnOnce(&Path) -> Result<Box<dyn TileNet + Send>, String>,
+    sources: Sources<F>,
     on_compute: impl FnOnce(),
     keep_going: &dyn Fn() -> bool,
-) -> Result<(Arc<Denoised>, u64), String> {
-    let (cache, models) = dirs;
+) -> Result<(Arc<Denoised>, u64), String>
+where
+    F: FnOnce(&Path) -> Result<Box<dyn TileNet + Send>, String>,
+{
+    let Sources { cache, models, net } = sources;
     let tier = match using {
         DenoiseUse::Compute => tier,
         DenoiseUse::Cached(t) => t,
@@ -150,7 +171,7 @@ pub fn for_export(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pipeline::{ImageSource, PipelineStage};
+    use pipeline::ImageSource;
 
     fn ramp(w: usize, h: usize) -> ImageBuf {
         let data = (0..w * h * 3)
@@ -220,14 +241,17 @@ mod tests {
         let stored = ramp(40, 30).downscale_to(40);
         let key = crate::denoise_cache::key(&photo, Demosaic::Fast);
         crate::denoise_cache::store(&cache, &key, &stored).unwrap();
-        let dirs = || (Some(cache.clone()), None);
+        let dirs = || Sources {
+            cache: Some(cache.clone()),
+            models: None,
+            net: no_net,
+        };
         let (got, id) = for_export(
             &photo,
             &img,
             Demosaic::Fast,
             DenoiseUse::Compute,
             dirs(),
-            no_net,
             || panic!("no compute"),
             &|| true,
         )
@@ -246,7 +270,6 @@ mod tests {
                 other,
                 DenoiseUse::Cached(Demosaic::Fast),
                 dirs(),
-                no_net,
                 || panic!("no compute"),
                 &|| true,
             )
@@ -261,8 +284,11 @@ mod tests {
             &img,
             other,
             DenoiseUse::Cached(other),
-            (Some(cache.clone()), Some(models)),
-            no_net,
+            Sources {
+                cache: Some(cache.clone()),
+                models: Some(models),
+                net: no_net,
+            },
             || panic!("no compute"),
             &|| true,
         );
@@ -284,8 +310,11 @@ mod tests {
             &img,
             Demosaic::Fast,
             DenoiseUse::Compute,
-            (Some(cache.clone()), Some(models)),
-            |_| Ok(Box::new(Lift)),
+            Sources {
+                cache: Some(cache.clone()),
+                models: Some(models),
+                net: |_: &Path| Ok(Box::new(Lift) as Box<dyn TileNet + Send>),
+            },
             || said.set(true),
             &|| true,
         )

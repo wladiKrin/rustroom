@@ -498,6 +498,8 @@ pub struct Pickers<'a> {
     /// Lens Blur's canvas side (M10.16d): its focus picker, its depth view and the line about its
     /// maps — here rather than in `SourceInfo` so a test's `Pickers::default()` still says "none".
     pub lens_blur: super::lens_blur::LensBlurUi<'a>,
+    /// Detail's AI denoise line (M10.16b) — here for Lens Blur's reason.
+    pub ai_denoise: super::ai_denoise::AiDenoiseUi,
 }
 
 pub fn show(
@@ -513,6 +515,7 @@ pub fn show(
         wb: picking,
         fringe: picking_fringe,
         lens_blur,
+        ai_denoise,
     } = pickers;
     let Channels {
         hsl: hsl_channel,
@@ -667,6 +670,10 @@ pub fn show(
         // ⚠ Noise Reduction above Sharpening: you must denoise before you can judge
         // sharpening, and it is the pipeline's own order. A deliberate divergence from
         // Lightroom, which puts Sharpening first.
+        //
+        // ⚠ M10.16b: AI denoise above both — it runs first of everything in the pipeline, and the
+        // Noise reduction sliders fine-tune what it leaves.
+        super::ai_denoise::body(ui, &mut edits.ai_denoise, ai_denoise, ed);
         theme::sub_label(ui, "Noise reduction");
         ed.help_scope = rustroom_app::slider_help::Scope::NoiseReduction;
         let nr = &mut edits.noise_reduction;
@@ -1167,6 +1174,66 @@ mod tests {
         );
         crate::test_ui::click(&ctx, "Pick a fringe", &mut body);
         assert!(picking, "the picker did not arm");
+    }
+
+    /// M10.16b: Detail draws AI denoise — its Amount and the job's line — above Noise reduction.
+    #[test]
+    fn detail_shows_ai_denoise_above_noise_reduction() {
+        let ctx = crate::test_ui::ctx();
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            ctx.style_mut_of(theme, |s| s.animation_time = 0.0);
+        }
+        let buf = tone_fixture();
+        let mut edits = edit_model::Edits::default();
+        let mut channel = HslChannel::default();
+        let mut grade = color_wheel::GradeRange::default();
+        let (mut show_range, mut view) = (false, None);
+        let mut body = |ui: &mut egui::Ui| {
+            let mut ed = Edited::default();
+            show(
+                ui,
+                &mut edits,
+                Channels {
+                    hsl: &mut channel,
+                    curve_mode: &mut tone_curve::CurveMode::default(),
+                    curve: &mut tone_curve::CurveChannel::default(),
+                    curve_open: &mut true,
+                    parametric_drag: Default::default(),
+                },
+                GradeUi {
+                    range: &mut grade,
+                    show_range: &mut show_range,
+                    view: &mut view,
+                },
+                SourceInfo {
+                    lens: None,
+                    lens_profile_found: false,
+                    wb_baseline: color::wb::Illuminant::default(),
+                    baseline_ev: None,
+                    buffer: &buf,
+                    hist: None,
+                    fresh: &edit_model::Edits::default(),
+                },
+                Pickers {
+                    ai_denoise: super::super::ai_denoise::AiDenoiseUi {
+                        status: Some("Denoising… 37 %".to_string()),
+                    },
+                    ..Default::default()
+                },
+                &mut ed,
+            );
+        };
+        crate::test_ui::click(&ctx, "Detail", &mut body);
+        // ⚠ By position on the screen: the accessibility nodes come in no visual order.
+        let shown = crate::test_ui::labelled_centres(&ctx, Vec::new(), &mut body);
+        let y = |want: &str| shown.iter().find(|(l, _)| l == want).map(|(_, p)| p.y);
+        let (ai, nr) = (y("AI denoise"), y("Noise reduction"));
+        assert!(ai.is_some() && nr.is_some(), "{shown:?}");
+        assert!(
+            ai < nr,
+            "AI denoise is not above Noise reduction: {ai:?} {nr:?}"
+        );
+        assert!(y("Denoising… 37 %").is_some(), "the job's line: {shown:?}");
     }
 
     /// ⚠⚠ **Every slider in the Edit panel resets to its field's DEFAULT on a double-click** —
