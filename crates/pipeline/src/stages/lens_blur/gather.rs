@@ -77,8 +77,10 @@ fn boost(img: &ImageBuf, boost: f32) -> ImageBuf {
     }
     let lum: Vec<f32> = img
         .data()
-        .chunks_exact(3)
-        .map(|c| color::luminance([c[0], c[1], c[2]]))
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|&c| color::luminance(c))
         .collect();
     let mut sorted: Vec<f32> = lum.iter().cloned().filter(|v| v.is_finite()).collect();
     if sorted.is_empty() {
@@ -89,7 +91,7 @@ fn boost(img: &ImageBuf, boost: f32) -> ImageBuf {
     let l99 = l99.max(1e-6);
     let k = 3.0 * boost.clamp(0.0, 100.0) / 100.0;
     let mut out = img.clone();
-    for (px, &l) in out.data_mut().chunks_exact_mut(3).zip(&lum) {
+    for (px, &l) in out.data_mut().as_chunks_mut::<3>().0.iter_mut().zip(&lum) {
         let t = ((l - l99) / (2.0 * l99)).clamp(0.0, 1.0);
         let f = 1.0 + k * t * t * (3.0 - 2.0 * t);
         px.iter_mut().for_each(|v| *v *= f);
@@ -202,7 +204,7 @@ impl Level {
         let r = RCAP as i32;
         let mut out = Gathered::new(w * h);
         out.rows_mut(w).enumerate().for_each(|(py, row)| {
-            for (px, cell) in row.into_iter().enumerate() {
+            for (px, cell) in row.iter_mut().enumerate() {
                 for dy in -r..=r {
                     let qy = py as i32 + dy;
                     if qy < 0 || qy >= h as i32 {
@@ -215,7 +217,7 @@ impl Level {
                         }
                         let q = qy as usize * w + qx as usize;
                         let d2 = (dx * dx + dy * dy) as f32;
-                        for layer in 0..2 {
+                        for (layer, norm) in norm.iter().enumerate() {
                             let f = self.frac[layer][q];
                             if f <= 0.0 {
                                 continue;
@@ -229,7 +231,7 @@ impl Level {
                             if sw <= 0.0 {
                                 continue;
                             }
-                            let e = f * sw * norm[layer][q];
+                            let e = f * sw * norm[q];
                             cell.add(layer, self.col[layer][q], e);
                         }
                     }
@@ -279,8 +281,8 @@ struct Cell {
 
 impl Cell {
     fn add(&mut self, layer: usize, col: [f32; 3], e: f32) {
-        for ch in 0..3 {
-            self.num[layer][ch] += col[ch] * e;
+        for (n, c) in self.num[layer].iter_mut().zip(col) {
+            *n += c * e;
         }
         self.den[layer] += e;
     }
@@ -366,7 +368,7 @@ fn composite(img: &ImageBuf, c: &[f32], alpha: &[f32], acc: &Accum) -> ImageBuf 
         .par_chunks_mut(w * 3)
         .enumerate()
         .for_each(|(y, row)| {
-            for (x, px) in row.chunks_exact_mut(3).enumerate() {
+            for (x, px) in row.as_chunks_mut::<3>().0.iter_mut().enumerate() {
                 let i = y * w + x;
                 let src = [px[0], px[1], px[2]];
                 let cell = &acc.0[i];

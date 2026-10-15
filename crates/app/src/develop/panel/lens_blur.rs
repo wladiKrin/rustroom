@@ -32,7 +32,7 @@ enum Focus {
 
 pub(super) fn body(ui: &mut egui::Ui, lb: &mut LensBlur, view: LensBlurUi<'_>, ed: &mut Edited) {
     let LensBlurUi {
-        mut picking,
+        picking,
         visualize,
         status,
     } = view;
@@ -82,7 +82,7 @@ pub(super) fn body(ui: &mut egui::Ui, lb: &mut LensBlur, view: LensBlurUi<'_>, e
         };
         ed.discrete();
     }
-    if let Some(p) = picking.as_deref_mut() {
+    if let Some(p) = picking {
         if matches!(lb.focus, LensFocus::Point { .. }) {
             // ⚠ The white-balance eyedropper's shape: a toggle that arms one canvas click.
             if ui
