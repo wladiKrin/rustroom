@@ -8,7 +8,6 @@
 
 use crate::{GpuContext, GpuImage, GpuStage};
 use pipeline::PipelineStage;
-use std::sync::Arc;
 
 /// The most levels one frame may need — ½ … 1/256: a disc of 2,048 px at the coarsest.
 pub(crate) const MAX_LEVELS: usize = 8;
@@ -258,6 +257,7 @@ mod tests {
     use edit_model::{Bokeh, LensBlur, LensFocus};
     use pipeline::lens_blur::{Inputs, LensBlurStage};
     use pipeline::RasterSource;
+    use std::sync::Arc;
 
     fn ctx() -> Option<Arc<GpuContext>> {
         match crate::shared() {

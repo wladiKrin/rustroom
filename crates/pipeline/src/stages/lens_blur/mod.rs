@@ -44,6 +44,9 @@ pub fn inputs(lb: &edit_model::LensBlur, ai: &dyn AiRasters) -> Option<Inputs> {
 /// A plane at `w × h`, row-major, `0..=255` — what both the CPU step and the GPU twin read.
 pub fn plane_bytes(src: &dyn RasterSource, w: usize, h: usize) -> Vec<u8> {
     let m = src.coverage(w, h);
+    if (m.x0, m.y0, m.w, m.h) == (0, 0, w, h) {
+        return m.data;
+    }
     (0..h)
         .flat_map(|y| (0..w).map(move |x| (x, y)))
         .map(|(x, y)| m.at(x, y))

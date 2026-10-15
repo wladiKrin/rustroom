@@ -319,10 +319,41 @@ struct MapRaster {
     geometry: edit_model::Geometry,
     perspective: edit_model::Perspective,
     decode: (usize, usize),
+    /// A Lens Blur plane's identity — its map's content id, the lens key it was warped for, which
+    /// plane (the cover rule) — so its resolution is memoised (M10.16d2). `None` for a mask's
+    /// component, whose cover moves with its sliders.
+    memo: Option<(u64, u64, pipeline::MapPlane)>,
 }
 
-impl pipeline::RasterSource for MapRaster {
-    fn coverage(&self, frame_w: usize, frame_h: usize) -> CoverageMap {
+impl MapRaster {
+    /// The memo's key — EVERYTHING `coverage` reads. ⚠ Destructured without `..`: a new field must be
+    /// placed in the key or named here as identified by another (`map` by `id` and `lens`, `cover` by
+    /// `plane`).
+    fn key(&self, w: usize, h: usize) -> Option<PlaneKey> {
+        let MapRaster {
+            map: _,
+            cover: _,
+            outside,
+            geometry,
+            perspective,
+            decode,
+            memo,
+        } = self;
+        let (id, lens, plane) = (*memo)?;
+        Some(PlaneKey {
+            id,
+            lens,
+            plane,
+            outside: *outside,
+            geometry: *geometry,
+            perspective: *perspective,
+            decode: *decode,
+            w,
+            h,
+        })
+    }
+
+    fn resolve(&self, frame_w: usize, frame_h: usize) -> CoverageMap {
         let dm = DecodeMap::new(
             &self.geometry,
             self.perspective,
@@ -336,6 +367,72 @@ impl pipeline::RasterSource for MapRaster {
     }
 }
 
+impl pipeline::RasterSource for MapRaster {
+    fn coverage(&self, frame_w: usize, frame_h: usize) -> CoverageMap {
+        match self.key(frame_w, frame_h) {
+            Some(k) => PLANES.get_or_insert(k, || self.resolve(frame_w, frame_h)),
+            None => self.resolve(frame_w, frame_h),
+        }
+    }
+}
+
+/// What a resolved Lens Blur plane depends on (M10.16d2) — [`MapRaster::key`].
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct PlaneKey {
+    pub id: u64,
+    pub lens: u64,
+    pub plane: pipeline::MapPlane,
+    pub outside: u8,
+    pub geometry: edit_model::Geometry,
+    pub perspective: edit_model::Perspective,
+    pub decode: (usize, usize),
+    pub w: usize,
+    pub h: usize,
+}
+
+/// The planes most recently resolved — a hit moves to the front.
+///
+/// ⚠⚠ **Why it exists: a Lens Blur drag re-builds its step, and its GPU twin resolved both planes
+/// afresh on every frame** — 7–11 ms each at 1600 px on the author's portraits, a third of the twin's
+/// 31–34 ms of GPU work (M10.16d2). Two entries: the depth and the subject of the frame being
+/// dragged; a rung change resolves them once more.
+pub(crate) struct PlaneMemo(std::sync::Mutex<Vec<(PlaneKey, std::sync::Arc<CoverageMap>)>>);
+
+const PLANES_HELD: usize = 2;
+
+static PLANES: PlaneMemo = PlaneMemo::new();
+
+impl PlaneMemo {
+    pub(crate) const fn new() -> Self {
+        Self(std::sync::Mutex::new(Vec::new()))
+    }
+
+    /// `key`'s plane — `make`'s answer, made once and kept. ⚠ `make` runs OUTSIDE the lock: two
+    /// threads missing at once each resolve it, and the later insert simply wins.
+    pub(crate) fn get_or_insert(
+        &self,
+        key: PlaneKey,
+        make: impl FnOnce() -> CoverageMap,
+    ) -> CoverageMap {
+        let lock = || self.0.lock().unwrap_or_else(|e| e.into_inner());
+        {
+            let mut held = lock();
+            if let Some(i) = held.iter().position(|(k, _)| *k == key) {
+                let hit = held.remove(i);
+                let m = (*hit.1).clone();
+                held.insert(0, hit);
+                return m;
+            }
+        }
+        let m = std::sync::Arc::new(make());
+        let mut held = lock();
+        held.retain(|(k, _)| *k != key);
+        held.insert(0, (key, m.clone()));
+        held.truncate(PLANES_HELD);
+        (*m).clone()
+    }
+}
+
 /// ⚠⚠ The prefix's maps come through the SAME source the tail's do — one set of maps, one coverage
 /// rule — so a mask's Dehaze and its Exposure cannot disagree about where it is.
 impl pipeline::AiRasters for AiSource<'_> {
@@ -344,7 +441,7 @@ impl pipeline::AiRasters for AiSource<'_> {
         mask: &edit_model::Mask,
     ) -> Option<(std::sync::Arc<dyn pipeline::RasterSource>, u64)> {
         let (cover, outside) = cover_fn(mask)?;
-        self.raster(MapQuery::of(mask)?, cover, outside)
+        self.raster(MapQuery::of(mask)?, cover, outside, None)
     }
 
     /// M10.16d: the depth raw — Lens Blur reads positions, not a band — and the Subject map through
@@ -354,11 +451,14 @@ impl pipeline::AiRasters for AiSource<'_> {
         which: pipeline::MapPlane,
     ) -> Option<(std::sync::Arc<dyn pipeline::RasterSource>, u64)> {
         match which {
-            pipeline::MapPlane::Depth => self.raster(MapQuery::Depth, Box::new(|p| p), 0),
+            pipeline::MapPlane::Depth => {
+                self.raster(MapQuery::Depth, Box::new(|p| p), 0, Some(which))
+            }
             pipeline::MapPlane::Subject => self.raster(
                 MapQuery::Prompt(edit_model::AiPrompt::Subject),
                 Box::new(|p| refine(p, 0.0, false)),
                 0,
+                Some(which),
             ),
         }
     }
@@ -388,9 +488,11 @@ impl AiSource<'_> {
         query: MapQuery,
         cover: Cover,
         outside: u8,
+        plane: Option<pipeline::MapPlane>,
     ) -> Option<(std::sync::Arc<dyn pipeline::RasterSource>, u64)> {
         let map = self.maps.get(&query)?;
         let id = self.maps.id(&query)?;
+        let lens = crate::ai_space::lens_key(self.lens, self.edits, self.decode.0, self.decode.1);
         Some((
             std::sync::Arc::new(MapRaster {
                 map: self.lensed(map),
@@ -399,6 +501,7 @@ impl AiSource<'_> {
                 geometry: self.edits.geometry,
                 perspective: self.edits.perspective,
                 decode: self.decode,
+                memo: plane.map(|p| (id, lens, p)),
             }),
             id,
         ))
@@ -904,6 +1007,117 @@ mod lens_blur_tests {
         assert_eq!(
             source(&AiMaps::default(), &e).lens_focus(&e.lens_blur),
             None
+        );
+    }
+
+    fn key(w: usize, geometry: edit_model::Geometry) -> PlaneKey {
+        PlaneKey {
+            id: 7,
+            lens: 0,
+            plane: MapPlane::Depth,
+            outside: 0,
+            geometry,
+            perspective: Default::default(),
+            decode: (40, 20),
+            w,
+            h: 20,
+        }
+    }
+
+    fn blank(w: usize) -> CoverageMap {
+        CoverageMap {
+            x0: 0,
+            y0: 0,
+            w,
+            h: 20,
+            data: vec![0; w * 20],
+            outside: 0,
+        }
+    }
+
+    /// M10.16d2: a plane is resolved once per key — another size, another geometry each miss — and the
+    /// two most recently used are kept, a hit moving to the front.
+    #[test]
+    fn a_plane_memo_resolves_each_key_once() {
+        let memo = PlaneMemo::new();
+        let calls = std::cell::Cell::new(0);
+        let get = |k: PlaneKey| {
+            memo.get_or_insert(k, || {
+                calls.set(calls.get() + 1);
+                blank(k.w)
+            })
+        };
+        let turned = edit_model::Geometry {
+            angle: 3.0,
+            ..Default::default()
+        };
+        let (a, b, c) = (
+            key(40, Default::default()),
+            key(41, Default::default()),
+            key(40, turned),
+        );
+        get(a);
+        get(a);
+        assert_eq!(calls.get(), 1, "the same key twice");
+        get(b);
+        assert_eq!(calls.get(), 2, "another size");
+        get(a);
+        assert_eq!(calls.get(), 2, "still held");
+        get(c);
+        assert_eq!(calls.get(), 3, "another geometry");
+        get(a);
+        assert_eq!(calls.get(), 3, "a, used last but one, was kept");
+        get(b);
+        assert_eq!(calls.get(), 4, "b, the least recently used, was let go");
+    }
+
+    /// The memo never hands back another frame's plane: under one geometry, another, then the first
+    /// again, each is the plane computed directly for its own.
+    #[test]
+    fn a_memoised_plane_follows_the_frame() {
+        let m = maps(None);
+        let flat = edits(on());
+        let turned = edit_model::Edits {
+            geometry: edit_model::Geometry {
+                orientation: edit_model::Orientation {
+                    rotate: edit_model::Quarter::Cw90,
+                    mirror: false,
+                },
+                ..Default::default()
+            },
+            ..edits(on())
+        };
+        for e in [&flat, &turned, &flat] {
+            let src = source(&m, e);
+            let (w, h) = if e.geometry.orientation.rotate == edit_model::Quarter::Cw90 {
+                (20, 40)
+            } else {
+                (40, 20)
+            };
+            let got = src.plane(MapPlane::Depth).expect("depth").0.coverage(w, h);
+            let want = to_frame(
+                &src.lensed(m.get(&MapQuery::Depth).expect("depth")),
+                |p| p,
+                0,
+                &src.decode_map(&e.geometry, w, h),
+                None,
+            );
+            assert_eq!((got.w, got.h, &got.data), (want.w, want.h, &want.data));
+        }
+        assert_ne!(
+            source(&m, &flat)
+                .plane(MapPlane::Depth)
+                .unwrap()
+                .0
+                .coverage(40, 20)
+                .data,
+            source(&m, &turned)
+                .plane(MapPlane::Depth)
+                .unwrap()
+                .0
+                .coverage(40, 20)
+                .data,
+            "the same size under a turn must not be handed the flat frame's plane"
         );
     }
 
