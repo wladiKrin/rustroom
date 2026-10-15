@@ -46,6 +46,11 @@ fn file(dir: &Path, key: &str) -> PathBuf {
     dir.join(format!("{key}.{EXT}"))
 }
 
+/// Whether a result is stored under `key` — a stat, cheap enough for every frame.
+pub fn exists(dir: &Path, key: &str) -> bool {
+    file(dir, key).is_file()
+}
+
 /// Write `img` under `key`, atomically (a partial then a rename): `RRDN`, the version, the width and
 /// height, then the samples as little-endian half-floats, deflated.
 pub fn store(dir: &Path, key: &str, img: &ImageBuf) -> std::io::Result<()> {
@@ -156,7 +161,9 @@ mod tests {
     fn a_result_round_trips_within_half_precision() {
         let d = test_dir::TempDir::new("denoise-cache-rt");
         let img = picture(37, 21);
+        assert!(!exists(d.path(), "k"));
         store(d.path(), "k", &img).expect("store");
+        assert!(exists(d.path(), "k"));
         let back = load(d.path(), "k").expect("load");
         assert_eq!((back.width(), back.height()), (37, 21));
         for (a, b) in img.data().iter().zip(back.data()) {

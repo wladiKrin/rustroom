@@ -159,6 +159,7 @@ mod tests {
                 resampler: Default::default(),
                 gpu_tail: false,
                 ai_subject: Default::default(),
+                denoise: crate::denoised::DenoiseUse::Cached(Demosaic::Better),
             },
             1,
             ExportDirs::default(),

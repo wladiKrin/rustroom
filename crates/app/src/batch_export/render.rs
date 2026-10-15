@@ -393,6 +393,8 @@ pub struct ExportRender {
     /// Which network's cached map a *Subject* mask reads (M9.13) — the Settings' choice, the same
     /// one the preview used.
     pub ai_subject: ai_mask::SubjectModel,
+    /// Where AI denoise's result comes from (M10.16b) — a rendered preview never runs the network.
+    pub denoise: crate::denoised::DenoiseUse,
 }
 
 #[cfg(test)]
@@ -1005,6 +1007,7 @@ mod tests {
                         ai_subject: ai_mask::SubjectModel::IsNet,
                         resampler: pipeline::Resampler::CatmullRom,
                         gpu_tail,
+                        denoise: crate::denoised::DenoiseUse::Compute,
                     },
                     &export::FileMetadata::default(),
                     None,

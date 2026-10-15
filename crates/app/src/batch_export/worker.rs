@@ -41,6 +41,11 @@ pub enum ExportEvent {
         at: PathBuf,
         why: String,
     },
+    /// AI denoise is being computed for `name` (M10.16b) — no result was cached at this demosaic
+    /// quality, and it takes minutes.
+    Denoising {
+        name: String,
+    },
     Finished(ExportReport),
 }
 
@@ -594,6 +599,30 @@ fn run(
                         );
                     }
                     src
+                });
+                // ⚠ M10.16b: AI denoise's result rides the maps too — the cache, or (for the user's
+                // export, never a preview) the network, there and then.
+                let decoded = decoded.and_then(|mut src| {
+                    if p.edits.ai_denoise.is_active() {
+                        let name = p
+                            .source
+                            .file_name()
+                            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                        let d = crate::denoised::for_export(
+                            &p.source,
+                            &src.image,
+                            opts.demosaic,
+                            render.denoise,
+                            (crate::denoise_cache::dir(), crate::ai_cache::models_dir()),
+                            crate::denoised::drunet,
+                            || {
+                                let _ = events.send(ExportEvent::Denoising { name });
+                            },
+                            &|| !cancel.load(Ordering::Relaxed),
+                        )?;
+                        src.ai.set_denoised(Some(d));
+                    }
+                    Ok(src)
                 });
 
                 // ⚠ Checked *again* after the decode, which is the slow part. Cancelling during a

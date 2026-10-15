@@ -234,6 +234,16 @@ pub fn denoise(
     denoise_in(img, &Encoding::of(img), net, sigma, progress)
 }
 
+/// `img` denoised at its own automatic σ ([`noise_sigma`]) — the job's and the export's one call.
+pub fn run(
+    img: &ImageBuf,
+    net: &mut dyn TileNet,
+    progress: &dyn Fn(usize, usize) -> bool,
+) -> Result<Option<ImageBuf>, String> {
+    let enc = Encoding::of(img);
+    denoise_in(img, &enc, net, noise_sigma(img, &enc), progress)
+}
+
 /// [`denoise`] in a given encoding — a crop denoised as its whole frame would be (the probe's sheets),
 /// since a crop's own encoding would scale its noise, and so its σ, differently.
 pub fn denoise_in(

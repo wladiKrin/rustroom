@@ -57,6 +57,10 @@ pub struct AiMaps {
     entries: Vec<(MapQuery, std::sync::Arc<ProbMap>, u64)>,
     /// Bumped on every change — what the canvas tint keys on, so a map arriving redraws it.
     generation: u64,
+    /// AI denoise's result and its id (M10.16b) — `None` until the job's lands. ⚠ Not a map, so untouched
+    /// by [`AiMaps::clear`] and the generation: a film negative's pick does not change the decode it was
+    /// computed on, and the tint does not read it.
+    denoised: Option<(std::sync::Arc<crate::denoised::Denoised>, u64)>,
 }
 
 /// A map's identity by CONTENT — the same pixels are the same map wherever they came from. What the
@@ -102,6 +106,15 @@ impl AiMaps {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    pub fn denoised(&self) -> Option<&(std::sync::Arc<crate::denoised::Denoised>, u64)> {
+        self.denoised.as_ref()
+    }
+
+    /// ⚠ Only over the decode it was computed on — the session's full-resolution one, an export's own.
+    pub fn set_denoised(&mut self, d: Option<(std::sync::Arc<crate::denoised::Denoised>, u64)>) {
+        self.denoised = d;
     }
 }
 
@@ -461,6 +474,15 @@ impl pipeline::AiRasters for AiSource<'_> {
                 Some(which),
             ),
         }
+    }
+
+    /// M10.16b: the denoised photo, as [`AiMaps::set_denoised`] was given it.
+    fn denoised(&self) -> Option<(std::sync::Arc<dyn pipeline::ImageSource>, u64)> {
+        let (d, id) = self.maps.denoised()?;
+        Some((
+            std::sync::Arc::clone(d) as std::sync::Arc<dyn pipeline::ImageSource>,
+            *id,
+        ))
     }
 
     /// M10.16d: the focus from the decode-space maps — `lens_blur_tool`'s rules; `None` while a map
