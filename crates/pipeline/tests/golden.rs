@@ -3203,3 +3203,108 @@ fn golden_lens_blur_point() {
         0.7,
     );
 }
+
+/// M10.16b: AI denoise's step — a grainy chart, its stored "denoised" result (the clean chart), blended
+/// by Amount as the prefix's first step. ⚠ The network is not here: the step only mixes, and the
+/// network's own tests are the app's (`ai_denoise`, the `real_drunet_…` test).
+mod ai_denoise_scene {
+    use super::*;
+
+    /// The chart with a fixed grain — an LCG, so the reference never moves.
+    fn grainy() -> ImageBuf {
+        let clean = chart();
+        let mut state = 0x2545_f491u32;
+        let data = clean
+            .data()
+            .iter()
+            .map(|v| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let n = (state >> 8) as f32 / (1u32 << 24) as f32 - 0.5;
+                (v + n * 0.08).max(0.0)
+            })
+            .collect();
+        ImageBuf::from_vec(clean.width(), clean.height(), data)
+    }
+
+    /// The stored result, answered at its own size only — the golden renders at full scale.
+    struct Stored(ImageBuf);
+    impl pipeline::ImageSource for Stored {
+        fn image(&self, w: usize, h: usize) -> Option<ImageBuf> {
+            ((self.0.width(), self.0.height()) == (w, h)).then(|| self.0.clone())
+        }
+    }
+
+    struct Result(std::sync::Arc<Stored>);
+    impl pipeline::AiRasters for Result {
+        fn source(
+            &self,
+            _: &edit_model::Mask,
+        ) -> Option<(std::sync::Arc<dyn pipeline::RasterSource>, u64)> {
+            None
+        }
+        fn denoised(&self) -> Option<(std::sync::Arc<dyn pipeline::ImageSource>, u64)> {
+            Some((self.0.clone(), 1))
+        }
+    }
+
+    /// The whole chain: the prefix with the result, then the colorimetric tail.
+    fn render(amount: f32) -> ImageBuf {
+        let edits = Edits {
+            ai_denoise: edit_model::AiDenoise { amount },
+            ..Edits::default()
+        };
+        let stored = Result(std::sync::Arc::new(Stored(chart())));
+        let img = pipeline::build_prefix_steps(
+            &edits,
+            RenderScale::FULL,
+            None,
+            RESAMPLER,
+            None,
+            Some(&stored),
+        )
+        .iter()
+        .fold(grainy(), |img, s| s.stage.apply(img));
+        let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
+            &edits,
+            RenderScale::FULL,
+            None,
+            None,
+            pipeline::RenderSpec {
+                resampler: RESAMPLER,
+                ..Default::default()
+            },
+            None,
+            TailRendering::colorimetric(),
+        );
+        tail.run(img)
+    }
+
+    /// Shape (c): the blend must differ from the grainy render before it is pinned.
+    pub fn check(name: &str, amount: f32) {
+        let rendered = render(amount);
+        let grainy = render(0.0);
+        let worst = rendered
+            .data()
+            .iter()
+            .zip(grainy.data())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst * 255.0 > 5.0,
+            "{name}: the blend changed nothing ({worst})"
+        );
+        compare_or_update(name, rendered);
+    }
+}
+
+/// M10.16b: Amount 50 — halfway between the grain and the stored result.
+#[test]
+fn golden_ai_denoise_50() {
+    ai_denoise_scene::check("ai_denoise_50", 50.0);
+}
+
+/// M10.16b: Amount 100 — the stored result exactly, the grain gone.
+#[test]
+fn golden_ai_denoise_100() {
+    ai_denoise_scene::check("ai_denoise_100", 100.0);
+}
