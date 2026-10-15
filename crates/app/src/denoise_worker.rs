@@ -109,6 +109,8 @@ impl DenoiseWorker {
                                         is_wanted(&key)
                                     });
                                     set_progress(None);
+                                    // ⚠ Whatever the outcome: the GPU's activations go (Review Focus 4).
+                                    n.finished();
                                     // Cancelled (`Ok(None)`): another photo is wanted now.
                                     out.transpose().inspect(|r| {
                                         // ⚠ Stored even if no longer wanted: it is this photo's
@@ -190,6 +192,36 @@ mod tests {
     /// A photo of `w × h` that takes several tiles.
     fn photo(w: usize, h: usize) -> Arc<ImageBuf> {
         Arc::new(ImageBuf::from_vec(w, h, vec![0.2; w * h * 3]))
+    }
+
+    /// A network that returns its input and counts the jobs it was told ended.
+    struct Counting(Arc<std::sync::atomic::AtomicUsize>);
+    impl TileNet for Counting {
+        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: f32) -> Result<Vec<f32>, String> {
+            Ok(rgb.to_vec())
+        }
+        fn finished(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Review Focus 4: the network is told when a job ends — the GPU frees its activations.
+    #[test]
+    fn the_network_is_told_when_a_job_ends() {
+        let ended = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let e = ended.clone();
+        let w = DenoiseWorker::spawn(
+            Box::new(move || Ok(Box::new(Counting(e)) as Box<dyn TileNet + Send>)),
+            None,
+            || {},
+        );
+        w.request(DenoiseRequest {
+            key: "a".into(),
+            image: Some(photo(600, 300)),
+        });
+        assert_eq!(wait(&w, 1).len(), 1);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(ended.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     fn wait(w: &DenoiseWorker, want: usize) -> Vec<DenoiseResult> {
