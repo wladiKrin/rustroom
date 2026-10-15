@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.16d2: Lens Blur's GPU twin — live while dragging (2026-10-15)](#2026-10-15--m1016d2-lens-blurs-gpu-twin--live-while-dragging-branch-m1016d2-lens-blur-gpu-not-merged)
 - [M10.16d1: Lens Blur — the CPU reference, the section, Pick focus and Visualize (2026-10-15)](#2026-10-15--m1016d1-lens-blur--the-cpu-reference-the-section-pick-focus-and-visualize-branch-m1016d-lens-blur-merged-2026-10-15)
 - [M10.16a: depth masks — an estimated depth map and the Depth range mask (2026-10-14)](#2026-10-14--m1016a-depth-masks--an-estimated-depth-map-and-the-depth-range-mask-branch-m1016a-depth-masks-merged-2026-10-14)
 - [M10.15d: Send marks to Immich, and Undo last send (2026-10-13)](#2026-10-13--m1015d-send-marks-to-immich-and-undo-last-send-branch-m1015d-immich-send-marks-merged-2026-10-14)
@@ -177,6 +178,37 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-15 — M10.16d2: Lens Blur's GPU twin — live while dragging (branch `m10.16d2-lens-blur-gpu`, not merged)
+
+**The item:** spec §3 — `GpuLensBlurStage`, the d1 CPU reference as compute shaders, joined to the prefix
+seam by name. Plan `2026-10-15-m10.16d2-lens-blur-gpu.md`.
+
+**Built:** `pipeline::lens_blur::inputs` — **the ONE lookup** of the planes and focus, which the prefix
+keys and builds its step from and the seam builds the twin from; `plane_bytes`; the aperture's constants
+exposed so the shader's literals are the CPU's bits. **`GpuLensBlurStage`** resolves its inputs on the CPU at
+construction and runs **one constant shader**: a source build and a dense gather per level (entry points
+`build_l`/`gather_l`, l < 8) and one full-resolution composite that samples every level bilinearly — no
+full-resolution accumulators; every parameter a uniform, so it compiles once (`GpuCache` keys on the
+text). Declines below half a pixel, past 8 levels, or past the device's buffer limit. `SeamFacts` gains
+`ai`; the walk builds its `AiSource` from the maps it was planned with; export passes its own.
+
+**⚠ The highlight level (Boost's threshold) is now read from a ≤ 256-point grid** — dehaze's airlight's
+reason: cheap enough to compute at construction, and the same at the preview and the export. A reference
+change, invisible on frames ≤ 256 px (the goldens did not move).
+
+**Measured** (`lens_blur_probe gpu`, 1600 px, load ≈ 11–16 from an unrelated encode): GPU passes
+**30.0–31.9 ms** a frame against **178–192 ms** on the CPU; parity on the real photographs **< 0.001**
+eight-bit levels. ⚠ The rule fired on the planes: resolved afresh every drag frame at **7–11 ms each** —
+now memoised (`ai_coverage::PlaneMemo`, two held, its key an exhaustive destructure of `MapRaster`), and the
+twin builds in **0.3 ms**. The passes are under the 50 ms target, so the gather is not tiled.
+
+**Sabotages, all red:** the highlight percentile at the maximum; the Ring's floor in the shader alone
+(**3.17 levels**); the composite without a level's offset (**162 levels**); the walk passing no maps
+(`gpu_prefix_steps` 0); the memo's key without geometry (a same-size turned frame got the flat plane).
+
+⚠ **A process lesson:** waiting on `pgrep -f <pattern>` from a shell whose own command line holds the
+pattern matches itself — six waiters deadlocked; wait on a background command's own notification.
 
 ### 2026-10-15 — M10.16d1: Lens Blur — the CPU reference, the section, Pick focus and Visualize (branch `m10.16d-lens-blur`, merged 2026-10-15)
 

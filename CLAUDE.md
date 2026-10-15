@@ -248,8 +248,9 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, M10.16d1** (table above).
 
-**▶ NEXT: M10.16d2 — Lens Blur's GPU twin** (live while dragging, the spec's §3; d1 ✅ merged 2026-10-15,
-its constants confirmed by the author). `grep -n 'M10.16d1' docs/JOURNAL.md`. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
+**▶ IN PROGRESS: M10.16d2 — Lens Blur's GPU twin, built on branch `m10.16d2-lens-blur-gpu` (2026-10-15)**,
+awaiting the author's look: 30–32 ms of GPU passes a frame at 1600 px against ~180 ms on the CPU, parity
+under a thousandth of a level. `grep -n 'M10.16d2' docs/JOURNAL.md`. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
 d), M10.14 f–h ⏸.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
@@ -263,7 +264,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | **M10.12** the mask model | c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · d camera-matching colour out of the box (P-22), **with b's `ProfileLookTable` and c's per-photo profile folded in** (re-scoped 2026-10-12: neither changes a photo until d brings such a profile; b's `CameraCalibration` ⛔ withdrawn — a DNG-file tag, never in a profile) |
 | **M10.14** performance & verification | f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h ⏸ the reference photo on the GPU (parked 2026-10-13 until a need shows — 1 of 74 photos; 111–125 ms at 3200, numbers in the backlog) |
-| **M10.16** AI tools | **d2 Lens Blur's GPU twin (next)** · b AI denoise · c content-aware remove |
+| **M10.16** AI tools | **d2 Lens Blur's GPU twin (on its branch)** · b AI denoise · c content-aware remove |
 | **M10.17** merge | a HDR · b panorama |
 | **M10.18** new modules | a tethering · b GPS and a map · c people tagging · d publish services · e print |
 | **M10.19** found in use (added 2026-10-01) | a HEIC/HEIF photos — libraw cannot read them, so they never appear; needs a decoder · b Move to folder: download Immich assets first, then move (today skipped and counted) (c ✅ above) |
@@ -286,8 +287,8 @@ GPU device for the window and the pipeline.
 
 ### The GPU port — closed (reopened once, for geometry, 2026-09-26)
 
-⚠⚠ **20 of the 24 stages that `impl PipelineStage`** have GPU twins (2026-10-12; `per_pixel`'s three
-test doubles not counted). The four without — `spot_removal` (measured and closed unbuilt), `defringe`
+⚠⚠ **22 of the 26 stages that `impl PipelineStage`** have GPU twins (2026-10-15, Lens Blur's the newest;
+`per_pixel`'s three test doubles and the GPU crate's four probes not counted). The four without — `spot_removal` (measured and closed unbuilt), `defringe`
 (parked, M10.14f), `red_eye` and `negative` — are all **prefix steps**: every TAIL stage has a twin.
 ⚠⚠ **Geometry was declined too, and that decline was WRONG for one reason worth remembering: it priced the COMPUTE and missed the TRANSFERS.** On a
 fitted rung of 6.8 Mpx a Straighten frame was 63 ms, and the twin's value was that it let the pixels
@@ -361,7 +362,10 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   `every_prefix_step_has_its_own_key` is handed `lens_blur_tests::MAPS` for that reason.
 - ⚠⚠ **A prefix step reading AI maps keys on their CONTENT ids** (`AiRasters::source` / `plane`), and anything
   it derives from them is memoised on those ids — `build_prefix_steps` runs EVERY FRAME, so Lens Blur's
-  Subject focus (a median over every subject pixel) lives in `lens_blur_tool::subject_focus`'s memo.
+  Subject focus (a median over every subject pixel) lives in `lens_blur_tool::subject_focus`'s memo, and
+  its planes in `ai_coverage::PlaneMemo` — keyed by an exhaustive destructure of `MapRaster`, so a field
+  added there must join the key. Its CPU step and GPU twin read them through ONE lookup,
+  `pipeline::lens_blur::inputs`.
 - ⚠⚠ **Every reader of the undeveloped decode (`Session.buffer`) sees the positive** (M10.11a): a pixel
   through `negative_tool::view`, an image through `pipeline::negative::positive` (Auto tone, the AI
   input), and a cache of anything derived from it keyed on `edits.negative` (`ai_cache::key`, the AI
