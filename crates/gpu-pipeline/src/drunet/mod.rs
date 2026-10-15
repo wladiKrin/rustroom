@@ -3,6 +3,10 @@
 //! never parses ONNX.
 
 mod arch;
+mod conv;
 mod pack;
+#[cfg(test)]
+mod reference;
+mod wgsl;
 
 pub use arch::{Tensor, Weights};
