@@ -115,6 +115,8 @@ struct ViewKey {
     lens: u64,
     w: usize,
     h: usize,
+    /// Lens Blur's sharp zone and its tint (M10.16d) — `None` for the depth range's plain view.
+    band: Option<((f32, f32), [u8; 3])>,
 }
 
 thread_local! {
@@ -143,6 +145,46 @@ pub(super) fn paint(
         return None;
     }
     let maps = s.engine.ai_maps().read().expect("ai maps").clone();
+    paint_view(painter, s, frame_rect, &maps, None)
+}
+
+/// Lens Blur's Visualize depth (M10.16d): the same view with its sharp zone — the focus ± half the
+/// focal range — tinted in the accent. Nothing while Lens Blur is off or its depth map is missing;
+/// no tint while its focus cannot be measured yet (Subject mode before the Subject map).
+pub(super) fn paint_lens(
+    painter: &egui::Painter,
+    s: &Session,
+    frame_rect: egui::Rect,
+) -> Option<egui::TextureId> {
+    let lb = &s.edits.lens_blur;
+    if !lb.on {
+        return None;
+    }
+    let maps = s.engine.ai_maps().read().expect("ai maps").clone();
+    let src = AiSource {
+        maps: &maps,
+        edits: &s.edits,
+        lens: s.lens.shot.as_ref(),
+        decode: (s.buffer.width(), s.buffer.height()),
+    };
+    let band = pipeline::AiRasters::lens_focus(&src, lb).map(|f| {
+        let h = pipeline::lens_blur::Params::new(lb, f, 1).half_range;
+        // ⚠ `style_of(theme())` — the theme this frame is drawn in (`theme::dialog_frame`'s reason).
+        let ctx = painter.ctx();
+        let c = ctx.style_of(ctx.theme()).visuals.selection.bg_fill;
+        ((f - h, f + h), [c.r(), c.g(), c.b()])
+    });
+    paint_view(painter, s, frame_rect, &maps, band)
+}
+
+/// The depth view over the frame — `band` tinted when given — from a texture cached on its key.
+fn paint_view(
+    painter: &egui::Painter,
+    s: &Session,
+    frame_rect: egui::Rect,
+    maps: &rustroom_app::ai_coverage::AiMaps,
+    band: Option<((f32, f32), [u8; 3])>,
+) -> Option<egui::TextureId> {
     let map = maps.get(&MapQuery::Depth)?;
     let k = (VIEW_LONG / frame_rect.width().max(frame_rect.height()).max(1.0)).min(1.0);
     let (w, h) = (
@@ -157,6 +199,7 @@ pub(super) fn paint(
         lens: rustroom_app::ai_space::lens_key(s.lens.shot.as_ref(), &s.edits, decode.0, decode.1),
         w,
         h,
+        band,
     };
     let id = VIEW.with(|v| {
         let mut v = v.borrow_mut();
@@ -166,17 +209,18 @@ pub(super) fn paint(
             }
         }
         let src = AiSource {
-            maps: &maps,
+            maps,
             edits: &s.edits,
             lens: s.lens.shot.as_ref(),
             decode,
         };
-        let rgba = rustroom_app::depth_view::image(
-            &src.lensed(map),
-            &src.decode_map(&s.edits.geometry, w, h),
-            w,
-            h,
-        );
+        let (lensed, dm) = (src.lensed(map), src.decode_map(&s.edits.geometry, w, h));
+        let rgba = match band {
+            Some((b, tint)) => {
+                rustroom_app::depth_view::image_with_band(&lensed, &dm, w, h, b, tint)
+            }
+            None => rustroom_app::depth_view::image(&lensed, &dm, w, h),
+        };
         let tex = painter.ctx().load_texture(
             "depth_view",
             egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba),
@@ -342,6 +386,68 @@ mod tests {
                 .any(|s| matches!(&s.shape, egui::Shape::Mesh(m) if m.texture_id == id)),
             "on: its texture is not on the canvas"
         );
+    }
+
+    /// M10.16d: Lens Blur's Visualize — in the Edit tool, with Lens Blur on and its depth map, the
+    /// canvas paints the view; with the toggle off, or Lens Blur off, it does not.
+    #[test]
+    fn lens_blurs_visualize_paints_the_depth_view() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        app.tool = rustroom_app::tool::Tool::Edit;
+        {
+            let s = app.session.as_mut().unwrap();
+            s.edits.lens_blur = edit_model::LensBlur {
+                on: true,
+                focus: edit_model::LensFocus::Point { point: [0.25, 0.5] },
+                ..Default::default()
+            };
+            s.engine.ai_maps().write().unwrap().insert(
+                rustroom_app::ai_coverage::MapQuery::Depth,
+                std::sync::Arc::new(ai_mask::ProbMap::from_fn(80, 40, |x, _| {
+                    if x < 40 {
+                        0.2
+                    } else {
+                        0.8
+                    }
+                })),
+            );
+        }
+        let cached = || super::VIEW.with(|v| v.borrow().as_ref().map(|(_, t)| t.id()));
+        let run = |app: &mut RustroomApp| {
+            super::VIEW.with(|v| *v.borrow_mut() = None);
+            let mut shapes = Vec::new();
+            for _ in 0..2 {
+                let c = ctx.clone();
+                shapes = ctx
+                    .run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(super::super::test_support::screen()),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            super::super::show(app, ui, &c);
+                        },
+                    )
+                    .shapes;
+            }
+            shapes
+        };
+        let _ = run(&mut app);
+        assert!(cached().is_none(), "the toggle off: drawn");
+        app.show_lens_depth = true;
+        let shapes = run(&mut app);
+        let id = cached().expect("on: the view was not drawn");
+        assert!(
+            shapes
+                .iter()
+                .any(|s| matches!(&s.shape, egui::Shape::Mesh(m) if m.texture_id == id)),
+            "on: its texture is not on the canvas"
+        );
+        app.session.as_mut().unwrap().edits.lens_blur.on = false;
+        let _ = run(&mut app);
+        assert!(cached().is_none(), "Lens Blur off: drawn");
     }
 
     #[test]

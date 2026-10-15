@@ -169,7 +169,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 ### State (2026-10-14)
 
 **3862 tests** (10 ignored), **89 golden tests** (76 reference images — `cargo test --workspace --test golden`),
-gate green on `main`. ⚠⚠ **Run the git command above rather than
+gate green on `main`; the M10.16d branch's tip: **3906** / **92** (79 images), gate green 2026-10-15. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -247,10 +247,12 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a** (table above).
 
-**▶ NEXT: M10.16d — Lens Blur** (added 2026-10-14 by the author, split from M10.16a, ahead of b and c): a
-synthetic shallow depth of field on M10.16a's depth map — its own brainstorm (bokeh shape, focus picking,
-the stage's place, and clean edges around people, where the Subject mask's help was deferred to it). Left
-open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸, d), M10.14 f–h ⏸.
+**▶ IN PROGRESS: M10.16d — Lens Blur**, one spec and two plans. **d1 is built on branch
+`m10.16d-lens-blur` (2026-10-15)** — the CPU reference (a dense, level-adaptive gather in three layers),
+the section, Pick focus, Visualize, export — and **awaits the author's look** (Amount's 3 %, the ramp and
+Boost are first values); **d2, the GPU twin (live while dragging), is its own plan next.**
+`grep -n 'M10.16d1' docs/JOURNAL.md`. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
+d), M10.14 f–h ⏸.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
 release engineering, LAST.** The canonical list — every sub-item with its date, size and reasoning — is
@@ -263,7 +265,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | **M10.12** the mask model | c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · d camera-matching colour out of the box (P-22), **with b's `ProfileLookTable` and c's per-photo profile folded in** (re-scoped 2026-10-12: neither changes a photo until d brings such a profile; b's `CameraCalibration` ⛔ withdrawn — a DNG-file tag, never in a profile) |
 | **M10.14** performance & verification | f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h ⏸ the reference photo on the GPU (parked 2026-10-13 until a need shows — 1 of 74 photos; 111–125 ms at 3200, numbers in the backlog) |
-| **M10.16** AI tools | **d Lens Blur (next)** · b AI denoise · c content-aware remove |
+| **M10.16** AI tools | **d Lens Blur** (d1 on its branch; d2 the GPU twin next) · b AI denoise · c content-aware remove |
 | **M10.17** merge | a HDR · b panorama |
 | **M10.18** new modules | a tethering · b GPS and a map · c people tagging · d publish services · e print |
 | **M10.19** found in use (added 2026-10-01) | a HEIC/HEIF photos — libraw cannot read them, so they never appear; needs a decoder · b Move to folder: download Immich assets first, then move (today skipped and counted) (c ✅ above) |
@@ -320,8 +322,8 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   counts non-blank lines outside every `#[cfg(test)]` item **wherever it sits**, and skips a file
   declared `#[cfg(test)] mod x;`. ⚠ The old `awk` to the *first* `#[cfg(test)]` is blind past a
   mid-file test item — it read `main.rs` as 78 lines where it held 555; do not use it. Nearest the
-  ceiling on 2026-10-12: `app/src/session_flow.rs` 979, `modals/settings.rs` 863,
-  `collections_panel.rs` 801, `modals/export.rs` 796, `develop/panel/adjustments.rs` 778.
+  ceiling on 2026-10-15: `app/src/session_flow.rs` 980, `modals/export.rs` 796,
+  `develop/panel/adjustments.rs` 787, `collections_panel.rs` 779, `modals/settings.rs` 759.
   ⚠⚠ **Re-measure, never requote** — set `CEILING` to 600 for the list, then set it back. Split by responsibility, never to dodge the number: the M10.7d spec and plan are the method.
 - ⚠⚠ **A new `Edits` field is `#[serde(default, skip_serializing_if = "<T>::is_default")]`** (M10.11a/b),
   or the default's serialization changes and every rendered preview on disk misses at once.
@@ -357,6 +359,11 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   the file's key for good. ⚠ The Subject/Click cache keys are pinned as literal digests — maps on disk.
 - ⚠ **A new PREFIX step trips three tests in `prefix.rs` that count or index the steps** (truncated
   key, capture stages, own key) — on purpose: renumber them; the step's `PrefixStepKey` carries its whole setting.
+  ⚠ A step that waits for AI maps (Lens Blur, M10.16d) is invisible to a test built with `ai = None` —
+  `every_prefix_step_has_its_own_key` is handed `lens_blur_tests::MAPS` for that reason.
+- ⚠⚠ **A prefix step reading AI maps keys on their CONTENT ids** (`AiRasters::source` / `plane`), and anything
+  it derives from them is memoised on those ids — `build_prefix_steps` runs EVERY FRAME, so Lens Blur's
+  Subject focus (a median over every subject pixel) lives in `lens_blur_tool::subject_focus`'s memo.
 - ⚠⚠ **Every reader of the undeveloped decode (`Session.buffer`) sees the positive** (M10.11a): a pixel
   through `negative_tool::view`, an image through `pipeline::negative::positive` (Auto tone, the AI
   input), and a cache of anything derived from it keyed on `edits.negative` (`ai_cache::key`, the AI
@@ -381,7 +388,9 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   nothing, so I reported no `LICENSE` — it had been committed since `e71330d`. **`ls` here is aliased to
   `eza --long`, which prints NOTHING to a pipe unless given a path argument**, exiting 0 with empty
   stderr. Use `/bin/ls` or `git ls-files` for anything you will act on, and **prove a negative with a
-  positive control**: the same command must find something known to be there. **(c)** Comparing two
+  positive control**: the same command must find something known to be there. ⚠⚠ **And a sweep that CLICKS
+  must assert its targets are on the harness screen** — a slider off it "resets" untouched: the panel's reset
+  sweep skipped sixteen sliders until M10.16d's sabotage stayed green (now one section per pass). **(c)** Comparing two
   things that are **the same** proves nothing, so prove they differ first: the curve-order test asserts the
   two orders differ by >0.05 *before* asserting which happened; the GPU whole-chain test asserts the render
   differs from `neutral` before comparing backends. **(d)** When a threshold you invented fails, **find the

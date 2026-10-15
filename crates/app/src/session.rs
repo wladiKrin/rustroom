@@ -92,6 +92,9 @@ pub struct Session {
     /// The film-base eyedropper is armed: the next click on the canvas picks the film base and
     /// measures the frame (M10.11a). View state, `picking_wb`'s rule.
     pub(crate) picking_negative: bool,
+    /// Lens Blur's Pick focus is armed: the next click on the canvas sets a Point focus there
+    /// (M10.16d). View state, `picking_wb`'s rule.
+    pub(crate) picking_focus: bool,
     /// The illuminant the decode left this photo balanced to — the Kelvin slider's zero point.
     ///
     /// ⚠⚠ Kept on the session for the same reason `lens` is: it is a fact about the file that

@@ -728,6 +728,7 @@ impl RustroomApp {
             picking_wb: false,
             picking_fringe: false,
             picking_negative: false,
+            picking_focus: false,
             zoom: view.0,
             fit_scale: 1.0,
             pan: view.1,

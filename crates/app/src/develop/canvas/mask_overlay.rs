@@ -143,20 +143,7 @@ pub(super) fn draw_mask_overlay(
             .on_hover_cursor(egui::CursorIcon::Crosshair);
         if click.clicked() {
             if let Some(p) = click.interact_pointer_pos() {
-                let (dw, dh) = (s.buffer.width(), s.buffer.height());
-                let dm = rustroom_app::ai_space::DecodeMap::new(
-                    &s.edits.geometry,
-                    s.edits.perspective,
-                    frame_rect.width() as usize,
-                    frame_rect.height() as usize,
-                    s.lens
-                        .shot
-                        .as_ref()
-                        .and_then(|l| rustroom_app::ai_space::corrector_for(l, &s.edits, dw, dh)),
-                    dw,
-                    dh,
-                );
-                let point = dm.frame_to_decode(p.x - frame_rect.left(), p.y - frame_rect.top());
+                let point = super::eyedropper::decode_point(s, frame_rect, p);
                 if let Some(edit_model::Mask::Ai(a)) =
                     mask_components::component_mut(&mut s.edits.masks[i], j)
                 {

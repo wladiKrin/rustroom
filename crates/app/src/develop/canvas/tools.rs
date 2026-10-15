@@ -2,7 +2,7 @@
 
 use super::crop_overlay::{self, draw_crop_overlay};
 use super::eye_overlay;
-use super::eyedropper::{pick_fringe, pick_negative, pick_white_balance};
+use super::eyedropper::{pick_focus, pick_fringe, pick_negative, pick_white_balance};
 use super::guide_overlay::{draw_guide_overlay, GuideDrag};
 use super::mask_overlay::{draw_mask_overlay, BrushTool};
 use super::spot_overlay::{draw_spot_overlay, sampler_for};
@@ -40,8 +40,14 @@ pub(super) fn dispatch(
         app_crop_aspect,
         app_brush_flow,
         app_show_depth_map,
+        app_show_lens_depth,
         ..
     } = *inp;
+    // ⚠ M10.16d: Lens Blur's Visualize under every Edit gesture — a view, so it is drawn whether or
+    // not a picker is armed; Pick focus is then aimed against the depths.
+    if tool == Tool::Edit && app_show_lens_depth {
+        let _ = super::depth_overlay::paint_lens(&ui.painter_at(img_rect), s, frame_rect);
+    }
     // ⚠ A behaviour change, and an intended one: mask handles and brush
     // painting now belong to the Masks tool rather than to "any mode that is
     // not Geometry". A stray drag in Edit can no longer paint a stroke.
@@ -163,6 +169,14 @@ pub(super) fn dispatch(
                 out.photo_edited |= m.1;
                 out.fringe_status = Some(m.0);
             }
+        }
+        // ⚠ M10.16d: Pick focus, the white-balance eyedropper's twin — its own click-sensing
+        // interaction, only while armed, and the same crosshair.
+        Tool::Edit if s.picking_focus => {
+            let pick = ui
+                .interact(img_rect, ui.id().with("focus_picker"), egui::Sense::click())
+                .on_hover_cursor(egui::CursorIcon::Crosshair);
+            out.photo_edited |= pick_focus(s, &pick, frame_rect, tool);
         }
         Tool::Edit if s.picking_fringe => {
             let pick = ui

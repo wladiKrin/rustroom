@@ -41,6 +41,9 @@ pub use stages::grain::{
 /// wholesale — which would make every stage public API for the sake of one benchmark. `bench_hsl`
 /// needs the table and the small-angle pair to sweep table sizes against real pixels.
 pub use stages::hue_table;
+/// M10.16d: Lens Blur's render and parameters — for its prefix step, the probe, the goldens and (d2)
+/// the GPU twin, which must match it.
+pub use stages::lens_blur;
 /// M10.11a: the film negative's per-pixel inversion, for every reader of the undeveloped decode.
 pub use stages::negative;
 
@@ -131,7 +134,7 @@ pub use build::{
     build_pipeline_split_tapped, build_pipeline_to, build_pipeline_with, tail_kernel_radius,
     RenderSpec, TailHalves,
 };
-pub use coverage::{AiRasters, BrushCoverage, CoverageRasterizer, RasterSource};
+pub use coverage::{AiRasters, BrushCoverage, CoverageRasterizer, MapPlane, RasterSource};
 pub use pipeline_stage::{Pipeline, PipelineStage, RenderScale, SubStageAccelerator};
 pub use prefix::{build_prefix_steps, prefix_output_dims, PrefixKey, PrefixStep, PrefixStepKey};
 pub use prefix_airlight::{prefix_airlight, prefix_airlight_key, AirlightKey};

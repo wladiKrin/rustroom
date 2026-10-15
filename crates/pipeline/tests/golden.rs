@@ -3004,3 +3004,202 @@ fn golden_ai_masked_dehaze() {
     );
     compare_or_update("ai_masked_dehaze", rendered);
 }
+
+/// M10.16d: Lens Blur's scene, 256 × 192 — a textured background whose depth ramps from 0.4 (left) to
+/// 1.0 (right), a subject disc at depth 0.3, three point lights far behind it, and a near strip along
+/// the bottom at depth 0.05 — with the planes the app would hand the step.
+mod lens_blur_scene {
+    use super::*;
+
+    pub const W: usize = 256;
+    pub const H: usize = 192;
+    const SUBJECT: (f32, f32, f32) = (100.0, 88.0, 34.0);
+    const LIGHTS: [(usize, usize); 3] = [(196, 36), (222, 70), (178, 104)];
+    const NEAR_FROM: usize = 168;
+
+    fn in_subject(x: usize, y: usize) -> bool {
+        let (cx, cy, r) = SUBJECT;
+        (x as f32 + 0.5 - cx).hypot(y as f32 + 0.5 - cy) <= r
+    }
+
+    pub fn scene() -> ImageBuf {
+        let mut img = ImageBuf::new(W, H);
+        for y in 0..H {
+            for x in 0..W {
+                let px = if in_subject(x, y) {
+                    [0.55, 0.18, 0.08]
+                } else if y >= NEAR_FROM {
+                    if (x / 6 + y / 6) % 2 == 0 {
+                        [0.30, 0.32, 0.12]
+                    } else {
+                        [0.08, 0.10, 0.04]
+                    }
+                } else if LIGHTS
+                    .iter()
+                    .any(|&(lx, ly)| x.abs_diff(lx) <= 1 && y.abs_diff(ly) <= 1)
+                {
+                    [4.0, 3.6, 2.8]
+                } else {
+                    let stripe = if (x / 4) % 2 == 0 { 0.06 } else { 0.0 };
+                    let v = 0.10 + 0.10 * y as f32 / H as f32 + stripe;
+                    [v * 0.8, v * 0.9, v * 1.1]
+                };
+                img.set_pixel(x, y, px);
+            }
+        }
+        img
+    }
+
+    fn plane(w: usize, h: usize, f: impl Fn(usize, usize) -> f32) -> pipeline::brush::CoverageMap {
+        pipeline::brush::CoverageMap {
+            x0: 0,
+            y0: 0,
+            w,
+            h,
+            data: (0..w * h)
+                .map(|i| (f(i % w, i / w).clamp(0.0, 1.0) * 255.0).round() as u8)
+                .collect(),
+            outside: 0,
+        }
+    }
+
+    struct Depth;
+    impl pipeline::RasterSource for Depth {
+        fn coverage(&self, w: usize, h: usize) -> pipeline::brush::CoverageMap {
+            plane(w, h, |x, y| {
+                if in_subject(x, y) {
+                    0.3
+                } else if y >= NEAR_FROM {
+                    0.05
+                } else {
+                    0.4 + 0.6 * x as f32 / (w - 1) as f32
+                }
+            })
+        }
+    }
+
+    struct Subject;
+    impl pipeline::RasterSource for Subject {
+        fn coverage(&self, w: usize, h: usize) -> pipeline::brush::CoverageMap {
+            plane(w, h, |x, y| if in_subject(x, y) { 1.0 } else { 0.0 })
+        }
+    }
+
+    /// Both planes, and the focus the app would have measured.
+    pub struct Maps(pub f32);
+    impl pipeline::AiRasters for Maps {
+        fn source(
+            &self,
+            _: &edit_model::Mask,
+        ) -> Option<(std::sync::Arc<dyn pipeline::RasterSource>, u64)> {
+            None
+        }
+        fn plane(
+            &self,
+            which: pipeline::MapPlane,
+        ) -> Option<(std::sync::Arc<dyn pipeline::RasterSource>, u64)> {
+            Some(match which {
+                pipeline::MapPlane::Depth => (std::sync::Arc::new(Depth), 1),
+                pipeline::MapPlane::Subject => (std::sync::Arc::new(Subject), 2),
+            })
+        }
+        fn lens_focus(&self, _: &edit_model::LensBlur) -> Option<f32> {
+            Some(self.0)
+        }
+    }
+
+    /// The whole chain: the prefix with the planes, then the colorimetric tail.
+    pub fn render(lb: edit_model::LensBlur, focus: f32) -> ImageBuf {
+        let edits = Edits {
+            lens_blur: lb,
+            ..Edits::default()
+        };
+        let img = pipeline::build_prefix_steps(
+            &edits,
+            RenderScale::FULL,
+            None,
+            RESAMPLER,
+            None,
+            Some(&Maps(focus)),
+        )
+        .iter()
+        .fold(scene(), |img, s| s.stage.apply(img));
+        let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
+            &edits,
+            RenderScale::FULL,
+            None,
+            None,
+            pipeline::RenderSpec {
+                resampler: RESAMPLER,
+                ..Default::default()
+            },
+            None,
+            TailRendering::colorimetric(),
+        );
+        tail.run(img)
+    }
+
+    /// Shape (c): the blurred render must differ from the unblurred one before it is pinned.
+    pub fn check(name: &str, lb: edit_model::LensBlur, focus: f32) {
+        let rendered = render(lb, focus);
+        let plain = render(edit_model::LensBlur { on: false, ..lb }, focus);
+        let worst = rendered
+            .data()
+            .iter()
+            .zip(plain.data())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst * 255.0 > 20.0,
+            "{name}: the blur changed nothing ({worst})"
+        );
+        compare_or_update(name, rendered);
+    }
+}
+
+fn lens_blur(bokeh: edit_model::Bokeh, focus: edit_model::LensFocus) -> edit_model::LensBlur {
+    edit_model::LensBlur {
+        on: true,
+        amount: 100.0,
+        focus,
+        focal_range: 10.0,
+        bokeh,
+        boost: 60.0,
+    }
+}
+
+/// M10.16d: Subject focus, round discs — the subject crisp, the lights round discs behind it, the
+/// near strip blurred in front. ⚠ The strip does not reach the disc: a foreground spreading over the
+/// subject is the gather's own test (`a_foreground_spreads_over_the_subject`).
+#[test]
+fn golden_lens_blur_subject_circle() {
+    lens_blur_scene::check(
+        "lens_blur_subject_circle",
+        lens_blur(edit_model::Bokeh::Circle, edit_model::LensFocus::Subject),
+        0.3,
+    );
+}
+
+/// M10.16d: Cat-eye — the lights' discs narrowed radially, more toward the frame's right edge.
+#[test]
+fn golden_lens_blur_subject_cateye() {
+    lens_blur_scene::check(
+        "lens_blur_subject_cateye",
+        lens_blur(edit_model::Bokeh::CatEye, edit_model::LensFocus::Subject),
+        0.3,
+    );
+}
+
+/// M10.16d: Point focus mid-background (depth 0.7) — no subject layer: the disc and the near strip
+/// blur, the background around 0.7 stays sharp.
+#[test]
+fn golden_lens_blur_point() {
+    lens_blur_scene::check(
+        "lens_blur_point",
+        lens_blur(
+            edit_model::Bokeh::Circle,
+            edit_model::LensFocus::Point { point: [0.7, 0.4] },
+        ),
+        0.7,
+    );
+}

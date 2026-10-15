@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.16d1: Lens Blur — the CPU reference, the section, Pick focus and Visualize (2026-10-15)](#2026-10-15--m1016d1-lens-blur--the-cpu-reference-the-section-pick-focus-and-visualize-branch-m1016d-lens-blur-not-merged)
 - [M10.16a: depth masks — an estimated depth map and the Depth range mask (2026-10-14)](#2026-10-14--m1016a-depth-masks--an-estimated-depth-map-and-the-depth-range-mask-branch-m1016a-depth-masks-merged-2026-10-14)
 - [M10.15d: Send marks to Immich, and Undo last send (2026-10-13)](#2026-10-13--m1015d-send-marks-to-immich-and-undo-last-send-branch-m1015d-immich-send-marks-merged-2026-10-14)
 - [M10.15c: Immich's own rating and favourite, filled once (2026-10-13)](#2026-10-13--m1015c-immichs-own-rating-and-favourite-filled-once-branch-m1015c-immich-rating-merged-2026-10-13)
@@ -176,6 +177,66 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-15 — M10.16d1: Lens Blur — the CPU reference, the section, Pick focus and Visualize (branch `m10.16d-lens-blur`, not merged)
+
+**The item:** Lens Blur — split from M10.16a by the author, ahead of b and c, on its depth map. Spec
+`2026-10-14-m10.16d-lens-blur-design.md`; **one spec, two plans**: d1 (this — the CPU reference, the whole
+UI, export) and d2 (the GPU twin, live). **The author's calls in the brainstorm:** purpose *portraits —
+subject separation*; focus **both, as a choice** (Subject: the Subject map's outline keeps the person crisp;
+Point: a click, depth only); bokeh **shapes too** (Circle, Blades, Ring, Cat-eye) with a Boost; speed **live
+while dragging** (hence d2); approach A, split.
+
+**⚠⚠ The gather is DENSE, not the spec's sampled spiral** (a ruling before Task 2, spec §2 rewritten to say
+so): a 128-point Vogel spiral sees a point highlight only where a sample lands on it — a street light became a
+scatter of specks, not a disc. Each SOURCE pixel goes to the finest level (½, ¼, …) at which its disc spans
+≤ `RCAP` = 8 working px, each level gathers densely from its own sources, the levels upsample and sum before
+the composite: clean, energy-conserving discs at a cost nearly constant in the photo's size. Further rulings
+while building it: the disc edge **anti-aliased** (2 × 2 sub-tests at the boundary — a hard test made ragged,
+octagon-like discs, 17.75 px for 16); a disc under 3 working px **normalised by its discrete footprint** (an
+analytic area over-brightens it); Boost rises from the frame's 99th-percentile luminance to **3×** it (at the
+percentile itself a plain mid-grey frame was lifted); the cat-eye is the **intersection of two unit discs**
+offset ±shift/2 (symmetric, each disc centred on its pixel).
+
+**Halo protection is structural:** a subject pixel has radius 0 so it is never a source (sabotaging that is
+inert BY CONSTRUCTION — recorded, not counted); the background layer is normalised by the weight it found, so
+behind the subject it fills from its surroundings; the foreground spreads its colour AND its coverage.
+
+**The spike (Task 4, `examples/lens_blur_probe.rs`, kept; release, load ≈ 2.5):** the CPU `render` alone is
+**0.19 s at 1600 px** on all three portraits (DSCF7121, DSCF6760, DSCF7006) and **3.4–3.5 s at 6240**; **no
+halo** at any outline in the zoomed crops. Both rules pass; RCAP 8 kept. ⚠ The crops show the outline is only
+as fine as IS-Net's Subject map — single strands against a plain wall take its hard edge.
+
+**Built:** `edit-model::LensBlur` (+ its own group, off for Paste/Sync/presets; off never written);
+`pipeline::stages::lens_blur::{aperture, radius, gather}` + `LensBlurStage`, **the prefix's last step**, after
+the masked capture corrections; `AiRasters` gains `plane(MapPlane)` and `lens_focus` (default `None`); the key
+`PrefixStepKey::LensBlur(settings, focus bits, depth id, subject id)`; the step **waits** — no step, the photo
+unblurred — until the depth map (and in Subject mode the Subject map) and the focus exist. App:
+`lens_blur_tool` (queries while ON, the focus rules, the waiting/no-subject line); ⚠ **the Subject focus is
+memoised on the two maps' content ids** — `build_prefix_steps` runs every frame and the median reads every
+subject pixel; Point focus is the 3 × 3 median of map **pixels** (a bilinear blend at a boundary focused on a
+depth nothing had). The section (after Effects): On, Amount, Focus Subject | Point + Pick focus, Focal range,
+Bokeh, Boost, Visualize depth; Pick focus is one eyedropper among the others; `eyedropper::decode_point` —
+**one** click-into-decode-space helper, now shared with the Select click; Visualize = the depth view with the
+sharp zone tinted in the accent. 3 goldens (`lens_blur_subject_circle`, `_subject_cateye`, `_point`).
+
+**⚠⚠ FOUND — the reset sweep had never clicked sixteen sliders.** `every_slider_resets_to_its_fields_default`
+opened every section at once; the panel then outgrew the 400 × 1400 harness screen and a slider off it took
+no click — so it "reset" untouched. A sabotage of Lens Blur's Amount default stayed GREEN. Off the screen:
+Detail's (Smoothness, Strength, Masking, Radius, …), the defringe amounts, Lens Blur's. Now one section per
+pass, each header toggled by its expandable node ("Detail" and "Color" are slider labels too), with an
+off-screen assertion in every pass — all sixteen do reset correctly; the sabotage now goes red. Also: *Reset
+adjustments*' hover listed every section and the seventh pushed it past the 110-character rule
+(`hover_coverage` caught it) — it no longer lists them.
+
+**Sabotages:** focus bits out of the key → red; queries ignoring Off → red; the Subject plane without Refine →
+red; a Bokeh change without an undo step → red; Amount's default wrong → red (after the sweep fix); Pick focus
+storing the frame point → red ("not through the turn"); Visualize ignoring Off → red; Circle drawn as Blades
+→ two goldens red (41 and 176 levels). Inert: S1 (subject pixels weighted into the background) by
+construction.
+
+**Open:** the author's look (Amount's 3 %, the ramp, Boost) — the constants are first values; then d2, the
+GPU twin, its own plan.
 
 ### 2026-10-14 — M10.16a: depth masks — an estimated depth map and the Depth range mask (branch `m10.16a-depth-masks`, merged 2026-10-14)
 

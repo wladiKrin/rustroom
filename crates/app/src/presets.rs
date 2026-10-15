@@ -85,6 +85,7 @@ fn starter_groups() -> EditGroups {
         retouch: false,
         rendering: false,
         negative: false,
+        lens_blur: false,
     }
 }
 
