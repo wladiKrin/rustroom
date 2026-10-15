@@ -54,10 +54,10 @@ pub(crate) fn uniform(mode: Mode, d: &Dims, relu: bool, add1: bool, add2: bool) 
     ]
 }
 
-/// Workgroups: 64 rows by 64 columns each.
+/// Workgroups: `TM` rows by `TN` columns each — the kernel's tile.
 pub(crate) fn groups(mode: Mode, d: &Dims) -> (u32, u32) {
     let (m, n, _) = d.mnk(mode);
-    (m.div_ceil(64), n.div_ceil(64))
+    (m.div_ceil(super::wgsl::TM), n.div_ceil(super::wgsl::TN))
 }
 
 /// The binding: the source, the packed weights, the destination, two residuals, the parameters.

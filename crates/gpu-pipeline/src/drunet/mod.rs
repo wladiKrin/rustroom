@@ -346,6 +346,27 @@ mod tests {
         assert!(net.run(&[0.5; 16 * 16 * 3], 16, 16, 10.0).is_ok());
     }
 
+    /// Times a full-size DRUNet (random weights — the speed does not depend on them) on a 512 px tile:
+    /// the kernel's own number, without the app or the model file (Task 6's tuning loop).
+    #[test]
+    #[ignore = "a timing, not a check — run with --release"]
+    fn a_full_size_tile_time() {
+        let Some(ctx) = ctx() else { return };
+        let arch = Arch {
+            widths: [64, 128, 256, 512],
+            blocks: 4,
+        };
+        let mut net = GpuDrunet::new(ctx, &random_weights(&arch, 5)).expect("built");
+        let rgb = vec![0.5; 512 * 512 * 3];
+        let mut best = f64::MAX;
+        for _ in 0..3 {
+            let t = std::time::Instant::now();
+            net.run(&rgb, 512, 512, 10.0).expect("ran");
+            best = best.min(t.elapsed().as_secs_f64());
+        }
+        eprintln!("a 512 px tile: {:.3} s (best of 3)", best);
+    }
+
     /// A wrong file is refused at construction — the shape check, not a garbage run.
     #[test]
     fn weights_of_another_network_are_refused() {
