@@ -106,3 +106,69 @@ pub(crate) fn run(mode: Mode, src: &[f32], d: &Dims, wt: &Tensor) -> Vec<f32> {
         Mode::Up2 => up2(src, d, wt),
     }
 }
+
+fn dims(w: usize, h: usize, cin: usize, cout: usize) -> Dims {
+    Dims {
+        in_w: w as u32,
+        in_h: h as u32,
+        cin: cin as u32,
+        cout: cout as u32,
+    }
+}
+
+fn add(a: &[f32], b: &[f32]) -> Vec<f32> {
+    a.iter().zip(b).map(|(x, y)| x + y).collect()
+}
+
+/// `x + conv(relu(conv(x)))`.
+fn block(x: &[f32], wt: &super::Weights, prefix: &str, ch: usize, w: usize, h: usize) -> Vec<f32> {
+    let d = dims(w, h, ch, ch);
+    let t: Vec<f32> = conv3(x, &d, &wt[&format!("{prefix}.res.0.weight")])
+        .into_iter()
+        .map(|v| v.max(0.0))
+        .collect();
+    add(x, &conv3(&t, &d, &wt[&format!("{prefix}.res.2.weight")]))
+}
+
+/// DRUNet's forward pass on a CHW `[4, h, w]` input, `[3, h, w]` out — the file's graph, line by line.
+pub(crate) fn forward(
+    a: &super::arch::Arch,
+    wt: &super::Weights,
+    input: &[f32],
+    width: usize,
+    height: usize,
+) -> Vec<f32> {
+    let (c, nb) = (a.widths, a.blocks);
+    let (mut w, mut h) = (width, height);
+    let mut cur = conv3(input, &dims(w, h, 4, c[0]), &wt["m_head.weight"]);
+    let mut skips = vec![cur.clone()];
+    for l in 1..=3 {
+        for b in 0..nb {
+            cur = block(&cur, wt, &format!("m_down{l}.{b}"), c[l - 1], w, h);
+        }
+        cur = down2(
+            &cur,
+            &dims(w, h, c[l - 1], c[l]),
+            &wt[&format!("m_down{l}.{nb}.weight")],
+        );
+        (w, h) = (w / 2, h / 2);
+        skips.push(cur.clone());
+    }
+    for b in 0..nb {
+        cur = block(&cur, wt, &format!("m_body.{b}"), c[3], w, h);
+    }
+    cur = add(&cur, &skips[3]);
+    for l in (1..=3).rev() {
+        cur = up2(
+            &cur,
+            &dims(w, h, c[l], c[l - 1]),
+            &wt[&format!("m_up{l}.0.weight")],
+        );
+        (w, h) = (w * 2, h * 2);
+        for b in 0..nb {
+            cur = block(&cur, wt, &format!("m_up{l}.{}", b + 1), c[l - 1], w, h);
+        }
+        cur = add(&cur, &skips[l - 1]);
+    }
+    conv3(&cur, &dims(w, h, c[0], 3), &wt["m_tail.weight"])
+}
