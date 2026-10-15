@@ -79,6 +79,8 @@ struct CanvasInputs {
     app_brush_flow: f32,
     /// Show depth map (M10.16a) — view state on the app.
     app_show_depth_map: bool,
+    /// Lens Blur's Visualize depth (M10.16d) — view state on the app.
+    app_show_lens_depth: bool,
 }
 
 /// Copy out everything the canvas reads — with the **outer** `ui`, whose rect `press_on_canvas` asks about.
@@ -182,6 +184,7 @@ fn hoist(app: &RustroomApp, ui: &egui::Ui) -> CanvasInputs {
         app_crop_aspect: app.crop_aspect,
         app_brush_flow: app.brush_flow,
         app_show_depth_map: app.show_depth_map,
+        app_show_lens_depth: app.show_lens_depth,
     }
 }
 

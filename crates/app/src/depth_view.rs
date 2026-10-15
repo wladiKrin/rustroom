@@ -13,6 +13,29 @@ use ai_mask::ProbMap;
 /// `dm` — the same pair the render's coverage reads, which is what makes the view line up with the
 /// mask (`the_view_lines_up_with_the_coverage`).
 pub fn image(map: &ProbMap, dm: &DecodeMap, w: usize, h: usize) -> Vec<u8> {
+    render(map, dm, w, h, None)
+}
+
+/// [`image`] with the depths inside `band` (0 near ..= 1 far, both ends included) blended halfway
+/// toward `tint` — Lens Blur's sharp zone (M10.16d).
+pub fn image_with_band(
+    map: &ProbMap,
+    dm: &DecodeMap,
+    w: usize,
+    h: usize,
+    band: (f32, f32),
+    tint: [u8; 3],
+) -> Vec<u8> {
+    render(map, dm, w, h, Some((band, tint)))
+}
+
+fn render(
+    map: &ProbMap,
+    dm: &DecodeMap,
+    w: usize,
+    h: usize,
+    band: Option<((f32, f32), [u8; 3])>,
+) -> Vec<u8> {
     use rayon::prelude::*;
     let mut out = vec![0u8; w * h * 4];
     out.par_chunks_mut((w * 4).max(1))
@@ -20,8 +43,15 @@ pub fn image(map: &ProbMap, dm: &DecodeMap, w: usize, h: usize) -> Vec<u8> {
         .for_each(|(y, row)| {
             for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let [u, v] = dm.frame_to_decode(x as f32 + 0.5, y as f32 + 0.5);
-                let grey = 255 - (map.at(u, v) * 255.0).round() as u8;
-                *px = [grey, grey, grey, 255];
+                let d = map.at(u, v);
+                let grey = 255 - (d * 255.0).round() as u8;
+                *px = match band {
+                    Some(((lo, hi), tint)) if (lo..=hi).contains(&d) => {
+                        let mix = |t: u8| ((grey as u16 + t as u16) / 2) as u8;
+                        [mix(tint[0]), mix(tint[1]), mix(tint[2]), 255]
+                    }
+                    _ => [grey, grey, grey, 255],
+                };
             }
         });
     out
@@ -53,6 +83,40 @@ mod tests {
             &[0, 0, 0, 255],
             "the far half black, and opaque"
         );
+    }
+
+    /// M10.16d: exactly the pixels whose depth is inside the band move toward the tint; every other
+    /// pixel is the plain view's.
+    #[test]
+    fn a_band_tints_exactly_its_depths() {
+        let map = ProbMap::from_fn(40, 20, |x, _| x as f32 / 39.0);
+        let dm = DecodeMap::new(
+            &Geometry::default(),
+            Perspective::default(),
+            40,
+            20,
+            None,
+            40,
+            20,
+        );
+        let plain = image(&map, &dm, 40, 20);
+        let banded = image_with_band(&map, &dm, 40, 20, (0.3, 0.6), [255, 0, 0]);
+        let mut inside = 0;
+        for y in 0..20 {
+            for x in 0..40 {
+                let i = (y * 40 + x) * 4;
+                let [u, v] = dm.frame_to_decode(x as f32 + 0.5, y as f32 + 0.5);
+                let d = map.at(u, v);
+                if (0.3..=0.6).contains(&d) {
+                    inside += 1;
+                    assert_ne!(banded[i..i + 4], plain[i..i + 4], "({x}, {y}) at {d}");
+                    assert!(banded[i] > banded[i + 1], "({x}, {y}): toward the red");
+                } else {
+                    assert_eq!(banded[i..i + 4], plain[i..i + 4], "({x}, {y}) at {d}");
+                }
+            }
+        }
+        assert!((150..=300).contains(&inside), "fixture: {inside} inside");
     }
 
     /// Under a rotation, the view's white is exactly where a near-half depth range covers — the view

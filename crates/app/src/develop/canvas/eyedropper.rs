@@ -1,4 +1,5 @@
-//! The two eyedroppers: white balance and defringe, each a click on the photo.
+//! The eyedroppers: white balance, the film base, defringe and Lens Blur's focus — each a click on
+//! the photo.
 
 use crate::Session;
 use eframe::egui;
@@ -161,6 +162,53 @@ pub(super) fn pick_fringe(
     }
 }
 
+/// Frame point `p` (screen) → the decode-normalised point under it — through crop, rotation,
+/// perspective AND the lens corrector: where an AI map, and so a click that aims one, lives.
+///
+/// ⚠ The ONE construction for a click into decode space — the Select click and Pick focus both
+/// call it, so the two cannot disagree about where a point on the photo is.
+pub(super) fn decode_point(s: &Session, frame_rect: egui::Rect, p: egui::Pos2) -> [f32; 2] {
+    let (dw, dh) = (s.buffer.width(), s.buffer.height());
+    let dm = rustroom_app::ai_space::DecodeMap::new(
+        &s.edits.geometry,
+        s.edits.perspective,
+        frame_rect.width() as usize,
+        frame_rect.height() as usize,
+        s.lens
+            .shot
+            .as_ref()
+            .and_then(|l| rustroom_app::ai_space::corrector_for(l, &s.edits, dw, dh)),
+        dw,
+        dh,
+    );
+    dm.frame_to_decode(p.x - frame_rect.left(), p.y - frame_rect.top())
+}
+
+/// Lens Blur's Pick focus (M10.16d): a Point focus at the decode point under the click, so it stays
+/// on its object through every crop, rotation and lens change. Disarmed after one click; `true` when
+/// this pushed history — one click, one undo step.
+pub(super) fn pick_focus(
+    s: &mut Session,
+    resp: &egui::Response,
+    frame_rect: egui::Rect,
+    tool: Tool,
+) -> bool {
+    if !resp.clicked() {
+        return false;
+    }
+    let Some(p) = resp.interact_pointer_pos() else {
+        return false;
+    };
+    let point = decode_point(s, frame_rect, p);
+    s.picking_focus = false;
+    if !point.iter().all(|v| (0.0..=1.0).contains(v)) {
+        return false;
+    }
+    s.edits.lens_blur.focus = edit_model::LensFocus::Point { point };
+    s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
+    s.history.push(s.edits.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,6 +365,74 @@ mod tests {
         let (d, status) = run([0.3; 3]);
         assert_eq!(d, edit_model::Defringe::default());
         assert!(status.contains("No colour"), "{status}");
+    }
+
+    /// M10.16d: armed, Pick focus sets a Point at the DECODE point under the click — through the
+    /// quarter turn, the Select click's path — disarms, and is one undo step. Then a crop: the stored
+    /// point and the depth it reads stay the clicked object's.
+    #[test]
+    fn the_focus_point_survives_a_crop() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let depth = std::sync::Arc::new(ai_mask::ProbMap::from_fn(80, 40, |x, _| {
+            if x < 40 {
+                0.2
+            } else {
+                0.8
+            }
+        }));
+        {
+            let s = app.session.as_mut().expect("a session");
+            s.edits.geometry.orientation = edit_model::Orientation {
+                rotate: edit_model::Quarter::Cw90,
+                mirror: false,
+            };
+            s.edits.lens_blur = edit_model::LensBlur {
+                on: true,
+                focus: edit_model::LensFocus::Point { point: [0.5, 0.5] },
+                ..Default::default()
+            };
+            s.history.push(s.edits.clone());
+            s.picking_focus = true;
+        }
+        let steps = app.session.as_ref().unwrap().history.undo_depth();
+        let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+        // The frame's upper right — under a clockwise quarter turn, the decode's LEFT half.
+        crate::develop::canvas::test_support::click_through(
+            &mut app,
+            &ctx,
+            centre + egui::vec2(20.0, -60.0),
+        );
+        let s = app.session.as_mut().expect("a session");
+        assert!(!s.picking_focus, "the picker stayed armed after a click");
+        assert_eq!(s.history.undo_depth(), steps + 1, "not one undo step");
+        let edit_model::LensFocus::Point { point } = s.edits.lens_blur.focus else {
+            panic!("no Point focus: {:?}", s.edits.lens_blur.focus)
+        };
+        assert!(
+            point[0] < 0.45 && point[1] < 0.5,
+            "not through the turn: {point:?}"
+        );
+        let lb = s.edits.lens_blur;
+        let f = rustroom_app::lens_blur_tool::focus_depth(&lb, &depth, None).expect("a focus");
+        assert!((f - 0.2).abs() < 0.01, "{f}");
+        // A crop and another turn later: the same point, the same depth.
+        s.edits.geometry.crop = edit_model::CropRect {
+            left: 0.1,
+            top: 0.2,
+            right: 0.7,
+            bottom: 0.7,
+        };
+        s.edits.geometry.orientation.rotate = edit_model::Quarter::Cw180;
+        assert_eq!(
+            s.edits.lens_blur.focus,
+            edit_model::LensFocus::Point { point }
+        );
+        assert_eq!(
+            rustroom_app::lens_blur_tool::focus_depth(&s.edits.lens_blur, &depth, None),
+            Some(f)
+        );
     }
 
     /// ⚠ The guard on the guard: "a click changed the edits" means nothing unless a click with
