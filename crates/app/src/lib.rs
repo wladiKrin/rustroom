@@ -3,6 +3,7 @@
 pub mod action_log;
 pub mod ai_cache;
 pub mod ai_coverage;
+pub mod ai_denoise;
 pub mod ai_space;
 pub mod ai_worker;
 pub mod auto_tone_tool;
