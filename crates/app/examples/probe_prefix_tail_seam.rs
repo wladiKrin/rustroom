@@ -111,6 +111,7 @@ fn main() {
                     lens: None,
                     resampler,
                     airlight,
+                    ai: None,
                 },
                 ctx,
             );

@@ -226,6 +226,7 @@ pub fn export_one(
                         // ⚠ The same frame-global value the CPU prefix was built with, so the twin
                         // cannot disagree with the shader about what colour the haze is.
                         airlight,
+                        ai: Some(&ai),
                     },
                     ctx,
                 )

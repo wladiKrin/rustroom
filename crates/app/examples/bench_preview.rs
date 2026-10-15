@@ -462,6 +462,7 @@ fn main() {
                             pipeline::Resampler::Bilinear,
                             None,
                         ),
+                        ai: None,
                     },
                     ctx,
                 ) else {
@@ -506,6 +507,7 @@ fn main() {
                                 pipeline::Resampler::Bilinear,
                                 None,
                             ),
+                            ai: None,
                         },
                         ctx,
                     )
@@ -597,6 +599,7 @@ fn main() {
                                     pipeline::Resampler::Bilinear,
                                     None,
                                 ),
+                                ai: None,
                             },
                             ctx,
                         ) {

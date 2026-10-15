@@ -21,6 +21,10 @@ pub(super) struct Walk<'a> {
     pub(super) lens: Option<lens_profile::LensShot>,
     pub(super) resampler: pipeline::Resampler,
     pub(super) gpu_tail: bool,
+    /// The photo's AI and depth maps and the decode's size (M10.16d2) — the GPU seam builds Lens
+    /// Blur's twin from them, as `build_prefix_steps` built its step.
+    pub(super) ai_maps: &'a crate::ai_coverage::AiMaps,
+    pub(super) decode: (usize, usize),
 }
 
 impl Walk<'_> {
@@ -56,7 +60,8 @@ pub(super) struct PrefixOut {
 
 /// Plan one render's prefix: the frame-global airlight, then the steps.
 ///
-/// `ai` — the photo's AI and depth maps (M10.16a), for a mask's Noise reduction, Dehaze and Defringe.
+/// `ai_maps` — the photo's AI and depth maps (M10.16a), for a mask's Noise reduction, Dehaze and Defringe,
+/// and Lens Blur's step and its GPU twin (M10.16d).
 pub(super) fn plan<'a>(
     edits: &'a Edits,
     buffer: &Arc<ImageBuf>,
@@ -64,7 +69,7 @@ pub(super) fn plan<'a>(
     scale: RenderScale,
     spec: &FrameSpec,
     cache: &mut PrefixCache,
-    ai: &crate::ai_coverage::AiMaps,
+    ai_maps: &'a crate::ai_coverage::AiMaps,
 ) -> Walk<'a> {
     let FrameSpec {
         max_dim,
@@ -99,7 +104,7 @@ pub(super) fn plan<'a>(
     // ⚠ Cloned rather than moved: the GPU seam below needs the same profile per step, and a
     // `LensShot` is a handful of bytes plus a shared profile handle.
     let ai = crate::ai_coverage::AiSource {
-        maps: ai,
+        maps: ai_maps,
         edits,
         lens: lens.as_ref(),
         decode: (buffer.width(), buffer.height()),
@@ -126,6 +131,8 @@ pub(super) fn plan<'a>(
         lens,
         resampler,
         gpu_tail,
+        ai_maps,
+        decode: (buffer.width(), buffer.height()),
     }
 }
 
@@ -187,8 +194,17 @@ pub(super) fn walk_whole(
         ref lens,
         resampler,
         gpu_tail,
+        ai_maps,
+        decode,
         ..
     } = *walk;
+    // ⚠ M10.16d2: the same maps the steps were built from, for Lens Blur's GPU twin.
+    let ai = crate::ai_coverage::AiSource {
+        maps: ai_maps,
+        edits,
+        lens: lens.as_ref(),
+        decode,
+    };
     let mut gpu_prefix_steps = 0usize;
     let mut gpu_prefix_uploads = 0usize;
     // The output size of a prefix whose last step handed off — there is no CPU image to ask.
@@ -246,6 +262,7 @@ pub(super) fn walk_whole(
                         lens: lens.as_ref(),
                         resampler,
                         airlight,
+                        ai: Some(&ai),
                     },
                     ctx,
                 )
