@@ -111,9 +111,120 @@ impl Drunet {
     }
 }
 
+/// Every initializer of DRUNet's file as `(name, shape, values)` — the GPU engine's weights (M10.16b2),
+/// read by tract's own parser so no second ONNX reader exists.
+pub fn weights(path: &std::path::Path) -> Result<Vec<(String, Vec<usize>, Vec<f32>)>, InferError> {
+    use tract_onnx::prelude::Framework;
+    let proto = tract_onnx::onnx().proto_model_for_path(path).map_err(err)?;
+    weights_of(&proto)
+}
+
+/// [`weights`] from a parsed model. ⚠ Float only (`data_type` 1); the values from `raw_data`
+/// (little-endian) or `float_data`, and their count must be the shape's.
+pub fn weights_of(
+    proto: &tract_onnx::pb::ModelProto,
+) -> Result<Vec<(String, Vec<usize>, Vec<f32>)>, InferError> {
+    let graph = proto
+        .graph
+        .as_ref()
+        .ok_or_else(|| InferError::Model("no graph".into()))?;
+    graph
+        .initializer
+        .iter()
+        .map(|t| {
+            if t.data_type != 1 {
+                return Err(InferError::Model(format!("{}: not float", t.name)));
+            }
+            let shape: Vec<usize> = t.dims.iter().map(|&d| d.max(0) as usize).collect();
+            let data: Vec<f32> = if t.raw_data.is_empty() {
+                t.float_data.clone()
+            } else {
+                t.raw_data
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|b| f32::from_le_bytes(*b))
+                    .collect()
+            };
+            if data.len() != shape.iter().product::<usize>() {
+                return Err(InferError::Model(format!(
+                    "{}: {} values for {shape:?}",
+                    t.name,
+                    data.len()
+                )));
+            }
+            Ok((t.name.clone(), shape, data))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tensor(
+        name: &str,
+        dims: &[i64],
+        raw: Option<&[f32]>,
+        floats: &[f32],
+    ) -> tract_onnx::pb::TensorProto {
+        tract_onnx::pb::TensorProto {
+            name: name.to_string(),
+            dims: dims.to_vec(),
+            data_type: 1, // FLOAT
+            raw_data: raw.map_or_else(Vec::new, |r| {
+                r.iter().flat_map(|v| v.to_le_bytes()).collect()
+            }),
+            float_data: floats.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    fn model(init: Vec<tract_onnx::pb::TensorProto>) -> tract_onnx::pb::ModelProto {
+        tract_onnx::pb::ModelProto {
+            graph: Some(tract_onnx::pb::GraphProto {
+                initializer: init,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Both encodings ONNX allows, each with its shape.
+    #[test]
+    fn weights_read_raw_and_float_data() {
+        let m = model(vec![
+            tensor("a", &[2, 1], Some(&[1.5, -2.0]), &[]),
+            tensor("b", &[3], None, &[0.25, 0.5, 0.75]),
+        ]);
+        let w = weights_of(&m).expect("read");
+        assert_eq!(w[0], ("a".to_string(), vec![2, 1], vec![1.5, -2.0]));
+        assert_eq!(w[1], ("b".to_string(), vec![3], vec![0.25, 0.5, 0.75]));
+    }
+
+    /// A tensor whose data does not fill its shape, or is not float, is an error — never a short weight.
+    #[test]
+    fn a_short_or_foreign_tensor_is_refused() {
+        assert!(weights_of(&model(vec![tensor("a", &[4], Some(&[1.0]), &[])])).is_err());
+        let mut t = tensor("a", &[1], None, &[1.0]);
+        t.data_type = 7; // INT64
+        assert!(weights_of(&model(vec![t])).is_err());
+    }
+
+    /// The real file: DRUNet's 64 weights (run with `RUSTROOM_DRUNET`).
+    #[test]
+    #[ignore = "needs the model; set RUSTROOM_DRUNET"]
+    fn the_real_weights_are_drunets() {
+        let path = std::env::var("RUSTROOM_DRUNET").expect("RUSTROOM_DRUNET");
+        let w = weights(std::path::Path::new(&path)).expect("read");
+        assert_eq!(w.len(), 64);
+        let head = w
+            .iter()
+            .find(|(n, _, _)| n == "m_head.weight")
+            .expect("head");
+        assert_eq!(head.1, vec![64, 4, 3, 3]);
+        assert_eq!(head.2.len(), 64 * 4 * 9);
+    }
 
     #[test]
     fn a_tile_must_be_a_multiple_of_eight() {
