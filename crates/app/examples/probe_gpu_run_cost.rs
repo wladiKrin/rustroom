@@ -57,6 +57,7 @@ fn main() {
                     lens: lens.as_ref(),
                     resampler: Resampler::default(),
                     airlight: air,
+                    ai: None,
                 },
                 ctx,
             )

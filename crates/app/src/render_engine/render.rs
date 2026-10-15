@@ -883,6 +883,52 @@ mod tests {
         assert_eq!(ran.gpu_prefix_steps, 1, "dehaze must have run on the GPU");
     }
 
+    /// ⚠⚠ M10.16d2's carrier, `a_dehaze_prefix_step_runs_on_the_gpu`'s reason: the seam changes no
+    /// pixel a test can read, so only the count can see that the walk hands it the maps.
+    #[test]
+    fn a_lens_blur_prefix_step_runs_on_the_gpu() {
+        if gpu_pipeline::shared().is_none() {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        }
+        let edits = edit_model::Edits {
+            lens_blur: edit_model::LensBlur {
+                on: true,
+                amount: 100.0,
+                focus: edit_model::LensFocus::Point { point: [0.5, 0.5] },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut brush = BrushCache::default();
+        brush.ai.write().expect("ai maps").insert(
+            crate::ai_coverage::MapQuery::Depth,
+            std::sync::Arc::new(ai_mask::ProbMap::from_fn(64, 48, |x, _| x as f32 / 63.0)),
+        );
+        let (_, ran) = render_cached(
+            &hazy_buffer(),
+            &edits,
+            FrameSpec {
+                gpu_tail: true,
+                ..FrameSpec::fit(200)
+            },
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            pipeline::TailRendering::default(),
+            &mut PrefixCache::default(),
+            &mut brush,
+        );
+        assert_eq!(
+            ran.prefix_stages, 1,
+            "fixture check: the lens blur step must be built"
+        );
+        assert_eq!(
+            ran.gpu_prefix_steps, 1,
+            "lens blur must have run on the GPU"
+        );
+    }
+
     fn straightened(angle: f32, cache: &mut PrefixCache) -> (RenderedFrame, Ran) {
         straightened_at(angle, 200, cache)
     }

@@ -500,6 +500,7 @@ fn main() {
                     Resampler::default(),
                     Some(shot.clone()),
                 ),
+                ai: None,
             },
             ctx,
         ) {

@@ -179,6 +179,7 @@ fn main() {
                             lens: shot.as_ref(),
                             resampler: res,
                             airlight: air_e,
+                            ai: None,
                         },
                         ctx,
                     );

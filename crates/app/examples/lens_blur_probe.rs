@@ -4,7 +4,11 @@
 //!
 //! ```text
 //! cargo run --release --example lens_blur_probe -- <out dir> <photo>…
+//! cargo run --release --example lens_blur_probe -- gpu <photo>…
 //! ```
+//! `gpu` (M10.16d2): the GPU twin's frame at 1600 px — the planes through the app's real path
+//! (`AiSource::plane`), the twin's construction, five warm frames with GPU timestamps, and its parity
+//! with the CPU reference on the real photograph.
 //! Depth and Subject are computed as the app does (`depth_map::RECIPE`; IS-Net), the photo read upright.
 
 use image::{GenericImage, ImageDecoder};
@@ -76,8 +80,137 @@ fn focus(depth: &[f32], subject: &[f32]) -> f32 {
     under[under.len() / 2]
 }
 
+/// The 8-bit photo as linear light.
+fn linear(img: &image::RgbImage) -> core_image::ImageBuf {
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let mut buf = core_image::ImageBuf::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let p = img.get_pixel(x as u32, y as u32);
+            buf.set_pixel(
+                x,
+                y,
+                [0, 1, 2].map(|c| color::srgb_to_linear(p[c] as f32 / 255.0)),
+            );
+        }
+    }
+    buf
+}
+
+fn ms(d: std::time::Duration) -> f64 {
+    d.as_secs_f64() * 1000.0
+}
+
+fn median(mut v: Vec<f64>) -> f64 {
+    v.sort_by(f64::total_cmp);
+    v.get(v.len() / 2).copied().unwrap_or(f64::NAN)
+}
+
+fn gpu_mode(photos: &[String]) {
+    use pipeline::PipelineStage;
+    use rustroom_app::ai_coverage::{AiMaps, AiSource, MapQuery};
+    let Some(ctx) = gpu_pipeline::shared().cloned() else {
+        eprintln!("no GPU adapter");
+        return;
+    };
+    let models = rustroom_app::ai_cache::models_dir().expect("models dir");
+    let mut depth_net = ai_mask::depth::Depth::load(
+        &models.join(ai_mask::ModelId::DepthAnythingV2Small.spec().file),
+    )
+    .expect("depth model");
+    let subject_net = ai_mask::Subject::load(
+        &models.join(ai_mask::ModelId::IsNet.spec().file),
+        ai_mask::SubjectModel::IsNet,
+    )
+    .expect("subject model");
+    let r = rustroom_app::depth_map::RECIPE;
+    for photo in photos {
+        let img = upright(photo);
+        let guide = fit(&img, r.store_long);
+        let raw = depth_net.run(&guide, r.infer_long).expect("depth");
+        let depth =
+            rustroom_app::depth_map::finish(&ai_mask::depth::normalise(&raw, r.scale), &guide, &r);
+        let subject = subject_net.run(&fit(&img, 1024)).expect("subject");
+        let mut maps = AiMaps::default();
+        maps.insert(MapQuery::Depth, std::sync::Arc::new(depth));
+        maps.insert(
+            MapQuery::Prompt(edit_model::AiPrompt::Subject),
+            std::sync::Arc::new(subject),
+        );
+        let edits = edit_model::Edits {
+            lens_blur: edit_model::LensBlur {
+                on: true,
+                ..edit_model::LensBlur::default()
+            },
+            ..Default::default()
+        };
+        let lb = edits.lens_blur;
+        let buf = linear(&fit(&img, 1600));
+        let (w, h) = (buf.width(), buf.height());
+        let src = AiSource {
+            maps: &maps,
+            edits: &edits,
+            lens: None,
+            decode: (img.width() as usize, img.height() as usize),
+        };
+        let t = std::time::Instant::now();
+        let i = pipeline::lens_blur::inputs(&lb, &src).expect("inputs");
+        let t_inputs = ms(t.elapsed());
+        let t = std::time::Instant::now();
+        let _ = pipeline::lens_blur::plane_bytes(&*i.depth.0, w, h);
+        let t_depth = ms(t.elapsed());
+        let t = std::time::Instant::now();
+        let _ = pipeline::lens_blur::plane_bytes(&*i.subject.as_ref().expect("subject").0, w, h);
+        let t_subject = ms(t.elapsed());
+        let t = std::time::Instant::now();
+        let _ = gpu_pipeline::GpuLensBlurStage::new(&lb, &i, &buf, &ctx).expect("the twin");
+        let t_new = ms(t.elapsed());
+        // ⚠ A drag's next frame: inputs and the twin built afresh, the planes from the memo.
+        let t = std::time::Instant::now();
+        let i = pipeline::lens_blur::inputs(&lb, &src).expect("inputs");
+        let stage = gpu_pipeline::GpuLensBlurStage::new(&lb, &i, &buf, &ctx).expect("the twin");
+        let t_warm = ms(t.elapsed());
+        let mut chain = gpu_pipeline::GpuChain::new(ctx.clone(), vec![Box::new(stage)]);
+        chain.set_timing(true);
+        let _ = chain.apply(buf.clone()); // compiles the program
+        let (mut walls, mut spans) = (Vec::new(), Vec::new());
+        let mut gpu = buf.clone();
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            gpu = chain.apply(buf.clone());
+            walls.push(ms(t.elapsed()));
+            if let Some(tm) = chain.last_timings() {
+                spans.push(tm.gpu_span_ms);
+            }
+        }
+        let t = std::time::Instant::now();
+        let cpu = pipeline::lens_blur::LensBlurStage::new(
+            &lb,
+            i.focus,
+            i.depth.0.clone(),
+            i.subject.as_ref().map(|s| s.0.clone()),
+        )
+        .apply(buf.clone());
+        let t_cpu = ms(t.elapsed());
+        let d = gpu_pipeline::compare(&cpu, &gpu);
+        println!(
+            "{photo}: {w}x{h}  inputs {t_inputs:.1} ms (planes cold: depth {t_depth:.1}, subject {t_subject:.1})  \
+             twin new {t_new:.1} / {t_warm:.1} ms (planes memoised)  GPU frame {:.1} ms wall / {:.1} ms passes (median of 5)  \
+             CPU {t_cpu:.0} ms  parity worst {:.3} levels over {} of {}",
+            median(walls),
+            median(spans),
+            d.worst_levels,
+            d.differing,
+            d.total
+        );
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("gpu") {
+        return gpu_mode(&args[2..]);
+    }
     let out = std::path::PathBuf::from(&args[1]);
     let models = rustroom_app::ai_cache::models_dir().expect("models dir");
     let mut depth_net = ai_mask::depth::Depth::load(

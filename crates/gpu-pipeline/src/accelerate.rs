@@ -325,6 +325,10 @@ pub struct SeamFacts<'a> {
     /// dehazed tone breathed as the angle moved. ⚠ Not an `Option`: a `None` arm would be a silent
     /// fallback to estimating, which is how it survived.
     pub airlight: [f32; 3],
+    /// The photo's AI and depth maps (M10.16d2) — what Lens Blur's twin is built from, through the
+    /// step's own lookup. `None` where a caller has none: the twin then declines, as the step
+    /// itself is absent without its maps.
+    pub ai: Option<&'a dyn pipeline::AiRasters>,
 }
 
 pub fn accelerate_prefix_stage(
@@ -339,6 +343,7 @@ pub fn accelerate_prefix_stage(
         lens,
         resampler,
         airlight,
+        ai,
     } = facts;
     // ⚠ Name-matched, exactly as `REPLACEABLE` is, and for the same reason: a `dyn PipelineStage`
     // exposes only `name()` and `apply()`, while the caller still holds the `Edits` it was built
@@ -384,6 +389,17 @@ pub fn accelerate_prefix_stage(
             resampler,
             image,
         )?),
+        // ⚠⚠ M10.16d2: built through `pipeline::lens_blur::inputs` — the lookup the CPU step was
+        // keyed and built with — so the twin blurs with exactly its planes and focus.
+        "lens_blur" => {
+            let i = pipeline::lens_blur::inputs(&edits.lens_blur, ai?)?;
+            Box::new(crate::GpuLensBlurStage::new(
+                &edits.lens_blur,
+                &i,
+                image,
+                ctx,
+            )?)
+        }
         _ => return None,
     };
     // ⚠ The same question the tail asks, and it fails toward the CPU for the same reason: a wrong
@@ -1250,6 +1266,7 @@ mod tests {
                 lens: None,
                 resampler: RES,
                 airlight: pipeline::airlight(&img),
+                ai: None,
             },
             &ctx,
         )
@@ -1283,6 +1300,7 @@ mod tests {
                     lens: None,
                     resampler: RES,
                     airlight: air,
+                    ai: None,
                 },
                 &ctx,
             )
@@ -1324,6 +1342,7 @@ mod tests {
                 lens: None,
                 resampler: RES,
                 airlight: pipeline::airlight(&img),
+                ai: None,
             },
             &ctx,
         )
@@ -1360,6 +1379,7 @@ mod tests {
                 lens: None,
                 resampler: RES,
                 airlight: pipeline::airlight(&img),
+                ai: None,
             },
             &ctx,
         )
@@ -1407,6 +1427,7 @@ mod tests {
                         lens: None,
                         resampler: RES,
                         airlight: pipeline::airlight(&img),
+                        ai: None,
                     },
                     &ctx
                 )
@@ -1414,6 +1435,137 @@ mod tests {
                 "`{name}` has no GPU twin and must be left alone"
             );
         }
+    }
+
+    /// M10.16d2: Lens Blur's maps as the seam is handed them — depth ramping left to right, an empty
+    /// subject, the focus at 0.3.
+    struct LensPlanes;
+    impl pipeline::AiRasters for LensPlanes {
+        fn source(
+            &self,
+            _: &edit_model::Mask,
+        ) -> Option<(std::sync::Arc<dyn pipeline::RasterSource>, u64)> {
+            None
+        }
+        fn plane(
+            &self,
+            which: pipeline::MapPlane,
+        ) -> Option<(std::sync::Arc<dyn pipeline::RasterSource>, u64)> {
+            Some(match which {
+                pipeline::MapPlane::Depth => (std::sync::Arc::new(Ramp(true)), 1),
+                pipeline::MapPlane::Subject => (std::sync::Arc::new(Ramp(false)), 2),
+            })
+        }
+        fn lens_focus(&self, _: &edit_model::LensBlur) -> Option<f32> {
+            Some(0.3)
+        }
+    }
+
+    /// `true`: 0 at the left to 255 at the right; `false`: 0 everywhere.
+    struct Ramp(bool);
+    impl pipeline::RasterSource for Ramp {
+        fn coverage(&self, w: usize, h: usize) -> pipeline::brush::CoverageMap {
+            pipeline::brush::CoverageMap {
+                x0: 0,
+                y0: 0,
+                w,
+                h,
+                data: (0..w * h)
+                    .map(|i| {
+                        if self.0 {
+                            ((i % w) * 255 / (w - 1).max(1)) as u8
+                        } else {
+                            0
+                        }
+                    })
+                    .collect(),
+                outside: 0,
+            }
+        }
+    }
+
+    fn blurred_edits() -> Edits {
+        Edits {
+            lens_blur: edit_model::LensBlur {
+                on: true,
+                amount: 100.0,
+                boost: 40.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        }
+    }
+
+    /// ⚠⚠ Both halves: without its maps the seam leaves the step alone; with them it fires.
+    #[test]
+    fn lens_blur_is_accelerated_only_with_its_maps() {
+        let Some(ctx) = ctx() else { return };
+        let img = hazy(200, 160);
+        let e = blurred_edits();
+        let seam = |ai: Option<&dyn pipeline::AiRasters>| {
+            accelerate_prefix_stage(
+                "lens_blur",
+                &e,
+                SCALE,
+                &img,
+                SeamFacts {
+                    lens: None,
+                    resampler: RES,
+                    airlight: pipeline::airlight(&img),
+                    ai,
+                },
+                &ctx,
+            )
+        };
+        assert!(
+            seam(None).is_none(),
+            "without its maps there is nothing to accelerate"
+        );
+        assert!(
+            seam(Some(&LensPlanes)).is_some(),
+            "with them the seam must fire"
+        );
+    }
+
+    /// The seam's chain renders the prefix's own CPU step's picture.
+    #[test]
+    fn an_accelerated_lens_blur_step_renders_the_same_picture() {
+        let Some(ctx) = ctx() else { return };
+        let e = blurred_edits();
+        let img = hazy(200, 160);
+        let steps = pipeline::build_prefix_steps(&e, SCALE, None, RES, None, Some(&LensPlanes));
+        let step = steps
+            .iter()
+            .find(|s| s.stage.name() == "lens_blur")
+            .expect("fixture check: there must be a lens blur step");
+        let cpu = step.stage.apply(img.clone());
+        let gpu = accelerate_prefix_stage(
+            "lens_blur",
+            &e,
+            SCALE,
+            &img,
+            SeamFacts {
+                lens: None,
+                resampler: RES,
+                airlight: pipeline::airlight(&img),
+                ai: Some(&LensPlanes),
+            },
+            &ctx,
+        )
+        .expect("lens blur must be replaceable")
+        .apply(img.clone());
+        assert!(
+            !crate::compare(&img, &cpu).is_exact(),
+            "fixture check: the step must actually change the picture"
+        );
+        let d = crate::compare(&cpu, &gpu);
+        assert!(
+            d.worst_levels < 1.0,
+            "worst {} levels over {} of {} samples",
+            d.worst_levels,
+            d.differing,
+            d.total
+        );
     }
 
     /// ⚠⚠ **BOTH halves, because either alone passes against a bug.** An arm that never fires and
@@ -1433,6 +1585,7 @@ mod tests {
                     lens: None,
                     resampler: RES,
                     airlight: pipeline::airlight(&img),
+                    ai: None,
                 },
                 &ctx
             )
@@ -1450,6 +1603,7 @@ mod tests {
                     lens: Some(&lens),
                     resampler: RES,
                     airlight: pipeline::airlight(&img),
+                    ai: None,
                 },
                 &ctx
             )
@@ -1525,6 +1679,7 @@ mod tests {
                 lens: None,
                 resampler: RES,
                 airlight: pipeline::airlight(&img),
+                ai: None,
             },
             &ctx,
         )
@@ -1604,6 +1759,7 @@ mod tests {
                     lens: None,
                     resampler: pipeline::Resampler::default(),
                     airlight,
+                    ai: None,
                 },
                 ctx,
             );

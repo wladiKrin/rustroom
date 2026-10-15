@@ -7,12 +7,51 @@ pub mod aperture;
 pub mod gather;
 pub mod radius;
 
-pub use gather::render;
-pub use radius::{radius, Params};
+pub use gather::{highlight_level, level_of, render, GRID, RCAP};
+pub use radius::{radius, Params, RAMP};
 
-use crate::{PipelineStage, RasterSource};
+use crate::{AiRasters, MapPlane, PipelineStage, RasterSource};
 use core_image::ImageBuf;
 use std::sync::Arc;
+
+/// What the step reads besides its settings: the focal depth and the planes with their identities.
+pub struct Inputs {
+    pub focus: f32,
+    pub depth: (Arc<dyn RasterSource>, u64),
+    /// Subject mode only.
+    pub subject: Option<(Arc<dyn RasterSource>, u64)>,
+}
+
+/// Lens Blur's inputs from the maps, or `None` while one it needs has not arrived.
+///
+/// ⚠⚠ **The ONE lookup** — `build_prefix_steps` keys and builds the CPU step from it, and the GPU seam
+/// builds the twin from it (M10.16d2), so the two cannot disagree about which planes or focus a frame
+/// was blurred with.
+pub fn inputs(lb: &edit_model::LensBlur, ai: &dyn AiRasters) -> Option<Inputs> {
+    let depth = ai.plane(MapPlane::Depth)?;
+    let subject = match lb.focus {
+        edit_model::LensFocus::Subject => Some(ai.plane(MapPlane::Subject)?),
+        edit_model::LensFocus::Point { .. } => None,
+    };
+    let focus = ai.lens_focus(lb)?;
+    Some(Inputs {
+        focus,
+        depth,
+        subject,
+    })
+}
+
+/// A plane at `w × h`, row-major, `0..=255` — what both the CPU step and the GPU twin read.
+pub fn plane_bytes(src: &dyn RasterSource, w: usize, h: usize) -> Vec<u8> {
+    let m = src.coverage(w, h);
+    if (m.x0, m.y0, m.w, m.h) == (0, 0, w, h) {
+        return m.data;
+    }
+    (0..h)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .map(|(x, y)| m.at(x, y))
+        .collect()
+}
 
 /// Lens Blur as the prefix's last step. Its planes are resolved at the frame it runs on — the reason
 /// M10.16a made a map a lazy [`RasterSource`]: the prefix has not produced that frame when the step is
@@ -49,10 +88,9 @@ impl PipelineStage for LensBlurStage {
     fn apply(&self, image: ImageBuf) -> ImageBuf {
         let (w, h) = (image.width(), image.height());
         let plane = |s: &dyn RasterSource| -> Vec<f32> {
-            let m = s.coverage(w, h);
-            (0..h)
-                .flat_map(|y| (0..w).map(move |x| (y, x)))
-                .map(|(y, x)| m.at(x, y) as f32 / 255.0)
+            plane_bytes(s, w, h)
+                .into_iter()
+                .map(|b| b as f32 / 255.0)
                 .collect()
         };
         let depth = plane(&*self.depth);

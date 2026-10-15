@@ -59,12 +59,42 @@ pub fn render(img: &ImageBuf, depth: &[f32], subject: Option<&[f32]>, p: &Params
 
 /// The level a source of radius `c` (full pixels, ≥ 0.5) is gathered at: the finest scale ½, ¼, …
 /// at which its disc spans at most [`RCAP`] working pixels.
-fn level_of(c: f32) -> usize {
+pub fn level_of(c: f32) -> usize {
     let mut l = 0;
     while c * 0.5f32.powi(l as i32 + 1) > RCAP as f32 {
         l += 1;
     }
     l
+}
+
+/// The highlight level's grid: at most this many samples along the frame's long side.
+pub const GRID: usize = 256;
+
+/// The frame's 99th-percentile luminance, floored at `1e-6` — where Boost begins. `None` when no
+/// sampled luminance is finite.
+///
+/// ⚠⚠ **Read from a grid of at most [`GRID`] samples a side** — the pixel nearest each cell's centre
+/// (M10.16d2; d1 read every pixel). Dehaze's airlight's reason: ~65k samples cost nothing, so the GPU
+/// twin computes it at construction, and a 1600 px preview and the 6240 px export read the same
+/// picture. A frame no wider than the grid is every pixel.
+pub fn highlight_level(img: &ImageBuf) -> Option<f32> {
+    let (w, h) = (img.width(), img.height());
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let step = w.max(h).div_ceil(GRID).max(1);
+    let at = |g: usize, n: usize| (g * step + step / 2).min(n - 1);
+    let mut lum: Vec<f32> = (0..h.div_ceil(step))
+        .flat_map(|gy| (0..w.div_ceil(step)).map(move |gx| (gx, gy)))
+        .map(|(gx, gy)| color::luminance(img.pixel(at(gx, w), at(gy, h))))
+        .filter(|v| v.is_finite())
+        .collect();
+    if lum.is_empty() {
+        return None;
+    }
+    let at = ((lum.len() - 1) as f32 * 0.99).round() as usize;
+    let (_, l, _) = lum.select_nth_unstable_by(at, f32::total_cmp);
+    Some(l.max(1e-6))
 }
 
 /// Lift the highlights well above the frame's typical brightness — `1 + 3·boost/100` at most — so they
@@ -75,6 +105,9 @@ fn boost(img: &ImageBuf, boost: f32) -> ImageBuf {
     if boost <= 0.0 {
         return img.clone();
     }
+    let Some(l99) = highlight_level(img) else {
+        return img.clone();
+    };
     let lum: Vec<f32> = img
         .data()
         .as_chunks::<3>()
@@ -82,13 +115,6 @@ fn boost(img: &ImageBuf, boost: f32) -> ImageBuf {
         .iter()
         .map(|&c| color::luminance(c))
         .collect();
-    let mut sorted: Vec<f32> = lum.iter().cloned().filter(|v| v.is_finite()).collect();
-    if sorted.is_empty() {
-        return img.clone();
-    }
-    let at = ((sorted.len() - 1) as f32 * 0.99).round() as usize;
-    let (_, l99, _) = sorted.select_nth_unstable_by(at, f32::total_cmp);
-    let l99 = l99.max(1e-6);
     let k = 3.0 * boost.clamp(0.0, 100.0) / 100.0;
     let mut out = img.clone();
     for (px, &l) in out.data_mut().as_chunks_mut::<3>().0.iter_mut().zip(&lum) {
@@ -667,6 +693,34 @@ mod tests {
             (boosted.pixel(20, 20)[0] - plain.pixel(20, 20)[0]).abs() < 1e-4,
             "mid-grey moved"
         );
+    }
+
+    /// M10.16d2: the highlight level is read from a grid of at most `GRID` samples a side — the
+    /// pixel nearest each cell's centre — so the GPU twin computes it at construction for the cost of
+    /// ~65k samples, and the preview and the export read the same picture. A frame 2048 wide steps by
+    /// 8 and samples x = 4, 12, … — every bright odd column is between two samples.
+    #[test]
+    fn the_highlight_level_is_read_from_a_grid() {
+        let grey = color::luminance([0.18; 3]);
+        let (img, _) = scene(2048, 4, |x, _| {
+            ([if x % 2 == 1 { 9.0 } else { 0.18 }; 3], 1.0)
+        });
+        let l = highlight_level(&img).expect("finite");
+        assert!((l - grey).abs() < 1e-6, "{l}: the grid saw a bright column");
+        // Under the grid it is every pixel: a few bright ones do not set it, half of them do.
+        let (few, _) = scene(200, 100, |x, y| {
+            ([if (x + y * 200) % 200 == 7 { 9.0 } else { 0.18 }; 3], 1.0)
+        });
+        assert!((highlight_level(&few).unwrap() - grey).abs() < 1e-6);
+        let (half, _) = scene(200, 100, |x, _| {
+            ([if x % 2 == 1 { 9.0 } else { 0.18 }; 3], 1.0)
+        });
+        assert!(
+            highlight_level(&half).unwrap() > grey * 10.0,
+            "the positive control"
+        );
+        let (nan, _) = scene(8, 8, |_, _| ([f32::NAN; 3], 1.0));
+        assert_eq!(highlight_level(&nan), None);
     }
 
     /// Review Focus 3: degenerate frames and the strongest blur stay finite and keep their size.
