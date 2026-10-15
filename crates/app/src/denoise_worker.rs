@@ -19,8 +19,19 @@ pub struct DenoiseRequest {
 
 /// What came back.
 pub enum DenoiseResult {
-    Done { key: String, image: Arc<ImageBuf> },
-    Failed { key: String, error: String },
+    Done {
+        key: String,
+        image: Arc<ImageBuf>,
+    },
+    Failed {
+        key: String,
+        error: String,
+    },
+    /// A load found no usable result — none there, or a corrupt one, now removed: the photo goes the
+    /// normal way, and this is no failure.
+    Missing {
+        key: String,
+    },
 }
 
 /// Makes the network on the worker's thread — `tract`'s `Drunet` in the app, a fake in the tests.
@@ -72,7 +83,16 @@ impl DenoiseWorker {
                         .and_then(|d| crate::denoise_cache::load(d, &key));
                     let result = match (cached, req.image) {
                         (Some(img), _) => Some(Ok(img)),
-                        (None, None) => Some(Err("the result is not in the cache".to_string())),
+                        (None, None) => {
+                            // ⚠ A file there that did not load is corrupt: removed, so the photo goes
+                            // the normal way and is computed again (Review Focus 5).
+                            if let Some(d) = &cache {
+                                crate::denoise_cache::remove(d, &key);
+                            }
+                            let _ = done.send(DenoiseResult::Missing { key });
+                            repaint();
+                            continue;
+                        }
                         (None, Some(image)) => {
                             if net.is_none() && load_error.is_none() {
                                 match factory.take().map(|f| f()) {
@@ -232,7 +252,9 @@ mod tests {
             .into_iter()
             .chain(w.poll())
             .map(|r| match r {
-                DenoiseResult::Done { key, .. } | DenoiseResult::Failed { key, .. } => key,
+                DenoiseResult::Done { key, .. }
+                | DenoiseResult::Failed { key, .. }
+                | DenoiseResult::Missing { key } => key,
             })
             .collect();
         keys.sort();
@@ -256,6 +278,31 @@ mod tests {
             "{} results",
             got.len()
         );
+    }
+
+    /// Review Focus 5: a corrupt result is removed and reported missing — so the flow computes it
+    /// again — never a failure that sticks for the run, never a garbage image.
+    #[test]
+    fn a_corrupt_cached_result_is_removed_and_reported_missing() {
+        let d = test_dir::TempDir::new("denoise-worker-corrupt");
+        std::fs::write(d.path().join("k.rrdn"), b"RRDN garbage").unwrap();
+        assert!(crate::denoise_cache::exists(d.path(), "k"), "the fixture");
+        let w = DenoiseWorker::spawn(
+            Box::new(|| panic!("the network was made")),
+            Some(d.path().to_path_buf()),
+            || {},
+        );
+        w.request(DenoiseRequest {
+            key: "k".into(),
+            image: None,
+        });
+        let got = wait(&w, 1);
+        assert!(
+            matches!(&got[..], [DenoiseResult::Missing { key }] if key == "k"),
+            "{} results",
+            got.len()
+        );
+        assert!(!crate::denoise_cache::exists(d.path(), "k"), "still there");
     }
 
     /// A cached result is loaded without making the network — the model need not be there.
@@ -285,8 +332,8 @@ mod tests {
         });
         let got = wait(&w, 1);
         assert!(
-            matches!(&got[..], [DenoiseResult::Failed { key, .. }] if key == "absent"),
-            "a load of nothing fails"
+            matches!(&got[..], [DenoiseResult::Missing { key }] if key == "absent"),
+            "a load of nothing is missing, not failed"
         );
     }
 }

@@ -51,6 +51,11 @@ pub fn exists(dir: &Path, key: &str) -> bool {
     file(dir, key).is_file()
 }
 
+/// Remove `key`'s result — a corrupt one, which [`load`] refused.
+pub fn remove(dir: &Path, key: &str) {
+    let _ = std::fs::remove_file(file(dir, key));
+}
+
 /// Write `img` under `key`, atomically (a partial then a rename): `RRDN`, the version, the width and
 /// height, then the samples as little-endian half-floats, deflated.
 pub fn store(dir: &Path, key: &str, img: &ImageBuf) -> std::io::Result<()> {

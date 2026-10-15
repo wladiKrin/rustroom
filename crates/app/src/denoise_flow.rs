@@ -108,6 +108,8 @@ impl RustroomApp {
             self.denoise.held = None;
         }
         if !s.edits.ai_denoise.is_active() {
+            // ⚠ "Not now" holds while Amount stays up; setting it again asks again.
+            self.denoise.offered = false;
             return;
         }
         let Some((cache, models)) = self.denoise.dirs() else {
@@ -177,7 +179,9 @@ impl RustroomApp {
         let open = self.denoise.key.as_ref().map(|(_, _, k)| k.clone());
         for r in w.poll() {
             let key = match &r {
-                DenoiseResult::Done { key, .. } | DenoiseResult::Failed { key, .. } => key.clone(),
+                DenoiseResult::Done { key, .. }
+                | DenoiseResult::Failed { key, .. }
+                | DenoiseResult::Missing { key } => key.clone(),
             };
             if self.denoise.pending.as_ref() == Some(&key) {
                 self.denoise.pending = None;
@@ -188,7 +192,7 @@ impl RustroomApp {
                     self.denoise.held = Some((key, Arc::new(Denoised::new(image))));
                     self.status = "Denoised".to_string();
                 }
-                DenoiseResult::Done { .. } => {}
+                DenoiseResult::Done { .. } | DenoiseResult::Missing { .. } => {}
                 DenoiseResult::Failed { error, .. } => {
                     self.status = format!("AI denoise failed: {error}");
                     self.denoise.failed.insert(key);
@@ -316,6 +320,46 @@ mod tests {
         );
         app.session.as_mut().unwrap().edits.ai_denoise.amount = 0.0;
         assert_eq!(status(&app.denoise, app.session.as_ref().unwrap()), None);
+    }
+
+    /// "Not now" is not for good: once Amount goes back to 0 and up again, the download is offered again.
+    #[test]
+    fn a_dismissed_offer_returns_when_amount_is_set_again() {
+        let (mut app, ctx, _) = app_with_denoise("reoffer", 50.0);
+        app.pump_denoise(&ctx);
+        assert!(app.modal == crate::modals::Modal::AiDownload, "not offered");
+        app.modal = crate::modals::Modal::None;
+        app.session.as_mut().unwrap().edits.ai_denoise.amount = 0.0;
+        app.pump_denoise(&ctx);
+        app.session.as_mut().unwrap().edits.ai_denoise.amount = 40.0;
+        app.pump_denoise(&ctx);
+        assert!(
+            app.modal == crate::modals::Modal::AiDownload,
+            "not offered again"
+        );
+    }
+
+    /// Review Focus 5: a corrupt result on disk is removed, and the photo goes the normal way — here, to
+    /// the model's offer — rather than failing for the run.
+    #[test]
+    fn a_corrupt_cached_result_goes_the_normal_way() {
+        let (mut app, ctx, cache) = app_with_denoise("corrupt", 100.0);
+        let photo = app.session.as_ref().unwrap().path.clone();
+        let key = rustroom_app::denoise_cache::key(
+            &photo,
+            denoised::tier_for(&photo, app.settings.view_demosaic),
+        );
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join(format!("{key}.rrdn")), b"RRDN garbage").unwrap();
+        for _ in 0..200 {
+            app.pump_denoise(&ctx);
+            if app.modal == crate::modals::Modal::AiDownload {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(app.modal == crate::modals::Modal::AiDownload, "stuck");
+        assert!(!app.denoise.failed.contains(&key), "failed for the run");
     }
 
     /// At Amount 0 nothing is asked for.
