@@ -199,6 +199,8 @@ pub(crate) fn all_edits() -> Edits {
             bokeh: edit_model::Bokeh::CatEye,
             boost: 40.0,
         },
+        // M10.16b
+        ai_denoise: edit_model::AiDenoise { amount: 35.0 },
         negative: edit_model::Negative {
             on: true,
             base: [0.7, 0.45, 0.25],

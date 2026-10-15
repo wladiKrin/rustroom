@@ -21,7 +21,9 @@ mod tone;
 pub use colour::{
     ColorGrading, GradeWheel, Hsl, HslBand, Look, LutSpace, Rendering, HSL_BAND_NAMES,
 };
-pub use detail::{Defringe, Dehaze, Grain, LocalContrast, NoiseReduction, Sharpening, Vignette};
+pub use detail::{
+    AiDenoise, Defringe, Dehaze, Grain, LocalContrast, NoiseReduction, Sharpening, Vignette,
+};
 pub use geo_group::GeoGroup;
 pub use geometry::{CropRect, Geometry, LensCorrection, Orientation, Perspective, Quarter};
 pub use groups::{
@@ -150,6 +152,9 @@ pub struct Edits {
     /// group. ⚠ Not written while default — `negative`'s reason.
     #[serde(default, skip_serializing_if = "LensBlur::is_default")]
     pub lens_blur: LensBlur,
+    /// AI denoise (M10.16b) — Detail's group. ⚠ Not written while default — `negative`'s reason.
+    #[serde(default, skip_serializing_if = "AiDenoise::is_default")]
+    pub ai_denoise: AiDenoise,
 }
 
 impl Edits {
@@ -226,6 +231,7 @@ impl Edits {
             negative,
             grain,
             lens_blur,
+            ai_denoise,
         } = src;
 
         if groups.white_balance {
@@ -257,6 +263,7 @@ impl Edits {
         if groups.detail {
             self.noise_reduction = *noise_reduction;
             self.sharpening = *sharpening;
+            self.ai_denoise = *ai_denoise;
         }
         if groups.lens {
             self.lens_correction = *lens_correction;
@@ -583,6 +590,34 @@ mod tests {
         let json = serde_json::to_string(&Edits::default()).unwrap();
         assert!(!json.contains("lens_blur"), "{json}");
         assert!(serde_json::to_string(&src).unwrap().contains("lens_blur"));
+    }
+
+    /// M10.16b: AI denoise rides Detail's group, like the NR sliders it sits above; off is never
+    /// written, so no sidecar or preview key changes for a photo without it.
+    #[test]
+    fn ai_denoise_rides_detail_and_off_is_not_written() {
+        let src = Edits {
+            ai_denoise: AiDenoise { amount: 60.0 },
+            ..Edits::default()
+        };
+        let detail = EDIT_GROUP_NAMES
+            .iter()
+            .position(|n| *n == "Detail")
+            .expect("the Detail group");
+        let mut a = Edits::default();
+        a.merge_from(&src, EditGroups::only(detail));
+        assert_eq!(a.ai_denoise, src.ai_denoise);
+        let mut b = Edits::default();
+        b.merge_from(&src, EditGroups::only(detail + 1));
+        assert_eq!(
+            b.ai_denoise,
+            AiDenoise::default(),
+            "another group carried it"
+        );
+        let json = serde_json::to_string(&Edits::default()).unwrap();
+        assert!(!json.contains("ai_denoise"), "{json}");
+        assert!(serde_json::to_string(&src).unwrap().contains("ai_denoise"));
+        assert!(src.ai_denoise.is_active() && !AiDenoise::default().is_active());
     }
 
     #[test]
@@ -980,6 +1015,8 @@ mod tests {
                 bokeh: Bokeh::CatEye,
                 boost: 40.0,
             },
+            // M10.16b: off its default, so Detail's sweep sees it.
+            ai_denoise: AiDenoise { amount: 35.0 },
             negative: Negative {
                 on: true,
                 base: [0.7, 0.45, 0.25],
