@@ -8,7 +8,7 @@ pub const MULTIPLE: usize = 8;
 
 /// Whether a `w × h` tile can be run.
 pub fn check_size(w: usize, h: usize) -> Result<(), InferError> {
-    if w == 0 || h == 0 || w % MULTIPLE != 0 || h % MULTIPLE != 0 {
+    if w == 0 || h == 0 || !w.is_multiple_of(MULTIPLE) || !h.is_multiple_of(MULTIPLE) {
         return Err(InferError::Model(format!(
             "a {w} × {h} tile: both sides must be positive multiples of {MULTIPLE}"
         )));
