@@ -111,9 +111,12 @@ impl Drunet {
     }
 }
 
+/// One weight of the file: its name, its shape, its values.
+pub type Weight = (String, Vec<usize>, Vec<f32>);
+
 /// Every initializer of DRUNet's file as `(name, shape, values)` — the GPU engine's weights (M10.16b2),
 /// read by tract's own parser so no second ONNX reader exists.
-pub fn weights(path: &std::path::Path) -> Result<Vec<(String, Vec<usize>, Vec<f32>)>, InferError> {
+pub fn weights(path: &std::path::Path) -> Result<Vec<Weight>, InferError> {
     use tract_onnx::prelude::Framework;
     let proto = tract_onnx::onnx().proto_model_for_path(path).map_err(err)?;
     weights_of(&proto)
@@ -121,9 +124,7 @@ pub fn weights(path: &std::path::Path) -> Result<Vec<(String, Vec<usize>, Vec<f3
 
 /// [`weights`] from a parsed model. ⚠ Float only (`data_type` 1); the values from `raw_data`
 /// (little-endian) or `float_data`, and their count must be the shape's.
-pub fn weights_of(
-    proto: &tract_onnx::pb::ModelProto,
-) -> Result<Vec<(String, Vec<usize>, Vec<f32>)>, InferError> {
+pub fn weights_of(proto: &tract_onnx::pb::ModelProto) -> Result<Vec<Weight>, InferError> {
     let graph = proto
         .graph
         .as_ref()
