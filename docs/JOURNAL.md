@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.16b2: AI denoise on the GPU — DRUNet as one tiled WGSL product (2026-10-16)](#2026-10-16--m1016b2-ai-denoise-on-the-gpu--drunet-as-one-tiled-wgsl-product-branch-m1016b2-ai-denoise-gpu)
 - [M10.16b1: AI denoise — DRUNet on the CPU, a background job, its cache, the Amount in Detail (2026-10-15)](#2026-10-15--m1016b1-ai-denoise--drunet-on-the-cpu-a-background-job-its-cache-the-amount-in-detail-branch-m1016b-ai-denoise)
 - [M10.16d2: Lens Blur's GPU twin — live while dragging (2026-10-15)](#2026-10-15--m1016d2-lens-blurs-gpu-twin--live-while-dragging-branch-m1016d2-lens-blur-gpu-merged-2026-10-15)
 - [M10.16d1: Lens Blur — the CPU reference, the section, Pick focus and Visualize (2026-10-15)](#2026-10-15--m1016d1-lens-blur--the-cpu-reference-the-section-pick-focus-and-visualize-branch-m1016d-lens-blur-merged-2026-10-15)
@@ -179,6 +180,48 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-16 — M10.16b2: AI denoise on the GPU — DRUNet as one tiled WGSL product (branch `m10.16b2-ai-denoise-gpu`)
+
+**The item:** spec §3 — DRUNet's convolutions on the GPU, swapped in as the denoise job's network. Plan
+`2026-10-15-m10.16b2-ai-denoise-gpu.md`. **The author on b1 (2026-10-16):** *"It works, but it's painfully
+slow"*, and *"even setting amount to 100 is quite weak on some photos"* — about the same on all. His calls:
+**the GPU engine first**, then **measure the strength and let him pick**.
+
+**Built:** `ai_mask::denoise::weights` (every initializer through tract's own parser); `gpu_pipeline::drunet` —
+`Arch::of` (the 64 weights' names and shapes, the first misfit named), `program` (the 64 convolutions with
+their buffers, written from the file's graph), `pack` (each weight as the product's `[K][N]`), ONE WGSL kernel
+in three index modes (3 × 3 zero-padded, 2 × 2 stride-2 down, 2 × 2 transposed up — one product over input
+pixels with the four quadrants as columns), ReLU and two residual adds fused into its store; `GpuDrunet`
+(weights uploaded once, activations per tile size, released when a job ends); the app's `Engine` — the GPU
+until it fails, then `tract` for that tile and every later one — and `network(models, gpu)` on Settings'
+*Use the GPU*; the probe's `frame --gpu` and `parity`.
+
+**Parity: exactly 0** against `tract` — on the real model at 64² and 296 × 200 and on four real 512 px tiles:
+both engines sum each output over `ci · 9 + tap` in order with fused multiply-adds, and add the residual then
+the skip in the file's order. ⚠⚠ **The first 0 was nearly a test that could not fail:** `f32::max` ignores
+NaN, so every parity check of the plan would have read an all-NaN GPU output as perfect. All now fail on a
+non-finite value first, and the real 0 was proven by sabotaging the kernel's ReLU on the real model — 3.4e18.
+
+**Speed (a 512 px tile of the full network, the M2, best of 3):** the first kernel **7.82 s — 2.5× SLOWER than
+`tract`'s 3.05** (its accumulators were an array indexed by the loop counter, which Metal spilled to thread
+memory); four named vec4 accumulators and every runtime division hoisted out of the loop over k **1.77 s**;
+**8 × 8 outputs a thread on 64 threads 1.35 s** (kept). Slower and dropped: 32 deep 1.63, 256 threads on a 256 ×
+64 tile 3.19, register prefetching 1.46; reads interleaved against bank conflicts 1.35 (no change, kept).
+
+**Editing while a job runs** (Review Focus 5; a 1600 px exposure chain, 6.3 ms idle): with a tile's seven
+levels submitted at once an editing frame waited **1,354 ms** — Metal runs one queue in order. One convolution
+a submission 51 ms; bands of 2³⁰ multiply-adds waited one by one 12 ms but +34 % a tile; **bands of 2³⁰, two
+in flight: 15 ms at 1.46 s a tile** (kept); 2³¹ 24 ms at 1.41 s.
+
+**A whole 26 Mpx frame: 174 s** (DSCF6990; 160 s before the bands) **against `tract`'s 397 s** — 2.3×. Under
+the spec's 3-minute rule; what is left is structural (half precision; Winograd's 2.25× fewer multiplies for
+the 3 × 3 convolutions) and goes to the author as a choice.
+
+**Sabotages, all red:** the body's skip dropped from the program; Conv3's padding offset; the second add
+ignored (alone); the up levels' skips dropped (the small-network parity AND the program test); `fits` from
+scale 1; the weights read big-endian; the `Engine` retrying a failed GPU; the worker not telling the network a
+job ended; the ReLU off on the real model.
 
 ### 2026-10-15 — M10.16b1: AI denoise — DRUNet on the CPU, a background job, its cache, the Amount in Detail (branch `m10.16b-ai-denoise`)
 
