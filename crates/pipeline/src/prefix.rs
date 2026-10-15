@@ -319,20 +319,15 @@ fn lens_blur_step(
     if !lb.is_active() {
         return None;
     }
-    let ai = ai?;
-    let (depth, depth_id) = ai.plane(crate::MapPlane::Depth)?;
-    let (subject, subject_id) = match lb.focus {
-        edit_model::LensFocus::Subject => {
-            let (s, id) = ai.plane(crate::MapPlane::Subject)?;
-            (Some(s), id)
-        }
-        edit_model::LensFocus::Point { .. } => (None, 0),
-    };
-    let focus = ai.lens_focus(lb)?;
+    let i = stages::lens_blur::inputs(lb, ai?)?;
+    let subject_id = i.subject.as_ref().map_or(0, |s| s.1);
     Some(PrefixStep {
-        key: PrefixStepKey::LensBlur(*lb, focus.to_bits(), depth_id, subject_id),
+        key: PrefixStepKey::LensBlur(*lb, i.focus.to_bits(), i.depth.1, subject_id),
         stage: Box::new(stages::lens_blur::LensBlurStage::new(
-            lb, focus, depth, subject,
+            lb,
+            i.focus,
+            i.depth.0,
+            i.subject.map(|s| s.0),
         )),
     })
 }

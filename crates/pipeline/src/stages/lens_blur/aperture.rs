@@ -18,15 +18,11 @@ pub fn weight(kind: Bokeh, o: [f32; 2], pos: [f32; 2]) -> f32 {
     let r = o[0].hypot(o[1]);
     match kind {
         Bokeh::Circle => inside(r <= 1.0),
-        Bokeh::Blades => {
-            let apothem = (std::f32::consts::PI / 6.0).cos();
-            let edges = [30f32, 90.0, 150.0].map(|deg| deg.to_radians().sin_cos());
-            inside(
-                edges
-                    .iter()
-                    .all(|&(s, c)| (o[0] * c + o[1] * s).abs() <= apothem),
-            )
-        }
+        Bokeh::Blades => inside(
+            blade_edges()
+                .iter()
+                .all(|&(s, c)| (o[0] * c + o[1] * s).abs() <= apothem()),
+        ),
         Bokeh::Ring => {
             if r > 1.0 {
                 0.0
@@ -42,6 +38,17 @@ pub fn weight(kind: Bokeh, o: [f32; 2], pos: [f32; 2]) -> f32 {
             inside(a <= 1.0 && b <= 1.0)
         }
     }
+}
+
+/// The hexagon's three edge normals as `(sin, cos)` of 30°, 90° and 150° — exactly as computed here,
+/// so the GPU twin's literals are the same bits (M10.16d2).
+pub fn blade_edges() -> [(f32, f32); 3] {
+    [30f32, 90.0, 150.0].map(|deg| deg.to_radians().sin_cos())
+}
+
+/// The hexagon's apothem, `cos 30°`.
+pub fn apothem() -> f32 {
+    (std::f32::consts::PI / 6.0).cos()
 }
 
 fn inside(b: bool) -> f32 {
