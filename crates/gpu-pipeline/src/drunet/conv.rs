@@ -211,8 +211,12 @@ pub(crate) mod tests {
             .collect()
     }
 
-    fn close(a: &[f32], b: &[f32]) -> f32 {
+    /// ⚠ Fails on a non-finite value first: `f32::max` ignores NaN, so an all-NaN output would read as
+    /// "no difference" (it did, on the real network — shape (b): a query that finds nothing).
+    pub(crate) fn close(a: &[f32], b: &[f32]) -> f32 {
         assert_eq!(a.len(), b.len());
+        let bad = a.iter().chain(b).filter(|v| !v.is_finite()).count();
+        assert_eq!(bad, 0, "{bad} non-finite values");
         a.iter()
             .zip(b)
             .map(|(x, y)| (x - y).abs())

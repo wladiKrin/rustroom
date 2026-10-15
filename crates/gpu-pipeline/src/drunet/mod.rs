@@ -266,6 +266,9 @@ mod tests {
     /// The worst difference relative to the reference's largest value.
     fn hwc_vs_chw(got: &[f32], want: &[f32], w: usize, h: usize) -> f32 {
         let n = w * h;
+        // ⚠ NaN first — `f32::max` ignores it (see `conv::tests::close`).
+        let bad = got.iter().chain(want).filter(|v| !v.is_finite()).count();
+        assert_eq!(bad, 0, "{bad} non-finite values");
         let big = want.iter().fold(1.0f32, |m, v| m.max(v.abs()));
         let mut worst = 0f32;
         for i in 0..n {
