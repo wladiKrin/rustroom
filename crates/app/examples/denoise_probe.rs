@@ -2,8 +2,13 @@
 //! 12 (a shadow and a detail crop each, 100 % and the centre at 200 %, a green bar under the column
 //! nearest the estimate), one full frame's time, and the cache file's size.
 //!
+//!
+//! `calibrate` (M10.16b's Task 10): the same sheets with the columns at 0.5 · 0.75 · 1 · 1.5 · 2 × each
+//! photo's own estimate, the green bar under 1 × — the author's look sets `ai_denoise::CALIBRATION`.
+//!
 //! ```text
 //! cargo run --release --example denoise_probe -- <out dir> <drunet.onnx> <raf>…
+//! cargo run --release --example denoise_probe -- calibrate <out dir> <drunet.onnx> <raf>…
 //! cargo run --release --example denoise_probe -- frame <out dir> <drunet.onnx> <raf>
 //! ```
 
@@ -11,6 +16,8 @@ use rustroom_app::ai_denoise::{denoise, denoise_in, noise_sigma, Encoding};
 
 const SIDE: usize = 512;
 const SIGMAS: [f32; 5] = [4.0, 6.0, 8.0, 10.0, 12.0];
+/// `calibrate`'s columns, as multiples of the estimate.
+const FACTORS: [f32; 5] = [0.5, 0.75, 1.0, 1.5, 2.0];
 
 fn decode(path: &str) -> core_image::ImageBuf {
     raw_decode::decode_raw(
@@ -62,7 +69,8 @@ fn shown(img: &core_image::ImageBuf, enc: &Encoding) -> image::RgbImage {
     })
 }
 
-fn sheets(out: &std::path::Path, model: &str, rafs: &[String]) {
+/// `relative`: the columns at [`FACTORS`] × the estimate, not at [`SIGMAS`].
+fn sheets(out: &std::path::Path, model: &str, rafs: &[String], relative: bool) {
     let mut net = ai_mask::denoise::Drunet::load(std::path::Path::new(model)).expect("model");
     for raf in rafs {
         let stem = std::path::Path::new(raf)
@@ -79,11 +87,17 @@ fn sheets(out: &std::path::Path, model: &str, rafs: &[String]) {
             t.elapsed().as_secs_f64() * 1000.0,
             enc.scale
         );
-        let cols = SIGMAS.len() as u32 + 1;
+        let sigmas: Vec<f32> = if relative {
+            FACTORS.iter().map(|f| (f * est).clamp(1.0, 40.0)).collect()
+        } else {
+            SIGMAS.to_vec()
+        };
+        println!("  columns after the input: σ {sigmas:.2?}");
+        let cols = sigmas.len() as u32 + 1;
         let cell = SIDE as u32 + 6;
         let mut sheet =
             image::RgbImage::from_pixel(cols * cell, 4 * cell + 16, image::Rgb([40, 40, 40]));
-        let nearest = SIGMAS
+        let nearest = sigmas
             .iter()
             .enumerate()
             .min_by(|a, b| (a.1 - est).abs().total_cmp(&(b.1 - est).abs()))
@@ -92,7 +106,7 @@ fn sheets(out: &std::path::Path, model: &str, rafs: &[String]) {
         for (row, (x0, y0)) in windows(&img, &enc).into_iter().enumerate() {
             let crop = img.crop(x0, y0, SIDE, SIDE);
             let mut variants = vec![shown(&crop, &enc)];
-            for s in SIGMAS {
+            for &s in &sigmas {
                 let d = denoise_in(&crop, &enc, &mut net, s, &|_, _| true)
                     .expect("run")
                     .expect("not cancelled");
@@ -118,8 +132,9 @@ fn sheets(out: &std::path::Path, model: &str, rafs: &[String]) {
                 sheet.put_pixel(x, y, image::Rgb([60, 200, 90]));
             }
         }
+        let suffix = if relative { "calibrate" } else { "sigma" };
         sheet
-            .save(out.join(format!("{stem}_sigma.png")))
+            .save(out.join(format!("{stem}_{suffix}.png")))
             .expect("sheet");
     }
 }
@@ -180,7 +195,12 @@ fn main() {
         std::fs::create_dir_all(&out).expect("out");
         return frame(&out, &args[3], &args[4]);
     }
+    if args[1] == "calibrate" {
+        let out = std::path::PathBuf::from(&args[2]);
+        std::fs::create_dir_all(&out).expect("out");
+        return sheets(&out, &args[3], &args[4..], true);
+    }
     let out = std::path::PathBuf::from(&args[1]);
     std::fs::create_dir_all(&out).expect("out");
-    sheets(&out, &args[2], &args[3..]);
+    sheets(&out, &args[2], &args[3..], false);
 }
