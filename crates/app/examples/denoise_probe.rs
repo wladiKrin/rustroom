@@ -15,7 +15,7 @@
 //! ```
 //!
 //! `strength` (the author's call 2026-10-16, "measure, then I pick"): the noise against brightness, and a
-//! dark and a mid-tone crop each through today's σ, 2× it, a per-brightness noise map and the map at 2×,
+//! dark, a mid-tone and a busy crop each through today's σ, 2× it, a per-brightness noise map and the map at 2×,
 //! with the noise each leaves.
 //!
 //! M10.16b2: `frame --gpu` runs the job's own network (`denoised::network`, the GPU first); `parity`
@@ -377,11 +377,14 @@ fn strength(out: &std::path::Path, model: &str, rafs: &[String]) {
             "  σ by brightness (eighths): {}",
             curve.map(|v| format!("{v:.1}")).join(" · ")
         );
-        let [dark, _] = windows(&img, &enc);
+        let [dark, busy] = windows(&img, &enc);
         let mid = mid_window(&img, &enc);
         let cell = SIDE as u32 + 6;
-        let mut sheet = image::RgbImage::from_pixel(5 * cell, 4 * cell, image::Rgb([40, 40, 40]));
-        for (row, (name, (x0, y0))) in [("dark", dark), ("mid", mid)].into_iter().enumerate() {
+        let mut sheet = image::RgbImage::from_pixel(5 * cell, 6 * cell, image::Rgb([40, 40, 40]));
+        // ⚠ The busy crop shows the cost — texture a stronger σ smooths — where the flat ones show the
+        // noise.
+        let crops = [("dark", dark), ("mid", mid), ("busy", busy)];
+        for (row, (name, (x0, y0))) in crops.into_iter().enumerate() {
             let crop = img.crop(x0, y0, SIDE, SIDE);
             let rgb: Vec<f32> = (0..SIDE * SIDE)
                 .flat_map(|i| enc.encode(crop.pixel(i % SIDE, i / SIDE)))
