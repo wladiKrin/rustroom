@@ -1,3 +1,4 @@
+pub mod ai_denoise;
 pub mod color_grading;
 pub mod contrast;
 pub mod creative_look;

@@ -64,6 +64,8 @@ pub enum PrefixStepKey {
         Vec<edit_model::MaskedAdjustment>,
         Vec<Vec<u64>>,
     ),
+    /// M10.16b — AI denoise: its Amount's bits and the result's identity (the cache's content id).
+    AiDenoise(u32, u64),
     /// M10.16d — Lens Blur: its settings, the focal depth's bits (resolved from the maps, so a moved
     /// focus is not in the settings alone), the depth map's identity and the Subject map's (0 in
     /// Point mode, which reads none).
@@ -131,7 +133,21 @@ pub fn build_prefix_steps(
     // ahead of it cost a further 92 ms per NR drag for no measurable gain. Numbers and the
     // alternatives are in the M7.3b journal entry.
 
-    // Lens correction first. ⚠ Ahead of geometry: the calibration is defined in the uncropped,
+    // ⚠⚠ M10.16b: AI denoise FIRST — on the decode itself, while each pixel's noise is still its own,
+    // ahead of the lens correction's resample. It waits (no step) until the job's result exists.
+    if edits.ai_denoise.is_active() {
+        if let Some((src, id)) = ai.and_then(|a| a.denoised()) {
+            steps.push(PrefixStep {
+                key: PrefixStepKey::AiDenoise(edits.ai_denoise.amount.to_bits(), id),
+                stage: Box::new(stages::ai_denoise::AiDenoiseStage::new(
+                    edits.ai_denoise.amount,
+                    src,
+                )),
+            });
+        }
+    }
+
+    // Lens correction next — first after AI denoise. ⚠ Ahead of geometry: the calibration is defined in the uncropped,
     // unrotated sensor frame. A missing corrector — an unlisted lens, or a JPEG — skips the step
     // silently, which is the ordinary case.
     let lens_correction = edits.applied_lens_correction();
@@ -1009,16 +1025,22 @@ mod tests {
         let base_keys = keys(&base);
         assert_eq!(
             base_keys.len(),
-            9,
-            "all nine prefix steps should be active — the negative (M10.11a), NR, dehaze, spots, red eye (M9.11), the geometry (with the \
+            10,
+            "all ten prefix steps should be active — AI denoise (M10.16b), the negative (M10.11a), NR, dehaze, spots, red eye (M9.11), the geometry (with the \
              keystone fused in since M7.3b), the defringe (M9.6), the fixture's masked capture \
              correction and the lens blur (M10.16d)"
         );
 
         let variants = [
+            // ⚠ M10.16b: AI denoise heads the prefix — its key moves with its Amount and nothing else.
+            (0, {
+                let mut e = base.clone();
+                e.ai_denoise.amount = 80.0;
+                e
+            }),
             // ⚠ M10.11a: the negative step moves with its own setting and nothing else.
             (
-                0,
+                1,
                 Edits {
                     negative: edit_model::Negative {
                         gamma: 0.9,
@@ -1029,7 +1051,7 @@ mod tests {
             ),
             // ⚠ The keystone moves the GEOMETRY key since M7.3b — it is part of that step.
             (
-                5,
+                6,
                 Edits {
                     perspective: edit_model::Perspective {
                         vertical: 70.0,
@@ -1039,7 +1061,7 @@ mod tests {
                 },
             ),
             (
-                3,
+                4,
                 Edits {
                     spots: vec![edit_model::Spot {
                         centre: [0.7, 0.7],
@@ -1052,7 +1074,7 @@ mod tests {
                 },
             ),
             (
-                5,
+                6,
                 Edits {
                     geometry: edit_model::Geometry {
                         angle: 7.0,
@@ -1062,7 +1084,7 @@ mod tests {
                 },
             ),
             (
-                1,
+                2,
                 Edits {
                     noise_reduction: edit_model::NoiseReduction {
                         luminance: 80.0,
@@ -1073,7 +1095,7 @@ mod tests {
                 },
             ),
             (
-                2,
+                3,
                 Edits {
                     dehaze: edit_model::Dehaze { amount: 90.0 },
                     ..base.clone()
@@ -1082,7 +1104,7 @@ mod tests {
             // ⚠ The masked capture correction is a prefix step like any other, and its key must
             // move with its own parameters and nothing else — the same property the five above
             // assert, extended to the step this milestone added.
-            (7, {
+            (8, {
                 let mut e = base.clone();
                 e.masks[0].adjustments.noise_reduction.luminance = 90.0;
                 e
@@ -1090,7 +1112,7 @@ mod tests {
             // ⚠ M9.6: the defringe step moves with the global settings AND with a mask's local
             // slider — and a mask's local slider moves nothing else, not its capture step.
             (
-                6,
+                7,
                 Edits {
                     defringe: edit_model::Defringe {
                         purple_amount: 70.0,
@@ -1099,19 +1121,19 @@ mod tests {
                     ..base.clone()
                 },
             ),
-            (6, {
+            (7, {
                 let mut e = base.clone();
                 e.masks[0].adjustments.defringe = -40.0;
                 e
             }),
             // ⚠ M9.11: the red-eye step moves with its own eye list and nothing else.
-            (4, {
+            (5, {
                 let mut e = base.clone();
                 e.eyes[0].darken = 95.0;
                 e
             }),
             // ⚠ M10.16d: the lens blur moves with its own settings and nothing else.
-            (8, {
+            (9, {
                 let mut e = base.clone();
                 e.lens_blur.focal_range = 55.0;
                 e
@@ -1119,7 +1141,7 @@ mod tests {
         ];
         for (moved, e) in variants {
             let ks = keys(&e);
-            for i in 0..9 {
+            for i in 0..10 {
                 if i == moved {
                     assert_ne!(ks[i], base_keys[i], "step {i} should have changed");
                 } else {
@@ -1748,6 +1770,18 @@ pub(crate) mod lens_blur_tests {
         fn lens_focus(&self, _: &edit_model::LensBlur) -> Option<f32> {
             self.focus
         }
+        /// M10.16b: a denoised result, so `every_prefix_step_has_its_own_key` sees the step.
+        fn denoised(&self) -> Option<(Arc<dyn crate::ImageSource>, u64)> {
+            Some((Arc::new(Whole), 3))
+        }
+    }
+
+    /// A flat "denoised" photo at any size.
+    struct Whole;
+    impl crate::ImageSource for Whole {
+        fn image(&self, w: usize, h: usize) -> Option<core_image::ImageBuf> {
+            Some(core_image::ImageBuf::from_vec(w, h, vec![0.3; w * h * 3]))
+        }
     }
 
     fn with(lb: edit_model::LensBlur) -> Edits {
@@ -1925,5 +1959,130 @@ pub(crate) mod lens_blur_tests {
         for (i, k) in moved.iter().enumerate() {
             assert_ne!(k, &base, "variant {i} kept the key");
         }
+    }
+}
+
+/// M10.16b: AI denoise as the prefix's FIRST step, blending the denoised photo the app hands it.
+#[cfg(test)]
+mod ai_denoise_tests {
+    use super::*;
+    use crate::{AiRasters, ImageSource, RasterSource};
+    use core_image::ImageBuf;
+    use std::sync::Arc;
+
+    /// The "denoised" photo: a flat 0.5 at whatever size is asked, or nothing at one size.
+    struct Flat(Option<(usize, usize)>);
+    impl ImageSource for Flat {
+        fn image(&self, w: usize, h: usize) -> Option<ImageBuf> {
+            if self.0 == Some((w, h)) {
+                return None;
+            }
+            let mut img = ImageBuf::new(w, h);
+            for y in 0..h {
+                for x in 0..w {
+                    img.set_pixel(x, y, [0.5; 3]);
+                }
+            }
+            Some(img)
+        }
+    }
+
+    /// The denoised result under `id`, or none yet.
+    struct Denoised(Option<u64>);
+    impl AiRasters for Denoised {
+        fn source(&self, _: &edit_model::Mask) -> Option<(Arc<dyn RasterSource>, u64)> {
+            None
+        }
+        fn denoised(&self) -> Option<(Arc<dyn ImageSource>, u64)> {
+            self.0
+                .map(|id| (Arc::new(Flat(None)) as Arc<dyn ImageSource>, id))
+        }
+    }
+
+    fn at(amount: f32) -> Edits {
+        Edits {
+            ai_denoise: edit_model::AiDenoise { amount },
+            ..Default::default()
+        }
+    }
+
+    fn steps(e: &Edits, ai: Option<&dyn AiRasters>) -> Vec<PrefixStep> {
+        build_prefix_steps(e, RenderScale::FULL, None, Resampler::default(), None, ai)
+    }
+
+    fn input() -> ImageBuf {
+        let mut img = ImageBuf::new(20, 10);
+        for y in 0..10 {
+            for x in 0..20 {
+                img.set_pixel(x, y, [x as f32 / 20.0, 0.1, 0.9]);
+            }
+        }
+        img
+    }
+
+    fn run(e: &Edits, ai: Option<&dyn AiRasters>) -> ImageBuf {
+        steps(e, ai)
+            .iter()
+            .fold(input(), |img, s| s.stage.apply(img))
+    }
+
+    #[test]
+    fn amount_zero_or_no_result_adds_no_step() {
+        assert!(
+            steps(&at(0.0), Some(&Denoised(Some(1)))).is_empty(),
+            "Amount 0"
+        );
+        assert!(
+            steps(&at(60.0), Some(&Denoised(None))).is_empty(),
+            "no result yet"
+        );
+        assert!(steps(&at(60.0), None).is_empty(), "no maps at all");
+        assert_eq!(run(&at(60.0), Some(&Denoised(None))).data(), input().data());
+        assert_eq!(
+            steps(&at(60.0), Some(&Denoised(Some(1)))).len(),
+            1,
+            "positive control"
+        );
+    }
+
+    /// Before lens correction and everything else — while each pixel's noise is its own.
+    #[test]
+    fn the_step_is_first() {
+        let e = Edits {
+            geometry: edit_model::Geometry {
+                angle: 3.0,
+                ..Default::default()
+            },
+            dehaze: edit_model::Dehaze { amount: 30.0 },
+            ..at(60.0)
+        };
+        let names: Vec<&str> = steps(&e, Some(&Denoised(Some(1))))
+            .iter()
+            .map(|s| s.stage.name())
+            .collect();
+        assert_eq!(names.first(), Some(&"ai_denoise"), "{names:?}");
+    }
+
+    /// Amount 100 is the result itself; 50 the midpoint; a size the source cannot answer passes through.
+    #[test]
+    fn amount_blends_the_result() {
+        let full = run(&at(100.0), Some(&Denoised(Some(1))));
+        assert!(full.data().iter().all(|&v| v == 0.5));
+        let half = run(&at(50.0), Some(&Denoised(Some(1))));
+        let src = input();
+        for (h, s) in half.data().iter().zip(src.data()) {
+            assert!((h - (s + 0.5) / 2.0).abs() < 1e-6);
+        }
+        let stage = stages::ai_denoise::AiDenoiseStage::new(100.0, Arc::new(Flat(Some((20, 10)))));
+        assert_eq!(stage.apply(input()).data(), input().data());
+    }
+
+    #[test]
+    fn the_key_moves_with_the_amount_and_the_result() {
+        let key =
+            |amount: f32, id: u64| steps(&at(amount), Some(&Denoised(Some(id))))[0].key.clone();
+        assert_eq!(key(60.0, 1), key(60.0, 1));
+        assert_ne!(key(60.0, 1), key(70.0, 1), "the Amount");
+        assert_ne!(key(60.0, 1), key(60.0, 2), "another result");
     }
 }

@@ -160,6 +160,18 @@ pub trait AiRasters {
     fn lens_focus(&self, _lb: &edit_model::LensBlur) -> Option<f32> {
         None
     }
+
+    /// AI denoise's result (M10.16b) — the corrected photo, resolved at the frame the step runs at —
+    /// and its identity; `None` until the job has finished for this photo.
+    fn denoised(&self) -> Option<(std::sync::Arc<dyn ImageSource>, u64)> {
+        None
+    }
+}
+
+/// A whole image a prefix step reads, resolved at the frame it runs on (M10.16b: the denoised photo) —
+/// [`RasterSource`]'s shape for an RGB image. `None` for a size it cannot answer exactly.
+pub trait ImageSource: Send + Sync {
+    fn image(&self, w: usize, h: usize) -> Option<core_image::ImageBuf>;
 }
 
 /// A raw map [`AiRasters::plane`] hands over whole, beside a mask component's coverage.
