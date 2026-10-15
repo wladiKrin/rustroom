@@ -34,8 +34,15 @@ impl Dims {
     }
 }
 
-/// The kernel's `Params`, in its field order.
-pub(crate) fn uniform(mode: Mode, d: &Dims, relu: bool, add1: bool, add2: bool) -> [u32; 12] {
+/// The kernel's `Params`, in its field order — `g0` the band's first row-workgroup.
+pub(crate) fn uniform(
+    mode: Mode,
+    d: &Dims,
+    relu: bool,
+    add1: bool,
+    add2: bool,
+    g0: u32,
+) -> [u32; 12] {
     let (ow, oh) = d.out(mode);
     let (m, n, k) = d.mnk(mode);
     [
@@ -50,8 +57,35 @@ pub(crate) fn uniform(mode: Mode, d: &Dims, relu: bool, add1: bool, add2: bool) 
         relu as u32,
         add1 as u32,
         add2 as u32,
-        0,
+        g0,
     ]
+}
+
+/// Multiply-adds a submission — ~2.7 ms of the M2. Each convolution runs as bands of row-workgroups this
+/// size or smaller, two in flight, so an editing frame on the same queue waits behind two bands at most.
+///
+/// ⚠ Measured (`editing_frames_while_a_tile_runs`, an editing frame 6.3 ms idle; `a_full_size_tile_time`):
+///
+/// | submissions | an editing frame during a tile | a tile |
+/// |---|---|---|
+/// | a tile's 7 levels at once | 1,354 ms | 1.35 s |
+/// | one convolution each, waited for | 51 ms | 1.42 s |
+/// | bands of 2³⁰, each waited for | 12 ms | 1.91 s |
+/// | **bands of 2³⁰, two in flight (this)** | **15 ms** | **1.46 s** |
+/// | bands of 2³¹, two in flight | 24 ms | 1.41 s |
+pub(crate) const SUBMISSION_MACS: u64 = 1 << 30;
+
+/// `groups.0` split into bands of at most [`SUBMISSION_MACS`]: each `(first, count)`.
+pub(crate) fn bands(mode: Mode, d: &Dims) -> Vec<(u32, u32)> {
+    let (m, n, k) = d.mnk(mode);
+    let (gx, _) = groups(mode, d);
+    let macs = m as u64 * n as u64 * k as u64;
+    let count = macs.div_ceil(SUBMISSION_MACS).clamp(1, gx as u64) as u32;
+    let size = gx.div_ceil(count);
+    (0..gx)
+        .step_by(size as usize)
+        .map(|g0| (g0, size.min(gx - g0)))
+        .collect()
 }
 
 /// Workgroups: `TM` rows by `TN` columns each — the kernel's tile.
@@ -258,7 +292,7 @@ pub(crate) mod tests {
         let r1 = res1.map(|r| upload(ctx, "test-res1", r));
         let r2 = res2.map(|r| upload(ctx, "test-res2", r));
         let none = zeros(ctx, "test-none", 1);
-        let params = uniform_buffer(ctx, &uniform(mode, d, relu, r1.is_some(), r2.is_some()));
+        let params = uniform_buffer(ctx, &uniform(mode, d, relu, r1.is_some(), r2.is_some(), 0));
         let (layout, pipeline) = kernel(ctx, mode);
         let bind = bind(
             ctx,

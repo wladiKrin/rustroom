@@ -36,13 +36,11 @@ struct Sized {
     steps: Vec<Step>,
 }
 
-/// One convolution, ready to dispatch.
+/// One convolution, ready to dispatch as bands — each its own bind group (its `g0`) and row-workgroups.
 struct Step {
     pipeline: wgpu::ComputePipeline,
-    bind: wgpu::BindGroup,
-    groups: (u32, u32),
-    /// Steps of one level go in one submission.
-    level: usize,
+    bands: Vec<(wgpu::BindGroup, u32)>,
+    gy: u32,
 }
 
 /// Whether a `w × h` tile's largest buffer fits the device's limit — scale 0's widest, since each
@@ -117,23 +115,32 @@ impl GpuDrunet {
         let ctx = &self.ctx;
         ctx.queue
             .write_buffer(&sized.bufs[&Buf::Input], 0, bytemuck::cast_slice(&input));
-        // ⚠ One submission a level, never one for the whole tile: the render engine shares this queue,
-        // and an editing frame waits behind whatever was submitted first (Review Focus 5).
-        let mut i = 0;
-        while i < sized.steps.len() {
-            let level = sized.steps[i].level;
+        // ⚠⚠ ONE BAND A SUBMISSION, EACH WAITED FOR BEFORE THE NEXT (Review Focus 5). The render engine
+        // shares this queue and Metal runs it in order: with a tile's levels submitted at once an editing
+        // frame queued behind all of them — 1,354 ms median against 9.4 idle; with one convolution a
+        // submission, 51 ms (`editing_frames_while_a_tile_runs`). Bands of `SUBMISSION_MACS` bound it.
+        let mut in_flight: Option<wgpu::SubmissionIndex> = None;
+        for (bind, gx, gy, pipeline) in sized.steps.iter().flat_map(|s| {
+            s.bands
+                .iter()
+                .map(move |(b, gx)| (b, *gx, s.gy, &s.pipeline))
+        }) {
             let mut enc = ctx.device.create_command_encoder(&Default::default());
             {
                 let mut pass = enc.begin_compute_pass(&Default::default());
-                while i < sized.steps.len() && sized.steps[i].level == level {
-                    let s = &sized.steps[i];
-                    pass.set_pipeline(&s.pipeline);
-                    pass.set_bind_group(0, &s.bind, &[]);
-                    pass.dispatch_workgroups(s.groups.0, s.groups.1, 1);
-                    i += 1;
-                }
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, bind, &[]);
+                pass.dispatch_workgroups(gx, gy, 1);
             }
-            ctx.queue.submit(Some(enc.finish()));
+            // ⚠ Two in flight: the next band is queued before the last is waited for, so the GPU never
+            // idles between them (one at a time cost +34 % a tile) and a frame waits behind two at most.
+            let index = ctx.queue.submit(Some(enc.finish()));
+            if let Some(before) = in_flight.replace(index) {
+                let _ = ctx.device.poll(wgpu::PollType::Wait {
+                    submission_index: Some(before),
+                    timeout: None,
+                });
+            }
         }
         let out = conv::read(ctx, &sized.bufs[&Buf::Output], 3 * n)?;
         let mut hwc = vec![0f32; 3 * n];
@@ -168,52 +175,56 @@ impl GpuDrunet {
         let spare = conv::zeros(ctx, "drunet-spare", 1);
         let mut kernels: HashMap<Mode, (wgpu::BindGroupLayout, wgpu::ComputePipeline)> =
             HashMap::new();
-        let mut level = 0;
         let steps = self
             .program
             .iter()
             .zip(&self.weights)
             .map(|(op, weights)| {
-                if op.mode == Mode::Up2 {
-                    level += 1;
-                }
                 let d = Dims {
                     in_w: (w >> op.scale_in) as u32,
                     in_h: (h >> op.scale_in) as u32,
                     cin: op.cin as u32,
                     cout: op.cout as u32,
                 };
-                let params = conv::uniform_buffer(
-                    ctx,
-                    &conv::uniform(op.mode, &d, op.relu, op.add1.is_some(), op.add2.is_some()),
-                );
                 let (layout, pipeline) = kernels
                     .entry(op.mode)
                     .or_insert_with(|| conv::kernel(ctx, op.mode))
                     .clone();
                 let res = |r: Option<Buf>| r.map_or(&spare, |b| &bufs[&b]);
-                let bind = conv::bind(
-                    ctx,
-                    &layout,
-                    [
-                        &bufs[&op.src],
-                        weights,
-                        &bufs[&op.dst],
-                        res(op.add1),
-                        res(op.add2),
-                    ],
-                    &params,
-                );
-                let step = Step {
+                let bands = conv::bands(op.mode, &d)
+                    .into_iter()
+                    .map(|(g0, count)| {
+                        let params = conv::uniform_buffer(
+                            ctx,
+                            &conv::uniform(
+                                op.mode,
+                                &d,
+                                op.relu,
+                                op.add1.is_some(),
+                                op.add2.is_some(),
+                                g0,
+                            ),
+                        );
+                        let bind = conv::bind(
+                            ctx,
+                            &layout,
+                            [
+                                &bufs[&op.src],
+                                weights,
+                                &bufs[&op.dst],
+                                res(op.add1),
+                                res(op.add2),
+                            ],
+                            &params,
+                        );
+                        (bind, count)
+                    })
+                    .collect();
+                Step {
                     pipeline,
-                    bind,
-                    groups: conv::groups(op.mode, &d),
-                    level,
-                };
-                if op.mode == Mode::Down2 {
-                    level += 1;
+                    bands,
+                    gy: conv::groups(op.mode, &d).1,
                 }
-                step
             })
             .collect();
         Sized { w, h, bufs, steps }
@@ -365,6 +376,49 @@ mod tests {
             best = best.min(t.elapsed().as_secs_f64());
         }
         eprintln!("a 512 px tile: {:.3} s (best of 3)", best);
+    }
+
+    /// Review Focus 5: an editing frame's GPU time — a 1600 px exposure chain, its upload, dispatch and
+    /// download — idle and while a full-size tile runs on another thread (one submission a level).
+    #[test]
+    #[ignore = "a timing, not a check — run with --release"]
+    fn editing_frames_while_a_tile_runs() {
+        use pipeline::PipelineStage;
+        let Some(ctx) = ctx() else { return };
+        let frame = core_image::ImageBuf::from_vec(1600, 1067, vec![0.3; 1600 * 1067 * 3]);
+        let median = |ctx: &Arc<GpuContext>| {
+            let mut times: Vec<f64> = (0..15)
+                .map(|_| {
+                    let t = std::time::Instant::now();
+                    let _ = crate::GpuExposureStage::new(0.3, ctx.clone()).apply(frame.clone());
+                    t.elapsed().as_secs_f64() * 1000.0
+                })
+                .collect();
+            times.sort_by(f64::total_cmp);
+            (times[7], times[14])
+        };
+        let idle = median(&ctx);
+        let arch = Arch {
+            widths: [64, 128, 256, 512],
+            blocks: 4,
+        };
+        let mut net = GpuDrunet::new(ctx.clone(), &random_weights(&arch, 5)).expect("built");
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let s = stop.clone();
+        let job = std::thread::spawn(move || {
+            let rgb = vec![0.5; 512 * 512 * 3];
+            while !s.load(std::sync::atomic::Ordering::Relaxed) {
+                net.run(&rgb, 512, 512, 10.0).expect("ran");
+            }
+        });
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let busy = median(&ctx);
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        job.join().expect("joined");
+        eprintln!(
+            "an editing frame: idle median {:.1} ms (worst {:.1}), during a tile median {:.1} ms (worst {:.1})",
+            idle.0, idle.1, busy.0, busy.1
+        );
     }
 
     /// A wrong file is refused at construction — the shape check, not a garbage run.

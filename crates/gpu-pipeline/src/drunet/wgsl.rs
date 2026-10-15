@@ -17,7 +17,7 @@ const BODY: &str = r#"
 struct Params {
   in_w: u32, in_h: u32, out_w: u32, out_h: u32,
   m: u32, n: u32, k: u32, cout: u32,
-  relu: u32, add1: u32, add2: u32, pad: u32,
+  relu: u32, add1: u32, add2: u32, g0: u32,
 }
 @group(0) @binding(0) var<storage, read> src: array<f32>;
 @group(0) @binding(1) var<storage, read> wts: array<f32>;
@@ -55,7 +55,8 @@ fn ld(i: u32, ok: bool) -> f32 {
 @compute @workgroup_size(8, 8)
 fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid: vec3<u32>) {
   let t = lid.y * 8u + lid.x;
-  let m0 = wid.x * TM;
+  // ⚠ `g0`: this band's first row-workgroup — a convolution runs as several submissions.
+  let m0 = (wid.x + p.g0) * TM;
   let n0 = wid.y * TN;
   // This thread's load slots, the same every k-step: four adjacent rows (pixels) 4q … 4q + 3 and four
   // adjacent columns, at k-offsets t / 16 + 4r within the step.
