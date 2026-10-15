@@ -89,13 +89,32 @@ impl Encoding {
 /// The side of the blocks the noise estimate ranks by flatness.
 const BLOCK: usize = 16;
 
-/// The photo's noise level in the network's units (0…255 of the encoding), clamped to 1…40.
+/// The photo's noise level in the network's units (0…255 of the encoding), clamped to 1…40 — read at
+/// [`NOISE_BIN`], times [`CALIBRATION`].
 ///
 /// ⚠ The standard robust estimate: the finest-scale detail of every channel — the 2 × 2 Haar diagonal
 /// `(a − b − c + d) / 2`, whose spread is the noise's own for independent noise — over the flattest
 /// quarter of 16 × 16 blocks (ranked by their mean absolute neighbour difference, clipped blocks left
 /// out), as a median absolute value × 1.4826.
 pub fn noise_sigma(img: &ImageBuf, enc: &Encoding) -> f32 {
+    (noise_sigma_at(img, enc, NOISE_BIN) * CALIBRATION).clamp(1.0, 40.0)
+}
+
+/// The scale the estimate reads at. ⚠⚠ **Measured (M10.16b's spike):** at single pixels the estimate
+/// read 2–4× under the eye on the author's ISO 3200 RAFs — the demosaic correlates neighbouring noise,
+/// which the finest scale cannot see. Binned 2 × 2 it reads 7.6 where σ 8 looked right (DSCF6990);
+/// 4 × 4 begins to count texture. The table is in the spec, §4.
+pub const NOISE_BIN: usize = 2;
+
+/// The estimate's factor to the σ that looks right — 1.0 until the author's look sets it (§4).
+pub const CALIBRATION: f32 = 1.0;
+
+/// [`noise_sigma`] measured on the image binned `bin × bin` (each sample the mean of its block), scaled
+/// back to one pixel's noise (× `bin`, what averaging `bin²` independent samples divides by). For white
+/// noise every `bin` agrees; noise a demosaic has correlated between neighbours reads higher binned.
+pub fn noise_sigma_at(img: &ImageBuf, enc: &Encoding, bin: usize) -> f32 {
+    let bin = bin.max(1);
+    let img = &binned(img, bin);
     let (w, h) = (img.width(), img.height());
     let (bw, bh) = (w / BLOCK, h / BLOCK);
     if bw == 0 || bh == 0 {
@@ -141,7 +160,32 @@ pub fn noise_sigma(img: &ImageBuf, enc: &Encoding) -> f32 {
     }
     let mid = coeffs.len() / 2;
     let (_, m, _) = coeffs.select_nth_unstable_by(mid, f32::total_cmp);
-    (*m * 1.4826 * 255.0).clamp(1.0, 40.0)
+    (*m * 1.4826 * 255.0 * bin as f32).clamp(1.0, 40.0)
+}
+
+/// `img` averaged over `bin × bin` blocks (a partial edge block dropped).
+fn binned(img: &ImageBuf, bin: usize) -> ImageBuf {
+    if bin == 1 {
+        return img.clone();
+    }
+    let (w, h) = (img.width() / bin, img.height() / bin);
+    let mut out = ImageBuf::new(w, h);
+    let n = (bin * bin) as f32;
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = [0f32; 3];
+            for dy in 0..bin {
+                for dx in 0..bin {
+                    let p = img.pixel(x * bin + dx, y * bin + dy);
+                    for c in 0..3 {
+                        acc[c] += p[c];
+                    }
+                }
+            }
+            out.set_pixel(x, y, acc.map(|v| v / n));
+        }
+    }
+    out
 }
 
 /// Where tiles start along a side of `n`: every `TILE − OVERLAP`, the last flush with the end.
@@ -180,9 +224,21 @@ fn mirror(i: usize, t: usize) -> usize {
 }
 
 /// `img` denoised at `sigma`, tile by tile — `progress(done, total)` after each tile, which answers
-/// `false` to cancel (`Ok(None)`).
+/// `false` to cancel (`Ok(None)`). In the photo's own encoding ([`Encoding::of`]).
 pub fn denoise(
     img: &ImageBuf,
+    net: &mut dyn TileNet,
+    sigma: f32,
+    progress: &dyn Fn(usize, usize) -> bool,
+) -> Result<Option<ImageBuf>, String> {
+    denoise_in(img, &Encoding::of(img), net, sigma, progress)
+}
+
+/// [`denoise`] in a given encoding — a crop denoised as its whole frame would be (the probe's sheets),
+/// since a crop's own encoding would scale its noise, and so its σ, differently.
+pub fn denoise_in(
+    img: &ImageBuf,
+    enc: &Encoding,
     net: &mut dyn TileNet,
     sigma: f32,
     progress: &dyn Fn(usize, usize) -> bool,
@@ -191,7 +247,7 @@ pub fn denoise(
     if w == 0 || h == 0 {
         return Ok(Some(img.clone()));
     }
-    let enc = Encoding::of(img);
+    let enc = *enc;
     let encoded: Vec<[f32; 3]> = (0..w * h)
         .map(|i| enc.encode(img.pixel(i % w, i / w)))
         .collect();
