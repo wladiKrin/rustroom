@@ -229,6 +229,11 @@ so real photos stay held at 3e-3. **Re-timed with Rustroom closed:** f32 direct 
 f16 direct 1.40 · **f16 Winograd 0.87–0.91 s** a tile (−42 %); editing frames 14.9 ms median during a tile (7.6
 idle).
 
+⚠ **The gate then failed once** (1440 of 1441): `the_network_is_told_when_a_job_ends` waited for ANY first
+result, and under the gate's load the job outlasted a second and published a partial one before the network
+was told — b4's partials, the flaw b4 fixed only in the focus test. Reproduced every time with 400 ms tiles; every
+worker test expecting `Done` now goes through `wait_done`.
+
 ### 2026-10-16 — M10.16b4: AI denoise — your view first, shown as it lands (branch `m10.16b3-ai-denoise-strength-speed`)
 
 **The item:** spec §2 — the author's *"too slow to use it effectively"*: the tiles under the view first, each
