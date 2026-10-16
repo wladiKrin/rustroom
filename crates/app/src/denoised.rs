@@ -353,10 +353,11 @@ mod tests {
     }
 
     /// The largest |GPU − tract| on the real model, in the network's 0…1 units — measured, never tuned
-    /// to pass. ⚠ Measured **exactly 0** on the M2 (2026-10-15): both engines sum each output over
-    /// `ci · 9 + tap` in order with fused multiply-adds, and add the residual and the skip in the file's
-    /// order, so the bits agree. 1e-5 leaves room for another GPU contracting differently.
-    const TOL: f32 = 1e-5;
+    /// to pass. b2's direct `f32` kernel measured **exactly 0** (2026-10-15). Since M10.16b5 the GPU
+    /// stores in `f16` and runs the 3 × 3 convolutions as Winograd F(2 × 2, 3 × 3): measured on the M2
+    /// **1.10e-3 at 64² and 1.42e-3 at 296 × 200** (2026-10-16) — a third of one 8-bit level (3.9e-3).
+    /// 3e-3 is twice the larger number and still under that level; never raise it without a new number.
+    const TOL: f32 = 3e-3;
 
     /// DRUNet on the GPU against `tract` on the real model: a 64 × 64 tile and a 296 × 200 one (sides
     /// multiples of 8, the second not of 64).
