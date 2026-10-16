@@ -260,19 +260,42 @@ pub fn denoise(
     )
 }
 
-/// `img` denoised at its own noise — the job's and the export's one call (M10.16b3): the photo's noise
-/// curve, measured once, and each tile's σ plane from it × [`CALIBRATION`].
+/// `img` denoised at its own noise — the export's one call (M10.16b3): the photo's noise curve, measured
+/// once, and each tile's σ plane from it × [`CALIBRATION`]; the tiles from the centre out.
 pub fn run(
     img: &ImageBuf,
     net: &mut dyn TileNet,
     progress: &dyn Fn(usize, usize) -> bool,
 ) -> Result<Option<ImageBuf>, String> {
+    run_progressive(img, net, &|| [0.5, 0.5], &mut |t| {
+        progress(t.done(), t.total())
+    })
+}
+
+/// [`run`] for the session's job (M10.16b4): the tile nearest `focus()` next — read before every tile, so
+/// a pan re-orders what is left — and `after` told after each; `false` cancels (`Ok(None)`).
+pub fn run_progressive(
+    img: &ImageBuf,
+    net: &mut dyn TileNet,
+    focus: &dyn Fn() -> [f32; 2],
+    after: &mut dyn FnMut(&Tiler<'_>) -> bool,
+) -> Result<Option<ImageBuf>, String> {
+    if img.width() == 0 || img.height() == 0 {
+        return Ok(Some(img.clone()));
+    }
     let enc = Encoding::of(img);
     let curve = crate::noise_curve::noise_curve(img, &enc);
     let sigma = |rgb: &[f32], w: usize, h: usize| {
         crate::noise_curve::noise_map(rgb, w, h, &curve, CALIBRATION)
     };
-    denoise_in(img, &enc, net, &sigma, progress)
+    let mut t = Tiler::new(img, &enc);
+    while t.done() < t.total() {
+        t.step(net, &sigma, focus())?;
+        if !after(&t) {
+            return Ok(None);
+        }
+    }
+    Ok(Some(t.into_result()))
 }
 
 /// [`denoise`] in a given encoding — a crop denoised as its whole frame would be (the probe's sheets),

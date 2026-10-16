@@ -182,10 +182,13 @@ impl RustroomApp {
         for r in w.poll() {
             let key = match &r {
                 DenoiseResult::Done { key, .. }
+                | DenoiseResult::Partial { key, .. }
                 | DenoiseResult::Failed { key, .. }
                 | DenoiseResult::Missing { key } => key.clone(),
             };
-            if self.denoise.pending.as_ref() == Some(&key) {
+            // ⚠ A partial result is not the job's end: the job still runs.
+            let ended = !matches!(r, DenoiseResult::Partial { .. });
+            if ended && self.denoise.pending.as_ref() == Some(&key) {
                 self.denoise.pending = None;
             }
             match r {
@@ -194,7 +197,9 @@ impl RustroomApp {
                     self.denoise.held = Some((key, Arc::new(Denoised::new(image))));
                     self.status = "Denoised".to_string();
                 }
-                DenoiseResult::Done { .. } | DenoiseResult::Missing { .. } => {}
+                DenoiseResult::Done { .. }
+                | DenoiseResult::Partial { .. }
+                | DenoiseResult::Missing { .. } => {}
                 DenoiseResult::Failed { error, .. } => {
                     self.status = format!("AI denoise failed: {error}");
                     self.denoise.failed.insert(key);
