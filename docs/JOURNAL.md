@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.16b4: AI denoise — your view first, shown as it lands (2026-10-16)](#2026-10-16--m1016b4-ai-denoise--your-view-first-shown-as-it-lands-branch-m1016b3-ai-denoise-strength-speed)
 - [M10.16b3: AI denoise at the noise map × 2 (2026-10-16)](#2026-10-16--m1016b3-ai-denoise-at-the-noise-map--2-branch-m1016b3-ai-denoise-strength-speed)
 - [M10.16b2: AI denoise on the GPU — DRUNet as one tiled WGSL product (2026-10-16)](#2026-10-16--m1016b2-ai-denoise-on-the-gpu--drunet-as-one-tiled-wgsl-product-branch-m1016b2-ai-denoise-gpu)
 - [M10.16b1: AI denoise — DRUNet on the CPU, a background job, its cache, the Amount in Detail (2026-10-15)](#2026-10-15--m1016b1-ai-denoise--drunet-on-the-cpu-a-background-job-its-cache-the-amount-in-detail-branch-m1016b-ai-denoise)
@@ -181,6 +182,28 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-16 — M10.16b4: AI denoise — your view first, shown as it lands (branch `m10.16b3-ai-denoise-strength-speed`)
+
+**The item:** spec §2 — the author's *"too slow to use it effectively"*: the tiles under the view first, each
+shown as it lands. Plan `2026-10-16-m10.16b4-ai-denoise-view-first.md`.
+
+**Built:** `ai_denoise::Tiler` — the remaining tile nearest a focus point next, the result kept up to date tile
+by tile: **the original decode wherever no tile has landed**, so the prefix step needed no coverage at all — where
+the "denoised" image is the input, the blend changes nothing. `run_progressive` (the focus read before every tile,
+`after` told after each); the worker's `set_focus` and `DenoiseResult::Partial`, published at most once a second,
+never cached; the flow's `Held { complete }` — a partial result shown with its own id, **not** counted as
+finished (a job dropped mid-way runs again); the canvas records its visible centre, mapped to decode space by the
+eyedropper's own `decode_point`, memoised on the frame and the centre.
+
+**What the author sees:** at 1:1 the view is ~15 tiles at ~1.5 s — the first tile under the centre after the
+noise curve (~1 s) and one tile; the view filled in ~20–25 s, the rest of the photo behind it.
+
+**Sabotages:** the first remaining tile taken, not the nearest; the result's recompute skipped (⚠ green at
+first: `denoise_in` now runs on the same `Tiler`, so both sides of the comparison broke alike — shape (c); the
+test proves the one-shot run moved first, at half the measured 0.0086); a partial stored in the cache; the focus
+pinned at the centre; a partial counted as finished. ⚠ The worker's focus test first waited for any result and
+got a partial (a debug job publishes after a second) — it waits for the finished one now.
 
 ### 2026-10-16 — M10.16b3: AI denoise at the noise map × 2 (branch `m10.16b3-ai-denoise-strength-speed`)
 
