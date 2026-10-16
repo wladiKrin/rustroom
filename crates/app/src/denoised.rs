@@ -172,7 +172,7 @@ impl Engine {
 }
 
 impl TileNet for Engine {
-    fn run(&mut self, rgb: &[f32], w: usize, h: usize, sigma: f32) -> Result<Vec<f32>, String> {
+    fn run(&mut self, rgb: &[f32], w: usize, h: usize, sigma: &[f32]) -> Result<Vec<f32>, String> {
         if let Some(p) = self.primary.as_mut() {
             match p.run(rgb, w, h, sigma) {
                 Ok(v) => return Ok(v),
@@ -290,7 +290,7 @@ mod tests {
     /// A network that adds `0.1` to every value — visibly not the input.
     struct Lift;
     impl TileNet for Lift {
-        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: f32) -> Result<Vec<f32>, String> {
+        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: &[f32]) -> Result<Vec<f32>, String> {
             Ok(rgb.iter().map(|v| v + 0.1).collect())
         }
     }
@@ -302,7 +302,7 @@ mod tests {
         calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
     impl TileNet for FailAfter {
-        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: f32) -> Result<Vec<f32>, String> {
+        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: &[f32]) -> Result<Vec<f32>, String> {
             let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if n < self.ok {
                 Ok(rgb.iter().map(|v| v + 0.1).collect())
@@ -331,7 +331,7 @@ mod tests {
             }),
         );
         for _ in 0..3 {
-            let out = e.run(&[0.5; 3], 1, 1, 1.0).expect("a tile");
+            let out = e.run(&[0.5; 3], 1, 1, &[1.0]).expect("a tile");
             assert!((out[0] - 0.6).abs() < 1e-6);
         }
         assert_eq!(
@@ -349,7 +349,7 @@ mod tests {
             None,
             Box::new(|| Ok(Box::new(Lift) as Box<dyn TileNet + Send>)),
         );
-        assert!((e.run(&[0.5; 3], 1, 1, 1.0).unwrap()[0] - 0.6).abs() < 1e-6);
+        assert!((e.run(&[0.5; 3], 1, 1, &[1.0]).unwrap()[0] - 0.6).abs() < 1e-6);
     }
 
     /// The largest |GPU − tract| on the real model, in the network's 0…1 units — measured, never tuned
@@ -376,7 +376,7 @@ mod tests {
             let rgb: Vec<f32> = (0..w * h * 3)
                 .map(|i| ((i * 7919) % 1000) as f32 / 1000.0)
                 .collect();
-            let a = cpu.run(&rgb, w, h, 15.0).expect("cpu");
+            let a = cpu.run(&rgb, w, h, &vec![15.0; w * h]).expect("cpu");
             let b = gpu.run(&rgb, w, h, 15.0).expect("gpu");
             // ⚠ NaN first: `f32::max` ignores it, and an all-NaN GPU output once read here as a perfect 0.
             let bad = b.iter().filter(|v| !v.is_finite()).count();

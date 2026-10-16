@@ -175,7 +175,7 @@ mod tests {
     /// A network that returns its input, slowly enough to be overtaken.
     struct Slow;
     impl TileNet for Slow {
-        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: f32) -> Result<Vec<f32>, String> {
+        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: &[f32]) -> Result<Vec<f32>, String> {
             std::thread::sleep(std::time::Duration::from_millis(30));
             Ok(rgb.to_vec())
         }
@@ -197,7 +197,7 @@ mod tests {
     /// A network that returns its input and counts the jobs it was told ended.
     struct Counting(Arc<std::sync::atomic::AtomicUsize>);
     impl TileNet for Counting {
-        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: f32) -> Result<Vec<f32>, String> {
+        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: &[f32]) -> Result<Vec<f32>, String> {
             Ok(rgb.to_vec())
         }
         fn finished(&mut self) {

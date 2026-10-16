@@ -12,15 +12,16 @@ use core_image::ImageBuf;
 /// One tile through the network: `rgb` (`w × h`, interleaved, encoded 0…1) denoised at noise level
 /// `sigma` (0…255 units), the same layout back. The CPU's `tract` runner and b2's GPU engine both.
 pub trait TileNet {
-    fn run(&mut self, rgb: &[f32], w: usize, h: usize, sigma: f32) -> Result<Vec<f32>, String>;
+    /// `rgb` (`w × h`, interleaved, encoded 0…1) denoised at `sigma` — one noise level a pixel, 0…255.
+    fn run(&mut self, rgb: &[f32], w: usize, h: usize, sigma: &[f32]) -> Result<Vec<f32>, String>;
 
     /// A job ended — what the network holds for one (the GPU's activations, M10.16b2) may go.
     fn finished(&mut self) {}
 }
 
 impl TileNet for gpu_pipeline::GpuDrunet {
-    fn run(&mut self, rgb: &[f32], w: usize, h: usize, sigma: f32) -> Result<Vec<f32>, String> {
-        gpu_pipeline::GpuDrunet::run(self, rgb, w, h, sigma)
+    fn run(&mut self, rgb: &[f32], w: usize, h: usize, sigma: &[f32]) -> Result<Vec<f32>, String> {
+        gpu_pipeline::GpuDrunet::run_map(self, rgb, w, h, sigma)
     }
 
     fn finished(&mut self) {
@@ -29,7 +30,7 @@ impl TileNet for gpu_pipeline::GpuDrunet {
 }
 
 impl TileNet for ai_mask::denoise::Drunet {
-    fn run(&mut self, rgb: &[f32], w: usize, h: usize, sigma: f32) -> Result<Vec<f32>, String> {
+    fn run(&mut self, rgb: &[f32], w: usize, h: usize, sigma: &[f32]) -> Result<Vec<f32>, String> {
         ai_mask::denoise::Drunet::run(self, rgb, w, h, sigma).map_err(|e| e.to_string())
     }
 }
@@ -103,14 +104,15 @@ impl Encoding {
 pub(crate) const BLOCK: usize = 16;
 
 /// The photo's noise level in the network's units (0…255 of the encoding), clamped to 1…40 — read at
-/// [`NOISE_BIN`], times [`CALIBRATION`].
+/// [`NOISE_BIN`] — the photo's noise in one number, as measured. ⚠ Not × [`CALIBRATION`]: since M10.16b3
+/// the network is given the noise MAP × it (`run`), and this stays the measurement (the probe's).
 ///
 /// ⚠ The standard robust estimate: the finest-scale detail of every channel — the 2 × 2 Haar diagonal
 /// `(a − b − c + d) / 2`, whose spread is the noise's own for independent noise — over the flattest
 /// quarter of 16 × 16 blocks (ranked by their mean absolute neighbour difference, clipped blocks left
 /// out), as a median absolute value × 1.4826.
 pub fn noise_sigma(img: &ImageBuf, enc: &Encoding) -> f32 {
-    (noise_sigma_at(img, enc, NOISE_BIN) * CALIBRATION).clamp(1.0, 40.0)
+    noise_sigma_at(img, enc, NOISE_BIN).clamp(1.0, 40.0)
 }
 
 /// The scale the estimate reads at. ⚠⚠ **Measured (M10.16b's spike):** at single pixels the estimate
@@ -119,8 +121,9 @@ pub fn noise_sigma(img: &ImageBuf, enc: &Encoding) -> f32 {
 /// 4 × 4 begins to count texture. The table is in the spec, §4.
 pub const NOISE_BIN: usize = 2;
 
-/// The estimate's factor to the σ that looks right — 1.0 until the author's look sets it (§4).
-pub const CALIBRATION: f32 = 1.0;
+/// The noise map's factor to the σ that looks right — **2.0, the author's pick** from the strength sheets
+/// (2026-10-16): at 1× Amount 100 left 35–65 % of the noise in mid-tones and 45–80 % in shadows.
+pub const CALIBRATION: f32 = 2.0;
 
 /// [`noise_sigma`] measured on the image binned `bin × bin` (each sample the mean of its block), scaled
 /// back to one pixel's noise (× `bin`, what averaging `bin²` independent samples divides by). For white
@@ -244,26 +247,38 @@ pub fn denoise(
     sigma: f32,
     progress: &dyn Fn(usize, usize) -> bool,
 ) -> Result<Option<ImageBuf>, String> {
-    denoise_in(img, &Encoding::of(img), net, sigma, progress)
+    denoise_in(
+        img,
+        &Encoding::of(img),
+        net,
+        &|_, w, h| vec![sigma; w * h],
+        progress,
+    )
 }
 
-/// `img` denoised at its own automatic σ ([`noise_sigma`]) — the job's and the export's one call.
+/// `img` denoised at its own noise — the job's and the export's one call (M10.16b3): the photo's noise
+/// curve, measured once, and each tile's σ plane from it × [`CALIBRATION`].
 pub fn run(
     img: &ImageBuf,
     net: &mut dyn TileNet,
     progress: &dyn Fn(usize, usize) -> bool,
 ) -> Result<Option<ImageBuf>, String> {
     let enc = Encoding::of(img);
-    denoise_in(img, &enc, net, noise_sigma(img, &enc), progress)
+    let curve = crate::noise_curve::noise_curve(img, &enc);
+    let sigma = |rgb: &[f32], w: usize, h: usize| {
+        crate::noise_curve::noise_map(rgb, w, h, &curve, CALIBRATION)
+    };
+    denoise_in(img, &enc, net, &sigma, progress)
 }
 
 /// [`denoise`] in a given encoding — a crop denoised as its whole frame would be (the probe's sheets),
-/// since a crop's own encoding would scale its noise, and so its σ, differently.
+/// since a crop's own encoding would scale its noise, and so its σ, differently. `sigma` gives each tile
+/// its σ plane from the tile itself (encoded, padded, `w × h`).
 pub fn denoise_in(
     img: &ImageBuf,
     enc: &Encoding,
     net: &mut dyn TileNet,
-    sigma: f32,
+    sigma: &dyn Fn(&[f32], usize, usize) -> Vec<f32>,
     progress: &dyn Fn(usize, usize) -> bool,
 ) -> Result<Option<ImageBuf>, String> {
     let (w, h) = (img.width(), img.height());
@@ -293,7 +308,7 @@ pub fn denoise_in(
                     tile.extend_from_slice(&encoded[sy * w + sx]);
                 }
             }
-            let out = net.run(&tile, pw, ph, sigma)?;
+            let out = net.run(&tile, pw, ph, &sigma(&tile, pw, ph))?;
             for y in 0..th {
                 let wy = ramp(y, th, ty, h);
                 for x in 0..tw {
@@ -331,7 +346,7 @@ mod tests {
     /// A network that returns what it was given.
     struct Identity;
     impl TileNet for Identity {
-        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: f32) -> Result<Vec<f32>, String> {
+        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: &[f32]) -> Result<Vec<f32>, String> {
             Ok(rgb.to_vec())
         }
     }
@@ -339,7 +354,7 @@ mod tests {
     /// A network that adds `0.02` to every value.
     struct Lift;
     impl TileNet for Lift {
-        fn run(&mut self, rgb: &[f32], w: usize, h: usize, _: f32) -> Result<Vec<f32>, String> {
+        fn run(&mut self, rgb: &[f32], w: usize, h: usize, _: &[f32]) -> Result<Vec<f32>, String> {
             assert!(
                 w.is_multiple_of(8) && h.is_multiple_of(8),
                 "a {w} × {h} tile reached the network"
@@ -472,6 +487,44 @@ mod tests {
         assert!(
             cancelled.is_none(),
             "the answer after the second tile stops it"
+        );
+    }
+
+    /// Review Focus 3: each tile's plane covers the padded tile, and the dark half of a photo whose noise
+    /// curve falls is given more σ than the bright half.
+    #[test]
+    fn each_tile_carries_its_map() {
+        type Seen = std::sync::Arc<std::sync::Mutex<Vec<(usize, usize, Vec<f32>)>>>;
+        struct Record(Seen);
+        impl TileNet for Record {
+            fn run(
+                &mut self,
+                rgb: &[f32],
+                w: usize,
+                h: usize,
+                s: &[f32],
+            ) -> Result<Vec<f32>, String> {
+                self.0.lock().unwrap().push((w, h, s.to_vec()));
+                Ok(rgb.to_vec())
+            }
+        }
+        let seen: Seen = Default::default();
+        let img = image(301, 203, |x, _| if x < 150 { [0.002; 3] } else { [0.6; 3] });
+        let enc = Encoding::of(&img);
+        let c: crate::noise_curve::Curve = [20.0, 18.0, 16.0, 14.0, 12.0, 10.0, 8.0, 6.0];
+        let sigma =
+            |rgb: &[f32], w: usize, h: usize| crate::noise_curve::noise_map(rgb, w, h, &c, 1.0);
+        denoise_in(&img, &enc, &mut Record(seen.clone()), &sigma, &|_, _| true).unwrap();
+        let seen = seen.lock().unwrap();
+        let (w, h, s) = &seen[0];
+        assert_eq!(s.len(), w * h, "the plane covers the padded tile");
+        assert_eq!((w % 8, h % 8), (0, 0));
+        let at = |x: usize| s[(h / 2) * w + x];
+        assert!(
+            at(10) > at(290) + 2.0,
+            "dark {} vs bright {}",
+            at(10),
+            at(290)
         );
     }
 }
