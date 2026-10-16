@@ -285,62 +285,140 @@ pub fn denoise_in(
     sigma: &Sigma<'_>,
     progress: &dyn Fn(usize, usize) -> bool,
 ) -> Result<Option<ImageBuf>, String> {
-    let (w, h) = (img.width(), img.height());
-    if w == 0 || h == 0 {
+    if img.width() == 0 || img.height() == 0 {
         return Ok(Some(img.clone()));
     }
-    let enc = *enc;
-    let encoded: Vec<[f32; 3]> = (0..w * h)
-        .map(|i| enc.encode(img.pixel(i % w, i / w)))
-        .collect();
-    let (xs, ys) = (starts(w), starts(h));
-    let total = xs.len() * ys.len();
-    let mut sum = vec![[0f32; 3]; w * h];
-    let mut wsum = vec![0f32; w * h];
-    let mut done = 0;
-    for &ty in &ys {
-        for &tx in &xs {
-            let (tw, th) = (TILE.min(w), TILE.min(h));
-            let (pw, ph) = (
-                tw.div_ceil(ai_mask::denoise::MULTIPLE) * ai_mask::denoise::MULTIPLE,
-                th.div_ceil(ai_mask::denoise::MULTIPLE) * ai_mask::denoise::MULTIPLE,
-            );
-            let mut tile = Vec::with_capacity(pw * ph * 3);
-            for y in 0..ph {
-                for x in 0..pw {
-                    let (sx, sy) = (tx + mirror(x, tw), ty + mirror(y, th));
-                    tile.extend_from_slice(&encoded[sy * w + sx]);
-                }
-            }
-            let out = net.run(&tile, pw, ph, &sigma(&tile, pw, ph))?;
-            for y in 0..th {
-                let wy = ramp(y, th, ty, h);
-                for x in 0..tw {
-                    let wt = wy * ramp(x, tw, tx, w);
-                    let i = (ty + y) * w + tx + x;
-                    let o = (y * pw + x) * 3;
-                    for c in 0..3 {
-                        sum[i][c] += out[o + c] * wt;
-                    }
-                    wsum[i] += wt;
-                }
-            }
-            done += 1;
-            if !progress(done, total) {
-                return Ok(None);
-            }
+    let mut t = Tiler::new(img, enc);
+    while t.done() < t.total() {
+        t.step(net, sigma, [0.5, 0.5])?;
+        if !progress(t.done(), t.total()) {
+            return Ok(None);
         }
     }
-    // The correction back in linear light, added to the ORIGINAL pixel.
-    let mut result = img.clone();
-    for i in 0..w * h {
-        let d = sum[i].map(|v| v / wsum[i]);
-        let (x, y) = (i % w, i / w);
-        let p = img.pixel(x, y);
-        let (to, from) = (enc.decode(d), enc.decode(encoded[i]));
-        result.set_pixel(x, y, [0, 1, 2].map(|c| p[c] + to[c] - from[c]));
+    Ok(Some(t.into_result()))
+}
+
+/// One photo's tiles, run one at a time — the nearest a focus first — with the result kept up to date as
+/// each lands (M10.16b4): the original decode wherever no tile has landed yet, so a partial result
+/// blends in only where it is done.
+pub struct Tiler<'a> {
+    img: &'a ImageBuf,
+    enc: Encoding,
+    encoded: Vec<[f32; 3]>,
+    /// The tiles not run yet, by their top-left corners.
+    left: Vec<(usize, usize)>,
+    total: usize,
+    sum: Vec<[f32; 3]>,
+    wsum: Vec<f32>,
+    result: ImageBuf,
+}
+
+impl<'a> Tiler<'a> {
+    pub fn new(img: &'a ImageBuf, enc: &Encoding) -> Self {
+        let (w, h) = (img.width(), img.height());
+        let enc = *enc;
+        let encoded = (0..w * h)
+            .map(|i| enc.encode(img.pixel(i % w, i / w)))
+            .collect();
+        let left: Vec<(usize, usize)> = if w == 0 || h == 0 {
+            Vec::new()
+        } else {
+            starts(h)
+                .into_iter()
+                .flat_map(|ty| starts(w).into_iter().map(move |tx| (tx, ty)))
+                .collect()
+        };
+        Self {
+            img,
+            enc,
+            encoded,
+            total: left.len(),
+            left,
+            sum: vec![[0f32; 3]; w * h],
+            wsum: vec![0f32; w * h],
+            result: img.clone(),
+        }
     }
-    Ok(Some(result))
+
+    pub fn total(&self) -> usize {
+        self.total
+    }
+
+    pub fn done(&self) -> usize {
+        self.total - self.left.len()
+    }
+
+    /// The remaining tile whose centre is nearest `focus` (decode-normalised, clamped into the photo) —
+    /// run through `net` at `sigma`'s plane and folded into the result.
+    pub fn step(
+        &mut self,
+        net: &mut dyn TileNet,
+        sigma: &Sigma<'_>,
+        focus: [f32; 2],
+    ) -> Result<(), String> {
+        let (w, h) = (self.img.width(), self.img.height());
+        let (tw, th) = (TILE.min(w), TILE.min(h));
+        let f = [
+            focus[0].clamp(0.0, 1.0) * w as f32,
+            focus[1].clamp(0.0, 1.0) * h as f32,
+        ];
+        let distance = |&(tx, ty): &(usize, usize)| {
+            let (cx, cy) = (tx as f32 + tw as f32 / 2.0, ty as f32 + th as f32 / 2.0);
+            (cx - f[0]).powi(2) + (cy - f[1]).powi(2)
+        };
+        let Some(i) = (0..self.left.len())
+            .min_by(|&a, &b| distance(&self.left[a]).total_cmp(&distance(&self.left[b])))
+        else {
+            return Ok(());
+        };
+        let (tx, ty) = self.left.remove(i);
+        let (pw, ph) = (
+            tw.div_ceil(ai_mask::denoise::MULTIPLE) * ai_mask::denoise::MULTIPLE,
+            th.div_ceil(ai_mask::denoise::MULTIPLE) * ai_mask::denoise::MULTIPLE,
+        );
+        let mut tile = Vec::with_capacity(pw * ph * 3);
+        for y in 0..ph {
+            for x in 0..pw {
+                let (sx, sy) = (tx + mirror(x, tw), ty + mirror(y, th));
+                tile.extend_from_slice(&self.encoded[sy * w + sx]);
+            }
+        }
+        let out = net.run(&tile, pw, ph, &sigma(&tile, pw, ph))?;
+        for y in 0..th {
+            let wy = ramp(y, th, ty, h);
+            for x in 0..tw {
+                let wt = wy * ramp(x, tw, tx, w);
+                let i = (ty + y) * w + tx + x;
+                let o = (y * pw + x) * 3;
+                for c in 0..3 {
+                    self.sum[i][c] += out[o + c] * wt;
+                }
+                self.wsum[i] += wt;
+            }
+        }
+        // The correction back in linear light, added to the ORIGINAL pixel — over this tile's rectangle,
+        // by the weight so far: a neighbour still to come re-computes the overlap when it lands.
+        for y in ty..ty + th {
+            for x in tx..tx + tw {
+                let i = y * w + x;
+                let d = self.sum[i].map(|v| v / self.wsum[i]);
+                let p = self.img.pixel(x, y);
+                let (to, from) = (self.enc.decode(d), self.enc.decode(self.encoded[i]));
+                self.result
+                    .set_pixel(x, y, [0, 1, 2].map(|c| p[c] + to[c] - from[c]));
+            }
+        }
+        Ok(())
+    }
+
+    /// The result so far — the original where no tile has landed.
+    pub fn result(&self) -> &ImageBuf {
+        &self.result
+    }
+
+    pub fn into_result(self) -> ImageBuf {
+        self.result
+    }
 }
 
 #[cfg(test)]
@@ -530,5 +608,130 @@ mod tests {
             at(10),
             at(290)
         );
+    }
+
+    /// A network that records each tile's first pixel — the image encodes position, so it names the tile.
+    type Seen = std::sync::Arc<std::sync::Mutex<Vec<[f32; 3]>>>;
+    struct Where(Seen);
+    impl TileNet for Where {
+        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: &[f32]) -> Result<Vec<f32>, String> {
+            self.0.lock().unwrap().push([rgb[0], rgb[1], rgb[2]]);
+            Ok(rgb.to_vec())
+        }
+    }
+
+    fn flat(_: &[f32], w: usize, h: usize) -> Vec<f32> {
+        vec![8.0; w * h]
+    }
+
+    /// x and y as encoded red and green, in the identity encoding.
+    fn by_position(w: usize, h: usize) -> ImageBuf {
+        let enc = Encoding { scale: 1.0 };
+        image(w, h, |x, y| {
+            enc.decode([x as f32 / w as f32, y as f32 / h as f32, 0.5])
+        })
+    }
+
+    /// Review Focus 5: the first tile is the one nearest the focus, a focus past the photo clamped in.
+    #[test]
+    fn tiles_go_nearest_the_focus_first() {
+        let img = by_position(1100, 700); // 3 × 2 tiles
+        for (focus, want) in [
+            ([0.0, 0.0], [0.0, 0.0]),
+            ([2.0, 2.0], [588.0 / 1100.0, 188.0 / 700.0]),
+        ] {
+            let seen: Seen = Default::default();
+            let mut t = Tiler::new(&img, &Encoding { scale: 1.0 });
+            t.step(&mut Where(seen.clone()), &flat, focus).unwrap();
+            let first = seen.lock().unwrap()[0];
+            assert!(
+                (first[0] - want[0]).abs() < 1e-3 && (first[1] - want[1]).abs() < 1e-3,
+                "{focus:?}: {first:?}"
+            );
+        }
+    }
+
+    /// A focus moved between tiles re-orders what is left.
+    #[test]
+    fn a_moved_focus_reorders_the_rest() {
+        let img = by_position(1100, 700);
+        let seen: Seen = Default::default();
+        let mut t = Tiler::new(&img, &Encoding { scale: 1.0 });
+        let mut net = Where(seen.clone());
+        t.step(&mut net, &flat, [0.0, 0.0]).unwrap();
+        t.step(&mut net, &flat, [1.0, 1.0]).unwrap();
+        let second = seen.lock().unwrap()[1];
+        assert!(
+            (second[0] - 588.0 / 1100.0).abs() < 1e-3 && (second[1] - 188.0 / 700.0).abs() < 1e-3,
+            "{second:?}"
+        );
+    }
+
+    /// Review Focus 4: after one tile, the result is the original outside it and denoised inside — its
+    /// overlap with an unfinished neighbour included.
+    #[test]
+    fn a_partial_result_is_the_original_outside_finished_tiles() {
+        let img = image(1100, 700, |x, y| {
+            [0.1 + 0.0002 * x as f32, 0.12, 0.08 + 0.0003 * y as f32]
+        });
+        let mut t = Tiler::new(&img, &Encoding::of(&img));
+        t.step(&mut Lift, &flat, [0.0, 0.0]).unwrap();
+        let r = t.result();
+        assert_eq!(
+            r.pixel(1000, 600),
+            img.pixel(1000, 600),
+            "outside: the original"
+        );
+        assert_ne!(r.pixel(10, 10), img.pixel(10, 10), "inside: denoised");
+        assert_ne!(
+            r.pixel(500, 10),
+            img.pixel(500, 10),
+            "the overlap: the finished tile's own"
+        );
+        assert_eq!((t.done(), t.total()), (1, 6));
+    }
+
+    /// Review Focus 2: stepped in any order, the finished result is the one-shot result — to the last
+    /// bit but one: up to four tiles overlap, and the order of their sums moves an `f32`'s last bit.
+    #[test]
+    fn the_step_by_step_result_is_the_one_shot_result() {
+        let img = image(1100, 700, |x, y| {
+            [0.1 + 0.0002 * x as f32, 0.12, 0.08 + 0.0003 * y as f32]
+        });
+        let enc = Encoding::of(&img);
+        let one = denoise_in(&img, &enc, &mut Lift, &flat, &|_, _| true)
+            .unwrap()
+            .unwrap();
+        // ⚠ Shape (c): both sides run the same `Tiler`, so prove they denoised before comparing them.
+        let moved = one
+            .data()
+            .iter()
+            .zip(img.data())
+            .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+        // Lift's +0.02 in the encoding moves linear light by up to 0.0086 here (measured) — 0.004 is half.
+        assert!(moved > 0.004, "the one-shot run changed nothing: {moved}");
+        let mut t = Tiler::new(&img, &enc);
+        for focus in [
+            [1.0, 1.0],
+            [0.0, 0.5],
+            [0.3, 0.0],
+            [1.0, 0.0],
+            [0.5, 1.0],
+            [0.0, 0.0],
+        ] {
+            t.step(&mut Lift, &flat, focus).unwrap();
+        }
+        assert_eq!(t.done(), t.total());
+        let worst = t
+            .into_result()
+            .data()
+            .iter()
+            .zip(one.data())
+            .map(|(a, b)| (a - b).abs())
+            .fold(
+                0.0f32,
+                |m, v| if v.is_nan() { f32::INFINITY } else { m.max(v) },
+            );
+        assert!(worst < 1e-6, "{worst}");
     }
 }
