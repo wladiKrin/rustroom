@@ -267,8 +267,8 @@ mod tests {
             key: "a".into(),
             image: Some(photo(600, 300)),
         });
-        assert_eq!(wait(&w, 1).len(), 1);
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // `finished` runs before `Done` is sent, so no wait is needed after it.
+        wait_done(&w);
         assert_eq!(ended.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
@@ -282,6 +282,21 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         got
+    }
+
+    /// Every result until the FINISHED one, which is last — panics if none comes. ⚠ Never [`wait`] for a
+    /// job's first result and expect `Done`: under load a job outlasts a second and publishes a partial
+    /// one first (the M10.16b5 gate failed on it; the focus test had the same flaw in M10.16b4).
+    fn wait_done(w: &DenoiseWorker) -> Vec<DenoiseResult> {
+        let mut got = Vec::new();
+        for _ in 0..1000 {
+            got.extend(w.poll());
+            if matches!(got.last(), Some(DenoiseResult::Done { .. })) {
+                return got;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("the job never finished: {} results", got.len());
     }
 
     #[test]
@@ -301,9 +316,9 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert_eq!(seen.map(|p| p.1), Some(2), "two tiles across: {seen:?}");
-        let got = wait(&w, 1);
+        let got = wait_done(&w);
         assert!(
-            matches!(&got[..], [DenoiseResult::Done { key, .. }] if key == "a"),
+            matches!(got.last(), Some(DenoiseResult::Done { key, .. }) if key == "a"),
             "{} results",
             got.len()
         );
@@ -338,7 +353,9 @@ mod tests {
                 | DenoiseResult::Missing { key } => key,
             })
             .collect();
+        // A partial result of the second photo repeats its key.
         keys.sort();
+        keys.dedup();
         assert_eq!(
             keys,
             vec!["second".to_string()],
@@ -505,19 +522,7 @@ mod tests {
             key: "a".into(),
             image: Some(img),
         });
-        // ⚠ Until the FINISHED result: a slow (debug) job publishes a partial one after a second.
-        let mut finished = false;
-        for _ in 0..1000 {
-            finished |= w
-                .poll()
-                .iter()
-                .any(|r| matches!(r, DenoiseResult::Done { .. }));
-            if finished {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        assert!(finished, "the job never finished");
+        wait_done(&w);
         // ⚠ The job encodes in the photo's own encoding (`Encoding::of`), monotonic in x and y: the
         // bottom-right tile's corner has the largest of both among every tile's corner.
         let all = seen.lock().unwrap();
