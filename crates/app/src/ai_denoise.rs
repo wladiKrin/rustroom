@@ -35,6 +35,10 @@ impl TileNet for ai_mask::denoise::Drunet {
     }
 }
 
+/// Each tile's σ plane, from the tile itself (encoded, padded, `w × h`) — M10.16b3's noise map, or a
+/// constant (the probe's sheets).
+pub type Sigma<'a> = dyn Fn(&[f32], usize, usize) -> Vec<f32> + 'a;
+
 /// The tile's side, and how far neighbours overlap.
 pub const TILE: usize = 512;
 pub const OVERLAP: usize = 32;
@@ -278,7 +282,7 @@ pub fn denoise_in(
     img: &ImageBuf,
     enc: &Encoding,
     net: &mut dyn TileNet,
-    sigma: &dyn Fn(&[f32], usize, usize) -> Vec<f32>,
+    sigma: &Sigma<'_>,
     progress: &dyn Fn(usize, usize) -> bool,
 ) -> Result<Option<ImageBuf>, String> {
     let (w, h) = (img.width(), img.height());

@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.16b3: AI denoise at the noise map × 2 (2026-10-16)](#2026-10-16--m1016b3-ai-denoise-at-the-noise-map--2-branch-m1016b3-ai-denoise-strength-speed)
 - [M10.16b2: AI denoise on the GPU — DRUNet as one tiled WGSL product (2026-10-16)](#2026-10-16--m1016b2-ai-denoise-on-the-gpu--drunet-as-one-tiled-wgsl-product-branch-m1016b2-ai-denoise-gpu)
 - [M10.16b1: AI denoise — DRUNet on the CPU, a background job, its cache, the Amount in Detail (2026-10-15)](#2026-10-15--m1016b1-ai-denoise--drunet-on-the-cpu-a-background-job-its-cache-the-amount-in-detail-branch-m1016b-ai-denoise)
 - [M10.16d2: Lens Blur's GPU twin — live while dragging (2026-10-15)](#2026-10-15--m1016d2-lens-blurs-gpu-twin--live-while-dragging-branch-m1016d2-lens-blur-gpu-merged-2026-10-15)
@@ -180,6 +181,25 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-16 — M10.16b3: AI denoise at the noise map × 2 (branch `m10.16b3-ai-denoise-strength-speed`)
+
+**The item:** the strength the author found weak. Spec `2026-10-16-m10.16b-strength-and-speed-design.md` §1
+(b3–b5, one spec); plan `2026-10-16-m10.16b3-ai-denoise-strength.md`. **Measured first** (`denoise_probe
+strength`, four photos): the noise rises toward the shadows on every photo; b2's single σ matched the mid-tones
+and Amount 100 left 35–65 % of the noise there, 45–80 % in shadows. **The author picked the noise map at 2×** from
+the sheets (today · 2× · map · map 2×, on dark, flat and busy crops).
+
+**Built:** `noise_curve` — σ for each eighth of encoded brightness by the estimator on that band's blocks, an
+unread or clipped band (< 0.5) borrowing its nearest neighbour's; `noise_map` — each pixel's σ from the curve
+at its 15 px box-blurred brightness (a summed-area table), × `CALIBRATION` **2.0**, clamped 1…40. `TileNet::run`
+takes a σ plane (both engines; `GpuDrunet::run_map`); `denoise_in` asks a σ source for each padded tile; `run`
+builds the curve once a photo. The recipe moved to **`denoise:v2`** (the key pinned). ⚠ `noise_sigma` no longer
+multiplies by `CALIBRATION` — the 2× belongs to the map; `noise_sigma_reads_known_noise` caught the double meaning.
+
+**Sabotages:** the bands left unfilled (red); the blur's radius 0 — ⚠ green at first: the test checked the bright
+pixel's NEIGHBOUR, dark either way; it checks the pixel itself now (red); a σ plane truncated and padded — inert
+(the middle rows unmoved), recorded; `sigma` handed the unpadded tile's size (red).
 
 ### 2026-10-16 — M10.16b2: AI denoise on the GPU — DRUNet as one tiled WGSL product (branch `m10.16b2-ai-denoise-gpu`)
 

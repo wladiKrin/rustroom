@@ -248,12 +248,11 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, M10.16d** (table above).
 
-**▶ NOW: M10.16b — AI denoise.** **b1** (DRUNet through `tract`, the job, the cache, Detail's Amount,
-export; branch `m10.16b-ai-denoise`) — the author: *"works, but painfully slow"* and *"the effect is weak"*.
-**b2** (DRUNet on the GPU, ~2.8 min a 26 Mpx frame against 6.6; branch `m10.16b2-ai-denoise-gpu`, on b1)
-is built, **awaiting his look**. **Then the strength**: his call 2026-10-16 — *measure, then he picks*:
-the noise left in shadows vs mid-tones at Amount 100, and magnified crops of today, a 2× default, a
-per-brightness noise map (DRUNet takes σ per pixel), and both. `grep -n 'M10.16b' docs/JOURNAL.md`. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
+**▶ NOW: M10.16b — AI denoise.** b1 (the `tract` path, the job, the cache, the Amount) and b2 (DRUNet on the
+GPU, ~2.9 min a 26 Mpx frame) built; the author: *"still too slow to use it effectively"* and *"weak"*. His
+calls 2026-10-16 (spec `2026-10-16-m10.16b-strength-and-speed-design.md`): **b3 the noise map at 2×** (built),
+**b4 your view first** (the tiles under the view first, shown as they land), **b5 a faster kernel** (half
+precision, Winograd) — branch `m10.16b3-ai-denoise-strength-speed`, on b2, on b1. `grep -n 'M10.16b' docs/JOURNAL.md`. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
 d), M10.14 f–h ⏸.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is

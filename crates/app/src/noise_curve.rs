@@ -157,12 +157,11 @@ mod tests {
             enc.decode([v + s * gauss(), v + s * gauss(), v + s * gauss()])
         });
         let c = noise_curve(&img, &enc);
-        for b in 1..BANDS - 1 {
+        for (b, &cb) in c.iter().enumerate().take(BANDS - 1).skip(1) {
             let v = (b as f32 + 0.5) / BANDS as f32;
             assert!(
-                (c[b] - want(v)).abs() < 0.2 * want(v),
-                "band {b}: {} vs {}",
-                c[b],
+                (cb - want(v)).abs() < 0.2 * want(v),
+                "band {b}: {cb} vs {}",
                 want(v)
             );
         }
