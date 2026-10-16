@@ -264,6 +264,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     write_back(out, app, inp.tool)
 }
 
+/// The view's centre `centre` on screen as a decode point, through the photo's frame `frame` — what AI
+/// denoise's job is aimed at (M10.16b4); the eyedropper's own mapping.
+pub(crate) fn view_focus(s: &Session, frame: egui::Rect, centre: egui::Pos2) -> [f32; 2] {
+    eyedropper::decode_point(s, frame, centre)
+}
+
 /// The canvas for a session: its render planned and requested, the frame placed and painted, then
 /// the tool's overlay, the composition guides, zoom and pan, and the readout — in that order.
 fn session_canvas(
@@ -286,6 +292,7 @@ fn session_canvas(
     let shown = s.texture.as_ref().expect("the texture is checked above");
     let place = view::place(ui, s, shown, &plan);
     s.canvas_frame_rect = Some(place.frame_rect);
+    s.canvas_view_centre = Some(ui.clip_rect().center());
     view::debug_place(s, shown, &plan, &place);
     let resp = paint::frame(ui, s, shown, &plan, &place, pv, stand_in_key);
     tools::dispatch(ui, s, &resp, &place, inp, out);

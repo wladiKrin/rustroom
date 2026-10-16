@@ -380,6 +380,8 @@ pub struct Session {
     /// Where the whole photo sat on screen last frame — what lights-out cuts its hole around
     /// and the info card anchors to.
     pub(crate) canvas_frame_rect: Option<egui::Rect>,
+    /// The centre of the canvas on screen last frame — what AI denoise's job is aimed at (M10.16b4).
+    pub(crate) canvas_view_centre: Option<egui::Pos2>,
     /// The sampled value under the cursor, or `None`.
     ///
     /// ⚠ The **value**, not a formatted string: the swatch and the numbers are two renderings of
