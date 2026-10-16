@@ -619,7 +619,10 @@ mod tests {
         let (direct, wino) = (held(false), held(true));
         // Scale 0's blocks: 16 positions × 64 channels × 64 × 64 blocks, f32.
         let pair = 2 * 16 * 64 * 64 * 64 * 4;
-        assert!(wino > direct, "Winograd allocated no planes: {wino} vs {direct}");
+        assert!(
+            wino > direct,
+            "Winograd allocated no planes: {wino} vs {direct}"
+        );
         assert!(
             wino - direct <= pair,
             "Winograd's planes {} bytes, one pair {pair}",
@@ -644,7 +647,13 @@ mod tests {
             .into_iter()
             .map(|(n, t)| {
                 let data = t.data.iter().map(|v| v * 1e4).collect();
-                (n, Tensor { shape: t.shape, data })
+                (
+                    n,
+                    Tensor {
+                        shape: t.shape,
+                        data,
+                    },
+                )
             })
             .collect();
         let mut net = GpuDrunet::with_precision(ctx, &w, true).unwrap();
