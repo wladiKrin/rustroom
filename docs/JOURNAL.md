@@ -216,6 +216,19 @@ green, as it must be); `Bᵀ`'s third row's sign flipped (the small network, 0.4
 correctness is pinned at the network level (40 × 24 → a 5 × 3 deepest scale, so odd blocks are cropped) rather
 than by the plan's separate per-convolution test — the fusions and crops run there, and the sabotage went red.
 
+**The review (self-review, two fixes, each RED first):** ⚠⚠ **Winograd held a plane pair PER SCALE — 0.76 GB a
+512 px tile in `f16` against b2's 0.51**, unpriced: the plan checked each plane against the binding limit, never
+the total. The convolutions run one after another, so ONE pair at the largest scale's size serves all four
+(`planes`): **~0.52 GB**, twice that in `f32` (`winograd_holds_one_pair_of_planes`, counting `conv::zeros`).
+⚠ An `f16` overflow came back as a tile of NaN — which the job would have cached as the photo; `run_map` now
+returns an error on any non-finite value and the `Engine` hands the job to `tract`
+(`a_non_finite_tile_is_an_error`). **No input overflowed:** the real-model test now also runs the extremes a
+clamped photo can give — flat white at σ 40 1.41e-3, black 1.6e-6, a one-pixel 0/1 checkerboard 1.66e-3 at σ 1
+and **3.21e-3 at σ 40** (0.82 of one 8-bit level, the worst found) — under their own bound `TOL_EXTREME` 6.5e-3,
+so real photos stay held at 3e-3. **Re-timed with Rustroom closed:** f32 direct 1.51 s · f32 Winograd 1.08 ·
+f16 direct 1.40 · **f16 Winograd 0.87–0.91 s** a tile (−42 %); editing frames 14.9 ms median during a tile (7.6
+idle).
+
 ### 2026-10-16 — M10.16b4: AI denoise — your view first, shown as it lands (branch `m10.16b3-ai-denoise-strength-speed`)
 
 **The item:** spec §2 — the author's *"too slow to use it effectively"*: the tiles under the view first, each

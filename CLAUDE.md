@@ -376,6 +376,8 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
 - ⚠⚠ **A long GPU job shares the render engine's queue, and Metal runs it in order** (M10.16b2): submitted
   at once, DRUNet's tile made an editing frame wait 1,354 ms. It submits bands of ~2.7 ms, two in flight
   (`drunet::conv::SUBMISSION_MACS`): 15 ms. Any future background GPU work must do the same.
+  ⚠ Since M10.16b5 (`f16` + Winograd) its result is **not** `tract`'s bits: measured 1.42e-3 on photos,
+  3.21e-3 at worst (`denoised.rs`'s `TOL` / `TOL_EXTREME`); a non-finite tile is an error, never the photo.
 - ⚠⚠ **Every reader of the undeveloped decode (`Session.buffer`) sees the positive** (M10.11a): a pixel
   through `negative_tool::view`, an image through `pipeline::negative::positive` (Auto tone, the AI
   input), and a cache of anything derived from it keyed on `edits.negative` (`ai_cache::key`, the AI
