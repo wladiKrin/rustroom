@@ -207,13 +207,22 @@ pub(crate) fn upload(
     b
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The bytes [`zeros`] allocated on this thread — what a tile holds, for the memory test.
+    pub(crate) static ZEROED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// A storage buffer of `len` values — `f16` (2 bytes) when `half`, else `f32` — written by a kernel, read
 /// by the next or copied out. ⚠ Rounded up to 4 bytes: a buffer's size must be a multiple of four.
 pub(crate) fn zeros(ctx: &GpuContext, label: &'static str, len: usize, half: bool) -> wgpu::Buffer {
     let bytes = len.max(1) * if half { 2 } else { 4 };
+    let size = bytes.div_ceil(4) as u64 * 4;
+    #[cfg(test)]
+    ZEROED.with(|z| z.set(z.get() + size));
     ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
-        size: bytes.div_ceil(4) as u64 * 4,
+        size,
         usage: wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_DST
             | wgpu::BufferUsages::COPY_SRC,

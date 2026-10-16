@@ -359,8 +359,14 @@ mod tests {
     /// 3e-3 is twice the larger number and still under that level; never raise it without a new number.
     const TOL: f32 = 3e-3;
 
+    /// [`TOL`] for the extremes a clamped photo can give `f16` (M10.16b5's review, measured on the M2,
+    /// 2026-10-16): flat white at σ 40 1.41e-3, black 1.6e-6, a one-pixel 0/1 checkerboard at σ 1 1.66e-3
+    /// and **at σ 40 3.21e-3** — 0.82 of one 8-bit level, the worst found, and none overflowed. Twice it,
+    /// like `TOL`; never raise it without a new number.
+    const TOL_EXTREME: f32 = 6.5e-3;
+
     /// DRUNet on the GPU against `tract` on the real model: a 64 × 64 tile and a 296 × 200 one (sides
-    /// multiples of 8, the second not of 64).
+    /// multiples of 8, the second not of 64), then the extremes `f16` must hold.
     #[test]
     #[ignore = "needs the model and a GPU; set RUSTROOM_DRUNET"]
     fn gpu_drunet_matches_tract() {
@@ -401,8 +407,33 @@ mod tests {
             );
             worsts.push(worst);
         }
-        // ⚠ Both sizes measured before either is judged — a first failure hid the second's number.
+        // `f16` against DRUNet's largest activations (M10.16b5's review): the extremes a clamped photo can
+        // give — flat white and black, a one-pixel checkerboard — at the lowest and highest σ.
+        let mut extremes = Vec::new();
+        let n = 64 * 64;
+        let checker: Vec<f32> = (0..n * 3)
+            .map(|i| ((i / 3 % 64 + i / 3 / 64) % 2) as f32)
+            .collect();
+        for (name, rgb, sigma) in [
+            ("white", vec![1.0; n * 3], 40.0),
+            ("black", vec![0.0; n * 3], 1.0),
+            ("checker", checker.clone(), 1.0),
+            ("checker", checker, 40.0),
+        ] {
+            let a = cpu.run(&rgb, 64, 64, &vec![sigma; n]).expect("cpu");
+            // A non-finite tile is the GPU's Err, so an overflow fails here.
+            let b = gpu.run(&rgb, 64, 64, sigma).expect("gpu");
+            let worst = a
+                .iter()
+                .zip(&b)
+                .map(|(x, y)| (x - y).abs())
+                .fold(0.0f32, f32::max);
+            eprintln!("{name} at σ {sigma}: max |gpu − tract| = {worst:e}");
+            extremes.push(worst);
+        }
+        // ⚠ Every case measured before any is judged — a first failure hid the second's number.
         assert!(worsts.iter().all(|w| *w < TOL), "{worsts:?}");
+        assert!(extremes.iter().all(|w| *w < TOL_EXTREME), "{extremes:?}");
     }
 
     /// A file of the model's pinned size — `download::present`'s whole test.

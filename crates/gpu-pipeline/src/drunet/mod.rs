@@ -60,10 +60,19 @@ const WINOGRAD: bool = true;
 /// scale doubles the channels and quarters the pixels.
 pub(crate) fn fits(arch: &Arch, w: usize, h: usize, max_bytes: u64, winograd: bool) -> bool {
     // ⚠ Winograd's transformed planes are 16 positions × the blocks — ~4× an activation.
-    let wino = |s: usize| 16 * arch.widths[s] * (w >> s).div_ceil(2) * (h >> s).div_ceil(2) * 4;
-    (!winograd || (0..4).all(|s| wino(s) as u64 <= max_bytes))
+    (!winograd || (planes(arch, w, h) * 4) as u64 <= max_bytes)
         && (0..4).all(|s| (arch.widths[s] * (w >> s) * (h >> s) * 4) as u64 <= max_bytes)
         && (4 * w * h * 4) as u64 <= max_bytes
+}
+
+/// The values in one Winograd plane of a `w × h` tile: 16 positions × the channels × the 2 × 2 blocks, at
+/// the scale needing most — ONE pair (inputs and products) at this size serves every scale, since the
+/// convolutions run one after another (a pair per scale held 0.76 GB a 512 px tile against 0.51).
+fn planes(arch: &Arch, w: usize, h: usize) -> usize {
+    (0..4)
+        .map(|s| 16 * arch.widths[s] * (w >> s).div_ceil(2) * (h >> s).div_ceil(2))
+        .max()
+        .unwrap_or(0)
 }
 
 /// The Winograd transforms' binding: the source, the destination, two residuals, the parameters.
@@ -173,11 +182,18 @@ impl GpuDrunet {
         if !fits(&self.arch, w, h, self.ctx.max_image_bytes(), self.winograd) {
             return Err(format!("a {w} × {h} tile is too large for this GPU"));
         }
-        crate::guarded(|| self.run_inner(rgb, w, h, sigma))
-            .ok_or_else(|| "the GPU failed".to_string())
+        let out = crate::guarded(|| self.run_inner(rgb, w, h, sigma))
+            .ok_or_else(|| "the GPU failed".to_string())?;
+        // ⚠ An `f16` overflow is an error, never a tile of NaN — the caller falls back rather than
+        // caching it as the photo.
+        if out.iter().any(|v| !v.is_finite()) {
+            return Err("the network overflowed half precision".to_string());
+        }
+        Ok(out)
     }
 
-    /// Drop the activations — ~0.5 GB for a 512 px tile — and keep the weights.
+    /// Drop the activations and Winograd's planes — ~0.5 GB for a 512 px tile in `f16`, twice that in
+    /// `f32` — and keep the weights.
     pub fn release(&mut self) {
         self.sized = None;
     }
@@ -267,20 +283,14 @@ impl GpuDrunet {
         let spare = conv::zeros(ctx, "drunet-spare", 1, self.half);
         let mut kernels: HashMap<Mode, (wgpu::BindGroupLayout, wgpu::ComputePipeline)> =
             HashMap::new();
-        // Winograd's transformed planes, one pair a scale: 16 positions × the scale's width × its blocks.
-        let wino: Vec<(wgpu::Buffer, wgpu::Buffer)> = if self.winograd {
-            (0..4)
-                .map(|s| {
-                    let n = 16 * self.arch.widths[s] * (w >> s).div_ceil(2) * (h >> s).div_ceil(2);
-                    (
-                        conv::zeros(ctx, "drunet-wino-v", n, self.half),
-                        conv::zeros(ctx, "drunet-wino-m", n, self.half),
-                    )
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        // Winograd's transformed planes: one pair, shared by every scale's 3 × 3 convolutions.
+        let wino = self.winograd.then(|| {
+            let n = planes(&self.arch, w, h);
+            (
+                conv::zeros(ctx, "drunet-wino-v", n, self.half),
+                conv::zeros(ctx, "drunet-wino-m", n, self.half),
+            )
+        });
         let transforms = self.winograd.then(|| {
             ctx.cache.program(
                 &ctx.device,
@@ -299,8 +309,7 @@ impl GpuDrunet {
                 cout: op.cout as u32,
             };
             let res = |r: Option<Buf>| r.map_or(&spare, |b| &bufs[&b]);
-            if let (true, Mode::Conv3, Some((tl, tp))) = (self.winograd, op.mode, &transforms) {
-                let (v, m) = &wino[op.scale_in];
+            if let (Mode::Conv3, Some((tl, tp)), Some((v, m))) = (op.mode, &transforms, &wino) {
                 let transform = |c: u32, relu: bool, a1: Option<Buf>, a2: Option<Buf>| {
                     conv::uniform_buffer(
                         ctx,
@@ -587,6 +596,60 @@ mod tests {
         net.release();
         assert!(net.sized.is_none());
         assert!(net.run(&[0.5; 16 * 16 * 3], 16, 16, 10.0).is_ok());
+    }
+
+    /// What a tile holds beyond the direct kernel's activations is ONE pair of Winograd planes, at its
+    /// largest scale's size — the 3 × 3 convolutions run one after another, so every scale shares it.
+    /// ⚠ A pair per scale held 960 · N values for an N-pixel tile against this pair's 512 · N: 0.76 GB a
+    /// 512 px tile in `f16` against b2's 0.51 (M10.16b5's review).
+    #[test]
+    fn winograd_holds_one_pair_of_planes() {
+        let Some(ctx) = ctx() else { return };
+        let arch = Arch {
+            widths: [64, 128, 256, 512],
+            blocks: 1,
+        };
+        let w = random_weights(&arch, 3);
+        let held = |winograd: bool| {
+            let net = GpuDrunet::with_options(ctx.clone(), &w, false, winograd).unwrap();
+            conv::ZEROED.with(|z| z.set(0));
+            let _sized = net.build(128, 128);
+            conv::ZEROED.with(|z| z.get())
+        };
+        let (direct, wino) = (held(false), held(true));
+        // Scale 0's blocks: 16 positions × 64 channels × 64 × 64 blocks, f32.
+        let pair = 2 * 16 * 64 * 64 * 64 * 4;
+        assert!(wino > direct, "Winograd allocated no planes: {wino} vs {direct}");
+        assert!(
+            wino - direct <= pair,
+            "Winograd's planes {} bytes, one pair {pair}",
+            wino - direct
+        );
+    }
+
+    /// An `f16` overflow comes back as an error, never as a tile of NaN: the app's `Engine` then hands the
+    /// job to `tract`, where a NaN would have been cached on disk as the photo (M10.16b5's review).
+    #[test]
+    fn a_non_finite_tile_is_an_error() {
+        let Some(ctx) = ctx() else { return };
+        if !ctx.f16() {
+            return;
+        }
+        let arch = Arch {
+            widths: [4, 8, 16, 32],
+            blocks: 1,
+        };
+        // Weights ×1e4 a layer: past `f16`'s 65,504 within the first levels.
+        let w: Weights = random_weights(&arch, 4)
+            .into_iter()
+            .map(|(n, t)| {
+                let data = t.data.iter().map(|v| v * 1e4).collect();
+                (n, Tensor { shape: t.shape, data })
+            })
+            .collect();
+        let mut net = GpuDrunet::with_precision(ctx, &w, true).unwrap();
+        let got = net.run(&[0.9; 16 * 16 * 3], 16, 16, 30.0);
+        assert!(got.is_err(), "an overflowed tile came back as values");
     }
 
     /// Times a full-size DRUNet (random weights — the speed does not depend on them) on a 512 px tile:
