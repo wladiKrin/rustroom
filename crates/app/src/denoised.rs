@@ -372,6 +372,7 @@ mod tests {
         let mut cpu = ai_mask::denoise::Drunet::load(&path).expect("tract");
         let mut gpu =
             gpu_pipeline::GpuDrunet::new(ctx, &gpu_weights(&path).expect("weights")).expect("gpu");
+        let mut worsts = Vec::new();
         for (w, h) in [(64, 64), (296, 200)] {
             let rgb: Vec<f32> = (0..w * h * 3)
                 .map(|i| ((i * 7919) % 1000) as f32 / 1000.0)
@@ -397,8 +398,10 @@ mod tests {
                 moved > 0.01,
                 "the network changed nothing — the comparison would be empty"
             );
-            assert!(worst < TOL, "{w}×{h}: {worst}");
+            worsts.push(worst);
         }
+        // ⚠ Both sizes measured before either is judged — a first failure hid the second's number.
+        assert!(worsts.iter().all(|w| *w < TOL), "{worsts:?}");
     }
 
     /// A file of the model's pinned size — `download::present`'s whole test.

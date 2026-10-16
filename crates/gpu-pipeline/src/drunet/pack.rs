@@ -32,6 +32,8 @@ pub(crate) fn pack(mode: Mode, t: &Tensor) -> Vec<f32> {
             }
             b
         }
+        // ⚠ Winograd's weights are transformed (`winograd::transform_weights`), never packed.
+        Mode::Product => unreachable!("Winograd's product has no packing"),
     }
 }
 

@@ -20,6 +20,7 @@ impl Dims {
             Mode::Conv3 => (self.in_w, self.in_h),
             Mode::Down2 => (self.in_w / 2, self.in_h / 2),
             Mode::Up2 => (self.in_w * 2, self.in_h * 2),
+            Mode::Product => (self.in_w, self.in_h),
         }
     }
 
@@ -30,6 +31,7 @@ impl Dims {
             Mode::Conv3 => (ow * oh, self.cout, 9 * self.cin),
             Mode::Down2 => (ow * oh, self.cout, 4 * self.cin),
             Mode::Up2 => (self.in_w * self.in_h, 4 * self.cout, self.cin),
+            Mode::Product => (self.in_w * self.in_h, self.cout, self.cin),
         }
     }
 }
@@ -79,7 +81,9 @@ pub(crate) const SUBMISSION_MACS: u64 = 1 << 30;
 pub(crate) fn bands(mode: Mode, d: &Dims) -> Vec<(u32, u32)> {
     let (m, n, k) = d.mnk(mode);
     let (gx, _) = groups(mode, d);
-    let macs = m as u64 * n as u64 * k as u64;
+    // ⚠ Winograd's product is 16 products a dispatch.
+    let batch = if mode == Mode::Product { 16 } else { 1 };
+    let macs = m as u64 * n as u64 * k as u64 * batch;
     let count = macs.div_ceil(SUBMISSION_MACS).clamp(1, gx as u64) as u32;
     let size = gx.div_ceil(count);
     (0..gx)
@@ -117,15 +121,17 @@ pub(crate) fn conv_layout() -> [wgpu::BindGroupLayoutEntry; 6] {
     ]
 }
 
-/// `mode`'s pipeline and its layout — compiled once, kept by the context's cache (keyed on the text).
+/// `mode`'s pipeline and its layout, storing in `f16` when `half` — compiled once, kept by the context's
+/// cache (keyed on the text).
 pub(crate) fn kernel(
     ctx: &GpuContext,
     mode: Mode,
+    half: bool,
 ) -> (wgpu::BindGroupLayout, wgpu::ComputePipeline) {
     let (layout, mut pipelines) = ctx.cache.program(
         &ctx.device,
         "drunet-conv",
-        &super::wgsl::shader(mode),
+        &super::wgsl::shader(mode, half),
         &conv_layout(),
         &["main"],
     );
@@ -156,18 +162,58 @@ pub(crate) fn bind(
     })
 }
 
-/// A storage buffer holding `data`.
-pub(crate) fn upload(ctx: &GpuContext, label: &'static str, data: &[f32]) -> wgpu::Buffer {
-    let b = zeros(ctx, label, data.len());
-    ctx.queue.write_buffer(&b, 0, bytemuck::cast_slice(data));
+/// A bind group of `buffers` in binding order — the Winograd transforms' (their last is the uniform).
+pub(crate) fn bind_n(
+    ctx: &GpuContext,
+    layout: &wgpu::BindGroupLayout,
+    buffers: &[&wgpu::Buffer],
+) -> wgpu::BindGroup {
+    let entries: Vec<wgpu::BindGroupEntry<'_>> = buffers
+        .iter()
+        .enumerate()
+        .map(|(i, b)| wgpu::BindGroupEntry {
+            binding: i as u32,
+            resource: b.as_entire_binding(),
+        })
+        .collect();
+    ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("drunet-wino-bind"),
+        layout,
+        entries: &entries,
+    })
+}
+
+/// A storage buffer holding `data` — as `f16` when `half`.
+pub(crate) fn upload(
+    ctx: &GpuContext,
+    label: &'static str,
+    data: &[f32],
+    half: bool,
+) -> wgpu::Buffer {
+    let b = zeros(ctx, label, data.len(), half);
+    if half {
+        // ⚠ Padded to an even count: a write must be a multiple of 4 bytes.
+        let mut h: Vec<u16> = data
+            .iter()
+            .map(|v| half::f16::from_f32(*v).to_bits())
+            .collect();
+        if h.len() % 2 == 1 {
+            h.push(0);
+        }
+        ctx.queue.write_buffer(&b, 0, bytemuck::cast_slice(&h));
+    } else {
+        ctx.queue.write_buffer(&b, 0, bytemuck::cast_slice(data));
+    }
     b
 }
 
-/// A storage buffer of `len` floats — written by a kernel, read by the next or copied out.
-pub(crate) fn zeros(ctx: &GpuContext, label: &'static str, len: usize) -> wgpu::Buffer {
+/// A storage buffer of `len` values — `f16` (2 bytes) when `half`, else `f32` — written by a kernel, read
+/// by the next or copied out. ⚠ Rounded up to 4 bytes: a buffer's size must be a multiple of four.
+pub(crate) fn zeros(ctx: &GpuContext, label: &'static str, len: usize, half: bool) -> wgpu::Buffer {
+    let bytes = len.max(1) * if half { 2 } else { 4 };
     ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
-        size: (len.max(1) * 4) as u64,
+        size: bytes.div_ceil(4) as u64 * 4,
         usage: wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_DST
             | wgpu::BufferUsages::COPY_SRC,
@@ -187,9 +233,15 @@ pub(crate) fn uniform_buffer(ctx: &GpuContext, params: &[u32; 12]) -> wgpu::Buff
     b
 }
 
-/// `len` floats of `buf` read back — after everything submitted before it. `None` on a failed map.
-pub(crate) fn read(ctx: &GpuContext, buf: &wgpu::Buffer, len: usize) -> Option<Vec<f32>> {
-    let bytes = (len * 4) as u64;
+/// `len` values of `buf` read back (stored as `f16` when `half`) — after everything submitted before it.
+/// `None` on a failed map.
+pub(crate) fn read(
+    ctx: &GpuContext,
+    buf: &wgpu::Buffer,
+    len: usize,
+    half: bool,
+) -> Option<Vec<f32>> {
+    let bytes = (len * if half { 2 } else { 4 }).div_ceil(4) as u64 * 4;
     let readback = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("drunet-readback"),
         size: bytes,
@@ -209,7 +261,15 @@ pub(crate) fn read(ctx: &GpuContext, buf: &wgpu::Buffer, len: usize) -> Option<V
         timeout: None,
     });
     rx.recv().ok()?.ok()?;
-    let data: Vec<f32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
+    let data: Vec<f32> = if half {
+        let raw: Vec<u16> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
+        raw.iter()
+            .take(len)
+            .map(|b| half::f16::from_bits(*b).to_f32())
+            .collect()
+    } else {
+        bytemuck::cast_slice(&slice.get_mapped_range()).to_vec()
+    };
     readback.unmap();
     Some(data)
 }
@@ -257,12 +317,32 @@ pub(crate) mod tests {
             .fold(0.0, f32::max)
     }
 
+    /// The precisions this adapter runs: f32 always, f16 where it offers `SHADER_F16`.
+    pub(crate) fn precisions(ctx: &GpuContext) -> Vec<bool> {
+        if ctx.f16() {
+            vec![false, true]
+        } else {
+            eprintln!("f16: not offered by this adapter — f32 only");
+            vec![false]
+        }
+    }
+
+    /// f32: 1e-4 absolute; f16: 3e-3 of the reference's largest value (half precision keeps ~3 digits).
+    fn tolerance(half: bool, want: &[f32]) -> f32 {
+        if half {
+            3e-3 * want.iter().fold(1.0f32, |m, v| m.max(v.abs()))
+        } else {
+            1e-4
+        }
+    }
+
     fn weight(mode: Mode, d: &Dims) -> Tensor {
         let (cin, cout) = (d.cin as usize, d.cout as usize);
         let shape = match mode {
             Mode::Conv3 => vec![cout, cin, 3, 3],
             Mode::Down2 => vec![cout, cin, 2, 2],
             Mode::Up2 => vec![cin, cout, 2, 2],
+            Mode::Product => unreachable!("the product is tested through the network"),
         };
         let len = shape.iter().product();
         Tensor {
@@ -276,6 +356,7 @@ pub(crate) mod tests {
     #[allow(clippy::too_many_arguments)]
     fn run_one(
         ctx: &GpuContext,
+        half: bool,
         mode: Mode,
         d: &Dims,
         src: &[f32],
@@ -286,14 +367,19 @@ pub(crate) mod tests {
     ) -> Vec<f32> {
         let (ow, oh) = d.out(mode);
         let out_len = (d.cout * ow * oh) as usize;
-        let s = upload(ctx, "test-src", src);
-        let k = upload(ctx, "test-weights", &crate::drunet::pack::pack(mode, w));
-        let dst = zeros(ctx, "test-dst", out_len);
-        let r1 = res1.map(|r| upload(ctx, "test-res1", r));
-        let r2 = res2.map(|r| upload(ctx, "test-res2", r));
-        let none = zeros(ctx, "test-none", 1);
+        let s = upload(ctx, "test-src", src, half);
+        let k = upload(
+            ctx,
+            "test-weights",
+            &crate::drunet::pack::pack(mode, w),
+            half,
+        );
+        let dst = zeros(ctx, "test-dst", out_len, half);
+        let r1 = res1.map(|r| upload(ctx, "test-res1", r, half));
+        let r2 = res2.map(|r| upload(ctx, "test-res2", r, half));
+        let none = zeros(ctx, "test-none", 1, half);
         let params = uniform_buffer(ctx, &uniform(mode, d, relu, r1.is_some(), r2.is_some(), 0));
-        let (layout, pipeline) = kernel(ctx, mode);
+        let (layout, pipeline) = kernel(ctx, mode, half);
         let bind = bind(
             ctx,
             &layout,
@@ -315,7 +401,7 @@ pub(crate) mod tests {
             pass.dispatch_workgroups(gx, gy, 1);
         }
         ctx.queue.submit(Some(enc.finish()));
-        read(ctx, &dst, out_len).expect("read back")
+        read(ctx, &dst, out_len, half).expect("read back")
     }
 
     /// Each mode against the naive reference, on sizes and channel counts that are not multiples of the
@@ -364,9 +450,12 @@ pub(crate) mod tests {
             let w = weight(mode, &d);
             let src = rand((d.cin * d.in_w * d.in_h) as usize, 3);
             let want = reference::run(mode, &src, &d, &w);
-            let got = run_one(&ctx, mode, &d, &src, &w, false, None, None);
-            let worst = close(&got, &want);
-            assert!(worst < 1e-4, "{mode:?} {d:?}: {worst}");
+            for half in precisions(&ctx) {
+                let got = run_one(&ctx, half, mode, &d, &src, &w, false, None, None);
+                let worst = close(&got, &want);
+                let tol = tolerance(half, &want);
+                assert!(worst < tol, "{mode:?} {d:?} half {half}: {worst} ≥ {tol}");
+            }
         }
     }
 
@@ -388,16 +477,28 @@ pub(crate) mod tests {
             plain.iter().any(|v| *v < -0.01),
             "the fixture has negatives to clamp"
         );
-        let relu = run_one(&ctx, Mode::Conv3, &d, &src, &w, true, None, None);
-        let want: Vec<f32> = plain.iter().map(|v| v.max(0.0)).collect();
-        assert!(close(&relu, &want) < 1e-4);
-        let added = run_one(&ctx, Mode::Conv3, &d, &src, &w, false, Some(&r1), Some(&r2));
-        let want: Vec<f32> = plain
-            .iter()
-            .zip(&r1)
-            .zip(&r2)
-            .map(|((v, a), b)| v + a + b)
-            .collect();
-        assert!(close(&added, &want) < 1e-4);
+        for half in precisions(&ctx) {
+            let relu = run_one(&ctx, half, Mode::Conv3, &d, &src, &w, true, None, None);
+            let want: Vec<f32> = plain.iter().map(|v| v.max(0.0)).collect();
+            assert!(close(&relu, &want) < tolerance(half, &want), "half {half}");
+            let added = run_one(
+                &ctx,
+                half,
+                Mode::Conv3,
+                &d,
+                &src,
+                &w,
+                false,
+                Some(&r1),
+                Some(&r2),
+            );
+            let want: Vec<f32> = plain
+                .iter()
+                .zip(&r1)
+                .zip(&r2)
+                .map(|((v, a), b)| v + a + b)
+                .collect();
+            assert!(close(&added, &want) < tolerance(half, &want), "half {half}");
+        }
     }
 }
