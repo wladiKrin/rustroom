@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.16b5: AI denoise — a faster kernel: half precision and Winograd (2026-10-16)](#2026-10-16--m1016b5-ai-denoise--a-faster-kernel-half-precision-and-winograd-branch-m1016b3-ai-denoise-strength-speed)
 - [M10.16b4: AI denoise — your view first, shown as it lands (2026-10-16)](#2026-10-16--m1016b4-ai-denoise--your-view-first-shown-as-it-lands-branch-m1016b3-ai-denoise-strength-speed)
 - [M10.16b3: AI denoise at the noise map × 2 (2026-10-16)](#2026-10-16--m1016b3-ai-denoise-at-the-noise-map--2-branch-m1016b3-ai-denoise-strength-speed)
 - [M10.16b2: AI denoise on the GPU — DRUNet as one tiled WGSL product (2026-10-16)](#2026-10-16--m1016b2-ai-denoise-on-the-gpu--drunet-as-one-tiled-wgsl-product-branch-m1016b2-ai-denoise-gpu)
@@ -182,6 +183,38 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-16 — M10.16b5: AI denoise — a faster kernel: half precision and Winograd (branch `m10.16b3-ai-denoise-strength-speed`)
+
+**The item:** spec §3 — the second half of the author's speed call (*"Your view first + faster GPU"*): DRUNet's
+tile faster than b2's 1.46 s, each step kept only when measured ≥ 5 % faster with editing unharmed. Plan
+`2026-10-16-m10.16b5-ai-denoise-faster-kernel.md`.
+
+**Built:** **half precision** — `GpuContext` requests `SHADER_F16` when the adapter offers it (`f16()`); the
+kernel stores through an alias `S` (`f16` there, `f32` otherwise) while every sum stays `f32`; uploads, zeros and
+reads by element size (⚠ an odd `f16` count broke `write_buffer`'s 4-byte rule — a validation panic — padded by
+one). **Winograd F(2 × 2, 3 × 3)** (`drunet::winograd`) — the weights transformed once at upload (`U = G g Gᵀ`,
+16 matrices `[cin][cout]`); a 3 × 3 convolution is now an input transform (`V = Bᵀ d B` per 4 × 4 patch,
+zero-padded past the edge exactly as the direct convolution), the product's batched mode (`Mode::Product`, the 16
+products in one dispatch over `wid.z`) and an output transform carrying the ReLU and both adds, cropped at an odd
+edge. The 2 × 2 down/up convolutions unchanged; `fits` counts Winograd's planes (4× the activations).
+
+**Speed (`a_full_size_tile_time`, a 512 px tile, the M2, Rustroom open, two runs each):** f32 direct 1.64 / 2.02 s
+· f16 direct 2.10 / 2.00 · f32 Winograd 1.26 / 1.31 · **f16 Winograd 1.22 / 1.13 (kept)**. ⚠ Under load the runs
+were noisy: back to back, f16 alone measured ~10 % faster (1.63 / 1.56 → 1.46 / 1.40) and slower in the four-way
+run; Winograd was 25–40 % faster in both precisions, and the pair the fastest of the four. **Editing frames during
+a tile: 15.0 ms median** (idle 9.3) — unharmed. **A whole 26 Mpx frame (DSCF6990): 102.8 s, against b2's 174 s**
+(1.7×; 117 tiles, ~0.88 s a tile, Rustroom open); `tract` 397 s.
+
+**Parity — no longer the same bits.** b2 was exactly 0 against `tract`; now on the real model **1.10e-3 at 64²
+and 1.42e-3 at 296 × 200**, and on four real 512 px tiles of DSCF6990 **max 0.79–1.46e-3 (0.20–0.37 of one 8-bit
+level), mean 5–9.5e-5**. `gpu_drunet_matches_tract`'s bound 1e-5 → **3e-3** (twice the number, under one level).
+The author judges the look.
+
+**Sabotages, all red:** the `f16` loads at half the index (the three `f16` parity tests; the `f32`-path test
+green, as it must be); `Bᵀ`'s third row's sign flipped (the small network, 0.42 relative). ⚠ Winograd's
+correctness is pinned at the network level (40 × 24 → a 5 × 3 deepest scale, so odd blocks are cropped) rather
+than by the plan's separate per-convolution test — the fusions and crops run there, and the sabotage went red.
 
 ### 2026-10-16 — M10.16b4: AI denoise — your view first, shown as it lands (branch `m10.16b3-ai-denoise-strength-speed`)
 

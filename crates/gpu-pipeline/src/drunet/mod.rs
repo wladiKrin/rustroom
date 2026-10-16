@@ -1,6 +1,8 @@
-//! DRUNet on the GPU (M10.16b2): the denoise network's 64 convolutions as one tiled product in three
-//! modes, run tile by tile for the app's denoise job. The weights come in as plain tensors — this crate
-//! never parses ONNX.
+//! DRUNet on the GPU (M10.16b2): the denoise network's 64 convolutions as one tiled product, run tile by
+//! tile for the app's denoise job. The weights come in as plain tensors — this crate never parses ONNX.
+//! Since M10.16b5 its values are stored in `f16` where the device offers it (sums stay `f32`) and the
+//! 3 × 3 convolutions run as Winograd F(2 × 2, 3 × 3) (`winograd`) — no longer the same bits as `tract`,
+//! within 1.5e-3 on the real model.
 
 mod arch;
 mod conv;

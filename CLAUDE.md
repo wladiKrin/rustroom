@@ -250,9 +250,10 @@ that had grown to ~170 lines by appending.)
 
 **▶ NOW: M10.16b — AI denoise.** b1 (the `tract` path, the job, the cache, the Amount) and b2 (DRUNet on the
 GPU, ~2.9 min a 26 Mpx frame) built; the author: *"still too slow to use it effectively"* and *"weak"*. His
-calls 2026-10-16 (spec `2026-10-16-m10.16b-strength-and-speed-design.md`): **b3 the noise map at 2×** (built),
-**b4 your view first** (built: the tiles under the view first, shown as they land), **b5 a faster kernel** (half
-precision, Winograd) — branch `m10.16b3-ai-denoise-strength-speed`, on b2, on b1. `grep -n 'M10.16b' docs/JOURNAL.md`. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
+calls 2026-10-16 (spec `2026-10-16-m10.16b-strength-and-speed-design.md`), **all built, awaiting his look:** b3
+the noise map at 2×; b4 your view first (the tiles under the view first, shown as they land); b5 a faster
+kernel (`f16` storage + Winograd: a frame 174 → 103 s, within 1.5e-3 of `tract`) — branch
+`m10.16b3-ai-denoise-strength-speed`, on b2, on b1. `grep -n 'M10.16b' docs/JOURNAL.md`. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
 d), M10.14 f–h ⏸.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
