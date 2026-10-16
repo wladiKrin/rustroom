@@ -100,7 +100,7 @@ impl Encoding {
 }
 
 /// The side of the blocks the noise estimate ranks by flatness.
-const BLOCK: usize = 16;
+pub(crate) const BLOCK: usize = 16;
 
 /// The photo's noise level in the network's units (0…255 of the encoding), clamped to 1…40 — read at
 /// [`NOISE_BIN`], times [`CALIBRATION`].
@@ -177,7 +177,7 @@ pub fn noise_sigma_at(img: &ImageBuf, enc: &Encoding, bin: usize) -> f32 {
 }
 
 /// `img` averaged over `bin × bin` blocks (a partial edge block dropped).
-fn binned(img: &ImageBuf, bin: usize) -> ImageBuf {
+pub(crate) fn binned(img: &ImageBuf, bin: usize) -> ImageBuf {
     if bin == 1 {
         return img.clone();
     }
