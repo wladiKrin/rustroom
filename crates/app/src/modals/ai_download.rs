@@ -7,6 +7,19 @@ use crate::RustroomApp;
 use eframe::egui;
 use std::sync::atomic::Ordering;
 
+/// The dialog's title: AI denoise's when it offers a denoise network's model.
+fn title(proposed: &[ai_mask::ModelId]) -> &'static str {
+    // ⚠ Either network's model (M10.16b6) — never DRUNet's alone.
+    let denoise = rustroom_app::settings::DenoiseNetwork::ALL
+        .iter()
+        .any(|n| proposed.contains(&n.model()));
+    if denoise {
+        "AI denoise needs a model"
+    } else {
+        "AI masks need a model"
+    }
+}
+
 pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let proposed = app.ai.proposed.clone();
     let downloading = app
@@ -21,11 +34,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         ctx,
         &mut app.settings,
         "ai_download",
-        if proposed.contains(&ai_mask::ModelId::DrunetColor) {
-            "AI denoise needs a model"
-        } else {
-            "AI masks need a model"
-        },
+        title(&proposed),
         theme::DialogSize::Standard,
         Footer::confirm(
             &primary,
@@ -77,5 +86,25 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         app.start_ai_download();
     } else if out.dismissed {
         app.close_ai_download();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// M10.16b6 review: either AI denoise network's model is offered as AI denoise's — the title checked
+    /// for DRUNet's alone, so FFDNet's first download read "AI masks need a model". ⚠ Tested on the
+    /// decision: the dialog paints its title, which no accessibility label carries.
+    #[test]
+    fn a_denoise_model_says_ai_denoise() {
+        for net in rustroom_app::settings::DenoiseNetwork::ALL {
+            assert_eq!(title(&[net.model()]), "AI denoise needs a model", "{net:?}");
+        }
+        assert_eq!(
+            title(&[ai_mask::ModelId::IsNet]),
+            "AI masks need a model",
+            "positive control"
+        );
     }
 }
