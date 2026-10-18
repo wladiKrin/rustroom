@@ -14,7 +14,6 @@
 //! holds `drunet_color.onnx`, or `ffdnet_color.pth` with `--ffdnet` (M10.16b6). `RUSTROOM_DEBUG_RENDER=1` adds each render's own line.
 use core_image::ImageBuf;
 use edit_model::{AiDenoise, Edits};
-use rustroom_app::ai_denoise::TileNet;
 use rustroom_app::denoise_worker::{DenoiseRequest, DenoiseResult, DenoiseWorker};
 use rustroom_app::denoised::{self, Denoised};
 use rustroom_app::render_engine::{FrameSpec, RegionRect, RenderEngine};
