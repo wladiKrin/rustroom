@@ -38,6 +38,7 @@ pub mod export_presets;
 pub mod export_summary;
 pub mod eye_detect;
 pub mod eye_tool;
+pub mod ffdnet;
 pub mod file_rename;
 pub mod filename_template;
 pub mod folder_marks;

@@ -89,6 +89,13 @@ pub fn drunet(models: &Path) -> Result<Box<dyn TileNet + Send>, String> {
     Ok(Box::new(net))
 }
 
+/// The FFDNet network from the models directory, on the CPU (M10.16b6).
+pub fn ffdnet(models: &Path) -> Result<Box<dyn TileNet + Send>, String> {
+    let file = models.join(ai_mask::ModelId::FfdnetColor.spec().file);
+    let w = ai_mask::pth::read(&file).map_err(|e| e.to_string())?;
+    Ok(Box::new(crate::ffdnet::Ffdnet::from_weights(w)?))
+}
+
 /// How an export finds a photo's denoised result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DenoiseUse {
