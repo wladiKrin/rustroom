@@ -1233,7 +1233,7 @@ mod tests {
             ai < nr,
             "AI denoise is not above Noise reduction: {ai:?} {nr:?}"
         );
-        assert!(y("Denoising… 37 %").is_some(), "the job's line: {shown:?}");
+        assert!(y("Full denoise").is_some(), "the job's line: {shown:?}");
     }
 
     /// ⚠⚠ **Every slider in the Edit panel resets to its field's DEFAULT on a double-click** —

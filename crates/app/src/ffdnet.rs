@@ -123,7 +123,7 @@ pub fn gpu_weights(w: &[Weight]) -> gpu_pipeline::Weights {
 impl Ffdnet {
     /// The network from the file's weights — every name and shape checked, the first misfit named.
     pub fn from_weights(w: Vec<Weight>) -> Result<Self, String> {
-        let mut take = |name: String, shape: Vec<usize>| -> Result<Vec<f32>, String> {
+        let take = |name: String, shape: Vec<usize>| -> Result<Vec<f32>, String> {
             let (_, got, data) = w
                 .iter()
                 .find(|x| x.0 == name)
@@ -183,7 +183,7 @@ impl TileNet for gpu_pipeline::GpuFfdnet {
 
 /// A tile FFDNet can take: even, non-empty sides, and the values and noise levels to match.
 pub fn check(rgb: &[f32], w: usize, h: usize, sigma: &[f32]) -> Result<(), String> {
-    if w == 0 || h == 0 || w % 2 != 0 || h % 2 != 0 {
+    if w == 0 || h == 0 || !w.is_multiple_of(2) || !h.is_multiple_of(2) {
         return Err(format!("a {w} × {h} tile: FFDNet needs even sides"));
     }
     if rgb.len() != w * h * 3 || sigma.len() != w * h {

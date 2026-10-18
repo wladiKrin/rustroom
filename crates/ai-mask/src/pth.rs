@@ -57,8 +57,10 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Weight>, InferError> {
             .map_err(|_| bad("a negative storage size"))?;
         let raw = r.take(n.checked_mul(4).ok_or_else(|| bad("a storage too large"))?)?;
         let floats = raw
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect();
         storages.push((k, floats));
     }
