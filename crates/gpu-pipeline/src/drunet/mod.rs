@@ -6,6 +6,7 @@
 
 mod arch;
 mod conv;
+mod ffdnet;
 mod pack;
 #[cfg(test)]
 mod reference;
@@ -13,6 +14,7 @@ mod wgsl;
 mod winograd;
 
 pub use arch::{Tensor, Weights};
+pub use ffdnet::GpuFfdnet;
 
 use crate::GpuContext;
 use arch::{Arch, Buf, Mode, Op};
@@ -22,12 +24,50 @@ use std::sync::Arc;
 
 /// DRUNet on the GPU: its weights uploaded once, its program built once per tile size.
 pub struct GpuDrunet {
+    net: Net,
+}
+
+/// A network's program: its convolutions in order and its buffers' channels — DRUNet's four scales, or
+/// FFDNet's chain at one (M10.16b6).
+pub(crate) struct Graph {
+    pub ops: Vec<Op>,
+    /// The input's channels and the output's.
+    pub input: usize,
+    pub output: usize,
+    /// The work and skip buffers' channels at each scale.
+    pub widths: [usize; 4],
+}
+
+impl Graph {
+    /// DRUNet's: RGB and σ in, RGB out, its program over the four scales.
+    pub(crate) fn drunet(arch: &Arch) -> Self {
+        Self {
+            ops: arch::program(arch),
+            input: 4,
+            output: 3,
+            widths: arch.widths,
+        }
+    }
+
+    fn channels(&self, b: Buf) -> usize {
+        match b {
+            Buf::Input => self.input,
+            Buf::Output => self.output,
+            Buf::Skip(s) | Buf::Work(s, _) => self.widths[s],
+        }
+    }
+}
+
+/// The engine both networks run on (M10.16b6): the weights uploaded once, one tile size's buffers and
+/// bindings built once, each tile run as bands.
+pub(crate) struct Net {
     ctx: Arc<GpuContext>,
-    arch: Arch,
-    program: Vec<Op>,
+    graph: Graph,
     /// Each convolution's packed weights, in the program's order.
     weights: Vec<wgpu::Buffer>,
-    /// One tile size's activations, parameters and bindings — dropped by [`GpuDrunet::release`].
+    /// Each convolution's bias — FFDNet's have one, DRUNet's none.
+    biases: Vec<Option<wgpu::Buffer>>,
+    /// One tile size's activations, parameters and bindings — dropped by [`Net::release`].
     sized: Option<Sized>,
     /// Stored in `f16` (M10.16b5) — the device's `SHADER_F16`, unless a test asks otherwise.
     half: bool,
@@ -52,31 +92,38 @@ struct Step {
     gz: u32,
 }
 
-/// Whether DRUNet's 3 × 3 convolutions run as Winograd F(2 × 2, 3 × 3) — set by the measurement
-/// (M10.16b5, `a_full_size_tile_time`).
+/// Whether the 3 × 3 convolutions run as Winograd F(2 × 2, 3 × 3) — set by the measurement (M10.16b5,
+/// `a_full_size_tile_time`).
 const WINOGRAD: bool = true;
 
 /// Whether a `w × h` tile's largest buffer fits the device's limit — scale 0's widest, since each
 /// scale doubles the channels and quarters the pixels.
-pub(crate) fn fits(arch: &Arch, w: usize, h: usize, max_bytes: u64, winograd: bool) -> bool {
+pub(crate) fn fits(g: &Graph, w: usize, h: usize, max_bytes: u64, winograd: bool) -> bool {
     // ⚠ Winograd's transformed planes are 16 positions × the blocks — ~4× an activation.
-    (!winograd || (planes(arch, w, h) * 4) as u64 <= max_bytes)
-        && (0..4).all(|s| (arch.widths[s] * (w >> s) * (h >> s) * 4) as u64 <= max_bytes)
-        && (4 * w * h * 4) as u64 <= max_bytes
+    (!winograd || (planes(g, w, h) * 4) as u64 <= max_bytes)
+        && (0..4).all(|s| (g.widths[s] * (w >> s) * (h >> s) * 4) as u64 <= max_bytes)
+        && (g.input.max(g.output) * w * h * 4) as u64 <= max_bytes
 }
 
 /// The values in one Winograd plane of a `w × h` tile: 16 positions × the channels × the 2 × 2 blocks, at
 /// the scale needing most — ONE pair (inputs and products) at this size serves every scale, since the
 /// convolutions run one after another (a pair per scale held 0.76 GB a 512 px tile against 0.51).
-fn planes(arch: &Arch, w: usize, h: usize) -> usize {
+fn planes(g: &Graph, w: usize, h: usize) -> usize {
     (0..4)
-        .map(|s| 16 * arch.widths[s] * (w >> s).div_ceil(2) * (h >> s).div_ceil(2))
+        .map(|s| {
+            let c = if s == 0 {
+                g.widths[0].max(g.input).max(g.output)
+            } else {
+                g.widths[s]
+            };
+            16 * c * (w >> s).div_ceil(2) * (h >> s).div_ceil(2)
+        })
         .max()
         .unwrap_or(0)
 }
 
-/// The Winograd transforms' binding: the source, the destination, two residuals, the parameters.
-fn winograd_layout() -> [wgpu::BindGroupLayoutEntry; 5] {
+/// The Winograd transforms' binding: the source, the destination, two residuals, the parameters, the bias.
+fn winograd_layout() -> [wgpu::BindGroupLayoutEntry; 6] {
     let entry = |binding: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::COMPUTE,
@@ -94,6 +141,7 @@ fn winograd_layout() -> [wgpu::BindGroupLayoutEntry; 5] {
         entry(2, ro),
         entry(3, ro),
         entry(4, wgpu::BufferBindingType::Uniform),
+        entry(5, ro),
     ]
 }
 
@@ -121,37 +169,9 @@ impl GpuDrunet {
         half: bool,
         winograd: bool,
     ) -> Result<Self, String> {
-        let half = half && ctx.f16();
-        let arch = Arch::of(weights)?;
-        let program = arch::program(&arch);
-        let packed: Vec<Vec<f32>> = program
-            .iter()
-            .map(|op| {
-                let t = &weights[&op.weight];
-                if winograd && op.mode == Mode::Conv3 {
-                    winograd::transform_weights(t)
-                } else {
-                    pack::pack(op.mode, t)
-                }
-            })
-            .collect();
-        let uploaded = crate::guarded(|| {
-            Some(
-                packed
-                    .iter()
-                    .map(|p| conv::upload(&ctx, "drunet-weights", p, half))
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .ok_or("the GPU failed")?;
+        let graph = Graph::drunet(&Arch::of(weights)?);
         Ok(Self {
-            ctx,
-            arch,
-            program,
-            weights: uploaded,
-            sized: None,
-            half,
-            winograd,
+            net: Net::new(ctx, graph, weights, half, winograd)?,
         })
     }
 
@@ -179,10 +199,99 @@ impl GpuDrunet {
         if rgb.len() != w * h * 3 {
             return Err(format!("{} values for a {w} × {h} tile", rgb.len()));
         }
-        if !fits(&self.arch, w, h, self.ctx.max_image_bytes(), self.winograd) {
+        let n = w * h;
+        let mut input = vec![0.0; 4 * n];
+        for i in 0..n {
+            input[3 * n + i] = sigma[i] / 255.0;
+            for c in 0..3 {
+                input[c * n + i] = rgb[i * 3 + c];
+            }
+        }
+        let out = self.net.run_planes(&input, w, h)?;
+        let mut hwc = vec![0f32; 3 * n];
+        for i in 0..n {
+            for c in 0..3 {
+                hwc[i * 3 + c] = out[c * n + i];
+            }
+        }
+        Ok(hwc)
+    }
+
+    /// Drop the activations and Winograd's planes — ~0.5 GB for a 512 px tile in `f16`, twice that in
+    /// `f32` — and keep the weights.
+    pub fn release(&mut self) {
+        self.net.release();
+    }
+}
+
+impl Net {
+    /// `graph`'s weights (and biases) packed and uploaded.
+    pub(crate) fn new(
+        ctx: Arc<GpuContext>,
+        graph: Graph,
+        weights: &Weights,
+        half: bool,
+        winograd: bool,
+    ) -> Result<Self, String> {
+        let half = half && ctx.f16();
+        let packed: Vec<Vec<f32>> = graph
+            .ops
+            .iter()
+            .map(|op| {
+                let t = &weights[&op.weight];
+                if winograd && op.mode == Mode::Conv3 {
+                    winograd::transform_weights(t)
+                } else {
+                    pack::pack(op.mode, t)
+                }
+            })
+            .collect();
+        let (uploaded, biases) = crate::guarded(|| {
+            let w = packed
+                .iter()
+                .map(|p| conv::upload(&ctx, "drunet-weights", p, half))
+                .collect::<Vec<_>>();
+            let b = graph
+                .ops
+                .iter()
+                .map(|op| {
+                    op.bias
+                        .as_ref()
+                        .map(|b| conv::upload(&ctx, "drunet-bias", &weights[b].data, half))
+                })
+                .collect::<Vec<_>>();
+            Some((w, b))
+        })
+        .ok_or("the GPU failed")?;
+        Ok(Self {
+            ctx,
+            graph,
+            weights: uploaded,
+            biases,
+            sized: None,
+            half,
+            winograd,
+        })
+    }
+
+    /// The program over `input` — the input's channels of `w × h`, CHW — to the output's, CHW.
+    pub(crate) fn run_planes(
+        &mut self,
+        input: &[f32],
+        w: usize,
+        h: usize,
+    ) -> Result<Vec<f32>, String> {
+        if w == 0 || h == 0 || input.len() != self.graph.input * w * h {
+            return Err(format!(
+                "{} values for a {w} × {h} tile of {} planes",
+                input.len(),
+                self.graph.input
+            ));
+        }
+        if !fits(&self.graph, w, h, self.ctx.max_image_bytes(), self.winograd) {
             return Err(format!("a {w} × {h} tile is too large for this GPU"));
         }
-        let out = crate::guarded(|| self.run_inner(rgb, w, h, sigma))
+        let out = crate::guarded(|| self.run_inner(input, w, h))
             .ok_or_else(|| "the GPU failed".to_string())?;
         // ⚠ An `f16` overflow is an error, never a tile of NaN — the caller falls back rather than
         // caching it as the photo.
@@ -192,29 +301,19 @@ impl GpuDrunet {
         Ok(out)
     }
 
-    /// Drop the activations and Winograd's planes — ~0.5 GB for a 512 px tile in `f16`, twice that in
-    /// `f32` — and keep the weights.
-    pub fn release(&mut self) {
+    pub(crate) fn release(&mut self) {
         self.sized = None;
     }
 
-    fn run_inner(&mut self, rgb: &[f32], w: usize, h: usize, sigma: &[f32]) -> Option<Vec<f32>> {
+    fn run_inner(&mut self, input: &[f32], w: usize, h: usize) -> Option<Vec<f32>> {
         if self.sized.as_ref().map(|s| (s.w, s.h)) != Some((w, h)) {
             self.sized = None;
             self.sized = Some(self.build(w, h));
         }
         let sized = self.sized.as_ref()?;
-        let n = w * h;
-        let mut input = vec![0.0; 4 * n];
-        for i in 0..n {
-            input[3 * n + i] = sigma[i] / 255.0;
-            for c in 0..3 {
-                input[c * n + i] = rgb[i * 3 + c];
-            }
-        }
         let ctx = &self.ctx;
         // The input in the network's storage precision — rewritten into the Input buffer in place.
-        let staged = conv::upload(ctx, "drunet-input", &input, self.half);
+        let staged = conv::upload(ctx, "drunet-input", input, self.half);
         let mut enc = ctx.device.create_command_encoder(&Default::default());
         enc.copy_buffer_to_buffer(&staged, 0, &sized.bufs[&Buf::Input], 0, staged.size());
         ctx.queue.submit(Some(enc.finish()));
@@ -245,26 +344,20 @@ impl GpuDrunet {
                 });
             }
         }
-        let out = conv::read(ctx, &sized.bufs[&Buf::Output], 3 * n, self.half)?;
-        let mut hwc = vec![0f32; 3 * n];
-        for i in 0..n {
-            for c in 0..3 {
-                hwc[i * 3 + c] = out[c * n + i];
-            }
-        }
-        Some(hwc)
+        conv::read(
+            ctx,
+            &sized.bufs[&Buf::Output],
+            self.graph.output * w * h,
+            self.half,
+        )
     }
 
     /// Every buffer, parameter block and binding of a `w × h` tile.
     fn build(&self, w: usize, h: usize) -> Sized {
         let ctx = &self.ctx;
-        let channels = |b: Buf| match b {
-            Buf::Input => 4,
-            Buf::Output => 3,
-            Buf::Skip(s) | Buf::Work(s, _) => self.arch.widths[s],
-        };
+        let channels = |b: Buf| self.graph.channels(b);
         let mut bufs: HashMap<Buf, wgpu::Buffer> = HashMap::new();
-        for op in &self.program {
+        for op in &self.graph.ops {
             for b in [Some(op.src), Some(op.dst), op.add1, op.add2]
                 .into_iter()
                 .flatten()
@@ -285,7 +378,7 @@ impl GpuDrunet {
             HashMap::new();
         // Winograd's transformed planes: one pair, shared by every scale's 3 × 3 convolutions.
         let wino = self.winograd.then(|| {
-            let n = planes(&self.arch, w, h);
+            let n = planes(&self.graph, w, h);
             (
                 conv::zeros(ctx, "drunet-wino-v", n, self.half),
                 conv::zeros(ctx, "drunet-wino-m", n, self.half),
@@ -301,7 +394,8 @@ impl GpuDrunet {
             )
         });
         let mut steps: Vec<Step> = Vec::new();
-        for (op, weights) in self.program.iter().zip(&self.weights) {
+        for ((op, weights), bias) in self.graph.ops.iter().zip(&self.weights).zip(&self.biases) {
+            let bias = bias.as_ref();
             let d = Dims {
                 in_w: (w >> op.scale_in) as u32,
                 in_h: (h >> op.scale_in) as u32,
@@ -310,16 +404,20 @@ impl GpuDrunet {
             };
             let res = |r: Option<Buf>| r.map_or(&spare, |b| &bufs[&b]);
             if let (Mode::Conv3, Some((tl, tp)), Some((v, m))) = (op.mode, &transforms, &wino) {
-                let transform = |c: u32, relu: bool, a1: Option<Buf>, a2: Option<Buf>| {
+                let transform = |c: u32, relu: bool, b: bool, a1: Option<Buf>, a2: Option<Buf>| {
                     conv::uniform_buffer(
                         ctx,
-                        &winograd::uniform(d.in_w, d.in_h, c, relu, a1.is_some(), a2.is_some()),
+                        &winograd::uniform(d.in_w, d.in_h, c, relu, b, a1.is_some(), a2.is_some()),
                     )
                 };
                 // The input's 4 × 4 patches transformed.
                 let (gx, gy) = winograd::groups(d.in_w, d.in_h, d.cin);
-                let params = transform(d.cin, false, None, None);
-                let bind = conv::bind_n(ctx, tl, &[&bufs[&op.src], v, &spare, &spare, &params]);
+                let params = transform(d.cin, false, false, None, None);
+                let bind = conv::bind_n(
+                    ctx,
+                    tl,
+                    &[&bufs[&op.src], v, &spare, &spare, &params, &spare],
+                );
                 steps.push(Step {
                     pipeline: tp[0].clone(),
                     bands: vec![(bind, gx)],
@@ -342,10 +440,15 @@ impl GpuDrunet {
                     .map(|(g0, count)| {
                         let params = conv::uniform_buffer(
                             ctx,
-                            &conv::uniform(Mode::Product, &pd, false, false, false, g0),
+                            &conv::uniform(Mode::Product, &pd, false, false, false, false, g0),
                         );
-                        let bind =
-                            conv::bind(ctx, &layout, [v, weights, m, &spare, &spare], &params);
+                        let bind = conv::bind(
+                            ctx,
+                            &layout,
+                            [v, weights, m, &spare, &spare],
+                            &params,
+                            &spare,
+                        );
                         (bind, count)
                     })
                     .collect();
@@ -357,11 +460,19 @@ impl GpuDrunet {
                 });
                 // The products back to pixels, with the fusions.
                 let (gx, gy) = winograd::groups(d.in_w, d.in_h, d.cout);
-                let params = transform(d.cout, op.relu, op.add1, op.add2);
+                // ⚠ The bias joins here, not in the product: added to the transformed-back sum, before ReLU.
+                let params = transform(d.cout, op.relu, bias.is_some(), op.add1, op.add2);
                 let bind = conv::bind_n(
                     ctx,
                     tl,
-                    &[m, &bufs[&op.dst], res(op.add1), res(op.add2), &params],
+                    &[
+                        m,
+                        &bufs[&op.dst],
+                        res(op.add1),
+                        res(op.add2),
+                        &params,
+                        bias.unwrap_or(&spare),
+                    ],
                 );
                 steps.push(Step {
                     pipeline: tp[1].clone(),
@@ -384,6 +495,7 @@ impl GpuDrunet {
                             op.mode,
                             &d,
                             op.relu,
+                            bias.is_some(),
                             op.add1.is_some(),
                             op.add2.is_some(),
                             g0,
@@ -400,6 +512,7 @@ impl GpuDrunet {
                             res(op.add2),
                         ],
                         &params,
+                        bias.unwrap_or(&spare),
                     );
                     (bind, count)
                 })
@@ -549,7 +662,7 @@ mod tests {
         let w = random_weights(&arch, 6);
         let rgb: Vec<f32> = rand(16 * 16 * 3, 3).iter().map(|v| v + 0.5).collect();
         let mut full = GpuDrunet::with_precision(ctx, &w, false).unwrap();
-        assert!(!full.half);
+        assert!(!full.net.half);
         let want = reference::forward(&arch, &w, &chw_with_sigma(&rgb, 16, 16, 20.0), 16, 16);
         let got = full.run(&rgb, 16, 16, 20.0).unwrap();
         assert!(hwc_vs_chw(&got, &want, 16, 16) < 1e-4);
@@ -575,11 +688,23 @@ mod tests {
             blocks: 4,
         };
         // 64 channels × 512² × 4 bytes = 64 MiB at scale 0, the largest activation.
-        assert!(fits(&arch, 512, 512, 64 << 20, false));
-        assert!(!fits(&arch, 512, 512, (64 << 20) - 1, false));
+        assert!(fits(&Graph::drunet(&arch), 512, 512, 64 << 20, false));
+        assert!(!fits(
+            &Graph::drunet(&arch),
+            512,
+            512,
+            (64 << 20) - 1,
+            false
+        ));
         // Winograd's: 16 positions × 64 channels × 256² blocks × 4 bytes = 256 MiB.
-        assert!(fits(&arch, 512, 512, 256 << 20, true));
-        assert!(!fits(&arch, 512, 512, (256 << 20) - 1, true));
+        assert!(fits(&Graph::drunet(&arch), 512, 512, 256 << 20, true));
+        assert!(!fits(
+            &Graph::drunet(&arch),
+            512,
+            512,
+            (256 << 20) - 1,
+            true
+        ));
     }
 
     /// Review Focus 4: the activations go with `release`, the weights stay, and a run after it works.
@@ -592,9 +717,9 @@ mod tests {
         };
         let mut net = GpuDrunet::new(ctx, &random_weights(&arch, 2)).unwrap();
         net.run(&[0.5; 16 * 16 * 3], 16, 16, 10.0).unwrap();
-        assert!(net.sized.is_some());
+        assert!(net.net.sized.is_some());
         net.release();
-        assert!(net.sized.is_none());
+        assert!(net.net.sized.is_none());
         assert!(net.run(&[0.5; 16 * 16 * 3], 16, 16, 10.0).is_ok());
     }
 
@@ -613,7 +738,7 @@ mod tests {
         let held = |winograd: bool| {
             let net = GpuDrunet::with_options(ctx.clone(), &w, false, winograd).unwrap();
             conv::ZEROED.with(|z| z.set(0));
-            let _sized = net.build(128, 128);
+            let _sized = net.net.build(128, 128);
             conv::ZEROED.with(|z| z.get())
         };
         let (direct, wino) = (held(false), held(true));

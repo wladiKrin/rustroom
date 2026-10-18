@@ -61,6 +61,8 @@ impl Buf {
 pub(crate) struct Op {
     pub mode: Mode,
     pub weight: String,
+    /// The bias added to each output channel before ReLU — FFDNet's (M10.16b6); DRUNet has none.
+    pub bias: Option<String>,
     pub src: Buf,
     pub dst: Buf,
     /// ReLU on the store (a block's first convolution).
@@ -146,6 +148,7 @@ fn conv(weight: String, mode: Mode, src: Buf, dst: Buf, cin: usize, cout: usize)
     Op {
         mode,
         weight,
+        bias: None,
         src,
         dst,
         relu: false,

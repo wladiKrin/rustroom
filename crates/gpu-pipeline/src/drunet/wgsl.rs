@@ -23,7 +23,7 @@ const BODY: &str = r#"
 struct Params {
   in_w: u32, in_h: u32, out_w: u32, out_h: u32,
   m: u32, n: u32, k: u32, cout: u32,
-  relu: u32, add1: u32, add2: u32, g0: u32,
+  flags: u32, add1: u32, add2: u32, g0: u32,
 }
 @group(0) @binding(0) var<storage, read> src: array<S>;
 @group(0) @binding(1) var<storage, read> wts: array<S>;
@@ -31,6 +31,8 @@ struct Params {
 @group(0) @binding(3) var<storage, read> res1: array<S>;
 @group(0) @binding(4) var<storage, read> res2: array<S>;
 @group(0) @binding(5) var<uniform> p: Params;
+// Each output channel's bias (M10.16b6), read when `flags` bit 1 is set — Conv3's columns are its channels.
+@group(0) @binding(6) var<storage, read> bias: array<S>;
 
 const TM: u32 = 64u;
 const TN: u32 = 64u;
@@ -199,7 +201,9 @@ var<private> g_zo: u32;
 fn put(v0: f32, m: u32, n: u32) {
   if (m >= p.m || n >= p.n) { return; }
   var v = v0;
-  if (p.relu != 0u) { v = max(v, 0.0); }
+  // ⚠ The bias before the ReLU (bit 1, then bit 0): FFDNet's convolution is relu(W·x + b).
+  if ((p.flags & 2u) != 0u) { v = v + f32(bias[n]); }
+  if ((p.flags & 1u) != 0u) { v = max(v, 0.0); }
   let o = out_at(m, n);
   if (p.add1 != 0u) { v = v + f32(res1[o]); }
   if (p.add2 != 0u) { v = v + f32(res2[o]); }

@@ -169,6 +169,18 @@ impl TileNet for Ffdnet {
     }
 }
 
+impl TileNet for gpu_pipeline::GpuFfdnet {
+    fn run(&mut self, rgb: &[f32], w: usize, h: usize, sigma: &[f32]) -> Result<Vec<f32>, String> {
+        check(rgb, w, h, sigma)?;
+        let out = self.run_packed(&pack(rgb, sigma, w, h), w / 2, h / 2)?;
+        Ok(unpack(&out, w, h))
+    }
+
+    fn finished(&mut self) {
+        self.release();
+    }
+}
+
 /// A tile FFDNet can take: even, non-empty sides, and the values and noise levels to match.
 pub fn check(rgb: &[f32], w: usize, h: usize, sigma: &[f32]) -> Result<(), String> {
     if w == 0 || h == 0 || w % 2 != 0 || h % 2 != 0 {
@@ -187,6 +199,13 @@ pub fn check(rgb: &[f32], w: usize, h: usize, sigma: &[f32]) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The largest |GPU − CPU| on the real model, in the network's 0…1 units — measured on the M2
+    /// (2026-10-18), never tuned to pass: the `f32` GPU path **4.0e-6 / 3.5e-6** (64², 296 × 200) — the
+    /// Winograd sums against the direct ones; `f16` **4.3e-3 / 2.9e-3** on this near-white-noise input (the
+    /// network moves values by up to 0.57). Each bound is about twice its number.
+    const FFDNET_TOL_F32: f32 = 1e-5;
+    const FFDNET_TOL_F16: f32 = 9e-3;
 
     /// A seeded uniform −0.5…0.5.
     fn rand(n: usize, seed: u64) -> Vec<f32> {
@@ -311,6 +330,60 @@ mod tests {
         let (before, after) = known_noise(&mut real());
         eprintln!("σ 25 on a smooth picture: {before:.2} dB → {after:.2} dB");
         assert!(after > 40.0, "{after:.2} dB");
+    }
+
+    /// The GPU against the CPU on the real model — NaN first, both sizes measured before either is judged.
+    /// `FFDNET_TOL` comes from the measurement.
+    #[test]
+    #[ignore = "needs the downloaded model and a GPU; set RUSTROOM_FFDNET"]
+    fn gpu_ffdnet_matches_the_cpu() {
+        let Some(ctx) = gpu_pipeline::shared().cloned() else {
+            eprintln!("SKIPPED: no GPU adapter");
+            return;
+        };
+        let path = std::env::var("RUSTROOM_FFDNET").expect("RUSTROOM_FFDNET");
+        let w = ai_mask::pth::read(std::path::Path::new(&path)).expect("read");
+        let gw = gpu_weights(&w);
+        let mut cpu = Ffdnet::from_weights(w).expect("cpu");
+        let mut worsts = Vec::new();
+        let halves: Vec<bool> = [false, true]
+            .into_iter()
+            .filter(|h| !*h || ctx.f16())
+            .collect();
+        for (half, (tw, th)) in halves
+            .into_iter()
+            .flat_map(|h| [(64, 64), (296, 200)].map(|s| (h, s)))
+        {
+            let mut gpu = gpu_pipeline::GpuFfdnet::with_precision(ctx.clone(), &gw, half).unwrap();
+            let rgb: Vec<f32> = (0..tw * th * 3)
+                .map(|i| ((i * 7919) % 1000) as f32 / 1000.0)
+                .collect();
+            let sigma = vec![15.0; tw * th];
+            let a = cpu.run(&rgb, tw, th, &sigma).unwrap();
+            let b = gpu.run(&rgb, tw, th, &sigma).unwrap();
+            assert_eq!(b.iter().filter(|v| !v.is_finite()).count(), 0);
+            let worst = a
+                .iter()
+                .zip(&b)
+                .fold(0f32, |m, (x, y)| m.max((x - y).abs()));
+            let moved = a
+                .iter()
+                .zip(&rgb)
+                .fold(0f32, |m, (x, y)| m.max((x - y).abs()));
+            eprintln!(
+                "half {half} {tw}×{th}: max |gpu − cpu| = {worst:e} (moved values by {moved:.3})"
+            );
+            assert!(moved > 0.01, "the network changed nothing");
+            worsts.push((half, worst));
+        }
+        for (half, w) in &worsts {
+            let tol = if *half {
+                FFDNET_TOL_F16
+            } else {
+                FFDNET_TOL_F32
+            };
+            assert!(*w < tol, "half {half}: {w:e}");
+        }
     }
 
     /// Review Focus 4: the tiler's overlap (32) covers FFDNet's ±25 px — the tiled result inside the photo
