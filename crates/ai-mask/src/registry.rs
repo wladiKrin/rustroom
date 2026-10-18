@@ -29,16 +29,19 @@ pub enum ModelId {
     DepthAnythingV2Small,
     /// M10.16b — AI denoise's network.
     DrunetColor,
+    /// M10.16b6 — AI denoise's default network, ten times lighter than DRUNet.
+    FfdnetColor,
 }
 
 impl ModelId {
-    pub const ALL: [ModelId; 6] = [
+    pub const ALL: [ModelId; 7] = [
         Self::IsNet,
         Self::BiRefNetLite,
         Self::SamEncoder,
         Self::SamDecoder,
         Self::DepthAnythingV2Small,
         Self::DrunetColor,
+        Self::FfdnetColor,
     ];
 
     pub const fn spec(self) -> ModelSpec {
@@ -101,6 +104,16 @@ impl ModelId {
                 licence: "MIT (DRUNet weights, KAIR) — trained partly on DIV2K, whose terms say research use only",
                 licence_url: "https://github.com/cszn/DPIR",
             },
+            // ⚠ PyTorch's legacy format, read by `pth` — a closed pickle subset that runs nothing from it.
+            // Trained partly on ImageNet images, whose terms say research only — DRUNet's DIV2K note again.
+            Self::FfdnetColor => ModelSpec {
+                file: "ffdnet_color.pth",
+                url: "https://github.com/cszn/KAIR/releases/download/v1.0/ffdnet_color.pth",
+                bytes: 3_411_551,
+                sha256: "286f04f7e3a20254c067ba95efb5d3339f4fc8a09a365a93cd469184d4cdb279",
+                licence: "MIT (FFDNet weights, KAIR) — trained partly on ImageNet images, whose terms say research use only",
+                licence_url: "https://github.com/cszn/KAIR",
+            },
         }
     }
 }
@@ -153,6 +166,7 @@ mod tests {
             ModelId::SamDecoder => 3,
             ModelId::DepthAnythingV2Small => 4,
             ModelId::DrunetColor => 5,
+            ModelId::FfdnetColor => 6,
         };
         let every = [
             ModelId::IsNet,
@@ -161,6 +175,7 @@ mod tests {
             ModelId::SamDecoder,
             ModelId::DepthAnythingV2Small,
             ModelId::DrunetColor,
+            ModelId::FfdnetColor,
         ];
         for id in every {
             assert_eq!(

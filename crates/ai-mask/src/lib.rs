@@ -12,6 +12,7 @@ pub mod download;
 pub mod infer;
 pub mod map;
 pub mod prep;
+pub mod pth;
 pub mod registry;
 
 pub use infer::{Embedding, InferError, Sam, Subject};
