@@ -58,6 +58,7 @@ pub struct SettingsDraft {
     pub(super) immich_cache_warn: bool,
     pub(super) denoise_cache_limit_gb: u32,
     pub(super) denoise_cache_warn: bool,
+    pub(super) denoise_network: rustroom_app::settings::DenoiseNetwork,
     preview_demosaic: Option<raw_decode::Demosaic>,
     preview_budget_mb: u32,
     /// Settings → Keyboard (M10.9b).
@@ -132,6 +133,7 @@ impl SettingsDraft {
             immich_cache_warn: s.immich_cache_warn,
             denoise_cache_limit_gb: s.denoise_cache_limit_gb,
             denoise_cache_warn: s.denoise_cache_warn,
+            denoise_network: s.denoise_network,
             preview_demosaic: s.preview_demosaic,
             preview_budget_mb: s.preview_budget_mb,
             keyboard: super::settings_keyboard::KeyboardDraft::from(&s.shortcuts),
@@ -275,6 +277,11 @@ impl SettingsDraft {
         }
         if self.denoise_cache_warn != app.settings.denoise_cache_warn {
             app.settings.denoise_cache_warn = self.denoise_cache_warn;
+            plain = true;
+        }
+        // ⚠ The flow sees the change on its next frame and makes a new worker for it (M10.16b6).
+        if self.denoise_network != app.settings.denoise_network {
+            app.settings.denoise_network = self.denoise_network;
             plain = true;
         }
         if self.preview_demosaic != app.settings.preview_demosaic {

@@ -105,15 +105,15 @@ impl DenoiseState {
     }
 }
 
-/// The Detail block's line for the open photo — `denoise_tool::status` on this frame's facts, read with
-/// the key `pump_denoise` memoised this frame.
-pub(crate) fn status(st: &DenoiseState, s: &crate::Session) -> Option<String> {
+/// The Detail block's line for the open photo — `denoise_tool::line` on this frame's facts, read with the
+/// key `pump_denoise` memoised this frame.
+pub(crate) fn line(st: &DenoiseState, s: &crate::Session) -> Option<denoise_tool::Line> {
     let (photo, _, _, key) = st.key.as_ref()?;
     if *photo != s.path {
         return None;
     }
     let (cache, models) = st.dirs()?;
-    denoise_tool::status(&st.facts(s, key, &cache, &models), st.progress())
+    denoise_tool::line(&st.facts(s, key, &cache, &models), st.progress())
 }
 
 impl RustroomApp {
@@ -455,13 +455,15 @@ mod tests {
             .unwrap();
         app.session.as_mut().unwrap().buffer_is_full_res = false;
         app.pump_denoise(&ctx);
-        let line = status(&app.denoise, app.session.as_ref().unwrap());
+        let shown = line(&app.denoise, app.session.as_ref().unwrap());
         assert_eq!(
-            line.as_deref(),
-            Some("Waiting for the full-resolution decode…")
+            shown,
+            Some(denoise_tool::Line::Text(
+                "Waiting for the full-resolution decode…".to_string()
+            ))
         );
         app.session.as_mut().unwrap().edits.ai_denoise.amount = 0.0;
-        assert_eq!(status(&app.denoise, app.session.as_ref().unwrap()), None);
+        assert_eq!(line(&app.denoise, app.session.as_ref().unwrap()), None);
     }
 
     /// "Not now" is not for good: once Amount goes back to 0 and up again, the download is offered again.

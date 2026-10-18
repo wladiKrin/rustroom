@@ -1216,7 +1216,7 @@ mod tests {
                 },
                 Pickers {
                     ai_denoise: super::super::ai_denoise::AiDenoiseUi {
-                        status: Some("Denoising… 37 %".to_string()),
+                        line: Some(rustroom_app::denoise_tool::Line::Progress(0.37)),
                     },
                     ..Default::default()
                 },
