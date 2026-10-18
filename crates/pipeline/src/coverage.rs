@@ -170,8 +170,11 @@ pub trait AiRasters {
 
 /// A whole image a prefix step reads, resolved at the frame it runs on (M10.16b: the denoised photo) —
 /// [`RasterSource`]'s shape for an RGB image. `None` for a size it cannot answer exactly.
+///
+/// ⚠ Shared, never copied: at full resolution the denoised photo is 312 MB, and copying it on every prefix
+/// run at 1:1 was most of a 110–160 ms stutter each time a partial result landed (M10.16b6).
 pub trait ImageSource: Send + Sync {
-    fn image(&self, w: usize, h: usize) -> Option<core_image::ImageBuf>;
+    fn image(&self, w: usize, h: usize) -> Option<std::sync::Arc<core_image::ImageBuf>>;
 }
 
 /// A raw map [`AiRasters::plane`] hands over whole, beside a mask component's coverage.

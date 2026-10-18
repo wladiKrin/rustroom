@@ -3229,8 +3229,9 @@ mod ai_denoise_scene {
     /// The stored result, answered at its own size only — the golden renders at full scale.
     struct Stored(ImageBuf);
     impl pipeline::ImageSource for Stored {
-        fn image(&self, w: usize, h: usize) -> Option<ImageBuf> {
-            ((self.0.width(), self.0.height()) == (w, h)).then(|| self.0.clone())
+        fn image(&self, w: usize, h: usize) -> Option<std::sync::Arc<ImageBuf>> {
+            ((self.0.width(), self.0.height()) == (w, h))
+                .then(|| std::sync::Arc::new(self.0.clone()))
         }
     }
 

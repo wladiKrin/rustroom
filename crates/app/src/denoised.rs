@@ -42,13 +42,13 @@ impl Denoised {
 }
 
 impl pipeline::ImageSource for Denoised {
-    fn image(&self, w: usize, h: usize) -> Option<ImageBuf> {
+    fn image(&self, w: usize, h: usize) -> Option<Arc<ImageBuf>> {
         if (w, h) == self.size() {
-            return Some((*self.full).clone());
+            return Some(Arc::clone(&self.full));
         }
         let lock = || self.held.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(hit) = lock().iter().find(|i| (i.width(), i.height()) == (w, h)) {
-            return Some((**hit).clone());
+            return Some(Arc::clone(hit));
         }
         let d = self.full.downscale_to(w.max(h));
         if (d.width(), d.height()) != (w, h) {
@@ -59,7 +59,7 @@ impl pipeline::ImageSource for Denoised {
         held.retain(|i| (i.width(), i.height()) != (w, h));
         held.insert(0, Arc::clone(&d));
         held.truncate(HELD);
-        Some((*d).clone())
+        Some(d)
     }
 }
 
@@ -275,6 +275,15 @@ mod tests {
             d.image(want.width(), want.height()).unwrap().data(),
             want.data()
         );
+    }
+
+    /// The full size is the result itself, never a copy: a 312 MB copy on every prefix run at 1:1 cost
+    /// 110–160 ms a partial result while panning (M10.16b6, `bench_denoise_pan`).
+    #[test]
+    fn the_full_size_is_answered_without_a_copy() {
+        let full = Arc::new(ramp(300, 200));
+        let d = Denoised::new(Arc::clone(&full));
+        assert!(Arc::ptr_eq(&d.image(300, 200).expect("full"), &full));
     }
 
     /// Review Focus 1: a size the decode's downscale would not give — another photo's frame, a

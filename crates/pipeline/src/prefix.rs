@@ -1779,8 +1779,12 @@ pub(crate) mod lens_blur_tests {
     /// A flat "denoised" photo at any size.
     struct Whole;
     impl crate::ImageSource for Whole {
-        fn image(&self, w: usize, h: usize) -> Option<core_image::ImageBuf> {
-            Some(core_image::ImageBuf::from_vec(w, h, vec![0.3; w * h * 3]))
+        fn image(&self, w: usize, h: usize) -> Option<Arc<core_image::ImageBuf>> {
+            Some(Arc::new(core_image::ImageBuf::from_vec(
+                w,
+                h,
+                vec![0.3; w * h * 3],
+            )))
         }
     }
 
@@ -1973,7 +1977,7 @@ mod ai_denoise_tests {
     /// The "denoised" photo: a flat 0.5 at whatever size is asked, or nothing at one size.
     struct Flat(Option<(usize, usize)>);
     impl ImageSource for Flat {
-        fn image(&self, w: usize, h: usize) -> Option<ImageBuf> {
+        fn image(&self, w: usize, h: usize) -> Option<Arc<ImageBuf>> {
             if self.0 == Some((w, h)) {
                 return None;
             }
@@ -1983,7 +1987,7 @@ mod ai_denoise_tests {
                     img.set_pixel(x, y, [0.5; 3]);
                 }
             }
-            Some(img)
+            Some(Arc::new(img))
         }
     }
 
@@ -2075,6 +2079,43 @@ mod ai_denoise_tests {
         }
         let stage = stages::ai_denoise::AiDenoiseStage::new(100.0, Arc::new(Flat(Some((20, 10)))));
         assert_eq!(stage.apply(input()).data(), input().data());
+    }
+
+    /// A "denoised" photo that differs at every value, so a blend reading the wrong one shows.
+    struct Ramp;
+    impl ImageSource for Ramp {
+        fn image(&self, w: usize, h: usize) -> Option<Arc<ImageBuf>> {
+            let data = (0..w * h * 3).map(|i| (i % 251) as f32 / 251.0).collect();
+            Some(Arc::new(ImageBuf::from_vec(w, h, data)))
+        }
+    }
+
+    /// Every value is its own pixel's blend across a frame of many chunks with an odd tail — the blend
+    /// runs in parallel since M10.16b6, and a flat source could not see two chunks paired wrongly.
+    #[test]
+    fn the_blend_is_exact_across_a_large_odd_frame() {
+        let (w, h) = (333, 211);
+        let input = ImageBuf::from_vec(
+            w,
+            h,
+            (0..w * h * 3).map(|i| (i % 89) as f32 / 89.0).collect(),
+        );
+        let want = Ramp.image(w, h).unwrap();
+        for amount in [37.0, 100.0] {
+            let got = stages::ai_denoise::AiDenoiseStage::new(amount, Arc::new(Ramp))
+                .apply(input.clone());
+            let t = amount / 100.0;
+            for (i, ((g, s), n)) in got
+                .data()
+                .iter()
+                .zip(input.data())
+                .zip(want.data())
+                .enumerate()
+            {
+                let e = if t >= 1.0 { *n } else { s + (n - s) * t };
+                assert_eq!(*g, e, "value {i} at Amount {amount}");
+            }
+        }
     }
 
     #[test]
