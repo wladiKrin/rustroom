@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.16b6: AI denoise — FFDNet by default, DRUNet in Settings, "Full denoise" under Amount (2026-10-18)](#2026-10-18--m1016b6-ai-denoise--ffdnet-by-default-drunet-in-settings-full-denoise-under-amount-branch-m1016b6-ai-denoise-pan-and-network)
 - [M10.16b5: AI denoise — a faster kernel: half precision and Winograd (2026-10-16)](#2026-10-16--m1016b5-ai-denoise--a-faster-kernel-half-precision-and-winograd-branch-m1016b3-ai-denoise-strength-speed)
 - [M10.16b4: AI denoise — your view first, shown as it lands (2026-10-16)](#2026-10-16--m1016b4-ai-denoise--your-view-first-shown-as-it-lands-branch-m1016b3-ai-denoise-strength-speed)
 - [M10.16b3: AI denoise at the noise map × 2 (2026-10-16)](#2026-10-16--m1016b3-ai-denoise-at-the-noise-map--2-branch-m1016b3-ai-denoise-strength-speed)
@@ -183,6 +184,53 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-18 — M10.16b6: AI denoise — FFDNet by default, DRUNet in Settings, "Full denoise" under Amount (branch `m10.16b6-ai-denoise-pan-and-network`)
+
+**The item:** the author on b3–b5 (2026-10-16): *"I think it works"* — then three asks: panning and zooming
+*"noticeably slower"* during a job; a progress bar *"that says full denoising"*, *"instead of percentages"*; and
+*"still quite slow"*. The wait that matters to him is **the view at 1:1 clearing** (~15 s on DRUNet). Spec
+`2026-10-18-m10.16b6-ffdnet-and-progress-design.md`, plan `2026-10-18-m10.16b6-ffdnet-and-progress.md`.
+
+**The stutter, measured first** (`bench_denoise_pan`, a 1:1 pan of DSCF6990 through the real `RenderEngine`): each
+partial result changed the prefix's FIRST step's key, and the AI denoise step re-ran over the whole 26 Mpx frame —
+single-threaded, on a 312 MB copy: **109–163 ms** a frame, once a second; the job's GPU/CPU sharing +2–7 ms median.
+**The author's fix: the blend reads the shared result in place, on every core — 45–52 ms** (`ImageSource::image`
+returns an `Arc`; `a1a7d94b`). ⚠ My estimate was ~20 ms: the blend moves ~0.9 GB a frame, and memory is the floor.
+*Hold tiles while panning* was offered and **not chosen** — the other prefix steps still re-run per partial.
+
+**The network, from a spike:** FFDNet colour (KAIR v1.0, MIT, 3.4 MB `.pth`; ~0.21 M multiplies a pixel against
+DRUNet's ~2.1 M; the same σ plane, so b3's map × 2 carries over). Sheets on b3's four photos — original · DRUNet ·
+FFDNet × 2 · FFDNet × 1.5 — the port checked against known noise (σ 25: 20.17 → 43.42 dB). **The author: *"FFDNet at
+x2 works"*, DRUNet kept as a Settings choice; the progress as mockup C** — "Full denoise" over a 3 px line.
+
+**Built:** `ai_mask::pth` — PyTorch's legacy format through a **closed pickle subset** (the 23 opcodes and three
+globals read off the real file with `pickletools`; anything else an error naming it; nothing from the file runs);
+`app::ffdnet` — the unshuffle/σ packing, the CPU forward (the fallback and the GPU's reference); `GpuFfdnet` on the
+DRUNet engine (a per-channel bias in the store, before the ReLU — a flag bit beside it in the kernel, a spare slot in
+Winograd's output transform; ONE driver, `Net`, under both networks); `settings::DenoiseNetwork` reaching **every**
+place that names the network — the factory, the download offer, export (`ExportRender`), the cache key (DRUNet's
+string byte-identical, `denoise:v2`; FFDNet `denoise:v3-ffdnet`) and the rendered preview's key (only with Amount on);
+the worker **paired with its network**, a switch dropping it, the job and the held result before the old worker's
+results are read; `denoise_tool::Line` and the quiet line (`text2` caption, `line` track, `text3` fill, never the
+accent); the Settings combo; DESIGN.md §7.16's one exception.
+
+**Measured (the M2):** a 512 px tile **0.13 s** (f16 + Winograd; f32 0.14; DRUNet 0.89 — 6.8×); **a whole 26 Mpx
+frame 17.9 s** (DRUNet 103 s, `tract` 397 s); the 1:1 view (~15 tiles) ≈ 2 s of network after the noise curve. GPU
+against CPU: f32 **4e-6**; f16 4.3e-3 on near-white noise, **1.8–3.3e-3 on four real tiles** (0.46–0.84 of one 8-bit
+level, mean ~2e-4) — f16 kept, 10 % faster (b5's rule). Tiled against one pass inside: 6.4e-4 — the 32 px overlap
+covers FFDNet's ±25 px. During an FFDNet job a pan frame's median 14.1 ms; a frame after a new result still up to
+~150 ms, the job ~6× shorter.
+
+**Sabotages, all red:** a foreign global allowed (the plan aimed at `REDUCE`, which never sees it — `GLOBAL` refuses
+first); the unshuffle's `dy`/`dx` swapped; the bias after the ReLU (both kernel paths); the preview key ignoring the
+network; a switch keeping the worker; the line's done part in the accent (invisible to the theme sweeps and the label
+test — `the_full_denoise_line_is_never_the_accent` reads the painted rectangles of the line's own row; a first version
+read Amount's rail, which IS the accent, and failed honestly).
+
+⚠ **Two tests that could not fail, caught:** the plan's worker check compared the field's ADDRESS, which a new worker
+in the same slot shares (shape (a)) — the worker now carries its network; and `--lib --tests` (skipping the ~80
+examples) hid an example still calling `network` with two arguments until the full suite — the ruling's own cost.
 
 ### 2026-10-16 — M10.16b5: AI denoise — a faster kernel: half precision and Winograd (branch `m10.16b3-ai-denoise-strength-speed`)
 

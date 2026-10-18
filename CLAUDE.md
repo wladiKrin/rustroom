@@ -250,10 +250,11 @@ that had grown to ~170 lines by appending.)
 
 **▶ NOW: M10.16b — AI denoise.** b1 (the `tract` path, the job, the cache, the Amount) and b2 (DRUNet on the
 GPU, ~2.9 min a 26 Mpx frame) built; the author: *"still too slow to use it effectively"* and *"weak"*. His
-calls 2026-10-16 (spec `2026-10-16-m10.16b-strength-and-speed-design.md`), **all built, awaiting his look:** b3
-the noise map at 2×; b4 your view first (the tiles under the view first, shown as they land); b5 a faster
-kernel (`f16` storage + Winograd: a frame 174 → 103 s, within 1.5e-3 of `tract`) — branch
-`m10.16b3-ai-denoise-strength-speed`, on b2, on b1. `grep -n 'M10.16b' docs/JOURNAL.md`. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
+calls 2026-10-16 (spec `2026-10-16-m10.16b-strength-and-speed-design.md`): b3 the noise map at 2×; b4 your view
+first; b5 a faster kernel (`f16` + Winograd, a frame 174 → 103 s) — *"I think it works"*, branch
+`m10.16b3-ai-denoise-strength-speed`. **b6 built, awaiting his look** (spec `2026-10-18-m10.16b6-ffdnet-and-progress-design.md`,
+branch `m10.16b6-ai-denoise-pan-and-network`, on b3–b5, b2, b1): **FFDNet by default** (a frame **18 s**, a tile
+0.13 s), DRUNet a Settings choice; "Full denoise" — a quiet line under Amount; the blend shared and parallel. `grep -n 'M10.16b' docs/JOURNAL.md`. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
 d), M10.14 f–h ⏸.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
@@ -378,6 +379,11 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   (`drunet::conv::SUBMISSION_MACS`): 15 ms. Any future background GPU work must do the same.
   ⚠ Since M10.16b5 (`f16` + Winograd) its result is **not** `tract`'s bits: measured 1.42e-3 on photos,
   3.21e-3 at worst (`denoised.rs`'s `TOL` / `TOL_EXTREME`); a non-finite tile is an error, never the photo.
+- ⚠⚠ **AI denoise's network (`settings::DenoiseNetwork`, M10.16b6) is in EVERY key that holds its pixels** — the
+  cache key, the rendered preview's (with Amount on), `ExportRender`, the download offer — and the flow's worker is
+  paired with the network it was made for. A new place that stores or reads a result takes the network too, or one
+  network's pixels pass for the other's. ⚠ `ai_mask::pth` reads a `.pth` through a CLOSED pickle subset: never
+  widen it to "any global" — a pickle is a program.
 - ⚠⚠ **Every reader of the undeveloped decode (`Session.buffer`) sees the positive** (M10.11a): a pixel
   through `negative_tool::view`, an image through `pipeline::negative::positive` (Auto tone, the AI
   input), and a cache of anything derived from it keyed on `edits.negative` (`ai_cache::key`, the AI
