@@ -10,8 +10,8 @@
 //!
 //! Then the fitted view, where a new result costs a fresh downscale of the full photo.
 //!
-//! Run: `cargo run --release --example bench_denoise_pan -- <drunet dir> <raw>` — the directory holds
-//! `drunet_color.onnx`. `RUSTROOM_DEBUG_RENDER=1` adds each render's own line.
+//! Run: `cargo run --release --example bench_denoise_pan -- <models dir> <raw> [--ffdnet]` — the directory
+//! holds `drunet_color.onnx`, or `ffdnet_color.pth` with `--ffdnet` (M10.16b6). `RUSTROOM_DEBUG_RENDER=1` adds each render's own line.
 use core_image::ImageBuf;
 use edit_model::{AiDenoise, Edits};
 use rustroom_app::denoise_worker::{DenoiseRequest, DenoiseResult, DenoiseWorker};
@@ -100,9 +100,10 @@ fn install(engine: &RenderEngine, id: u64, image: &Arc<ImageBuf>) {
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let usage = "usage: bench_denoise_pan <drunet dir> <raw>";
+    let usage = "usage: bench_denoise_pan <models dir> <raw> [--ffdnet]";
     let models = PathBuf::from(args.next().expect(usage));
     let path = PathBuf::from(args.next().expect(usage));
+    let ffdnet = args.next().as_deref() == Some("--ffdnet");
     let opts = raw_decode::DecodeOptions::linear_scene();
     let d = raw_decode::decode_raw(&path, &opts).expect("decode");
     let buffer = Arc::new(d.image);
@@ -177,7 +178,16 @@ fn main() {
     }
 
     let dir = models.clone();
-    let worker = DenoiseWorker::spawn(Box::new(move || denoised::network(&dir, true)), None, || {});
+    let which = if ffdnet {
+        rustroom_app::settings::DenoiseNetwork::Ffdnet
+    } else {
+        rustroom_app::settings::DenoiseNetwork::Drunet
+    };
+    let worker = DenoiseWorker::spawn(
+        Box::new(move || denoised::network(&dir, true, which)),
+        None,
+        || {},
+    );
     install(&engine, 1, &buffer);
     worker.request(DenoiseRequest {
         key: "probe-d".into(),

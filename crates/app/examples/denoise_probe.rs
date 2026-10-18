@@ -9,7 +9,7 @@
 //! ```text
 //! cargo run --release --example denoise_probe -- <out dir> <drunet.onnx> <raf>…
 //! cargo run --release --example denoise_probe -- calibrate <out dir> <drunet.onnx> <raf>…
-//! cargo run --release --example denoise_probe -- frame [--gpu] <out dir> <drunet.onnx> <raf>
+//! cargo run --release --example denoise_probe -- frame [--gpu] <out dir> <drunet.onnx | ffdnet_color.pth> <raf>
 //! cargo run --release --example denoise_probe -- parity <drunet.onnx> <raf>
 //! cargo run --release --example denoise_probe -- strength <out dir> <drunet.onnx> <raf>…
 //! ```
@@ -151,12 +151,22 @@ fn sheets(out: &std::path::Path, model: &str, rafs: &[String], relative: bool) {
     }
 }
 
+/// `model` names the network: a `.pth` is FFDNet (M10.16b6), anything else DRUNet's ONNX.
 fn frame(out: &std::path::Path, model: &str, raf: &str, gpu: bool) {
+    use rustroom_app::settings::DenoiseNetwork;
     let path = std::path::Path::new(model);
-    let mut net: Box<dyn rustroom_app::ai_denoise::TileNet + Send> = if gpu {
-        rustroom_app::denoised::network(path.parent().expect("a folder"), true).expect("network")
+    let dir = path.parent().expect("a folder");
+    let which = if model.ends_with(".pth") {
+        DenoiseNetwork::Ffdnet
     } else {
-        Box::new(ai_mask::denoise::Drunet::load(path).expect("model"))
+        DenoiseNetwork::Drunet
+    };
+    let mut net: Box<dyn rustroom_app::ai_denoise::TileNet + Send> = match (gpu, which) {
+        (true, _) => rustroom_app::denoised::network(dir, true, which).expect("network"),
+        (false, DenoiseNetwork::Ffdnet) => rustroom_app::denoised::ffdnet(dir).expect("model"),
+        (false, DenoiseNetwork::Drunet) => {
+            Box::new(ai_mask::denoise::Drunet::load(path).expect("model"))
+        }
     };
     let img = decode(raf);
     let enc = Encoding::of(&img);

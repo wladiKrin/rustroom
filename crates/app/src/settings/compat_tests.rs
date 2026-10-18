@@ -392,6 +392,8 @@ fn settings_round_trip_carries_the_export_options() {
         immich_cache_warn: false,
         denoise_cache_limit_gb: 30,
         denoise_cache_warn: false,
+        // Non-default, so a field re-defaulted on load cannot pass.
+        denoise_network: DenoiseNetwork::Drunet,
         preview_demosaic: Some(Demosaic::Fastest),
         preview_budget_mb: 4096,
         export: ExportOptions {
@@ -940,4 +942,14 @@ fn stacking_is_on_by_default() {
         loaded.stacking.enabled,
         "a settings file from before the field must load with stacking on"
     );
+}
+
+/// M10.16b6: a settings file from before the network choice runs FFDNet — the default for everyone.
+#[test]
+fn a_settings_file_from_before_b6_runs_ffdnet() {
+    let f = TempFile::new("denoise_network_old");
+    std::fs::write(&f.0, r#"{"confirm_preset_delete": false}"#).unwrap();
+    let loaded = SettingsStore::new(f.0.clone()).load();
+    assert!(!loaded.confirm_preset_delete, "the old field must survive");
+    assert_eq!(loaded.denoise_network, DenoiseNetwork::Ffdnet);
 }

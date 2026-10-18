@@ -235,6 +235,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             let preq = PreviewRequest {
                                 untouched: is_untouched(&req.edits, &fresh),
                                 tier,
+                                network: app.settings.denoise_network,
                                 id: req.id.clone(),
                                 edits: req.edits.clone(),
                             };

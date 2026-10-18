@@ -65,6 +65,7 @@ pub(crate) const CPU: ExportRender = ExportRender {
     resampler: pipeline::Resampler::CatmullRom,
     gpu_tail: false,
     denoise: crate::denoised::DenoiseUse::Compute,
+    network: crate::settings::DenoiseNetwork::Ffdnet,
 };
 
 /// `long_edge`: a long edge in pixels, the one size every test before M10.10b set.

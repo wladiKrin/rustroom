@@ -31,6 +31,7 @@ impl RustroomApp {
         PreviewRequest {
             untouched: is_untouched(&edits, &fresh),
             tier: self.settings.preview_tier(),
+            network: self.settings.denoise_network,
             id,
             edits,
         }
@@ -170,6 +171,7 @@ impl RustroomApp {
                 // A preview never runs minutes of network; without a result its build fails, and runs
                 // again once there is one.
                 denoise: rustroom_app::denoised::DenoiseUse::Cached(self.settings.view_demosaic),
+                network: self.settings.denoise_network,
             },
             width,
             // ⚠ Looks only: a preview never carries a watermark — `build_options` leaves it at
@@ -192,15 +194,16 @@ impl RustroomApp {
     /// Photo → Build previews: the selection, or the open photo, skipping what the store has.
     pub(crate) fn start_preview_build(&mut self) {
         let tier = self.settings.preview_tier();
+        let net = self.settings.denoise_network;
         let jobs: Vec<ExportJob> = self
             .export_jobs()
             .into_iter()
             .filter(|j| {
                 !self
                     .preview_store
-                    .has(&PreviewKey::new(j.id.clone(), &j.edits, tier))
+                    .has(&PreviewKey::new(j.id.clone(), &j.edits, tier, net))
             })
-            .map(|j| build_job(j.id, j.edits, tier))
+            .map(|j| build_job(j.id, j.edits, tier, net))
             .collect();
         if jobs.is_empty() {
             self.status =
@@ -233,7 +236,8 @@ impl RustroomApp {
         if self.preview_builder.is_none() {
             if let Some((id, edits)) = self.leave_queue.pop() {
                 let tier = self.settings.preview_tier();
-                self.spawn_build(vec![build_job(id, edits, tier)], 1, BuildKind::Leave);
+                let net = self.settings.denoise_network;
+                self.spawn_build(vec![build_job(id, edits, tier, net)], 1, BuildKind::Leave);
             }
         }
         let Some((worker, kind)) = &self.preview_builder else {

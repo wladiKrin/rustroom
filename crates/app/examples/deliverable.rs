@@ -94,6 +94,7 @@ fn main() {
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: false,
                 denoise: rustroom_app::denoised::DenoiseUse::Compute,
+                network: Default::default(),
             },
             &export::FileMetadata::resolve(&o.metadata, described()),
             None,

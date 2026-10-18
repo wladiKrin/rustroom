@@ -11,15 +11,20 @@ use raw_decode::Demosaic;
 use rustroom_app::denoise_tool::{self, Facts, Next};
 use rustroom_app::denoise_worker::{DenoiseRequest, DenoiseResult, DenoiseWorker};
 use rustroom_app::denoised::{self, Denoised};
+use rustroom_app::settings::DenoiseNetwork;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[derive(Default)]
 pub(crate) struct DenoiseState {
-    worker: Option<DenoiseWorker>,
-    /// The open photo's key, memoised on its path and demosaic quality — a stat and a digest, once.
-    key: Option<(PathBuf, Demosaic, String)>,
+    /// The job's worker, with the network it was made for — its network is made once, so a worker can
+    /// only ever run that one (M10.16b6).
+    worker: Option<(DenoiseNetwork, DenoiseWorker)>,
+    /// The open photo's key, memoised on its path, demosaic quality and network — a stat and a digest, once.
+    key: Option<(PathBuf, Demosaic, DenoiseNetwork, String)>,
+    /// The network the worker was made for (M10.16b6) — a switch makes a new one.
+    network: Option<DenoiseNetwork>,
     /// The open photo's result — re-inserted into a replaced engine's store.
     held: Option<Held>,
     /// The view's centre the job was last aimed at: the frame's rectangle and the centre on screen, and
@@ -73,7 +78,7 @@ impl DenoiseState {
             cached: rustroom_app::denoise_cache::exists(cache, key),
             full_decode: s.buffer_is_full_res && !s.buffer_is_ghost,
             model_present: ai_mask::download::present(
-                &ai_mask::ModelId::DrunetColor.spec(),
+                &self.network.unwrap_or_default().model().spec(),
                 models,
             ),
             running: self.pending.as_deref() == Some(key),
@@ -81,13 +86,13 @@ impl DenoiseState {
         }
     }
 
-    fn key_for(&mut self, photo: &Path, tier: Demosaic) -> String {
+    fn key_for(&mut self, photo: &Path, tier: Demosaic, net: DenoiseNetwork) -> String {
         let tier = denoised::tier_for(photo, tier);
         match &self.key {
-            Some((p, t, k)) if p == photo && *t == tier => k.clone(),
+            Some((p, t, n, k)) if p == photo && *t == tier && *n == net => k.clone(),
             _ => {
-                let k = rustroom_app::denoise_cache::key(photo, tier);
-                self.key = Some((photo.to_path_buf(), tier, k.clone()));
+                let k = rustroom_app::denoise_cache::key(photo, tier, net);
+                self.key = Some((photo.to_path_buf(), tier, net, k.clone()));
                 k
             }
         }
@@ -96,14 +101,14 @@ impl DenoiseState {
     /// The tiles done of total of the open photo's job, while it runs — the Detail block's line.
     pub(crate) fn progress(&self) -> Option<(usize, usize)> {
         let key = self.pending.as_ref()?;
-        self.worker.as_ref()?.progress(key)
+        self.worker.as_ref()?.1.progress(key)
     }
 }
 
 /// The Detail block's line for the open photo — `denoise_tool::status` on this frame's facts, read with
 /// the key `pump_denoise` memoised this frame.
 pub(crate) fn status(st: &DenoiseState, s: &crate::Session) -> Option<String> {
-    let (photo, _, key) = st.key.as_ref()?;
+    let (photo, _, _, key) = st.key.as_ref()?;
     if *photo != s.path {
         return None;
     }
@@ -114,12 +119,26 @@ pub(crate) fn status(st: &DenoiseState, s: &crate::Session) -> Option<String> {
 impl RustroomApp {
     /// Once per frame, beside `pump_ai`.
     pub(crate) fn pump_denoise(&mut self, ctx: &egui::Context) {
+        let net = self.settings.denoise_network;
+        if self.denoise.network != Some(net) {
+            // ⚠ A switch (M10.16b6), BEFORE the old worker's results are read: its network is made once, so
+            // a new worker; the running job and the held result belong to the other network — dropped,
+            // never shown under this one's key.
+            self.denoise.worker = None;
+            self.denoise.pending = None;
+            self.denoise.held = None;
+            self.denoise.focus = None;
+            self.denoise.offered = false;
+            self.denoise.network = Some(net);
+        }
         self.pump_denoise_results();
         let Some(s) = &self.session else {
             self.denoise.held = None;
             return;
         };
-        let key = self.denoise.key_for(&s.path, self.settings.view_demosaic);
+        let key = self
+            .denoise
+            .key_for(&s.path, self.settings.view_demosaic, net);
         if self.denoise.held.as_ref().is_some_and(|h| h.key != key) {
             self.denoise.held = None;
         }
@@ -162,7 +181,7 @@ impl RustroomApp {
                     && self.modal == crate::modals::Modal::None
                 {
                     self.denoise.offered = true;
-                    self.ai.proposed = vec![ai_mask::ModelId::DrunetColor];
+                    self.ai.proposed = vec![net.model()];
                     self.modal = crate::modals::Modal::AiDownload;
                 }
                 None
@@ -171,13 +190,14 @@ impl RustroomApp {
         if let Some(image) = image {
             // ⚠ Read when the worker starts: a change in Settings reaches the next session's job.
             let gpu = self.settings.gpu_tail;
-            let worker = self.denoise.worker.get_or_insert_with(|| {
+            let (_, worker) = self.denoise.worker.get_or_insert_with(|| {
                 let repaint = ctx.clone();
-                DenoiseWorker::spawn(
-                    Box::new(move || denoised::network(&models, gpu)),
+                let w = DenoiseWorker::spawn(
+                    Box::new(move || denoised::network(&models, gpu, net)),
                     Some(cache),
                     move || repaint.request_repaint(),
-                )
+                );
+                (net, w)
             });
             worker.request(DenoiseRequest {
                 key: key.clone(),
@@ -194,10 +214,11 @@ impl RustroomApp {
     /// While the open photo's job runs, aim it at the view's centre (M10.16b4) — re-mapped to decode space
     /// only when the frame or the centre moved.
     fn aim_denoise(&mut self) {
-        let (Some(s), Some(w)) = (&self.session, &self.denoise.worker) else {
+        let (Some(s), Some((_, w))) = (&self.session, &self.denoise.worker) else {
             return;
         };
-        let running = self.denoise.key.as_ref().map(|(_, _, k)| k) == self.denoise.pending.as_ref();
+        let running =
+            self.denoise.key.as_ref().map(|(_, _, _, k)| k) == self.denoise.pending.as_ref();
         let (Some(frame), Some(centre)) = (s.canvas_frame_rect, s.canvas_view_centre) else {
             return;
         };
@@ -217,7 +238,7 @@ impl RustroomApp {
 
     fn pump_denoise_results(&mut self) {
         let results = match &self.denoise.worker {
-            Some(w) => w.poll(),
+            Some((_, w)) => w.poll(),
             None => return,
         };
         self.absorb_denoise(results);
@@ -226,7 +247,7 @@ impl RustroomApp {
     /// What the job sent: a finished result or the latest partial one for the open photo held, a failure
     /// remembered, a job's end cleared — testable without a worker.
     pub(crate) fn absorb_denoise(&mut self, results: Vec<DenoiseResult>) {
-        let open = self.denoise.key.as_ref().map(|(_, _, k)| k.clone());
+        let open = self.denoise.key.as_ref().map(|(_, _, _, k)| k.clone());
         for r in results {
             let key = match &r {
                 DenoiseResult::Done { key, .. }
@@ -309,6 +330,7 @@ mod tests {
         let key = rustroom_app::denoise_cache::key(
             &photo,
             denoised::tier_for(&photo, app.settings.view_demosaic),
+            app.settings.denoise_network,
         );
         let img = core_image::ImageBuf::from_vec(w, h, vec![0.3; w * h * 3]);
         rustroom_app::denoise_cache::store(&cache, &key, &img).unwrap();
@@ -338,6 +360,7 @@ mod tests {
         let key = rustroom_app::denoise_cache::key(
             &photo,
             denoised::tier_for(&photo, app.settings.view_demosaic),
+            app.settings.denoise_network,
         );
         let img = core_image::ImageBuf::from_vec(w, h, vec![0.3; w * h * 3]);
         rustroom_app::denoise_cache::store(&cache, &key, &img).unwrap();
@@ -356,16 +379,67 @@ mod tests {
         assert_eq!(shown(&app), Some((w, h)));
     }
 
-    /// Without a result or a model the download is offered, once.
+    /// Without a result or a model the chosen network's download is offered, once — FFDNet's by default,
+    /// DRUNet's once Settings chooses it (M10.16b6).
     #[test]
-    fn a_missing_model_is_offered_once() {
+    fn the_offer_proposes_the_chosen_network() {
         let (mut app, ctx, _) = app_with_denoise("model", 50.0);
         app.pump_denoise(&ctx);
         assert!(app.modal == crate::modals::Modal::AiDownload, "not offered");
-        assert_eq!(app.ai.proposed, vec![ai_mask::ModelId::DrunetColor]);
+        assert_eq!(app.ai.proposed, vec![ai_mask::ModelId::FfdnetColor]);
         app.modal = crate::modals::Modal::None;
         app.pump_denoise(&ctx);
         assert!(app.modal == crate::modals::Modal::None, "offered again");
+        app.settings.denoise_network = rustroom_app::settings::DenoiseNetwork::Drunet;
+        app.pump_denoise(&ctx);
+        assert!(
+            app.modal == crate::modals::Modal::AiDownload,
+            "the other network not offered"
+        );
+        assert_eq!(app.ai.proposed, vec![ai_mask::ModelId::DrunetColor]);
+    }
+
+    /// Review Focus 3: the network switched while a job runs — the job is dropped, a new worker made, and
+    /// the key the new network's, so the old job's result can never land under it.
+    #[test]
+    fn switching_the_network_drops_the_running_job() {
+        let (mut app, ctx, _) = app_with_denoise("switch", 100.0);
+        let models = app.denoise.dirs.as_ref().unwrap().1.clone();
+        std::fs::create_dir_all(&models).unwrap();
+        for net in rustroom_app::settings::DenoiseNetwork::ALL {
+            let spec = net.model().spec();
+            std::fs::File::create(models.join(spec.file))
+                .unwrap()
+                .set_len(spec.bytes)
+                .unwrap();
+        }
+        app.pump_denoise(&ctx);
+        let first = app.denoise.pending.clone().expect("a job running");
+        app.settings.denoise_network = rustroom_app::settings::DenoiseNetwork::Drunet;
+        app.pump_denoise(&ctx);
+        assert_ne!(
+            app.denoise.pending.as_ref(),
+            Some(&first),
+            "the old job still counted"
+        );
+        assert!(
+            app.denoise.held.is_none(),
+            "a result held across the switch"
+        );
+        // ⚠ Not the field's address — a new worker lands in the same slot (shape (a)): the network it was
+        // made for.
+        assert_eq!(
+            app.denoise.worker.as_ref().map(|(n, _)| *n),
+            Some(rustroom_app::settings::DenoiseNetwork::Drunet),
+            "the FFDNet worker kept"
+        );
+        let photo = app.session.as_ref().unwrap().path.clone();
+        let want = rustroom_app::denoise_cache::key(
+            &photo,
+            denoised::tier_for(&photo, app.settings.view_demosaic),
+            rustroom_app::settings::DenoiseNetwork::Drunet,
+        );
+        assert_eq!(open_key(&mut app, &ctx), want);
     }
 
     /// The Detail line follows the facts — waiting for the decode, then nothing once the result is in.
@@ -373,7 +447,7 @@ mod tests {
     fn the_line_says_why_nothing_shows_yet() {
         let (mut app, ctx, _) = app_with_denoise("line", 100.0);
         let models = app.denoise.dirs.as_ref().unwrap().1.clone();
-        let spec = ai_mask::ModelId::DrunetColor.spec();
+        let spec = app.settings.denoise_network.model().spec();
         std::fs::create_dir_all(&models).unwrap();
         std::fs::File::create(models.join(spec.file))
             .unwrap()
@@ -416,6 +490,7 @@ mod tests {
         let key = rustroom_app::denoise_cache::key(
             &photo,
             denoised::tier_for(&photo, app.settings.view_demosaic),
+            app.settings.denoise_network,
         );
         std::fs::create_dir_all(&cache).unwrap();
         std::fs::write(cache.join(format!("{key}.rrdn")), b"RRDN garbage").unwrap();
@@ -433,7 +508,7 @@ mod tests {
     /// The open photo's memoised key, after one pump.
     fn open_key(app: &mut RustroomApp, ctx: &egui::Context) -> String {
         app.pump_denoise(ctx);
-        app.denoise.key.as_ref().expect("a key").2.clone()
+        app.denoise.key.as_ref().expect("a key").3.clone()
     }
 
     fn shown_id(app: &RustroomApp) -> Option<u64> {
@@ -484,7 +559,7 @@ mod tests {
         let key = open_key(&mut app, &ctx);
         app.modal = crate::modals::Modal::None;
         let models = app.denoise.dirs.as_ref().unwrap().1.clone();
-        let spec = ai_mask::ModelId::DrunetColor.spec();
+        let spec = app.settings.denoise_network.model().spec();
         std::fs::create_dir_all(&models).unwrap();
         std::fs::File::create(models.join(spec.file))
             .unwrap()
