@@ -246,6 +246,34 @@ mod tests {
         assert!(net.run_packed(&vec![0.9; 13 * 16 * 16], 16, 16).is_err());
     }
 
+    /// Times FFDNet's real shape (13 → 96 × 11 → 12, random weights — the speed does not depend on them) on
+    /// a 512 px tile's packed planes (256²): both precisions, Winograd on and off, best of 3.
+    #[test]
+    #[ignore = "a timing, not a check — run with --release"]
+    fn ffdnet_full_size_tile_time() {
+        let Some(ctx) = ctx() else { return };
+        let mut channels = vec![13];
+        channels.extend([96; 11]);
+        channels.push(12);
+        let w = weights(&channels, 6);
+        let input = vec![0.3; 13 * 256 * 256];
+        let combos = precisions(&ctx)
+            .into_iter()
+            .flat_map(|half| [(half, false), (half, true)]);
+        for (half, wino) in combos {
+            let mut net = GpuFfdnet::with_options(ctx.clone(), &w, half, wino).expect("built");
+            let mut best = f64::MAX;
+            for _ in 0..3 {
+                let t = std::time::Instant::now();
+                net.run_packed(&input, 256, 256).expect("ran");
+                best = best.min(t.elapsed().as_secs_f64());
+            }
+            eprintln!(
+                "FFDNet, a 512 px tile, half {half}, winograd {wino}: {best:.3} s (best of 3)"
+            );
+        }
+    }
+
     /// A chain whose layers do not meet is refused with the layer named.
     #[test]
     fn a_broken_chain_is_named() {

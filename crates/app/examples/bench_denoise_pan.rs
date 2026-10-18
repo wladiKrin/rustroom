@@ -14,6 +14,7 @@
 //! holds `drunet_color.onnx`, or `ffdnet_color.pth` with `--ffdnet` (M10.16b6). `RUSTROOM_DEBUG_RENDER=1` adds each render's own line.
 use core_image::ImageBuf;
 use edit_model::{AiDenoise, Edits};
+use rustroom_app::ai_denoise::TileNet;
 use rustroom_app::denoise_worker::{DenoiseRequest, DenoiseResult, DenoiseWorker};
 use rustroom_app::denoised::{self, Denoised};
 use rustroom_app::render_engine::{FrameSpec, RegionRect, RenderEngine};
@@ -153,24 +154,27 @@ fn main() {
         &c,
     );
 
-    // D2: DRUNet tiles on the GPU in a loop — the job's GPU work without its CPU work.
+    let which = if ffdnet {
+        rustroom_app::settings::DenoiseNetwork::Ffdnet
+    } else {
+        rustroom_app::settings::DenoiseNetwork::Drunet
+    };
+    // D2: the network's tiles on the GPU in a loop — the job's GPU work without its CPU work.
     {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let st = Arc::clone(&stop);
-        let file = models.join("drunet_color.onnx");
+        let dir = models.clone();
         let gpu = std::thread::spawn(move || {
-            let ctx = gpu_pipeline::shared().cloned().expect("a GPU");
-            let w = denoised::gpu_weights(&file).expect("weights");
-            let mut net = gpu_pipeline::GpuDrunet::new(ctx, &w).expect("gpu");
-            let tile = vec![0.5; 512 * 512 * 3];
+            let mut net = denoised::network(&dir, true, which).expect("network");
+            let (tile, sigma) = (vec![0.5; 512 * 512 * 3], vec![15.0; 512 * 512]);
             while !st.load(std::sync::atomic::Ordering::Relaxed) {
-                net.run(&tile, 512, 512, 15.0).expect("tile");
+                net.run(&tile, 512, 512, &sigma).expect("tile");
             }
         });
         std::thread::sleep(Duration::from_secs(3));
         install(&engine, 1, &buffer);
         report(
-            "D2 DRUNet tiles on the GPU alone, no job",
+            "D2 the network's tiles on the GPU alone, no job",
             &pan(LONG, &engine, &on, size, || {}),
         );
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -178,11 +182,6 @@ fn main() {
     }
 
     let dir = models.clone();
-    let which = if ffdnet {
-        rustroom_app::settings::DenoiseNetwork::Ffdnet
-    } else {
-        rustroom_app::settings::DenoiseNetwork::Drunet
-    };
     let worker = DenoiseWorker::spawn(
         Box::new(move || denoised::network(&dir, true, which)),
         None,
