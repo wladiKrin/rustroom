@@ -39,6 +39,63 @@ pub type Net<'a> = &'a mut dyn FnMut(&[f32], &[f32]) -> Result<Vec<f32>, String>
 /// probability per pixel.
 pub type Detect<'a> = &'a mut dyn FnMut(&[f32], &[[f32; 2]], [f32; 4]) -> Result<Vec<f32>, String>;
 
+/// The Remove brush between strokes (M10.16c1) — Retouch's first and default mode.
+///
+/// ⚠ On the app beside `SpotTool` and `EyeTool`: the mode the panel shows is derived from the three.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RemoveTool {
+    /// Remove is the mode — off in Heal, Clone and the eye modes.
+    pub active: bool,
+    /// Detect objects, for the strokes still to be painted.
+    pub detect: bool,
+    /// The brush radius, a fraction of the decode's long edge.
+    pub radius: f32,
+}
+
+impl Default for RemoveTool {
+    fn default() -> Self {
+        Self {
+            active: true,
+            detect: false,
+            radius: 0.02,
+        }
+    }
+}
+
+/// A painted point joins the stroke only this far (× the radius) from the last one — dense enough for
+/// a smooth band, sparse enough that a slow drag does not pile up hundreds of points.
+pub const POINT_SPACING: f32 = 0.25;
+
+/// `p` (decode-normalised) onto `points` when it is at least [`POINT_SPACING`] × the radius from the last
+/// one, in decode pixels of a `w × h` decode; the first always.
+pub fn add_point(points: &mut Vec<[f32; 2]>, p: [f32; 2], radius: f32, w: usize, h: usize) {
+    let far = match points.last() {
+        None => true,
+        Some(q) => {
+            let (dx, dy) = ((p[0] - q[0]) * w as f32, (p[1] - q[1]) * h as f32);
+            (dx * dx + dy * dy).sqrt() >= POINT_SPACING * radius * w.max(h) as f32
+        }
+    };
+    if far && p.iter().all(|v| v.is_finite()) {
+        points.push(p);
+    }
+}
+
+/// The topmost removal whose stroke, soft edge included, covers decode-normalised `at` of a `w × h`
+/// decode — the one a click selects.
+pub fn hit_test(removals: &[Removal], at: [f32; 2], w: usize, h: usize) -> Option<usize> {
+    let (x, y) = (at[0] * w as f32, at[1] * h as f32);
+    removals.iter().enumerate().rev().find_map(|(i, r)| {
+        let pts: Vec<[f32; 2]> = r
+            .points
+            .iter()
+            .map(|p| [p[0] * w as f32, p[1] * h as f32])
+            .collect();
+        let reach = r.radius.max(0.0) * w.max(h) as f32 * HOLE_GROW;
+        (distance(&pts, x, y) <= reach).then_some(i)
+    })
+}
+
 /// The hole's box in decode pixels — the stroke's points grown by its soft edge — clamped to the decode.
 fn hole_box(r: &Removal, w: usize, h: usize) -> [f32; 4] {
     let rad = r.radius.max(0.0) * w.max(h) as f32 * HOLE_GROW;
@@ -412,6 +469,60 @@ mod tests {
             variant: 0,
             opacity: 100.0,
         }
+    }
+
+    #[test]
+    fn the_tool_starts_in_remove_mode() {
+        let t = RemoveTool::default();
+        assert!(t.active && !t.detect && t.radius > 0.0, "{t:?}");
+    }
+
+    /// A slow drag adds a point only every quarter radius; a fast one at each frame.
+    #[test]
+    fn a_stroke_point_is_kept_only_past_a_quarter_radius() {
+        let (w, h) = (4000, 3000);
+        let radius = 0.01; // 40 px; a quarter is 10 px
+        let mut pts = Vec::new();
+        for x in 0..40 {
+            add_point(
+                &mut pts,
+                [(1000.0 + x as f32 * 2.0) / w as f32, 0.5],
+                radius,
+                w,
+                h,
+            );
+        }
+        // Every gap at least a quarter radius (10 px) and less than that plus one 2-px step.
+        assert_eq!(pts[0], [0.25, 0.5], "the first point always");
+        assert!(pts.len() >= 6, "{pts:?}");
+        for g in pts.windows(2) {
+            let gap = (g[1][0] - g[0][0]) * w as f32;
+            assert!((9.99..12.01).contains(&gap), "a {gap} px gap in {pts:?}");
+        }
+        let n = pts.len();
+        add_point(&mut pts, [f32::NAN, 0.5], radius, w, h);
+        assert_eq!(pts.len(), n, "a NaN is never a point");
+    }
+
+    #[test]
+    fn hit_test_finds_the_topmost_removal_under_a_point() {
+        let (w, h) = (2000, 1000);
+        let a = stroke(vec![[0.2, 0.5], [0.4, 0.5]], 0.02); // 40 px radius, a 50 px reach
+        let b = stroke(vec![[0.35, 0.5]], 0.02);
+        let both = [a.clone(), b];
+        assert_eq!(hit_test(&both, [0.3, 0.5], w, h), Some(0), "on a's line");
+        assert_eq!(hit_test(&both, [0.35, 0.52], w, h), Some(1), "b is on top");
+        assert_eq!(
+            hit_test(&both, [0.3, 0.5 + 45.0 / 1000.0], w, h),
+            Some(0),
+            "in the soft edge"
+        );
+        assert_eq!(
+            hit_test(&both, [0.3, 0.5 + 60.0 / 1000.0], w, h),
+            None,
+            "past it"
+        );
+        assert_eq!(hit_test(&[], [0.3, 0.5], w, h), None);
     }
 
     /// The hole's extent in decode pixels: the stroke's box grown by the soft edge.

@@ -222,6 +222,8 @@ pub struct Session {
     pub(crate) suppressed_eye: Option<usize>,
     /// The eye gesture across frames — on the session for `spot_drag`'s reason.
     pub(crate) eye_drag: crate::develop::canvas::eye_overlay::EyeDrag,
+    /// The Remove gesture and the selected removal (M10.16c1) — `spot_drag`'s reason.
+    pub(crate) removal: crate::develop::canvas::remove_overlay::RemovalUi,
     /// Drawn perspective guides.
     ///
     /// ⚠⚠ **View state, never `Edits`.** A guide is scaffolding for arriving at a slider value,

@@ -186,6 +186,8 @@ pub(crate) struct RustroomApp {
     /// The red-eye tool's settings (M9.11) — `spot_tool`'s standing. Its `active` field is the
     /// Retouch tool's eye mode: `None` places patches, `Some(kind)` places eyes.
     pub(crate) eye_tool: rustroom_app::eye_tool::EyeTool,
+    /// The Remove brush (M10.16c1) — `spot_tool`'s standing; its `active` is Retouch's first mode.
+    pub(crate) remove_tool: rustroom_app::remove_tool::RemoveTool,
     /// Which HSL channel the Color section's selector is showing. View state, per app —
     /// like a brush size, it is a property of the tool and not of the photograph.
     pub(crate) hsl_channel: develop::panel::adjustments::HslChannel,

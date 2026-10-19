@@ -38,18 +38,6 @@ impl RemovalState {
             .clone()
             .or_else(|| Some((removal_cache::dir()?, rustroom_app::ai_cache::models_dir()?)))
     }
-
-    /// Whether a fill is being made or loaded for the open photo — Retouch's pending stroke.
-    #[allow(dead_code)] // ⚠ Task 6's overlay reads it; removed with that commit.
-    pub(crate) fn is_pending(&self, key: &str) -> bool {
-        self.pending.contains(key)
-    }
-
-    /// The open photo's key, once `pump_removals` has seen it.
-    #[allow(dead_code)] // ⚠ Task 6's overlay reads it; removed with that commit.
-    pub(crate) fn photo_key(&self) -> Option<&str> {
-        self.photo.as_ref().map(|(_, k)| k.as_str())
-    }
 }
 
 impl RustroomApp {
@@ -233,7 +221,15 @@ mod tests {
         let (mut app, ctx, r) = app_with_removal("lands");
         app.pump_removals(&ctx);
         assert!(!shown(&app, &r), "nothing yet");
-        let key = remove_tool::id(app.removals.photo_key().expect("seen"), &r, removal::MODEL);
+        let key = remove_tool::id(
+            app.removals
+                .photo
+                .as_ref()
+                .map(|(_, k)| k.as_str())
+                .expect("seen"),
+            &r,
+            removal::MODEL,
+        );
         let fill = Arc::new(pipeline::Fill {
             rect: [0.25, 0.25, 0.75, 0.75],
             w: 2,
@@ -254,7 +250,11 @@ mod tests {
         app.session.as_mut().unwrap().edits.removals.clear();
         app.pump_removals(&ctx);
         assert!(!app.removals.held.contains_key(&remove_tool::id(
-            app.removals.photo_key().unwrap(),
+            app.removals
+                .photo
+                .as_ref()
+                .map(|(_, k)| k.as_str())
+                .unwrap(),
             &r,
             removal::MODEL
         )));
@@ -280,14 +280,22 @@ mod tests {
     fn a_failure_is_reported_and_not_retried() {
         let (mut app, ctx, r) = app_with_removal("failed");
         app.pump_removals(&ctx);
-        let key = remove_tool::id(app.removals.photo_key().unwrap(), &r, removal::MODEL);
+        let key = remove_tool::id(
+            app.removals
+                .photo
+                .as_ref()
+                .map(|(_, k)| k.as_str())
+                .unwrap(),
+            &r,
+            removal::MODEL,
+        );
         app.removals.pending.insert(key.clone());
         app.absorb_removals(vec![RemovalResult::Failed {
             key: key.clone(),
             error: "no LaMa".into(),
         }]);
         assert!(app.status.contains("no LaMa"), "{}", app.status);
-        assert!(!app.removals.is_pending(&key));
+        assert!(!app.removals.pending.contains(&key));
         assert!(app.removals.failed.contains(&key));
     }
 }

@@ -53,6 +53,8 @@ pub enum Scope {
     LensBlur,
     /// Detail's AI denoise (M10.16b).
     AiDenoise,
+    /// Retouch's Remove brush and a removal (M10.16c1).
+    Remove,
 }
 
 /// The HSL bands' three tabs.
@@ -256,6 +258,11 @@ const PATCH: &[(&str, &str)] = &[
     ("Feather", "Softens the patch's edge"),
 ];
 
+const REMOVE: &[(&str, &str)] = &[
+    ("Size", "Sets the brush's radius, in pixels of the photo"),
+    ("Opacity", "Sets how much of the fill covers the photo"),
+];
+
 const EYE: &[(&str, &str)] = &[
     (
         "Pupil Size",
@@ -296,6 +303,7 @@ fn table(scope: Scope) -> &'static [(&'static str, &'static str)] {
         Scope::DepthRange => DEPTH_RANGE,
         Scope::LensBlur => LENS_BLUR,
         Scope::AiDenoise => AI_DENOISE,
+        Scope::Remove => REMOVE,
     }
 }
 
@@ -350,7 +358,7 @@ pub fn text(scope: Scope, label: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    const SCOPES: [Scope; 21] = [
+    const SCOPES: [Scope; 22] = [
         Scope::Global,
         Scope::Parametric,
         Scope::Hsl(HslTab::Hue),
@@ -372,6 +380,7 @@ mod tests {
         Scope::DepthRange,
         Scope::LensBlur,
         Scope::AiDenoise,
+        Scope::Remove,
     ];
 
     /// Every sentence the table can produce, with where it came from.

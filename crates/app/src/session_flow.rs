@@ -749,6 +749,7 @@ impl RustroomApp {
             selected_eye: None,
             suppressed_eye: None,
             eye_drag: Default::default(),
+            removal: Default::default(),
             active_mask_handle: None,
             guides: Vec::new(),
             active_guide: None,

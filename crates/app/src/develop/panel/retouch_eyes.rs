@@ -12,10 +12,12 @@ use eframe::egui;
 use rustroom_app::eye_tool::{EyeTool, FALLBACK_CATCHLIGHT};
 use rustroom_app::{mask_tool, spot_tool};
 
-/// The Retouch tool's four modes. Derived, never stored: `SpotTool::mode` and `EyeTool::active`
-/// are the two facts, and this is their product.
+/// The Retouch tool's five modes. Derived, never stored: `SpotTool::mode`, `EyeTool::active` and
+/// `RemoveTool::active` (M10.16c1) are the facts, and this is their product.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Mode {
+    /// The content-aware brush — the first mode and the default.
+    Remove,
     Heal,
     Clone,
     RedEye,
@@ -23,10 +25,11 @@ pub(super) enum Mode {
 }
 
 impl Mode {
-    pub(super) fn current(spot: SpotMode, eye: Option<EyeKind>) -> Self {
+    pub(super) fn current(spot: SpotMode, eye: Option<EyeKind>, remove: bool) -> Self {
         match (eye, spot) {
             (Some(EyeKind::Red), _) => Self::RedEye,
             (Some(EyeKind::Pet), _) => Self::PetEye,
+            (None, _) if remove => Self::Remove,
             (None, SpotMode::Heal) => Self::Heal,
             (None, SpotMode::Clone) => Self::Clone,
         }
@@ -36,7 +39,7 @@ impl Mode {
         match self {
             Self::RedEye => Some(EyeKind::Red),
             Self::PetEye => Some(EyeKind::Pet),
-            Self::Heal | Self::Clone => None,
+            Self::Remove | Self::Heal | Self::Clone => None,
         }
     }
 }
@@ -52,9 +55,20 @@ pub(super) const PET_EYE_HINT: &str = "Darkens an animal's glowing pupil you cli
 pub(super) fn apply_mode(
     s: &mut Session,
     eyes: &mut EyeTool,
+    remove: &mut rustroom_app::remove_tool::RemoveTool,
     to: Mode,
     ed: &mut Edited,
 ) -> Option<SpotMode> {
+    // ⚠ M10.16c1: to Remove, the patch and eye selections drop and both other tools stand down; from it,
+    // the removal selection drops.
+    remove.active = to == Mode::Remove;
+    if to == Mode::Remove {
+        eyes.active = None;
+        s.selected_eye = None;
+        s.selected_spot = None;
+        return None;
+    }
+    s.removal.selected = None;
     match to.eye() {
         Some(kind) => {
             s.selected_spot = None;

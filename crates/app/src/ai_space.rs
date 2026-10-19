@@ -96,6 +96,21 @@ impl DecodeMap {
     pub fn frame_size(&self) -> (f32, f32) {
         self.frame
     }
+
+    /// Decode-normalised `d` → frame pixel `(fx, fy)` — [`Self::frame_to_decode`]'s inverse, for drawing
+    /// what lives in decode space (M10.16c1's removals). ⚠ The lens has no forward map (M10.12c), so its
+    /// inverse is solved by fixed-point iteration — a distortion is a few percent, and eight steps land
+    /// within a hundredth of a pixel.
+    pub fn decode_to_frame(&self, d: [f32; 2]) -> (f32, f32) {
+        let mut p = d;
+        if self.corr.is_some() {
+            for _ in 0..8 {
+                let at = self.post_lens_to_decode(p);
+                p = [p[0] + d[0] - at[0], p[1] + d[1] - at[1]];
+            }
+        }
+        self.spot.point(p)
+    }
 }
 
 #[cfg(test)]
@@ -118,6 +133,52 @@ mod tests {
             (u - 0.25).abs() < 0.01 && (v - 0.25).abs() < 0.01,
             "{u},{v}"
         );
+    }
+
+    /// M10.16c1: a decode point drawn on the frame lands where the frame point it came from was — through
+    /// a rotation and crop, and through a lens's distortion.
+    #[test]
+    fn decode_to_frame_undoes_frame_to_decode() {
+        let mut g = Geometry {
+            angle: 4.0,
+            ..Default::default()
+        };
+        g.orientation.rotate_cw();
+        let xml = r#"<lensdatabase version="1">
+            <camera><maker>M</maker><model>C</model><mount>X</mount><cropfactor>1.0</cropfactor></camera>
+            <lens><maker>M</maker><model>L 50mm</model><mount>X</mount><cropfactor>1.0</cropfactor>
+                <calibration><distortion model="ptlens" focal="50" a="0.0" b="0.05" c="0.0"/></calibration>
+            </lens></lensdatabase>"#;
+        let db = lens_profile::Catalogue::from_xml(xml).unwrap();
+        let profile = db.find("M", "C", "L 50mm").unwrap();
+        let corr = lens_profile::Corrector::new(
+            &profile,
+            &lens_profile::Shot {
+                focal: 50.0,
+                aperture: 2.8,
+            },
+            300,
+            200,
+            lens_profile::Corrections {
+                distortion: true,
+                tca: false,
+                vignetting: false,
+                scale: 1.0,
+            },
+        );
+        assert!(corr.is_some(), "the fixture's lens corrects");
+        for corr in [None, corr] {
+            let lens = corr.is_some();
+            let m = DecodeMap::new(&g, Perspective::default(), 200, 300, corr, 300, 200);
+            for (fx, fy) in [(20.0, 30.0), (100.0, 150.0), (180.0, 270.0)] {
+                let d = m.frame_to_decode(fx, fy);
+                let (bx, by) = m.decode_to_frame(d);
+                assert!(
+                    (bx - fx).abs() < 0.05 && (by - fy).abs() < 0.05,
+                    "({fx}, {fy}) → {d:?} → ({bx}, {by}), lens {lens}"
+                );
+            }
+        }
     }
 
     /// ⚠ The property the space exists for: a quarter turn moves the frame, and the decode point
