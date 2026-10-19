@@ -702,6 +702,7 @@ impl RustroomApp {
             readout_bytes: None,
             clip_texture: None,
             canvas_frame_rect: None,
+            canvas_view_centre: None,
             readout: None,
             // ⚠ Off on every photo, like `visualize` and for the same reason: the state lives on
             // the session, which is rebuilt per photo. Recorded as an accepted caveat rather than

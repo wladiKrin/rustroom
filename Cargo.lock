@@ -2262,6 +2262,7 @@ dependencies = [
  "color 0.1.0",
  "core-image",
  "edit-model",
+ "half",
  "lens-profile",
  "pipeline",
  "pollster",

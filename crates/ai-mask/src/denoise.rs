@@ -42,20 +42,26 @@ impl Drunet {
         })
     }
 
-    /// `rgb` (`w × h`, interleaved, display-referred sRGB in 0…1) denoised at noise level `sigma`
-    /// (0…255 units) — the same layout back.
+    /// `rgb` (`w × h`, interleaved, display-referred sRGB in 0…1) denoised at the noise level `sigma`
+    /// gives each pixel (`w × h`, 0…255 units) — the same layout back.
     ///
-    /// ⚠ The export's own recipe: input `[1, 4, h, w]`, the fourth plane constant `sigma / 255`; one
+    /// ⚠ The export's own recipe: input `[1, 4, h, w]`, the fourth plane `sigma / 255`; one
     /// output `[1, 3, h, w]`. Its symbols are `b`, `h` and `w`, bound per size (`depth.rs`'s pattern).
     pub fn run(
         &mut self,
         rgb: &[f32],
         w: usize,
         h: usize,
-        sigma: f32,
+        sigma: &[f32],
     ) -> Result<Vec<f32>, InferError> {
         use tract_onnx::prelude::*;
         check_size(w, h)?;
+        if sigma.len() != w * h {
+            return Err(InferError::Model(format!(
+                "{} noise levels for a {w} × {h} tile",
+                sigma.len()
+            )));
+        }
         if rgb.len() != w * h * 3 {
             return Err(InferError::Model(format!(
                 "{} values for a {w} × {h} tile",
@@ -86,7 +92,7 @@ impl Drunet {
             for c in 0..3 {
                 data[c * n + i] = rgb[i * 3 + c];
             }
-            data[3 * n + i] = sigma / 255.0;
+            data[3 * n + i] = sigma[i] / 255.0;
         }
         let input = Tensor::from_shape(&[1, 4, h, w], &data).map_err(err)?;
         let outs = self.plans[&(w, h)].run(tvec!(input.into())).map_err(err)?;
@@ -253,7 +259,7 @@ mod tests {
             (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5
         };
         let rgb: Vec<f32> = (0..w * h * 3).map(|_| 0.5 + 0.1 * noise()).collect();
-        let out = net.run(&rgb, w, h, 25.0).expect("run");
+        let out = net.run(&rgb, w, h, &vec![25.0; w * h]).expect("run");
         assert_eq!(out.len(), rgb.len());
         let spread = |v: &[f32]| {
             let m = v.iter().sum::<f32>() / v.len() as f32;

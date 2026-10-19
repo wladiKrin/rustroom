@@ -23,6 +23,9 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.16b5: AI denoise — a faster kernel: half precision and Winograd (2026-10-16)](#2026-10-16--m1016b5-ai-denoise--a-faster-kernel-half-precision-and-winograd-branch-m1016b3-ai-denoise-strength-speed)
+- [M10.16b4: AI denoise — your view first, shown as it lands (2026-10-16)](#2026-10-16--m1016b4-ai-denoise--your-view-first-shown-as-it-lands-branch-m1016b3-ai-denoise-strength-speed)
+- [M10.16b3: AI denoise at the noise map × 2 (2026-10-16)](#2026-10-16--m1016b3-ai-denoise-at-the-noise-map--2-branch-m1016b3-ai-denoise-strength-speed)
 - [M10.16b2: AI denoise on the GPU — DRUNet as one tiled WGSL product (2026-10-16)](#2026-10-16--m1016b2-ai-denoise-on-the-gpu--drunet-as-one-tiled-wgsl-product-branch-m1016b2-ai-denoise-gpu)
 - [M10.16b1: AI denoise — DRUNet on the CPU, a background job, its cache, the Amount in Detail (2026-10-15)](#2026-10-15--m1016b1-ai-denoise--drunet-on-the-cpu-a-background-job-its-cache-the-amount-in-detail-branch-m1016b-ai-denoise)
 - [M10.16d2: Lens Blur's GPU twin — live while dragging (2026-10-15)](#2026-10-15--m1016d2-lens-blurs-gpu-twin--live-while-dragging-branch-m1016d2-lens-blur-gpu-merged-2026-10-15)
@@ -180,6 +183,97 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-16 — M10.16b5: AI denoise — a faster kernel: half precision and Winograd (branch `m10.16b3-ai-denoise-strength-speed`)
+
+**The item:** spec §3 — the second half of the author's speed call (*"Your view first + faster GPU"*): DRUNet's
+tile faster than b2's 1.46 s, each step kept only when measured ≥ 5 % faster with editing unharmed. Plan
+`2026-10-16-m10.16b5-ai-denoise-faster-kernel.md`.
+
+**Built:** **half precision** — `GpuContext` requests `SHADER_F16` when the adapter offers it (`f16()`); the
+kernel stores through an alias `S` (`f16` there, `f32` otherwise) while every sum stays `f32`; uploads, zeros and
+reads by element size (⚠ an odd `f16` count broke `write_buffer`'s 4-byte rule — a validation panic — padded by
+one). **Winograd F(2 × 2, 3 × 3)** (`drunet::winograd`) — the weights transformed once at upload (`U = G g Gᵀ`,
+16 matrices `[cin][cout]`); a 3 × 3 convolution is now an input transform (`V = Bᵀ d B` per 4 × 4 patch,
+zero-padded past the edge exactly as the direct convolution), the product's batched mode (`Mode::Product`, the 16
+products in one dispatch over `wid.z`) and an output transform carrying the ReLU and both adds, cropped at an odd
+edge. The 2 × 2 down/up convolutions unchanged; `fits` counts Winograd's planes (4× the activations).
+
+**Speed (`a_full_size_tile_time`, a 512 px tile, the M2, Rustroom open, two runs each):** f32 direct 1.64 / 2.02 s
+· f16 direct 2.10 / 2.00 · f32 Winograd 1.26 / 1.31 · **f16 Winograd 1.22 / 1.13 (kept)**. ⚠ Under load the runs
+were noisy: back to back, f16 alone measured ~10 % faster (1.63 / 1.56 → 1.46 / 1.40) and slower in the four-way
+run; Winograd was 25–40 % faster in both precisions, and the pair the fastest of the four. **Editing frames during
+a tile: 15.0 ms median** (idle 9.3) — unharmed. **A whole 26 Mpx frame (DSCF6990): 102.8 s, against b2's 174 s**
+(1.7×; 117 tiles, ~0.88 s a tile, Rustroom open); `tract` 397 s.
+
+**Parity — no longer the same bits.** b2 was exactly 0 against `tract`; now on the real model **1.10e-3 at 64²
+and 1.42e-3 at 296 × 200**, and on four real 512 px tiles of DSCF6990 **max 0.79–1.46e-3 (0.20–0.37 of one 8-bit
+level), mean 5–9.5e-5**. `gpu_drunet_matches_tract`'s bound 1e-5 → **3e-3** (twice the number, under one level).
+The author judges the look.
+
+**Sabotages, all red:** the `f16` loads at half the index (the three `f16` parity tests; the `f32`-path test
+green, as it must be); `Bᵀ`'s third row's sign flipped (the small network, 0.42 relative). ⚠ Winograd's
+correctness is pinned at the network level (40 × 24 → a 5 × 3 deepest scale, so odd blocks are cropped) rather
+than by the plan's separate per-convolution test — the fusions and crops run there, and the sabotage went red.
+
+**The review (self-review, two fixes, each RED first):** ⚠⚠ **Winograd held a plane pair PER SCALE — 0.76 GB a
+512 px tile in `f16` against b2's 0.51**, unpriced: the plan checked each plane against the binding limit, never
+the total. The convolutions run one after another, so ONE pair at the largest scale's size serves all four
+(`planes`): **~0.52 GB**, twice that in `f32` (`winograd_holds_one_pair_of_planes`, counting `conv::zeros`).
+⚠ An `f16` overflow came back as a tile of NaN — which the job would have cached as the photo; `run_map` now
+returns an error on any non-finite value and the `Engine` hands the job to `tract`
+(`a_non_finite_tile_is_an_error`). **No input overflowed:** the real-model test now also runs the extremes a
+clamped photo can give — flat white at σ 40 1.41e-3, black 1.6e-6, a one-pixel 0/1 checkerboard 1.66e-3 at σ 1
+and **3.21e-3 at σ 40** (0.82 of one 8-bit level, the worst found) — under their own bound `TOL_EXTREME` 6.5e-3,
+so real photos stay held at 3e-3. **Re-timed with Rustroom closed:** f32 direct 1.51 s · f32 Winograd 1.08 ·
+f16 direct 1.40 · **f16 Winograd 0.87–0.91 s** a tile (−42 %); editing frames 14.9 ms median during a tile (7.6
+idle).
+
+⚠ **The gate then failed once** (1440 of 1441): `the_network_is_told_when_a_job_ends` waited for ANY first
+result, and under the gate's load the job outlasted a second and published a partial one before the network
+was told — b4's partials, the flaw b4 fixed only in the focus test. Reproduced every time with 400 ms tiles; every
+worker test expecting `Done` now goes through `wait_done`.
+
+### 2026-10-16 — M10.16b4: AI denoise — your view first, shown as it lands (branch `m10.16b3-ai-denoise-strength-speed`)
+
+**The item:** spec §2 — the author's *"too slow to use it effectively"*: the tiles under the view first, each
+shown as it lands. Plan `2026-10-16-m10.16b4-ai-denoise-view-first.md`.
+
+**Built:** `ai_denoise::Tiler` — the remaining tile nearest a focus point next, the result kept up to date tile
+by tile: **the original decode wherever no tile has landed**, so the prefix step needed no coverage at all — where
+the "denoised" image is the input, the blend changes nothing. `run_progressive` (the focus read before every tile,
+`after` told after each); the worker's `set_focus` and `DenoiseResult::Partial`, published at most once a second,
+never cached; the flow's `Held { complete }` — a partial result shown with its own id, **not** counted as
+finished (a job dropped mid-way runs again); the canvas records its visible centre, mapped to decode space by the
+eyedropper's own `decode_point`, memoised on the frame and the centre.
+
+**What the author sees:** at 1:1 the view is ~15 tiles at ~1.5 s — the first tile under the centre after the
+noise curve (~1 s) and one tile; the view filled in ~20–25 s, the rest of the photo behind it.
+
+**Sabotages:** the first remaining tile taken, not the nearest; the result's recompute skipped (⚠ green at
+first: `denoise_in` now runs on the same `Tiler`, so both sides of the comparison broke alike — shape (c); the
+test proves the one-shot run moved first, at half the measured 0.0086); a partial stored in the cache; the focus
+pinned at the centre; a partial counted as finished. ⚠ The worker's focus test first waited for any result and
+got a partial (a debug job publishes after a second) — it waits for the finished one now.
+
+### 2026-10-16 — M10.16b3: AI denoise at the noise map × 2 (branch `m10.16b3-ai-denoise-strength-speed`)
+
+**The item:** the strength the author found weak. Spec `2026-10-16-m10.16b-strength-and-speed-design.md` §1
+(b3–b5, one spec); plan `2026-10-16-m10.16b3-ai-denoise-strength.md`. **Measured first** (`denoise_probe
+strength`, four photos): the noise rises toward the shadows on every photo; b2's single σ matched the mid-tones
+and Amount 100 left 35–65 % of the noise there, 45–80 % in shadows. **The author picked the noise map at 2×** from
+the sheets (today · 2× · map · map 2×, on dark, flat and busy crops).
+
+**Built:** `noise_curve` — σ for each eighth of encoded brightness by the estimator on that band's blocks, an
+unread or clipped band (< 0.5) borrowing its nearest neighbour's; `noise_map` — each pixel's σ from the curve
+at its 15 px box-blurred brightness (a summed-area table), × `CALIBRATION` **2.0**, clamped 1…40. `TileNet::run`
+takes a σ plane (both engines; `GpuDrunet::run_map`); `denoise_in` asks a σ source for each padded tile; `run`
+builds the curve once a photo. The recipe moved to **`denoise:v2`** (the key pinned). ⚠ `noise_sigma` no longer
+multiplies by `CALIBRATION` — the 2× belongs to the map; `noise_sigma_reads_known_noise` caught the double meaning.
+
+**Sabotages:** the bands left unfilled (red); the blur's radius 0 — ⚠ green at first: the test checked the bright
+pixel's NEIGHBOUR, dark either way; it checks the pixel itself now (red); a σ plane truncated and padded — inert
+(the middle rows unmoved), recorded; `sigma` handed the unpadded tile's size (red).
 
 ### 2026-10-16 — M10.16b2: AI denoise on the GPU — DRUNet as one tiled WGSL product (branch `m10.16b2-ai-denoise-gpu`)
 

@@ -104,6 +104,7 @@ pub(crate) fn run(mode: Mode, src: &[f32], d: &Dims, wt: &Tensor) -> Vec<f32> {
         Mode::Conv3 => conv3(src, d, wt),
         Mode::Down2 => down2(src, d, wt),
         Mode::Up2 => up2(src, d, wt),
+        Mode::Product => unreachable!("the reference convolves directly"),
     }
 }
 

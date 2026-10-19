@@ -172,7 +172,7 @@ impl Engine {
 }
 
 impl TileNet for Engine {
-    fn run(&mut self, rgb: &[f32], w: usize, h: usize, sigma: f32) -> Result<Vec<f32>, String> {
+    fn run(&mut self, rgb: &[f32], w: usize, h: usize, sigma: &[f32]) -> Result<Vec<f32>, String> {
         if let Some(p) = self.primary.as_mut() {
             match p.run(rgb, w, h, sigma) {
                 Ok(v) => return Ok(v),
@@ -290,7 +290,7 @@ mod tests {
     /// A network that adds `0.1` to every value — visibly not the input.
     struct Lift;
     impl TileNet for Lift {
-        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: f32) -> Result<Vec<f32>, String> {
+        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: &[f32]) -> Result<Vec<f32>, String> {
             Ok(rgb.iter().map(|v| v + 0.1).collect())
         }
     }
@@ -302,7 +302,7 @@ mod tests {
         calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
     impl TileNet for FailAfter {
-        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: f32) -> Result<Vec<f32>, String> {
+        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: &[f32]) -> Result<Vec<f32>, String> {
             let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if n < self.ok {
                 Ok(rgb.iter().map(|v| v + 0.1).collect())
@@ -331,7 +331,7 @@ mod tests {
             }),
         );
         for _ in 0..3 {
-            let out = e.run(&[0.5; 3], 1, 1, 1.0).expect("a tile");
+            let out = e.run(&[0.5; 3], 1, 1, &[1.0]).expect("a tile");
             assert!((out[0] - 0.6).abs() < 1e-6);
         }
         assert_eq!(
@@ -349,17 +349,24 @@ mod tests {
             None,
             Box::new(|| Ok(Box::new(Lift) as Box<dyn TileNet + Send>)),
         );
-        assert!((e.run(&[0.5; 3], 1, 1, 1.0).unwrap()[0] - 0.6).abs() < 1e-6);
+        assert!((e.run(&[0.5; 3], 1, 1, &[1.0]).unwrap()[0] - 0.6).abs() < 1e-6);
     }
 
     /// The largest |GPU − tract| on the real model, in the network's 0…1 units — measured, never tuned
-    /// to pass. ⚠ Measured **exactly 0** on the M2 (2026-10-15): both engines sum each output over
-    /// `ci · 9 + tap` in order with fused multiply-adds, and add the residual and the skip in the file's
-    /// order, so the bits agree. 1e-5 leaves room for another GPU contracting differently.
-    const TOL: f32 = 1e-5;
+    /// to pass. b2's direct `f32` kernel measured **exactly 0** (2026-10-15). Since M10.16b5 the GPU
+    /// stores in `f16` and runs the 3 × 3 convolutions as Winograd F(2 × 2, 3 × 3): measured on the M2
+    /// **1.10e-3 at 64² and 1.42e-3 at 296 × 200** (2026-10-16) — a third of one 8-bit level (3.9e-3).
+    /// 3e-3 is twice the larger number and still under that level; never raise it without a new number.
+    const TOL: f32 = 3e-3;
+
+    /// [`TOL`] for the extremes a clamped photo can give `f16` (M10.16b5's review, measured on the M2,
+    /// 2026-10-16): flat white at σ 40 1.41e-3, black 1.6e-6, a one-pixel 0/1 checkerboard at σ 1 1.66e-3
+    /// and **at σ 40 3.21e-3** — 0.82 of one 8-bit level, the worst found, and none overflowed. Twice it,
+    /// like `TOL`; never raise it without a new number.
+    const TOL_EXTREME: f32 = 6.5e-3;
 
     /// DRUNet on the GPU against `tract` on the real model: a 64 × 64 tile and a 296 × 200 one (sides
-    /// multiples of 8, the second not of 64).
+    /// multiples of 8, the second not of 64), then the extremes `f16` must hold.
     #[test]
     #[ignore = "needs the model and a GPU; set RUSTROOM_DRUNET"]
     fn gpu_drunet_matches_tract() {
@@ -372,11 +379,12 @@ mod tests {
         let mut cpu = ai_mask::denoise::Drunet::load(&path).expect("tract");
         let mut gpu =
             gpu_pipeline::GpuDrunet::new(ctx, &gpu_weights(&path).expect("weights")).expect("gpu");
+        let mut worsts = Vec::new();
         for (w, h) in [(64, 64), (296, 200)] {
             let rgb: Vec<f32> = (0..w * h * 3)
                 .map(|i| ((i * 7919) % 1000) as f32 / 1000.0)
                 .collect();
-            let a = cpu.run(&rgb, w, h, 15.0).expect("cpu");
+            let a = cpu.run(&rgb, w, h, &vec![15.0; w * h]).expect("cpu");
             let b = gpu.run(&rgb, w, h, 15.0).expect("gpu");
             // ⚠ NaN first: `f32::max` ignores it, and an all-NaN GPU output once read here as a perfect 0.
             let bad = b.iter().filter(|v| !v.is_finite()).count();
@@ -397,8 +405,35 @@ mod tests {
                 moved > 0.01,
                 "the network changed nothing — the comparison would be empty"
             );
-            assert!(worst < TOL, "{w}×{h}: {worst}");
+            worsts.push(worst);
         }
+        // `f16` against DRUNet's largest activations (M10.16b5's review): the extremes a clamped photo can
+        // give — flat white and black, a one-pixel checkerboard — at the lowest and highest σ.
+        let mut extremes = Vec::new();
+        let n = 64 * 64;
+        let checker: Vec<f32> = (0..n * 3)
+            .map(|i| ((i / 3 % 64 + i / 3 / 64) % 2) as f32)
+            .collect();
+        for (name, rgb, sigma) in [
+            ("white", vec![1.0; n * 3], 40.0),
+            ("black", vec![0.0; n * 3], 1.0),
+            ("checker", checker.clone(), 1.0),
+            ("checker", checker, 40.0),
+        ] {
+            let a = cpu.run(&rgb, 64, 64, &vec![sigma; n]).expect("cpu");
+            // A non-finite tile is the GPU's Err, so an overflow fails here.
+            let b = gpu.run(&rgb, 64, 64, sigma).expect("gpu");
+            let worst = a
+                .iter()
+                .zip(&b)
+                .map(|(x, y)| (x - y).abs())
+                .fold(0.0f32, f32::max);
+            eprintln!("{name} at σ {sigma}: max |gpu − tract| = {worst:e}");
+            extremes.push(worst);
+        }
+        // ⚠ Every case measured before any is judged — a first failure hid the second's number.
+        assert!(worsts.iter().all(|w| *w < TOL), "{worsts:?}");
+        assert!(extremes.iter().all(|w| *w < TOL_EXTREME), "{extremes:?}");
     }
 
     /// A file of the model's pinned size — `download::present`'s whole test.

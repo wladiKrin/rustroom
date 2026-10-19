@@ -321,6 +321,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         readout_bytes: None,
         clip_texture: None,
         canvas_frame_rect: None,
+        canvas_view_centre: None,
         readout: None,
         soft_proof: None,
         gamut_warning: false,

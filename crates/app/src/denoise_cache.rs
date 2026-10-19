@@ -13,7 +13,7 @@ pub fn dir() -> Option<PathBuf> {
 
 /// The recipe's version in every key — the encoding, the noise estimate and the model. ⚠ Bump it when
 /// any of them changes, or every cached result keeps the old picture.
-pub const RECIPE: &str = "denoise:v1";
+pub const RECIPE: &str = "denoise:v2";
 
 /// The cache key of `photo` decoded at `tier`.
 ///
@@ -291,4 +291,19 @@ mod tests {
         assert!(warn_at_startup(true, 10, at(10 * gb + 1)));
         assert!(!warn_at_startup(false, 10, at(20 * gb)));
     }
+
+    /// Review Focus 4: the key is pinned at the v2 recipe (M10.16b3, the noise map at 2×) — a result
+    /// computed at 1× never comes back.
+    #[test]
+    fn the_key_is_pinned_at_v2() {
+        assert_eq!(RECIPE, "denoise:v2");
+        let k = key(
+            std::path::Path::new("/no/such/photo.RAF"),
+            raw_decode::Demosaic::Fast,
+        );
+        assert_eq!(k, PINNED, "re-pin only for a deliberate recipe change");
+    }
+
+    /// The v2 key of the test's path — printed by this test's first run, never edited to pass.
+    const PINNED: &str = "168df676bc39eea56af5317940c250c210b7856c573dcb8bd215bcc58b69642a";
 }

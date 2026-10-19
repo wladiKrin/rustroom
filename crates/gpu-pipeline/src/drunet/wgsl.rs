@@ -4,9 +4,15 @@
 
 use super::arch::Mode;
 
-/// The kernel for `mode`.
-pub(crate) fn shader(mode: Mode) -> String {
-    format!("const MODE: u32 = {}u;\n{BODY}", mode as u32)
+/// The kernel for `mode` — its storage in `f16` when `half` (M10.16b5: half the memory traffic, every sum
+/// still `f32`), else `f32`.
+pub(crate) fn shader(mode: Mode, half: bool) -> String {
+    let head = if half {
+        "enable f16;\nalias S = f16;"
+    } else {
+        "alias S = f32;"
+    };
+    format!("{head}\nconst MODE: u32 = {}u;\n{BODY}", mode as u32)
 }
 
 /// The kernel's tile — rows (pixels) and columns (output channels) a workgroup; `groups` divides by them.
@@ -19,22 +25,22 @@ struct Params {
   m: u32, n: u32, k: u32, cout: u32,
   relu: u32, add1: u32, add2: u32, g0: u32,
 }
-@group(0) @binding(0) var<storage, read> src: array<f32>;
-@group(0) @binding(1) var<storage, read> wts: array<f32>;
-@group(0) @binding(2) var<storage, read_write> dst: array<f32>;
-@group(0) @binding(3) var<storage, read> res1: array<f32>;
-@group(0) @binding(4) var<storage, read> res2: array<f32>;
+@group(0) @binding(0) var<storage, read> src: array<S>;
+@group(0) @binding(1) var<storage, read> wts: array<S>;
+@group(0) @binding(2) var<storage, read_write> dst: array<S>;
+@group(0) @binding(3) var<storage, read> res1: array<S>;
+@group(0) @binding(4) var<storage, read> res2: array<S>;
 @group(0) @binding(5) var<uniform> p: Params;
 
 const TM: u32 = 64u;
 const TN: u32 = 64u;
 const TK: u32 = 16u;
 // [k][m / 4] and [k][n / 4]: k-row kk's rows (or columns) 4q … 4q + 3 at kk · 16 + q.
-var<workgroup> sa: array<vec4<f32>, 256>;
-var<workgroup> sb: array<vec4<f32>, 256>;
+var<workgroup> sa: array<vec4<S>, 256>;
+var<workgroup> sb: array<vec4<S>, 256>;
 
 fn ld(i: u32, ok: bool) -> f32 {
-  if (ok) { return src[i]; }
+  if (ok) { return f32(src[i]); }
   return 0.0;
 }
 
@@ -55,6 +61,7 @@ fn ld(i: u32, ok: bool) -> f32 {
 @compute @workgroup_size(8, 8)
 fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid: vec3<u32>) {
   let t = lid.y * 8u + lid.x;
+  g_zo = wid.z * p.n * p.out_w * p.out_h;
   // ⚠ `g0`: this band's first row-workgroup — a convolution runs as several submissions.
   let m0 = (wid.x + p.g0) * TM;
   let n0 = wid.y * TN;
@@ -67,7 +74,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
   let ok = ms < vec4<u32>(p.m);
   var py = vec4<i32>(0);
   var px = vec4<i32>(0);
-  if (MODE != 2u) {
+  if (MODE < 2u) {
     py = vec4<i32>(ms / p.out_w);
     px = vec4<i32>(ms % p.out_w);
   }
@@ -112,25 +119,26 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
             + vec4<u32>(2 * px) + vec4<u32>(tap % 2u);
           a = vec4<f32>(ld(at.x, ok.x), ld(at.y, ok.y), ld(at.z, ok.z), ld(at.w, ok.w));
         } else {
-          let at = vec4<u32>(k * in_hw) + ms;
+          // MODE 2, and 3 — Winograd's product, one of 16 a dispatch's z.
+          let at = vec4<u32>(wid.z * p.k * in_hw + k * in_hw) + ms;
           a = vec4<f32>(ld(at.x, ok.x), ld(at.y, ok.y), ld(at.z, ok.z), ld(at.w, ok.w));
         }
-        let wb = k * p.n;
+        let wb = wid.z * p.k * p.n + k * p.n;
         b = vec4<f32>(
-          select(0.0, wts[wb + ns.x], nok.x),
-          select(0.0, wts[wb + min(ns.y, p.n - 1u)], nok.y),
-          select(0.0, wts[wb + min(ns.z, p.n - 1u)], nok.z),
-          select(0.0, wts[wb + min(ns.w, p.n - 1u)], nok.w));
+          select(0.0, f32(wts[wb + ns.x]), nok.x),
+          select(0.0, f32(wts[wb + min(ns.y, p.n - 1u)]), nok.y),
+          select(0.0, f32(wts[wb + min(ns.z, p.n - 1u)]), nok.z),
+          select(0.0, f32(wts[wb + min(ns.w, p.n - 1u)]), nok.w));
       }
-      sa[kk * 16u + q] = a;
-      sb[kk * 16u + q] = b;
+      sa[kk * 16u + q] = vec4<S>(a);
+      sb[kk * 16u + q] = vec4<S>(b);
     }
     workgroupBarrier();
     for (var s = 0u; s < TK; s = s + 1u) {
-      let a0 = sa[s * 16u + lid.x];
-      let a1 = sa[s * 16u + 8u + lid.x];
-      let b0 = sb[s * 16u + lid.y];
-      let b1 = sb[s * 16u + 8u + lid.y];
+      let a0 = vec4<f32>(sa[s * 16u + lid.x]);
+      let a1 = vec4<f32>(sa[s * 16u + 8u + lid.x]);
+      let b0 = vec4<f32>(sb[s * 16u + lid.y]);
+      let b1 = vec4<f32>(sb[s * 16u + 8u + lid.y]);
       acc00 = acc00 + a0 * b0.x;
       acc01 = acc01 + a0 * b0.y;
       acc02 = acc02 + a0 * b0.z;
@@ -182,17 +190,20 @@ fn out_at(m: u32, n: u32) -> u32 {
     let co = n % p.cout;
     return co * p.out_w * p.out_h + (2u * y + q / 2u) * p.out_w + 2u * x + q % 2u;
   }
-  return n * p.out_w * p.out_h + m;
+  return g_zo + n * p.out_w * p.out_h + m;
 }
+
+// The batch's output offset (Winograd's product: z of 16); 0 for every other mode.
+var<private> g_zo: u32;
 
 fn put(v0: f32, m: u32, n: u32) {
   if (m >= p.m || n >= p.n) { return; }
   var v = v0;
   if (p.relu != 0u) { v = max(v, 0.0); }
   let o = out_at(m, n);
-  if (p.add1 != 0u) { v = v + res1[o]; }
-  if (p.add2 != 0u) { v = v + res2[o]; }
-  dst[o] = v;
+  if (p.add1 != 0u) { v = v + f32(res1[o]); }
+  if (p.add2 != 0u) { v = v + f32(res2[o]); }
+  dst[o] = S(v);
 }
 
 fn store(acc: vec4<f32>, m: u32, n: u32) {

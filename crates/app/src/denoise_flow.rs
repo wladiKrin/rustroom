@@ -20,8 +20,11 @@ pub(crate) struct DenoiseState {
     worker: Option<DenoiseWorker>,
     /// The open photo's key, memoised on its path and demosaic quality — a stat and a digest, once.
     key: Option<(PathBuf, Demosaic, String)>,
-    /// The open photo's result, by key — re-inserted into a replaced engine's store.
-    held: Option<(String, Arc<Denoised>)>,
+    /// The open photo's result — re-inserted into a replaced engine's store.
+    held: Option<Held>,
+    /// The view's centre the job was last aimed at: the frame's rectangle and the centre on screen, and
+    /// the decode point they map to — re-mapped only when they move (it builds a lens corrector).
+    focus: Option<(egui::Rect, egui::Pos2, [f32; 2])>,
     /// The key a job runs for.
     pending: Option<String>,
     /// Keys that failed — not retried this run, or a broken model would loop forever.
@@ -32,6 +35,15 @@ pub(crate) struct DenoiseState {
     pub dirs: Option<(PathBuf, PathBuf)>,
     /// The results' total for Settings → Performance — measured once per opening, `None` after a clear.
     pub usage: Option<rustroom_app::denoise_cache::Usage>,
+}
+
+/// The open photo's result: the finished one, or the job's latest partial one (M10.16b4) — each its own id,
+/// so a new partial re-renders.
+pub(crate) struct Held {
+    key: String,
+    image: Arc<Denoised>,
+    id: u64,
+    complete: bool,
 }
 
 impl DenoiseState {
@@ -53,7 +65,11 @@ impl DenoiseState {
     fn facts(&self, s: &crate::Session, key: &str, cache: &Path, models: &Path) -> Facts {
         Facts {
             active: s.edits.ai_denoise.is_active(),
-            has_result: self.held.as_ref().is_some_and(|(k, _)| k == key),
+            // ⚠ A partial result is not a finished one: a job dropped mid-way runs again (Review Focus 1).
+            has_result: self
+                .held
+                .as_ref()
+                .is_some_and(|h| h.key == key && h.complete),
             cached: rustroom_app::denoise_cache::exists(cache, key),
             full_decode: s.buffer_is_full_res && !s.buffer_is_ghost,
             model_present: ai_mask::download::present(
@@ -104,7 +120,7 @@ impl RustroomApp {
             return;
         };
         let key = self.denoise.key_for(&s.path, self.settings.view_demosaic);
-        if self.denoise.held.as_ref().is_some_and(|(k, _)| *k != key) {
+        if self.denoise.held.as_ref().is_some_and(|h| h.key != key) {
             self.denoise.held = None;
         }
         if !s.edits.ai_denoise.is_active() {
@@ -118,8 +134,8 @@ impl RustroomApp {
         let full_decode = s.buffer_is_full_res && !s.buffer_is_ghost;
         // ⚠⚠ Into the store only over the decode it was computed on — never the half-size one or a ghost,
         // whose pixels it would be blended with out of place.
-        if let Some((k, d)) = &self.denoise.held {
-            let id = denoised::id_of(k);
+        if let Some(Held { image: d, id, .. }) = &self.denoise.held {
+            let id = *id;
             let store = s.engine.ai_maps();
             let fits = d.size() == (s.buffer.width(), s.buffer.height());
             let shown = store.read().expect("ai maps").denoised().map(|(_, i)| *i) == Some(id);
@@ -169,32 +185,82 @@ impl RustroomApp {
             });
             self.denoise.pending = Some(key);
         }
+        self.aim_denoise();
         if self.denoise.pending.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
 
-    fn pump_denoise_results(&mut self) {
-        let Some(w) = &self.denoise.worker else {
+    /// While the open photo's job runs, aim it at the view's centre (M10.16b4) — re-mapped to decode space
+    /// only when the frame or the centre moved.
+    fn aim_denoise(&mut self) {
+        let (Some(s), Some(w)) = (&self.session, &self.denoise.worker) else {
             return;
         };
+        let running = self.denoise.key.as_ref().map(|(_, _, k)| k) == self.denoise.pending.as_ref();
+        let (Some(frame), Some(centre)) = (s.canvas_frame_rect, s.canvas_view_centre) else {
+            return;
+        };
+        if !running
+            || self
+                .denoise
+                .focus
+                .is_some_and(|(f, c, _)| f == frame && c == centre)
+        {
+            return;
+        }
+        let p = crate::develop::canvas::view_focus(s, frame, centre);
+        let p = [p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)];
+        w.set_focus(p);
+        self.denoise.focus = Some((frame, centre, p));
+    }
+
+    fn pump_denoise_results(&mut self) {
+        let results = match &self.denoise.worker {
+            Some(w) => w.poll(),
+            None => return,
+        };
+        self.absorb_denoise(results);
+    }
+
+    /// What the job sent: a finished result or the latest partial one for the open photo held, a failure
+    /// remembered, a job's end cleared — testable without a worker.
+    pub(crate) fn absorb_denoise(&mut self, results: Vec<DenoiseResult>) {
         let open = self.denoise.key.as_ref().map(|(_, _, k)| k.clone());
-        for r in w.poll() {
+        for r in results {
             let key = match &r {
                 DenoiseResult::Done { key, .. }
+                | DenoiseResult::Partial { key, .. }
                 | DenoiseResult::Failed { key, .. }
                 | DenoiseResult::Missing { key } => key.clone(),
             };
-            if self.denoise.pending.as_ref() == Some(&key) {
+            // ⚠ A partial result is not the job's end: the job still runs.
+            let ended = !matches!(r, DenoiseResult::Partial { .. });
+            if ended && self.denoise.pending.as_ref() == Some(&key) {
                 self.denoise.pending = None;
             }
             match r {
                 // ⚠ Only the open photo's: a job finished for the photo before is in the cache already.
                 DenoiseResult::Done { image, .. } if open.as_ref() == Some(&key) => {
-                    self.denoise.held = Some((key, Arc::new(Denoised::new(image))));
+                    self.denoise.held = Some(Held {
+                        id: denoised::id_of(&key),
+                        key,
+                        image: Arc::new(Denoised::new(image)),
+                        complete: true,
+                    });
                     self.status = "Denoised".to_string();
                 }
-                DenoiseResult::Done { .. } | DenoiseResult::Missing { .. } => {}
+                DenoiseResult::Partial { image, done, .. } if open.as_ref() == Some(&key) => {
+                    self.denoise.held = Some(Held {
+                        id: denoised::id_of(&format!("{key}#{done}")),
+                        key,
+                        image: Arc::new(Denoised::new(image)),
+                        complete: false,
+                    });
+                }
+                DenoiseResult::Done { .. }
+                | DenoiseResult::Partial { .. }
+                | DenoiseResult::Missing { .. } => {}
                 DenoiseResult::Failed { error, .. } => {
                     self.status = format!("AI denoise failed: {error}");
                     self.denoise.failed.insert(key);
@@ -362,6 +428,81 @@ mod tests {
         }
         assert!(app.modal == crate::modals::Modal::AiDownload, "stuck");
         assert!(!app.denoise.failed.contains(&key), "failed for the run");
+    }
+
+    /// The open photo's memoised key, after one pump.
+    fn open_key(app: &mut RustroomApp, ctx: &egui::Context) -> String {
+        app.pump_denoise(ctx);
+        app.denoise.key.as_ref().expect("a key").2.clone()
+    }
+
+    fn shown_id(app: &RustroomApp) -> Option<u64> {
+        let s = app.session.as_ref().unwrap();
+        let maps = s.engine.ai_maps();
+        let id = maps.read().unwrap().denoised().map(|(_, id)| *id);
+        id
+    }
+
+    /// M10.16b4: a partial result is shown over the full decode, then the finished one replaces it — each
+    /// with its own id.
+    #[test]
+    fn a_partial_result_is_shown_then_replaced() {
+        let (mut app, ctx, _) = app_with_denoise("partial", 100.0);
+        let (w, h) = {
+            let s = app.session.as_ref().unwrap();
+            (s.buffer.width(), s.buffer.height())
+        };
+        let key = open_key(&mut app, &ctx);
+        let img = |v: f32| Arc::new(core_image::ImageBuf::from_vec(w, h, vec![v; w * h * 3]));
+        app.absorb_denoise(vec![DenoiseResult::Partial {
+            key: key.clone(),
+            image: img(0.2),
+            done: 1,
+        }]);
+        app.pump_denoise(&ctx);
+        let first = shown_id(&app).expect("the partial is shown");
+        app.absorb_denoise(vec![DenoiseResult::Done {
+            key: key.clone(),
+            image: img(0.3),
+        }]);
+        app.pump_denoise(&ctx);
+        let second = shown_id(&app).expect("the finished one is shown");
+        assert_ne!(first, second);
+        assert_eq!(second, denoised::id_of(&key));
+    }
+
+    /// Review Focus 1: a job dropped after a partial — the partial does not count as finished, so the
+    /// photo's job is asked for again.
+    #[test]
+    fn a_partial_result_is_not_a_finished_one() {
+        let (mut app, ctx, _) = app_with_denoise("cancelled", 100.0);
+        let (w, h) = {
+            let s = app.session.as_ref().unwrap();
+            (s.buffer.width(), s.buffer.height())
+        };
+        // ⚠ The key first, with no model — so no real job starts on the stand-in file and fails.
+        let key = open_key(&mut app, &ctx);
+        app.modal = crate::modals::Modal::None;
+        let models = app.denoise.dirs.as_ref().unwrap().1.clone();
+        let spec = ai_mask::ModelId::DrunetColor.spec();
+        std::fs::create_dir_all(&models).unwrap();
+        std::fs::File::create(models.join(spec.file))
+            .unwrap()
+            .set_len(spec.bytes)
+            .unwrap();
+        let img = Arc::new(core_image::ImageBuf::from_vec(w, h, vec![0.2; w * h * 3]));
+        app.absorb_denoise(vec![DenoiseResult::Partial {
+            key: key.clone(),
+            image: img,
+            done: 1,
+        }]);
+        app.denoise.pending = None; // the job was dropped for another photo
+        app.pump_denoise(&ctx);
+        assert_eq!(
+            app.denoise.pending.as_deref(),
+            Some(key.as_str()),
+            "not asked again"
+        );
     }
 
     /// At Amount 0 nothing is asked for.

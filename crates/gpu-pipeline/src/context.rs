@@ -62,6 +62,8 @@ pub struct GpuContext {
     /// `TIMESTAMP_QUERY_INSIDE_PASSES` (wgpu gates that on `AtDispatchBoundary` counter sampling),
     /// which is why `timing.rs` times one PASS per stage rather than one dispatch.
     timestamps: bool,
+    /// Whether this device granted `SHADER_F16` — DRUNet's kernel then stores in half precision.
+    f16: bool,
     /// Nanoseconds per timestamp tick, from the queue.
     timestamp_period: f32,
 }
@@ -111,7 +113,8 @@ impl GpuContext {
         // `timing::note_unsupported` says so once.
         let wanted =
             wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
-        let features = adapter.features() & wanted;
+        // ⚠ M10.16b5: half-precision shaders too, when offered — DRUNet's kernel stores in f16 then.
+        let features = adapter.features() & (wanted | wgpu::Features::SHADER_F16);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             required_features: features,
             required_limits: limits,
@@ -119,6 +122,7 @@ impl GpuContext {
         }))
         .ok()?;
         let timestamps = features.contains(wanted);
+        let f16 = features.contains(wgpu::Features::SHADER_F16);
         let timestamp_period = queue.get_timestamp_period();
         Some(Self {
             device,
@@ -131,6 +135,7 @@ impl GpuContext {
             max_image_bytes,
             timestamps,
             timestamp_period,
+            f16,
         })
     }
 
@@ -179,6 +184,11 @@ impl GpuContext {
     /// second rule to keep in step.
     pub fn max_image_bytes(&self) -> u64 {
         self.max_image_bytes
+    }
+
+    /// Whether shaders may use `f16` on this device (M10.16b5).
+    pub fn f16(&self) -> bool {
+        self.f16
     }
 
     /// Whether chains can time themselves on this device. See the field.

@@ -23,6 +23,13 @@ pub enum DenoiseResult {
         key: String,
         image: Arc<ImageBuf>,
     },
+    /// The result so far (M10.16b4) — the original wherever no tile has landed; `done` tiles of it.
+    /// ⚠ Never cached: only `Done` is.
+    Partial {
+        key: String,
+        image: Arc<ImageBuf>,
+        done: usize,
+    },
     Failed {
         key: String,
         error: String,
@@ -44,21 +51,38 @@ pub struct DenoiseWorker {
     wanted: Arc<Mutex<Option<String>>>,
     /// The running job's key and its tiles done of total.
     progress: Arc<Mutex<Option<(String, usize, usize)>>>,
+    /// Where the view is, decode-normalised — the job's next tile is the one nearest it (M10.16b4).
+    focus: Arc<Mutex<[f32; 2]>>,
 }
 
 impl DenoiseWorker {
     /// The worker's thread; `cache` (when given) is where a result is looked for first and written once
-    /// computed.
+    /// computed. The result so far is published at most once a second.
     pub fn spawn(
         net: NetFactory,
         cache: Option<std::path::PathBuf>,
         repaint: impl Fn() + Send + 'static,
     ) -> Self {
+        Self::spawn_publishing(net, cache, repaint, std::time::Duration::from_secs(1))
+    }
+
+    /// [`DenoiseWorker::spawn`], publishing the result so far at most every `every`.
+    pub fn spawn_publishing(
+        net: NetFactory,
+        cache: Option<std::path::PathBuf>,
+        repaint: impl Fn() + Send + 'static,
+        every: std::time::Duration,
+    ) -> Self {
         let (tx, jobs) = std::sync::mpsc::channel::<DenoiseRequest>();
         let (done, rx) = std::sync::mpsc::channel::<DenoiseResult>();
         let wanted: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let progress: Arc<Mutex<Option<(String, usize, usize)>>> = Arc::new(Mutex::new(None));
-        let (want, prog) = (Arc::clone(&wanted), Arc::clone(&progress));
+        let focus: Arc<Mutex<[f32; 2]>> = Arc::new(Mutex::new([0.5, 0.5]));
+        let (want, prog, aim) = (
+            Arc::clone(&wanted),
+            Arc::clone(&progress),
+            Arc::clone(&focus),
+        );
         std::thread::Builder::new()
             .name("rustroom-denoise".into())
             .spawn(move || {
@@ -104,10 +128,28 @@ impl DenoiseWorker {
                             match net.as_mut() {
                                 None => Some(Err(load_error.clone().unwrap_or_default())),
                                 Some(n) => {
-                                    let out = ai_denoise::run(&image, n.as_mut(), &|d, t| {
-                                        set_progress(Some((key.clone(), d, t)));
-                                        is_wanted(&key)
-                                    });
+                                    let mut last = std::time::Instant::now();
+                                    let out = ai_denoise::run_progressive(
+                                        &image,
+                                        n.as_mut(),
+                                        &|| *aim.lock().unwrap_or_else(|e| e.into_inner()),
+                                        &mut |t| {
+                                            set_progress(Some((key.clone(), t.done(), t.total())));
+                                            if !is_wanted(&key) {
+                                                return false;
+                                            }
+                                            if t.done() < t.total() && last.elapsed() >= every {
+                                                last = std::time::Instant::now();
+                                                let _ = done.send(DenoiseResult::Partial {
+                                                    key: key.clone(),
+                                                    image: Arc::new(t.result().clone()),
+                                                    done: t.done(),
+                                                });
+                                                repaint();
+                                            }
+                                            true
+                                        },
+                                    );
                                     set_progress(None);
                                     // ⚠ Whatever the outcome: the GPU's activations go (Review Focus 4).
                                     n.finished();
@@ -143,7 +185,13 @@ impl DenoiseWorker {
             rx,
             wanted,
             progress,
+            focus,
         }
+    }
+
+    /// Where the view is now, decode-normalised — read by the running job before every tile.
+    pub fn set_focus(&self, f: [f32; 2]) {
+        *self.focus.lock().unwrap_or_else(|e| e.into_inner()) = f;
     }
 
     /// Ask for `r` — and for nothing else: a job for another key now stops at its next tile.
@@ -175,7 +223,7 @@ mod tests {
     /// A network that returns its input, slowly enough to be overtaken.
     struct Slow;
     impl TileNet for Slow {
-        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: f32) -> Result<Vec<f32>, String> {
+        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: &[f32]) -> Result<Vec<f32>, String> {
             std::thread::sleep(std::time::Duration::from_millis(30));
             Ok(rgb.to_vec())
         }
@@ -197,7 +245,7 @@ mod tests {
     /// A network that returns its input and counts the jobs it was told ended.
     struct Counting(Arc<std::sync::atomic::AtomicUsize>);
     impl TileNet for Counting {
-        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: f32) -> Result<Vec<f32>, String> {
+        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: &[f32]) -> Result<Vec<f32>, String> {
             Ok(rgb.to_vec())
         }
         fn finished(&mut self) {
@@ -219,8 +267,8 @@ mod tests {
             key: "a".into(),
             image: Some(photo(600, 300)),
         });
-        assert_eq!(wait(&w, 1).len(), 1);
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // `finished` runs before `Done` is sent, so no wait is needed after it.
+        wait_done(&w);
         assert_eq!(ended.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
@@ -234,6 +282,21 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         got
+    }
+
+    /// Every result until the FINISHED one, which is last — panics if none comes. ⚠ Never [`wait`] for a
+    /// job's first result and expect `Done`: under load a job outlasts a second and publishes a partial
+    /// one first (the M10.16b5 gate failed on it; the focus test had the same flaw in M10.16b4).
+    fn wait_done(w: &DenoiseWorker) -> Vec<DenoiseResult> {
+        let mut got = Vec::new();
+        for _ in 0..1000 {
+            got.extend(w.poll());
+            if matches!(got.last(), Some(DenoiseResult::Done { .. })) {
+                return got;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("the job never finished: {} results", got.len());
     }
 
     #[test]
@@ -253,9 +316,9 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert_eq!(seen.map(|p| p.1), Some(2), "two tiles across: {seen:?}");
-        let got = wait(&w, 1);
+        let got = wait_done(&w);
         assert!(
-            matches!(&got[..], [DenoiseResult::Done { key, .. }] if key == "a"),
+            matches!(got.last(), Some(DenoiseResult::Done { key, .. }) if key == "a"),
             "{} results",
             got.len()
         );
@@ -285,11 +348,14 @@ mod tests {
             .chain(w.poll())
             .map(|r| match r {
                 DenoiseResult::Done { key, .. }
+                | DenoiseResult::Partial { key, .. }
                 | DenoiseResult::Failed { key, .. }
                 | DenoiseResult::Missing { key } => key,
             })
             .collect();
+        // A partial result of the second photo repeats its key.
         keys.sort();
+        keys.dedup();
         assert_eq!(
             keys,
             vec!["second".to_string()],
@@ -366,6 +432,109 @@ mod tests {
         assert!(
             matches!(&got[..], [DenoiseResult::Missing { key }] if key == "absent"),
             "a load of nothing is missing, not failed"
+        );
+    }
+
+    /// Review Focus 3: partial results arrive while the job runs; the cache file appears only with the
+    /// last tile; the finished result comes last.
+    #[test]
+    fn partial_results_arrive_and_only_the_finished_one_is_stored() {
+        let d = test_dir::TempDir::new("denoise-worker-partial");
+        let w = DenoiseWorker::spawn_publishing(
+            Box::new(|| Ok(Box::new(Slow) as Box<dyn TileNet + Send>)),
+            Some(d.path().to_path_buf()),
+            || {},
+            std::time::Duration::ZERO,
+        );
+        w.request(DenoiseRequest {
+            key: "a".into(),
+            image: Some(photo(1100, 700)),
+        });
+        let mut partials = 0;
+        let mut done = false;
+        for _ in 0..600 {
+            for r in w.poll() {
+                match r {
+                    DenoiseResult::Partial { key, .. } => {
+                        assert_eq!(key, "a");
+                        assert!(!done, "a partial after the finished result");
+                        partials += 1;
+                        if partials == 1 {
+                            assert!(
+                                !crate::denoise_cache::exists(d.path(), "a"),
+                                "a partial was stored"
+                            );
+                        }
+                    }
+                    DenoiseResult::Done { .. } => done = true,
+                    _ => panic!("a failure"),
+                }
+            }
+            if done {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(done && partials >= 2, "{partials} partials, done {done}");
+        assert!(crate::denoise_cache::exists(d.path(), "a"));
+    }
+
+    /// The focus set before a job reaches it: the first tile is the one nearest it.
+    #[test]
+    fn the_focus_reaches_the_job() {
+        struct Where(Arc<std::sync::Mutex<Vec<[f32; 3]>>>);
+        impl TileNet for Where {
+            fn run(
+                &mut self,
+                rgb: &[f32],
+                _: usize,
+                _: usize,
+                _: &[f32],
+            ) -> Result<Vec<f32>, String> {
+                self.0.lock().unwrap().push([rgb[0], rgb[1], rgb[2]]);
+                Ok(rgb.to_vec())
+            }
+        }
+        let seen: Arc<std::sync::Mutex<Vec<[f32; 3]>>> = Default::default();
+        let s = Arc::clone(&seen);
+        let w = DenoiseWorker::spawn(
+            Box::new(move || Ok(Box::new(Where(s)) as Box<dyn TileNet + Send>)),
+            None,
+            || {},
+        );
+        w.set_focus([1.0, 1.0]);
+        let (pw, ph) = (1100, 700);
+        let enc = crate::ai_denoise::Encoding { scale: 1.0 };
+        let img = Arc::new(ImageBuf::from_vec(
+            pw,
+            ph,
+            (0..pw * ph)
+                .flat_map(|i| {
+                    enc.decode([
+                        (i % pw) as f32 / pw as f32,
+                        (i / pw) as f32 / ph as f32,
+                        0.5,
+                    ])
+                })
+                .collect(),
+        ));
+        w.request(DenoiseRequest {
+            key: "a".into(),
+            image: Some(img),
+        });
+        wait_done(&w);
+        // ⚠ The job encodes in the photo's own encoding (`Encoding::of`), monotonic in x and y: the
+        // bottom-right tile's corner has the largest of both among every tile's corner.
+        let all = seen.lock().unwrap();
+        assert_eq!(all.len(), 6, "3 × 2 tiles");
+        let (mx, my) = all
+            .iter()
+            .fold((0f32, 0f32), |(a, b), p| (a.max(p[0]), b.max(p[1])));
+        assert_eq!(
+            (all[0][0], all[0][1]),
+            (mx, my),
+            "the bottom-right tile first: {:?}",
+            all[0]
         );
     }
 }

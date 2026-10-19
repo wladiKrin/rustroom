@@ -16,3 +16,5 @@ lens-profile = { path = "../lens-profile" }
 wgpu = { workspace = true }
 pollster = { workspace = true }
 bytemuck = { workspace = true }
+# M10.16b5: DRUNet's f16 storage, packed on the CPU (already in the build through naga).
+half = "2.7"

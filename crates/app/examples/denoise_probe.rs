@@ -117,9 +117,11 @@ fn sheets(out: &std::path::Path, model: &str, rafs: &[String], relative: bool) {
             let crop = img.crop(x0, y0, SIDE, SIDE);
             let mut variants = vec![shown(&crop, &enc)];
             for &s in &sigmas {
-                let d = denoise_in(&crop, &enc, &mut net, s, &|_, _| true)
-                    .expect("run")
-                    .expect("not cancelled");
+                let d = denoise_in(&crop, &enc, &mut net, &|_, w, h| vec![s; w * h], &|_, _| {
+                    true
+                })
+                .expect("run")
+                .expect("not cancelled");
                 variants.push(shown(&d, &enc));
             }
             for (c, v) in variants.iter().enumerate() {
@@ -214,7 +216,9 @@ fn parity(model: &str, raf: &str) {
             .flat_map(|i| enc.encode(crop.pixel(i % SIDE, i / SIDE)))
             .collect();
         let t = std::time::Instant::now();
-        let a = cpu.run(&rgb, SIDE, SIDE, sigma).expect("tract");
+        let a = cpu
+            .run(&rgb, SIDE, SIDE, &vec![sigma; SIDE * SIDE])
+            .expect("tract");
         let tc = t.elapsed().as_secs_f64();
         let t = std::time::Instant::now();
         let b = gpu.run(&rgb, SIDE, SIDE, sigma).expect("GPU");

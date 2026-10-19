@@ -30,6 +30,9 @@ pub(crate) enum Mode {
     Down2 = 1,
     /// 2 × 2 transposed, stride 2.
     Up2 = 2,
+    /// Winograd's product (M10.16b5): 16 batched `[blocks × cin] · [cin × cout]`, one a dispatch's `z` — a
+    /// Conv3 op becomes this between two transforms when the network runs Winograd; `program` never emits it.
+    Product = 3,
 }
 
 /// A buffer of the program by its role: the tile's input and output, the skip scale `s` hands from its
