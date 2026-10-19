@@ -37,7 +37,7 @@ pub use mask_ranges::{ColourRange, DepthRange, LuminanceRange};
 pub use mask_shapes::{Brush, BrushStroke, LinearGradient, RadialGradient};
 pub use masks::{AiMask, AiPrompt, LocalAdjustments, Mask, MaskedAdjustment};
 pub use negative::Negative;
-pub use retouch::{Eye, EyeKind, Spot, SpotMode};
+pub use retouch::{Eye, EyeKind, Removal, Spot, SpotMode};
 pub use tone::{ParametricCurve, ToneCurve, WhiteBalance};
 
 /// All edits applied to one image. Every field is neutral by default.
@@ -155,6 +155,10 @@ pub struct Edits {
     /// AI denoise (M10.16b) — Detail's group. ⚠ Not written while default — `negative`'s reason.
     #[serde(default, skip_serializing_if = "AiDenoise::is_default")]
     pub ai_denoise: AiDenoise,
+    /// Content-aware removals (M10.16c1), in **decode** space, pasted right after AI denoise. Rides the
+    /// Retouch group with `spots` and `eyes`. ⚠ Not written while empty — `negative`'s reason.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removals: Vec<Removal>,
 }
 
 impl Edits {
@@ -232,6 +236,7 @@ impl Edits {
             grain,
             lens_blur,
             ai_denoise,
+            removals,
         } = src;
 
         if groups.white_balance {
@@ -287,6 +292,7 @@ impl Edits {
         if groups.retouch {
             self.spots = spots.clone();
             self.eyes = eyes.clone();
+            self.removals = removals.clone();
         }
         if groups.rendering {
             self.rendering = *rendering;
@@ -995,6 +1001,14 @@ mod tests {
                 darken: 40.0,
                 catchlight: Some([-0.35, -0.35]),
             }],
+            // M10.16c1: every field off its default.
+            removals: vec![Removal {
+                points: vec![[0.2, 0.3], [0.25, 0.32]],
+                radius: 0.02,
+                detect: true,
+                variant: 2,
+                opacity: 70.0,
+            }],
             rendering: Some(Rendering::Camera),
             look: Look {
                 file: Some("velvia.cube".into()),
@@ -1216,6 +1230,30 @@ mod tests {
             assert!(
                 without.spots.is_empty(),
                 "group {g} ({name}) must not carry spots"
+            );
+        }
+    }
+
+    /// ⚠ M10.16c1: removals with spots and eyes, on Retouch and no other group — both directions.
+    #[test]
+    fn removals_travel_on_the_retouch_group_and_no_other() {
+        let src = all_nonneutral();
+        assert!(
+            !src.removals.is_empty(),
+            "fixture check: the source carries a removal"
+        );
+        let mut with = Edits::default();
+        with.merge_from(&src, EditGroups::only(RETOUCH_GROUP));
+        assert_eq!(with.removals, src.removals);
+        for (g, name) in EDIT_GROUP_NAMES.iter().enumerate() {
+            if g == RETOUCH_GROUP {
+                continue;
+            }
+            let mut without = Edits::default();
+            without.merge_from(&src, EditGroups::only(g));
+            assert!(
+                without.removals.is_empty(),
+                "group {g} ({name}) must not carry removals"
             );
         }
     }

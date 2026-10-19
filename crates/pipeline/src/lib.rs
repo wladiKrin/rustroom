@@ -141,6 +141,7 @@ pub use pipeline_stage::{Pipeline, PipelineStage, RenderScale, SubStageAccelerat
 pub use prefix::{build_prefix_steps, prefix_output_dims, PrefixKey, PrefixStep, PrefixStepKey};
 pub use prefix_airlight::{prefix_airlight, prefix_airlight_key, AirlightKey};
 pub use region::{region_plan, run_region_plan, Rect, Region, RegionPlan, RegionSrc};
+pub use stages::remove::Fill;
 pub use tail_rendering::{effective_profile_curve, TailRendering};
 
 #[cfg(test)]

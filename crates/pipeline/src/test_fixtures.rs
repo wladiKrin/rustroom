@@ -179,6 +179,15 @@ pub(crate) fn all_edits() -> Edits {
             darken: 40.0,
             catchlight: Some([-0.35, -0.35]),
         }],
+        // M10.16c1: every field off its default. ⚠ Its step waits for a fill, so it appears only
+        // where the maps hand one (`lens_blur_tests::MAPS`).
+        removals: vec![edit_model::Removal {
+            points: vec![[0.2, 0.3], [0.25, 0.32]],
+            radius: 0.02,
+            detect: true,
+            variant: 2,
+            opacity: 70.0,
+        }],
         rendering: Some(edit_model::Rendering::Camera),
         look: edit_model::Look {
             file: Some("velvia.cube".into()),
