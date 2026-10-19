@@ -252,8 +252,8 @@ that had grown to ~170 lines by appending.)
 
 **▶ NEXT: M10.16c2 — Dust** (spec `2026-10-19-m10.16c-remove-design.md`, § c2: sensor spots found and healed as Heal
 spots, no network); then c3 People, c4 Reflections, each its own plan. ✅ c1 the Remove brush merged 2026-10-19
-(`grep -n 'M10.16c1' docs/JOURNAL.md`). ⬜ Unanswered from c1: Detect objects' effect is invisible — offered a clearer
-name, or shading the area it will fill; the author has not chosen. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
+(`grep -n 'M10.16c1' docs/JOURNAL.md`). M10.16c1b (the author's call): a removal being filled shades the
+AREA it will replace — Detect objects' whole object — sent by the job before the network runs. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
 d), M10.14 f–h ⏸.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
