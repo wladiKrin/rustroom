@@ -395,6 +395,8 @@ pub struct ExportRender {
     pub ai_subject: ai_mask::SubjectModel,
     /// Where AI denoise's result comes from (M10.16b) — a rendered preview never runs the network.
     pub denoise: crate::denoised::DenoiseUse,
+    /// Which network's result — the Settings' choice, the same one the preview used (M10.16b6).
+    pub network: crate::settings::DenoiseNetwork,
 }
 
 #[cfg(test)]
@@ -1008,6 +1010,7 @@ mod tests {
                         resampler: pipeline::Resampler::CatmullRom,
                         gpu_tail,
                         denoise: crate::denoised::DenoiseUse::Compute,
+                        network: Default::default(),
                     },
                     &export::FileMetadata::default(),
                     None,

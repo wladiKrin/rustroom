@@ -9,7 +9,7 @@
 //! ```text
 //! cargo run --release --example denoise_probe -- <out dir> <drunet.onnx> <raf>…
 //! cargo run --release --example denoise_probe -- calibrate <out dir> <drunet.onnx> <raf>…
-//! cargo run --release --example denoise_probe -- frame [--gpu] <out dir> <drunet.onnx> <raf>
+//! cargo run --release --example denoise_probe -- frame [--gpu] <out dir> <drunet.onnx | ffdnet_color.pth> <raf>
 //! cargo run --release --example denoise_probe -- parity <drunet.onnx> <raf>
 //! cargo run --release --example denoise_probe -- strength <out dir> <drunet.onnx> <raf>…
 //! ```
@@ -151,12 +151,22 @@ fn sheets(out: &std::path::Path, model: &str, rafs: &[String], relative: bool) {
     }
 }
 
+/// `model` names the network: a `.pth` is FFDNet (M10.16b6), anything else DRUNet's ONNX.
 fn frame(out: &std::path::Path, model: &str, raf: &str, gpu: bool) {
+    use rustroom_app::settings::DenoiseNetwork;
     let path = std::path::Path::new(model);
-    let mut net: Box<dyn rustroom_app::ai_denoise::TileNet + Send> = if gpu {
-        rustroom_app::denoised::network(path.parent().expect("a folder"), true).expect("network")
+    let dir = path.parent().expect("a folder");
+    let which = if model.ends_with(".pth") {
+        DenoiseNetwork::Ffdnet
     } else {
-        Box::new(ai_mask::denoise::Drunet::load(path).expect("model"))
+        DenoiseNetwork::Drunet
+    };
+    let mut net: Box<dyn rustroom_app::ai_denoise::TileNet + Send> = match (gpu, which) {
+        (true, _) => rustroom_app::denoised::network(dir, true, which).expect("network"),
+        (false, DenoiseNetwork::Ffdnet) => rustroom_app::denoised::ffdnet(dir).expect("model"),
+        (false, DenoiseNetwork::Drunet) => {
+            Box::new(ai_mask::denoise::Drunet::load(path).expect("model"))
+        }
     };
     let img = decode(raf);
     let enc = Encoding::of(&img);
@@ -190,14 +200,26 @@ fn frame(out: &std::path::Path, model: &str, raf: &str, gpu: bool) {
     );
 }
 
-/// Four 512 px tiles of `raf` — its darkest, its busiest, its centre, a corner — on `tract` and on the
-/// GPU, in the network's own 0…1 units.
+/// Four 512 px tiles of `raf` — its darkest, its busiest, its centre, a corner — on the CPU (`tract` for
+/// DRUNet, our own forward for FFDNet — a `.pth` model, M10.16b6) and on the GPU, in the network's 0…1 units.
 fn parity(model: &str, raf: &str) {
+    use rustroom_app::ai_denoise::TileNet;
     let path = std::path::Path::new(model);
-    let mut cpu = ai_mask::denoise::Drunet::load(path).expect("tract");
     let ctx = gpu_pipeline::shared().cloned().expect("a GPU adapter");
-    let weights = rustroom_app::denoised::gpu_weights(path).expect("weights");
-    let mut gpu = gpu_pipeline::GpuDrunet::new(ctx, &weights).expect("the GPU network");
+    let (mut cpu, mut gpu): (Box<dyn TileNet>, Box<dyn TileNet>) = if model.ends_with(".pth") {
+        let w = ai_mask::pth::read(path).expect("weights");
+        let gw = rustroom_app::ffdnet::gpu_weights(&w);
+        (
+            Box::new(rustroom_app::ffdnet::Ffdnet::from_weights(w).expect("FFDNet")),
+            Box::new(gpu_pipeline::GpuFfdnet::new(ctx, &gw).expect("the GPU network")),
+        )
+    } else {
+        let weights = rustroom_app::denoised::gpu_weights(path).expect("weights");
+        (
+            Box::new(ai_mask::denoise::Drunet::load(path).expect("tract")),
+            Box::new(gpu_pipeline::GpuDrunet::new(ctx, &weights).expect("the GPU network")),
+        )
+    };
     let img = decode(raf);
     let enc = Encoding::of(&img);
     let sigma = noise_sigma(&img, &enc);
@@ -218,16 +240,18 @@ fn parity(model: &str, raf: &str) {
         let t = std::time::Instant::now();
         let a = cpu
             .run(&rgb, SIDE, SIDE, &vec![sigma; SIDE * SIDE])
-            .expect("tract");
+            .expect("CPU");
         let tc = t.elapsed().as_secs_f64();
         let t = std::time::Instant::now();
-        let b = gpu.run(&rgb, SIDE, SIDE, sigma).expect("GPU");
+        let b = gpu
+            .run(&rgb, SIDE, SIDE, &vec![sigma; SIDE * SIDE])
+            .expect("GPU");
         let tg = t.elapsed().as_secs_f64();
         let d: Vec<f32> = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).collect();
         let max = d.iter().fold(0f32, |m, v| m.max(*v));
         let mean = d.iter().sum::<f32>() / d.len() as f32;
         println!(
-            "  {name:6}: max {max:.2e} ({:.3} of 255), mean {mean:.2e}; tract {tc:.2} s, GPU {tg:.3} s",
+            "  {name:6}: max {max:.2e} ({:.3} of 255), mean {mean:.2e}; CPU {tc:.2} s, GPU {tg:.3} s",
             max * 255.0
         );
     }

@@ -49,25 +49,40 @@ pub fn next(f: &Facts) -> Next {
     }
 }
 
-/// The Detail block's line, or `None` with nothing to say. `progress` is tiles done of total.
-pub fn status(f: &Facts, progress: Option<(usize, usize)>) -> Option<String> {
+/// What the Detail block shows under Amount, or `None` with nothing to say. `progress` is tiles done of
+/// total.
+pub fn line(f: &Facts, progress: Option<(usize, usize)>) -> Option<Line> {
     if !f.active || f.has_result {
         return None;
     }
     if f.running {
-        return Some(match progress {
-            Some((done, total)) => format!("Denoising… {} %", done * 100 / total.max(1)),
-            None => "Denoising…".to_string(),
-        });
+        // ⚠ M10.16b6: a quiet line, never a percentage — and nothing before the job counts tiles.
+        let (done, total) = progress?;
+        return Some(Line::Progress(done as f32 / total.max(1) as f32));
     }
     if f.failed {
-        return Some("Denoising failed — the status bar says why".to_string());
+        return Some(Line::Text(
+            "Denoising failed — the status bar says why".to_string(),
+        ));
     }
     match next(f) {
-        Next::NeedModel => Some("The AI denoise model is not downloaded".to_string()),
-        Next::WaitForDecode => Some("Waiting for the full-resolution decode…".to_string()),
+        Next::NeedModel => Some(Line::Text(
+            "The AI denoise model is not downloaded".to_string(),
+        )),
+        Next::WaitForDecode => Some(Line::Text(
+            "Waiting for the full-resolution decode…".to_string(),
+        )),
         _ => None,
     }
+}
+
+/// What the Detail block shows under Amount.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Line {
+    /// The whole-photo job's tiles done, 0…1 — the "Full denoise" line (M10.16b6).
+    Progress(f32),
+    /// Waiting, failed or missing its model.
+    Text(String),
 }
 
 #[cfg(test)]
@@ -119,8 +134,10 @@ mod tests {
         };
         assert_eq!(next(&half), Next::WaitForDecode);
         assert_eq!(
-            status(&half, None).as_deref(),
-            Some("Waiting for the full-resolution decode…")
+            line(&half, None),
+            Some(Line::Text(
+                "Waiting for the full-resolution decode…".to_string()
+            ))
         );
     }
 
@@ -140,7 +157,7 @@ mod tests {
             Next::NeedModel,
             "offered before the decode lands"
         );
-        assert!(status(&no_model, None).is_some_and(|s| s.contains("model")));
+        assert!(matches!(line(&no_model, None), Some(Line::Text(t)) if t.contains("model")));
         let running = Facts {
             running: true,
             ..wanted()
@@ -158,30 +175,46 @@ mod tests {
     }
 
     #[test]
-    fn the_line_says_what_is_happening() {
+    /// M10.16b6: a running job is a fraction for the quiet line — no percentage anywhere — and nothing until
+    /// it counts tiles; every other state its text.
+    fn a_running_job_is_a_fraction_without_a_percentage() {
         let running = Facts {
             running: true,
             ..wanted()
         };
-        assert_eq!(
-            status(&running, Some((37, 100))).as_deref(),
-            Some("Denoising… 37 %")
-        );
-        assert_eq!(status(&running, None).as_deref(), Some("Denoising…"));
+        assert_eq!(line(&running, Some((3, 12))), Some(Line::Progress(0.25)));
+        assert_eq!(line(&running, None), None);
         let failed = Facts {
             failed: true,
             ..wanted()
         };
-        assert!(status(&failed, None).is_some_and(|s| s.starts_with("Denoising failed")));
+        assert!(
+            matches!(line(&failed, None), Some(Line::Text(t)) if t.starts_with("Denoising failed"))
+        );
         let done = Facts {
             has_result: true,
             ..wanted()
         };
-        assert_eq!(status(&done, None), None);
+        assert_eq!(line(&done, None), None);
         let off = Facts {
             active: false,
             ..wanted()
         };
-        assert_eq!(status(&off, None), None);
+        assert_eq!(line(&off, None), None);
+        for f in [
+            failed,
+            Facts {
+                full_decode: false,
+                ..wanted()
+            },
+            Facts {
+                model_present: false,
+                ..wanted()
+            },
+        ] {
+            if let Some(Line::Text(t)) = line(&f, Some((1, 2))) {
+                assert!(!t.contains('%'), "{t}");
+            }
+        }
     }
 }

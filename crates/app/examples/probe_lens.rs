@@ -572,6 +572,7 @@ fn main() {
                         resampler: Resampler::default(),
                         gpu_tail,
                         denoise: rustroom_app::denoised::DenoiseUse::Compute,
+                        network: Default::default(),
                     },
                     &export::FileMetadata::default(),
                     None,

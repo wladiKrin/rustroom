@@ -41,6 +41,7 @@ pub(crate) fn uniform(
     mode: Mode,
     d: &Dims,
     relu: bool,
+    bias: bool,
     add1: bool,
     add2: bool,
     g0: u32,
@@ -56,7 +57,7 @@ pub(crate) fn uniform(
         n,
         k,
         d.cout,
-        relu as u32,
+        relu as u32 | (bias as u32) << 1,
         add1 as u32,
         add2 as u32,
         g0,
@@ -98,8 +99,8 @@ pub(crate) fn groups(mode: Mode, d: &Dims) -> (u32, u32) {
     (m.div_ceil(super::wgsl::TM), n.div_ceil(super::wgsl::TN))
 }
 
-/// The binding: the source, the packed weights, the destination, two residuals, the parameters.
-pub(crate) fn conv_layout() -> [wgpu::BindGroupLayoutEntry; 6] {
+/// The binding: the source, the packed weights, the destination, two residuals, the parameters, the bias.
+pub(crate) fn conv_layout() -> [wgpu::BindGroupLayoutEntry; 7] {
     let entry = |binding: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::COMPUTE,
@@ -118,6 +119,7 @@ pub(crate) fn conv_layout() -> [wgpu::BindGroupLayoutEntry; 6] {
         entry(3, ro),
         entry(4, ro),
         entry(5, wgpu::BufferBindingType::Uniform),
+        entry(6, ro),
     ]
 }
 
@@ -145,10 +147,11 @@ pub(crate) fn bind(
     layout: &wgpu::BindGroupLayout,
     buffers: [&wgpu::Buffer; 5],
     params: &wgpu::Buffer,
+    bias: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     let entries: Vec<wgpu::BindGroupEntry<'_>> = buffers
         .into_iter()
-        .chain([params])
+        .chain([params, bias])
         .enumerate()
         .map(|(i, b)| wgpu::BindGroupEntry {
             binding: i as u32,
@@ -387,7 +390,10 @@ pub(crate) mod tests {
         let r1 = res1.map(|r| upload(ctx, "test-res1", r, half));
         let r2 = res2.map(|r| upload(ctx, "test-res2", r, half));
         let none = zeros(ctx, "test-none", 1, half);
-        let params = uniform_buffer(ctx, &uniform(mode, d, relu, r1.is_some(), r2.is_some(), 0));
+        let params = uniform_buffer(
+            ctx,
+            &uniform(mode, d, relu, false, r1.is_some(), r2.is_some(), 0),
+        );
         let (layout, pipeline) = kernel(ctx, mode, half);
         let bind = bind(
             ctx,
@@ -400,6 +406,7 @@ pub(crate) mod tests {
                 r2.as_ref().unwrap_or(&none),
             ],
             &params,
+            &none,
         );
         let mut enc = ctx.device.create_command_encoder(&Default::default());
         {

@@ -365,7 +365,10 @@ one place explanatory prose is allowed on screen, because there is nothing else 
 
 ### 7.16 Progress
 Never a bar of its own: the status row's left side (§7.12), with Cancel. The same idiom for
-export, preview builds and Immich downloads (existing rule).
+export, preview builds and Immich downloads (existing rule). **One exception (the author,
+2026-10-18):** AI denoise's whole-photo job draws a quiet line under its Amount — "Full denoise" in
+Caption `text2` over a 3 px line across the section, the done part `text3` on `line`, never the
+accent, no percentage — because the view is done long before the photo is.
 
 ## 8. Hints and help
 

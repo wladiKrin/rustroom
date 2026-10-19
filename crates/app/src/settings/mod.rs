@@ -424,6 +424,9 @@ pub struct Settings {
     /// Whether startup warns when the results exceed [`Self::denoise_cache_limit_gb`] — no field-level
     /// default either, for `immich_cache_warn`'s.
     pub denoise_cache_warn: bool,
+    /// AI denoise's network (M10.16b6) — FFDNet unless chosen otherwise; a file from before reads FFDNet
+    /// (the container-level default).
+    pub denoise_network: DenoiseNetwork,
     /// Demosaic tier for **rendered previews** (M9.14). `None` follows [`Self::view_demosaic`],
     /// so a preview matches what Develop shows at 1:1; a lower tier is a cost choice — on an
     /// X-T4 a frame decodes in 16 s at Better, 7 s at Fast, 3 s at Fastest (measured 2026-09-28).
@@ -475,6 +478,7 @@ impl Default for Settings {
             immich_cache_warn: true,
             denoise_cache_limit_gb: 10,
             denoise_cache_warn: true,
+            denoise_network: DenoiseNetwork::Ffdnet,
             preview_demosaic: None,
             preview_budget_mb: 10240,
             confirm_preset_delete: true,

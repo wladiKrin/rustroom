@@ -7,6 +7,7 @@
 //! trap `thumb_store::fnv1a`'s doc records.
 
 use crate::photo_id::PhotoId;
+use crate::settings::DenoiseNetwork;
 use crate::thumb_store::{fnv1a, Identity};
 use edit_model::Edits;
 use raw_decode::Demosaic;
@@ -45,14 +46,18 @@ pub struct PreviewKey {
     pub id: PhotoId,
     pub edits: u64,
     pub tier: Demosaic,
+    /// With AI denoise on, the network's recipe (M10.16b6) — a switch rebuilds the preview rather than
+    /// showing the other network's pixels; `None` keeps every other preview's name.
+    pub denoise: Option<&'static str>,
 }
 
 impl PreviewKey {
-    pub fn new(id: PhotoId, edits: &Edits, tier: Demosaic) -> Self {
+    pub fn new(id: PhotoId, edits: &Edits, tier: Demosaic, net: DenoiseNetwork) -> Self {
         Self {
             id,
             edits: stable_fingerprint(edits),
             tier,
+            denoise: edits.ai_denoise.is_active().then(|| net.recipe()),
         }
     }
 
@@ -69,6 +74,9 @@ impl PreviewKey {
         bytes.extend_from_slice(&self.id.copy.to_le_bytes());
         bytes.extend_from_slice(&self.edits.to_le_bytes());
         bytes.extend_from_slice(self.tier.label().as_bytes());
+        if let Some(recipe) = self.denoise {
+            bytes.extend_from_slice(recipe.as_bytes());
+        }
         format!("{:016x}", fnv1a(&bytes))
     }
 
@@ -81,6 +89,7 @@ impl PreviewKey {
 mod tests {
     use super::*;
     use crate::settings::Settings;
+    use std::path::PathBuf;
 
     struct TempDir(std::path::PathBuf);
 
@@ -121,8 +130,18 @@ mod tests {
         let path = dir.0.join("a.RAF");
         std::fs::write(&path, b"raw").unwrap();
         let id = PhotoId::original(path);
-        let a = PreviewKey::new(id.clone(), &Edits::default(), Demosaic::Better);
-        let b = PreviewKey::new(id.clone(), &Edits::default(), Demosaic::Better);
+        let a = PreviewKey::new(
+            id.clone(),
+            &Edits::default(),
+            Demosaic::Better,
+            DenoiseNetwork::default(),
+        );
+        let b = PreviewKey::new(
+            id.clone(),
+            &Edits::default(),
+            Demosaic::Better,
+            DenoiseNetwork::default(),
+        );
         assert_eq!(a.file_name(), b.file_name());
         assert!(a.file_name().ends_with(".jpg"));
         assert_eq!(
@@ -131,13 +150,18 @@ mod tests {
             "sixteen hex digits: {}",
             a.file_stem()
         );
-        let c = PreviewKey::new(id.clone(), &Edits::default(), Demosaic::Fast);
+        let c = PreviewKey::new(
+            id.clone(),
+            &Edits::default(),
+            Demosaic::Fast,
+            DenoiseNetwork::default(),
+        );
         assert_ne!(a.file_name(), c.file_name(), "the tier is part of the key");
         let e = Edits {
             contrast: 10.0,
             ..Default::default()
         };
-        let d = PreviewKey::new(id.clone(), &e, Demosaic::Better);
+        let d = PreviewKey::new(id.clone(), &e, Demosaic::Better, DenoiseNetwork::default());
         assert_ne!(
             a.file_name(),
             d.file_name(),
@@ -147,12 +171,42 @@ mod tests {
             PhotoId::new(id.path.clone(), 1),
             &Edits::default(),
             Demosaic::Better,
+            DenoiseNetwork::default(),
         );
         assert_ne!(
             a.file_name(),
             copy.file_name(),
             "the copy is part of the key"
         );
+    }
+
+    /// M10.16b6: a photo without AI denoise keeps the file name it had before the network choice — under
+    /// either network — so no preview on disk is rebuilt for it.
+    #[test]
+    fn a_preview_without_ai_denoise_keeps_its_name() {
+        let id = PhotoId::original(PathBuf::from("/no/such/a.RAF"));
+        let e = Edits::default();
+        let stem = |net| PreviewKey::new(id.clone(), &e, Demosaic::Fast, net).file_stem();
+        let mut before = id.path.to_string_lossy().as_bytes().to_vec();
+        before.extend_from_slice(&id.copy.to_le_bytes());
+        before.extend_from_slice(&stable_fingerprint(&e).to_le_bytes());
+        before.extend_from_slice(Demosaic::Fast.label().as_bytes());
+        assert_eq!(
+            stem(DenoiseNetwork::Ffdnet),
+            format!("{:016x}", fnv1a(&before))
+        );
+        assert_eq!(stem(DenoiseNetwork::Ffdnet), stem(DenoiseNetwork::Drunet));
+    }
+
+    /// With AI denoise on, the preview names its network: a switch rebuilds it rather than showing the
+    /// other network's pixels.
+    #[test]
+    fn a_preview_with_ai_denoise_names_its_network() {
+        let id = PhotoId::original(PathBuf::from("/no/such/a.RAF"));
+        let mut e = Edits::default();
+        e.ai_denoise.amount = 50.0;
+        let stem = |net| PreviewKey::new(id.clone(), &e, Demosaic::Fast, net).file_stem();
+        assert_ne!(stem(DenoiseNetwork::Ffdnet), stem(DenoiseNetwork::Drunet));
     }
 
     #[test]

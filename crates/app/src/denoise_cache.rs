@@ -3,6 +3,7 @@
 //!
 //! ⛔ Nothing here deletes on its own: [`remove_all`] runs only from the Clear dialog (M10.15b's rule).
 
+use crate::settings::DenoiseNetwork;
 use core_image::ImageBuf;
 use std::path::{Path, PathBuf};
 
@@ -11,15 +12,13 @@ pub fn dir() -> Option<PathBuf> {
     Some(dirs::cache_dir()?.join("rustroom").join("denoise"))
 }
 
-/// The recipe's version in every key — the encoding, the noise estimate and the model. ⚠ Bump it when
-/// any of them changes, or every cached result keeps the old picture.
-pub const RECIPE: &str = "denoise:v2";
-
-/// The cache key of `photo` decoded at `tier`.
+/// The cache key of `photo` decoded at `tier`, denoised by `net` — its model and its recipe
+/// ([`DenoiseNetwork::recipe`]: the encoding, the noise estimate and the model's version — ⚠ bump it when any
+/// of them changes, or every cached result keeps the old picture).
 ///
 /// ⚠ Keyed on the FILE (path, size, mtime) and the demosaic quality — the network's input is that decode
 /// — and NOT on the film negative: the decode is the same whatever the negative's settings.
-pub fn key(photo: &Path, tier: raw_decode::Demosaic) -> String {
+pub fn key(photo: &Path, tier: raw_decode::Demosaic, net: DenoiseNetwork) -> String {
     let md = std::fs::metadata(photo).ok();
     let size = md.as_ref().map_or(0, |m| m.len());
     let mtime = md
@@ -28,9 +27,10 @@ pub fn key(photo: &Path, tier: raw_decode::Demosaic) -> String {
         .map_or(0, |d| d.as_secs());
     ai_mask::digest_hex(
         format!(
-            "{}|{size}|{mtime}|{:?}|{tier:?}|{RECIPE}",
+            "{}|{size}|{mtime}|{:?}|{tier:?}|{}",
             photo.display(),
-            ai_mask::ModelId::DrunetColor
+            net.model(),
+            net.recipe()
         )
         .as_bytes(),
     )
@@ -257,15 +257,22 @@ mod tests {
         let d = test_dir::TempDir::new("denoise-cache-key");
         let f = d.path().join("photo.raf");
         std::fs::write(&f, b"abc").expect("write");
-        let a = key(&f, raw_decode::Demosaic::default());
-        assert_eq!(a, key(&f, raw_decode::Demosaic::default()));
+        let a = key(&f, raw_decode::Demosaic::default(), DenoiseNetwork::Drunet);
+        assert_eq!(
+            a,
+            key(&f, raw_decode::Demosaic::default(), DenoiseNetwork::Drunet)
+        );
         let other = raw_decode::Demosaic::ALL
             .into_iter()
             .find(|t| *t != raw_decode::Demosaic::default())
             .expect("a second tier");
-        assert_ne!(a, key(&f, other), "the tier");
+        assert_ne!(a, key(&f, other, DenoiseNetwork::Drunet), "the tier");
         std::fs::write(&f, b"abcd").expect("grow");
-        assert_ne!(a, key(&f, raw_decode::Demosaic::default()), "the size");
+        assert_ne!(
+            a,
+            key(&f, raw_decode::Demosaic::default(), DenoiseNetwork::Drunet),
+            "the size"
+        );
     }
 
     #[test]
@@ -296,12 +303,26 @@ mod tests {
     /// computed at 1× never comes back.
     #[test]
     fn the_key_is_pinned_at_v2() {
-        assert_eq!(RECIPE, "denoise:v2");
+        assert_eq!(DenoiseNetwork::Drunet.recipe(), "denoise:v2");
+        // ⚠ M10.16b6: DRUNet's key string is byte-identical to b3's, so its results stay valid.
         let k = key(
             std::path::Path::new("/no/such/photo.RAF"),
             raw_decode::Demosaic::Fast,
+            DenoiseNetwork::Drunet,
         );
         assert_eq!(k, PINNED, "re-pin only for a deliberate recipe change");
+    }
+
+    /// FFDNet's results live under their own keys — never mistaken for DRUNet's (M10.16b6).
+    #[test]
+    fn the_ffdnet_key_differs() {
+        let p = std::path::Path::new("/no/such/photo.RAF");
+        let t = raw_decode::Demosaic::Fast;
+        assert_ne!(
+            key(p, t, DenoiseNetwork::Ffdnet),
+            key(p, t, DenoiseNetwork::Drunet)
+        );
+        assert_eq!(DenoiseNetwork::Ffdnet.recipe(), "denoise:v3-ffdnet");
     }
 
     /// The v2 key of the test's path — printed by this test's first run, never edited to pass.

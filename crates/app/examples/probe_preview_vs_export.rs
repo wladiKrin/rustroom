@@ -98,6 +98,7 @@ fn main() {
             resampler,
             gpu_tail: false,
             denoise: rustroom_app::denoised::DenoiseUse::Compute,
+            network: Default::default(),
         },
         &export::FileMetadata::default(),
         None,

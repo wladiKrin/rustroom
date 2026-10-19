@@ -8,6 +8,7 @@ use crate::theme;
 use crate::theme::Hover as _;
 use eframe::egui;
 use rustroom_app::denoise_cache::{self, Usage};
+use rustroom_app::settings::DenoiseNetwork;
 
 /// What the block reads and writes besides the draft.
 pub(super) struct Block<'a> {
@@ -20,6 +21,16 @@ pub(super) struct Block<'a> {
 }
 
 pub(super) fn show(ui: &mut egui::Ui, d: &mut SettingsDraft, b: Block<'_>) {
+    theme::sub_label(ui, "AI denoise network");
+    egui::ComboBox::from_id_salt("denoise_network_pick")
+        .selected_text(d.denoise_network.label())
+        .show_ui(ui, |ui| {
+            for n in DenoiseNetwork::ALL {
+                ui.selectable_value(&mut d.denoise_network, n, n.label());
+            }
+        })
+        .response
+        .hover("Which network AI denoise runs, FFDNet fast and DRUNet keeping a little more fine detail");
     theme::sub_label(ui, "AI denoise results");
     let usage = match &b.dir {
         Some(dir) => *b.usage.get_or_insert_with(|| denoise_cache::usage(dir)),
@@ -76,6 +87,27 @@ mod tests {
                 modal,
             },
         );
+    }
+
+    /// M10.16b6: the block offers the network, FFDNet by default.
+    #[test]
+    fn the_block_offers_the_network() {
+        let dir = test_dir::TempDir::new("settings-denoise-network");
+        let ctx = test_ui::ctx();
+        let app = test_app::for_test();
+        let mut d = SettingsDraft::from_settings(&app.settings);
+        let (mut modal, mut usage) = (Modal::None, None);
+        let labels: Vec<String> = test_ui::nodes(&ctx, |ui| {
+            draw(ui, &mut d, dir.path(), &mut modal, &mut usage)
+        })
+        .into_iter()
+        .map(|n| n.label)
+        .collect();
+        assert!(
+            labels.iter().any(|l| l == "AI denoise network"),
+            "{labels:?}"
+        );
+        assert!(labels.iter().any(|l| l == "FFDNet"), "{labels:?}");
     }
 
     #[test]

@@ -131,6 +131,7 @@ fn one_run(files: &[PathBuf], dest: &Path, width: usize, demosaic: raw_decode::D
         resampler: Default::default(),
         gpu_tail: false,
         denoise: rustroom_app::denoised::DenoiseUse::Compute,
+        network: Default::default(),
     };
 
     let t = Instant::now();

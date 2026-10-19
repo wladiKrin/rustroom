@@ -1216,7 +1216,7 @@ mod tests {
                 },
                 Pickers {
                     ai_denoise: super::super::ai_denoise::AiDenoiseUi {
-                        status: Some("Denoising… 37 %".to_string()),
+                        line: Some(rustroom_app::denoise_tool::Line::Progress(0.37)),
                     },
                     ..Default::default()
                 },
@@ -1233,7 +1233,7 @@ mod tests {
             ai < nr,
             "AI denoise is not above Noise reduction: {ai:?} {nr:?}"
         );
-        assert!(y("Denoising… 37 %").is_some(), "the job's line: {shown:?}");
+        assert!(y("Full denoise").is_some(), "the job's line: {shown:?}");
     }
 
     /// ⚠⚠ **Every slider in the Edit panel resets to its field's DEFAULT on a double-click** —

@@ -35,6 +35,8 @@ pub struct PreviewRequest {
     pub tier: Demosaic,
     /// Decided by the caller, who has the settings: `preview_key::is_untouched`.
     pub untouched: bool,
+    /// AI denoise's network (`Settings::denoise_network`) — part of the file's name when AI denoise is on.
+    pub network: crate::settings::DenoiseNetwork,
 }
 
 impl PreviewRequest {
@@ -45,7 +47,7 @@ impl PreviewRequest {
     }
 
     pub fn store_key(&self) -> PreviewKey {
-        PreviewKey::new(self.id.clone(), &self.edits, self.tier)
+        PreviewKey::new(self.id.clone(), &self.edits, self.tier, self.network)
     }
 }
 
@@ -236,6 +238,7 @@ mod tests {
         let p = dir.join("a.RAF");
         std::fs::write(&p, b"raw").unwrap();
         PreviewRequest {
+            network: Default::default(),
             id: PhotoId::original(p),
             edits: Edits::default(),
             tier: Demosaic::Better,

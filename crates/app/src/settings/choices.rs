@@ -436,3 +436,42 @@ mod tests {
         assert_eq!(StackDrag::default(), StackDrag::Drag, "the author's choice");
     }
 }
+
+/// AI denoise's network (M10.16b6): **FFDNet** by default — ten times lighter than DRUNet, the author's
+/// pick at the noise map × 2 — or **DRUNet**, kept in Settings, which holds a little more fine detail.
+///
+/// ⚠ Every place that names the network reads it from here: the job's factory, the download offer, export,
+/// the cache key and the rendered preview's key — or one network's pixels pass for the other's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum DenoiseNetwork {
+    #[default]
+    Ffdnet,
+    Drunet,
+}
+
+impl DenoiseNetwork {
+    pub const ALL: [DenoiseNetwork; 2] = [DenoiseNetwork::Ffdnet, DenoiseNetwork::Drunet];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DenoiseNetwork::Ffdnet => "FFDNet",
+            DenoiseNetwork::Drunet => "DRUNet",
+        }
+    }
+
+    /// Its model file.
+    pub fn model(self) -> ai_mask::ModelId {
+        match self {
+            DenoiseNetwork::Ffdnet => ai_mask::ModelId::FfdnetColor,
+            DenoiseNetwork::Drunet => ai_mask::ModelId::DrunetColor,
+        }
+    }
+
+    /// Its results' recipe in the cache key — DRUNet's unchanged since M10.16b3, so its results stay valid.
+    pub fn recipe(self) -> &'static str {
+        match self {
+            DenoiseNetwork::Ffdnet => "denoise:v3-ffdnet",
+            DenoiseNetwork::Drunet => "denoise:v2",
+        }
+    }
+}

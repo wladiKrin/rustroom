@@ -327,8 +327,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 &s.engine.ai_maps().read().expect("ai maps"),
                             );
                             let armed = [s.picking_wb, s.picking_fringe, s.picking_focus];
-                            let denoise_status =
-                                crate::denoise_flow::status(&app.denoise, s);
+                            let denoise_line = crate::denoise_flow::line(&app.denoise, s);
                             adjustments::show(
                                 ui,
                                 &mut s.edits,
@@ -365,7 +364,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                         status: lens_status,
                                     },
                                     ai_denoise: ai_denoise::AiDenoiseUi {
-                                        status: denoise_status,
+                                        line: denoise_line,
                                     },
                                 },
                                 &mut ed,

@@ -66,9 +66,15 @@ pub fn build_options(store_dir: std::path::PathBuf, tier: Demosaic) -> ExportOpt
     }
 }
 
-/// One build, named by its key. The metadata fields stay empty: nothing worth embedding.
-pub fn build_job(id: PhotoId, edits: Edits, tier: Demosaic) -> ExportJob {
-    let name = PreviewKey::new(id.clone(), &edits, tier).file_stem();
+/// One build, named by its key — AI denoise's `network` in it when the edits use it. The metadata fields stay
+/// empty: nothing worth embedding.
+pub fn build_job(
+    id: PhotoId,
+    edits: Edits,
+    tier: Demosaic,
+    network: crate::settings::DenoiseNetwork,
+) -> ExportJob {
+    let name = PreviewKey::new(id.clone(), &edits, tier, network).file_stem();
     ExportJob {
         id,
         name: Some(name),
@@ -137,8 +143,9 @@ mod tests {
         assert_eq!(o.space, color::OutputSpace::Srgb);
         assert_eq!(o.demosaic, Demosaic::Fast);
         assert_eq!(o.dest_dir, d.0);
-        let j = build_job(id(&d.0, "a.RAF"), Edits::default(), Demosaic::Fast);
-        let k = PreviewKey::new(j.id.clone(), &j.edits, Demosaic::Fast);
+        let net = Default::default();
+        let j = build_job(id(&d.0, "a.RAF"), Edits::default(), Demosaic::Fast, net);
+        let k = PreviewKey::new(j.id.clone(), &j.edits, Demosaic::Fast, net);
         assert_eq!(j.name.as_deref(), Some(k.file_stem().as_str()));
     }
 
@@ -147,11 +154,12 @@ mod tests {
         let d = TempDir::new("build");
         let store = crate::preview_store::PreviewStore::new(d.0.join("previews"), u64::MAX);
         let photo = id(&d.0, "a.RAF");
-        let key = PreviewKey::new(photo.clone(), &Edits::default(), Demosaic::Better);
+        let net = Default::default();
+        let key = PreviewKey::new(photo.clone(), &Edits::default(), Demosaic::Better, net);
         // ⚠ The worker writes into an existing directory only; the app calls this before a build.
         store.ensure_dir();
         let worker = ExportWorker::spawn(
-            vec![build_job(photo, Edits::default(), Demosaic::Better)],
+            vec![build_job(photo, Edits::default(), Demosaic::Better, net)],
             build_options(store.dir().to_path_buf(), Demosaic::Better),
             crate::batch_export::fixtures::ok_decode(),
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -160,6 +168,7 @@ mod tests {
                 gpu_tail: false,
                 ai_subject: Default::default(),
                 denoise: crate::denoised::DenoiseUse::Cached(Demosaic::Better),
+                network: net,
             },
             1,
             ExportDirs::default(),

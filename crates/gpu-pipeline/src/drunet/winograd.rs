@@ -38,8 +38,17 @@ pub(crate) fn transform_weights(t: &Tensor) -> Vec<f32> {
     u
 }
 
-/// The two transforms' parameters: the plane's size and channels, the block grid, the store's fusions.
-pub(crate) fn uniform(w: u32, h: u32, c: u32, relu: bool, add1: bool, add2: bool) -> [u32; 12] {
+/// The two transforms' parameters: the plane's size and channels, the block grid, the store's fusions —
+/// the bias (M10.16b6) added before the ReLU.
+pub(crate) fn uniform(
+    w: u32,
+    h: u32,
+    c: u32,
+    relu: bool,
+    bias: bool,
+    add1: bool,
+    add2: bool,
+) -> [u32; 12] {
     [
         w,
         h,
@@ -49,7 +58,7 @@ pub(crate) fn uniform(w: u32, h: u32, c: u32, relu: bool, add1: bool, add2: bool
         relu as u32,
         add1 as u32,
         add2 as u32,
-        0,
+        bias as u32,
         0,
         0,
         0,
@@ -120,13 +129,14 @@ pub(crate) fn shader(half: bool) -> String {
 struct T {{
   w: u32, h: u32, c: u32, nbx: u32,
   nby: u32, relu: u32, add1: u32, add2: u32,
-  p0: u32, p1: u32, p2: u32, p3: u32,
+  bias: u32, p1: u32, p2: u32, p3: u32,
 }}
 @group(0) @binding(0) var<storage, read> src: array<S>;
 @group(0) @binding(1) var<storage, read_write> dst: array<S>;
 @group(0) @binding(2) var<storage, read> res1: array<S>;
 @group(0) @binding(3) var<storage, read> res2: array<S>;
 @group(0) @binding(4) var<uniform> p: T;
+@group(0) @binding(5) var<storage, read> bias_of: array<S>;
 
 // The plane's value at (y, x) of channel c — zero outside, the convolution's own padding.
 fn at(c: u32, y: i32, x: i32) -> f32 {{
@@ -134,10 +144,11 @@ fn at(c: u32, y: i32, x: i32) -> f32 {{
   return f32(src[c * p.w * p.h + u32(y) * p.w + u32(x)]);
 }}
 
-// One output pixel, cropped at an odd edge, with ReLU and the two adds.
+// One output pixel, cropped at an odd edge, with its bias, ReLU and the two adds.
 fn put(c: u32, y: u32, x: u32, v0: f32) {{
   if (y >= p.h || x >= p.w) {{ return; }}
   var v = v0;
+  if (p.bias != 0u) {{ v = v + f32(bias_of[c]); }}
   if (p.relu != 0u) {{ v = max(v, 0.0); }}
   let o = c * p.w * p.h + y * p.w + x;
   if (p.add1 != 0u) {{ v = v + f32(res1[o]); }}

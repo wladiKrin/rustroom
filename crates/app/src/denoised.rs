@@ -2,6 +2,7 @@
 //! any frame's size, and the export's rule for finding — or computing — it.
 
 use crate::ai_denoise::TileNet;
+use crate::settings::DenoiseNetwork;
 use core_image::ImageBuf;
 use raw_decode::Demosaic;
 use std::path::{Path, PathBuf};
@@ -42,13 +43,13 @@ impl Denoised {
 }
 
 impl pipeline::ImageSource for Denoised {
-    fn image(&self, w: usize, h: usize) -> Option<ImageBuf> {
+    fn image(&self, w: usize, h: usize) -> Option<Arc<ImageBuf>> {
         if (w, h) == self.size() {
-            return Some((*self.full).clone());
+            return Some(Arc::clone(&self.full));
         }
         let lock = || self.held.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(hit) = lock().iter().find(|i| (i.width(), i.height()) == (w, h)) {
-            return Some((**hit).clone());
+            return Some(Arc::clone(hit));
         }
         let d = self.full.downscale_to(w.max(h));
         if (d.width(), d.height()) != (w, h) {
@@ -59,7 +60,7 @@ impl pipeline::ImageSource for Denoised {
         held.retain(|i| (i.width(), i.height()) != (w, h));
         held.insert(0, Arc::clone(&d));
         held.truncate(HELD);
-        Some((*d).clone())
+        Some(d)
     }
 }
 
@@ -89,6 +90,34 @@ pub fn drunet(models: &Path) -> Result<Box<dyn TileNet + Send>, String> {
     Ok(Box::new(net))
 }
 
+/// FFDNet on the GPU when `gpu` and an adapter exist, its CPU forward behind it; else the CPU alone.
+fn ffdnet_network(models: &Path, gpu: bool) -> Result<Box<dyn TileNet + Send>, String> {
+    if gpu {
+        if let Some(ctx) = gpu_pipeline::shared().cloned() {
+            let file = models.join(ai_mask::ModelId::FfdnetColor.spec().file);
+            let w = ai_mask::pth::read(&file).map_err(|e| e.to_string())?;
+            match gpu_pipeline::GpuFfdnet::new(ctx, &crate::ffdnet::gpu_weights(&w)) {
+                Ok(g) => {
+                    let m = models.to_path_buf();
+                    return Ok(Box::new(Engine::new(
+                        Some(Box::new(g)),
+                        Box::new(move || ffdnet(&m)),
+                    )));
+                }
+                Err(e) => eprintln!("rustroom: AI denoise runs on the CPU — {e}"),
+            }
+        }
+    }
+    ffdnet(models)
+}
+
+/// The FFDNet network from the models directory, on the CPU (M10.16b6).
+pub fn ffdnet(models: &Path) -> Result<Box<dyn TileNet + Send>, String> {
+    let file = models.join(ai_mask::ModelId::FfdnetColor.spec().file);
+    let w = ai_mask::pth::read(&file).map_err(|e| e.to_string())?;
+    Ok(Box::new(crate::ffdnet::Ffdnet::from_weights(w)?))
+}
+
 /// How an export finds a photo's denoised result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DenoiseUse {
@@ -101,21 +130,24 @@ pub enum DenoiseUse {
 }
 
 /// Where an export's result comes from: the results folder, and the models folder with the network
-/// made from it — on the export's own thread.
+/// made from it — on the export's own thread — and which network that is (its key and its model).
 pub struct Sources<F> {
     pub cache: Option<PathBuf>,
     pub models: Option<PathBuf>,
     pub net: F,
+    pub network: DenoiseNetwork,
 }
 
-/// The real folders and the job's network — on the GPU when `gpu` (Settings' *Use the GPU*).
+/// The real folders and the job's network — `network`, on the GPU when `gpu` (Settings' *Use the GPU*).
 pub fn user_sources(
     gpu: bool,
+    network: DenoiseNetwork,
 ) -> Sources<impl FnOnce(&Path) -> Result<Box<dyn TileNet + Send>, String>> {
     Sources {
         cache: crate::denoise_cache::dir(),
         models: crate::ai_cache::models_dir(),
-        net: move |models: &Path| network(models, gpu),
+        net: move |models: &Path| self::network(models, gpu, network),
+        network,
     }
 }
 
@@ -128,9 +160,17 @@ pub fn gpu_weights(model: &Path) -> Result<gpu_pipeline::Weights, String> {
         .collect())
 }
 
-/// The network the job runs (M10.16b2): DRUNet on the GPU when `gpu` is asked and an adapter exists, with
-/// `tract`'s behind it for any tile the GPU fails; otherwise `tract`'s alone.
-pub fn network(models: &Path, gpu: bool) -> Result<Box<dyn TileNet + Send>, String> {
+/// The network the job runs: `net` on the GPU when `gpu` is asked and an adapter exists, with its CPU path
+/// behind it for any tile the GPU fails; otherwise its CPU path alone — `tract` for DRUNet (M10.16b2), our
+/// own forward pass for FFDNet (M10.16b6), whose `.pth` `tract` cannot read.
+pub fn network(
+    models: &Path,
+    gpu: bool,
+    net: DenoiseNetwork,
+) -> Result<Box<dyn TileNet + Send>, String> {
+    if net == DenoiseNetwork::Ffdnet {
+        return ffdnet_network(models, gpu);
+    }
     if gpu {
         if let Some(ctx) = gpu_pipeline::shared().cloned() {
             let file = models.join(ai_mask::ModelId::DrunetColor.spec().file);
@@ -214,12 +254,17 @@ pub fn for_export<F>(
 where
     F: FnOnce(&Path) -> Result<Box<dyn TileNet + Send>, String>,
 {
-    let Sources { cache, models, net } = sources;
+    let Sources {
+        cache,
+        models,
+        net,
+        network,
+    } = sources;
     let tier = match using {
         DenoiseUse::Compute => tier,
         DenoiseUse::Cached(t) => t,
     };
-    let key = crate::denoise_cache::key(photo, tier_for(photo, tier));
+    let key = crate::denoise_cache::key(photo, tier_for(photo, tier), network);
     let fits = |d: &ImageBuf| (d.width(), d.height()) == (image.width(), image.height());
     let found = cache
         .as_deref()
@@ -232,7 +277,7 @@ where
         }
         (None, DenoiseUse::Compute) => {
             let models = models.ok_or("no models folder for AI denoise")?;
-            if !ai_mask::download::present(&ai_mask::ModelId::DrunetColor.spec(), &models) {
+            if !ai_mask::download::present(&network.model().spec(), &models) {
                 return Err("the AI denoise model is not downloaded".to_string());
             }
             on_compute();
@@ -275,6 +320,15 @@ mod tests {
             d.image(want.width(), want.height()).unwrap().data(),
             want.data()
         );
+    }
+
+    /// The full size is the result itself, never a copy: a 312 MB copy on every prefix run at 1:1 cost
+    /// 110–160 ms a partial result while panning (M10.16b6, `bench_denoise_pan`).
+    #[test]
+    fn the_full_size_is_answered_without_a_copy() {
+        let full = Arc::new(ramp(300, 200));
+        let d = Denoised::new(Arc::clone(&full));
+        assert!(Arc::ptr_eq(&d.image(300, 200).expect("full"), &full));
     }
 
     /// Review Focus 1: a size the decode's downscale would not give — another photo's frame, a
@@ -436,6 +490,51 @@ mod tests {
         assert!(extremes.iter().all(|w| *w < TOL_EXTREME), "{extremes:?}");
     }
 
+    /// Review Focus 1: without the GPU, FFDNet runs on our own CPU code — never `tract`, which cannot read a
+    /// `.pth`: with no model file, the error names FFDNet's.
+    #[test]
+    fn no_gpu_runs_ffdnet_on_the_cpu() {
+        let d = test_dir::TempDir::new("denoised-no-gpu");
+        let e = network(d.path(), false, DenoiseNetwork::Ffdnet)
+            .err()
+            .expect("no model file");
+        assert!(e.contains("ffdnet_color.pth"), "{e}");
+    }
+
+    /// Review Focus 5: a preview asking for FFDNet's result never borrows DRUNet's file.
+    #[test]
+    fn an_export_never_borrows_the_other_networks_result() {
+        let d = test_dir::TempDir::new("denoised-other-network");
+        let photo = d.path().join("a.RAF");
+        std::fs::write(&photo, b"raw").unwrap();
+        let cache = d.path().join("cache");
+        let img = ramp(40, 30);
+        let drunet = crate::denoise_cache::key(&photo, Demosaic::Fast, DenoiseNetwork::Drunet);
+        crate::denoise_cache::store(&cache, &drunet, &img).unwrap();
+        let sources = |network| Sources {
+            cache: Some(cache.clone()),
+            models: None,
+            net: no_net,
+            network,
+        };
+        let get = |network| {
+            for_export(
+                &photo,
+                &img,
+                Demosaic::Fast,
+                DenoiseUse::Cached(Demosaic::Fast),
+                sources(network),
+                || panic!("no compute"),
+                &|| true,
+            )
+        };
+        assert!(get(DenoiseNetwork::Drunet).is_ok(), "positive control");
+        assert!(
+            get(DenoiseNetwork::Ffdnet).is_err(),
+            "FFDNet borrowed DRUNet's result"
+        );
+    }
+
     /// A file of the model's pinned size — `download::present`'s whole test.
     fn present_model(models: &Path) {
         let spec = ai_mask::ModelId::DrunetColor.spec();
@@ -460,12 +559,13 @@ mod tests {
         let cache = d.path().join("cache");
         let img = ramp(40, 30);
         let stored = ramp(40, 30).downscale_to(40);
-        let key = crate::denoise_cache::key(&photo, Demosaic::Fast);
+        let key = crate::denoise_cache::key(&photo, Demosaic::Fast, DenoiseNetwork::Drunet);
         crate::denoise_cache::store(&cache, &key, &stored).unwrap();
         let dirs = || Sources {
             cache: Some(cache.clone()),
             models: None,
             net: no_net,
+            network: DenoiseNetwork::Drunet,
         };
         let (got, id) = for_export(
             &photo,
@@ -509,6 +609,7 @@ mod tests {
                 cache: Some(cache.clone()),
                 models: Some(models),
                 net: no_net,
+                network: DenoiseNetwork::Drunet,
             },
             || panic!("no compute"),
             &|| true,
@@ -535,6 +636,7 @@ mod tests {
                 cache: Some(cache.clone()),
                 models: Some(models),
                 net: |_: &Path| Ok(Box::new(Lift) as Box<dyn TileNet + Send>),
+                network: DenoiseNetwork::Drunet,
             },
             || said.set(true),
             &|| true,
@@ -546,7 +648,7 @@ mod tests {
             (frame.data()[0] - img.data()[0]).abs() > 0.01,
             "the network's change is in the result"
         );
-        let key = crate::denoise_cache::key(&photo, Demosaic::default());
+        let key = crate::denoise_cache::key(&photo, Demosaic::default(), DenoiseNetwork::Drunet);
         assert!(crate::denoise_cache::load(&cache, &key).is_some(), "stored");
     }
 

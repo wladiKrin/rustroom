@@ -197,7 +197,12 @@ mod tests {
         if !p.exists() {
             std::fs::write(&p, b"raw").unwrap();
         }
-        PreviewKey::new(PhotoId::original(p), &Edits::default(), Demosaic::Better)
+        PreviewKey::new(
+            PhotoId::original(p),
+            &Edits::default(),
+            Demosaic::Better,
+            Default::default(),
+        )
     }
 
     fn jpeg_at(path: &Path, w: u32, h: u32) -> u64 {

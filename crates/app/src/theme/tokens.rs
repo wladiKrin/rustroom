@@ -123,6 +123,9 @@ pub const ICON_LARGE: f32 = 24.0;
 
 /// Buttons, fields, combos, slider rows, checkboxes.
 pub const CONTROL_ROW: f32 = 28.0;
+
+/// The height of AI denoise's quiet "Full denoise" line (M10.16b6, `docs/DESIGN.md` §7.16).
+pub const PROGRESS_LINE: f32 = 3.0;
 /// Rail, mask list, snapshots, presets.
 pub const LIST_ROW: f32 = 30.0;
 /// The width of a list row's action cell (`×`, `⬇`) — tighter than the row is tall, which the cell

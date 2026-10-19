@@ -99,7 +99,7 @@ pub use contrast::GpuContrastStage;
 pub use creative_look::GpuCreativeLookStage;
 pub use dehaze::GpuDehazeStage;
 pub use display_rendering::GpuDisplayRenderingStage;
-pub use drunet::{GpuDrunet, Tensor, Weights};
+pub use drunet::{GpuDrunet, GpuFfdnet, Tensor, Weights};
 pub use equivalence::{compare, Divergence};
 pub use exposure::GpuExposureStage;
 pub use geometry::GpuGeometryStage;
