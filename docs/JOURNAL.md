@@ -187,6 +187,9 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ### 2026-10-18 — M10.16b6: AI denoise — FFDNet by default, DRUNet in Settings, "Full denoise" under Amount (branch `m10.16b6-ai-denoise-pan-and-network`)
 
+✅ **Confirmed by the author ("works") and merged 2026-10-19 — M10.16b complete** (b1, b2, b3–b5 and b6, each its
+own `--no-ff` merge, the branches deleted). Next: **M10.16c, content-aware remove**.
+
 **The item:** the author on b3–b5 (2026-10-16): *"I think it works"* — then three asks: panning and zooming
 *"noticeably slower"* during a job; a progress bar *"that says full denoising"*, *"instead of percentages"*; and
 *"still quite slow"*. The wait that matters to him is **the view at 1:1 clearing** (~15 s on DRUNet). Spec
