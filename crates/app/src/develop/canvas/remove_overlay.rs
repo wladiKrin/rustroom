@@ -8,39 +8,74 @@
 use super::navigation::{tool_drag, tool_drag_started};
 use crate::Session;
 use eframe::egui;
+use rustroom_app::ai_space::DecodeMap;
 use rustroom_app::remove_tool::{self, RemoveTool};
 use rustroom_app::tool::Tool;
+use std::sync::Arc;
 
 /// A press that moved less than this many points is a click, left to the click path — the eye
 /// overlay's rule, for its reason: egui runs the whole drag lifecycle for a plain click.
 const CLICK_SLOP: f32 = 3.0;
 
+/// What a screen ↔ decode map is built from: the geometry, the perspective, the frame's size, the lens
+/// (`ai_space::lens_key`) and the decode's size.
+type MapKey = (
+    edit_model::Geometry,
+    edit_model::Perspective,
+    usize,
+    usize,
+    u64,
+    usize,
+    usize,
+);
+
 /// The Remove gesture across frames — on the session for `spot_drag`'s reason: `show` runs fresh every
 /// frame. And which removal is selected — view state, never `Edits`.
-#[derive(Debug, Default, Clone)]
+#[derive(Default)]
 pub(crate) struct RemovalUi {
     pub(crate) selected: Option<usize>,
     /// The stroke being painted, decode-normalised.
     pub(crate) stroke: Vec<[f32; 2]>,
     /// Where the press began, on screen — what tells a stroke from a click.
     pub(crate) press: Option<egui::Pos2>,
+    /// The screen ↔ decode map and what it was built from. ⚠ Memoised: it builds a lens corrector, which
+    /// samples its whole displacement field — not a per-frame cost while the pointer moves.
+    map: Option<(MapKey, Arc<DecodeMap>)>,
 }
 
-/// The screen ↔ decode mapping for this frame.
-fn decode_map(s: &Session, frame_rect: egui::Rect) -> rustroom_app::ai_space::DecodeMap {
+impl RemovalUi {
+    /// The held map's address — the memo's test.
+    #[cfg(test)]
+    pub(crate) fn map_ptr(&self) -> Option<*const DecodeMap> {
+        self.map.as_ref().map(|(_, m)| Arc::as_ptr(m))
+    }
+}
+
+/// The screen ↔ decode mapping for this view — the held one while nothing it is built from has changed.
+fn decode_map(s: &mut Session, frame_rect: egui::Rect) -> Arc<DecodeMap> {
     let (dw, dh) = (s.buffer.width(), s.buffer.height());
-    rustroom_app::ai_space::DecodeMap::new(
+    let (fw, fh) = (frame_rect.width() as usize, frame_rect.height() as usize);
+    let lens = rustroom_app::ai_space::lens_key(s.lens.shot.as_ref(), &s.edits, dw, dh);
+    let key: MapKey = (s.edits.geometry, s.edits.perspective, fw, fh, lens, dw, dh);
+    if let Some((k, m)) = &s.removal.map {
+        if *k == key {
+            return Arc::clone(m);
+        }
+    }
+    let m = Arc::new(DecodeMap::new(
         &s.edits.geometry,
         s.edits.perspective,
-        frame_rect.width() as usize,
-        frame_rect.height() as usize,
+        fw,
+        fh,
         s.lens
             .shot
             .as_ref()
             .and_then(|l| rustroom_app::ai_space::corrector_for(l, &s.edits, dw, dh)),
         dw,
         dh,
-    )
+    ));
+    s.removal.map = Some((key, Arc::clone(&m)));
+    m
 }
 
 /// One removal as the panel and the canvas place it: the tool's brush and Detect, full Opacity.
@@ -265,6 +300,82 @@ mod tests {
         assert_eq!(s.history.undo_depth(), depth + 1, "one undo step");
         assert_eq!(s.removal.selected, Some(0));
         assert!(s.edits.spots.is_empty(), "no patch placed");
+    }
+
+    /// ⚠ Painting changes no pixel until the release, so the view must not drop to the drag rung while a
+    /// stroke is painted — it would blur under the brush for nothing. Read on the DRAG frame: the release
+    /// asks for its own render either way.
+    ///
+    /// ⚠⚠ The fixture is `view.rs`'s pan test's, and for its reason: the test photo's own ladder has one
+    /// rung, so without `buffer_long` 3200, a zoom and a seeded region a drop is unrepresentable — the
+    /// first version of this test passed with nothing exempting the stroke.
+    #[test]
+    fn a_stroke_keeps_the_view_sharp_while_it_is_painted() {
+        let ctx = egui::Context::default();
+        let mut app = remove_app(&ctx);
+        app.settings.drag_quality = rustroom_app::settings::DragQuality::Faster;
+        {
+            let s = app.session.as_mut().unwrap();
+            s.buffer_long = 3200;
+            s.zoom = 4.0;
+        }
+        let c = canvas_centre(&mut app, &ctx);
+        let _ = canvas_centre(&mut app, &ctx);
+        {
+            let s = app.session.as_mut().unwrap();
+            s.rendered_region = Some(rustroom_app::render_engine::RegionRect {
+                x: 0,
+                y: 0,
+                w: 160,
+                h: 120,
+            });
+        }
+        assert_eq!(
+            app.session.as_ref().unwrap().render_rung,
+            3200,
+            "fixture check: settled on the top rung, so a drop is representable"
+        );
+        let counts = drag_through(&mut app, &ctx, c, c + egui::vec2(6.0, 4.0));
+        assert_eq!(
+            counts[2],
+            counts[1],
+            "the drag frame asked for {} render(s): {counts:?}",
+            counts[2] - counts[1]
+        );
+        assert_eq!(
+            app.session.as_ref().unwrap().edits.removals.len(),
+            1,
+            "the stroke landed"
+        );
+    }
+
+    /// The screen ↔ decode map builds a lens corrector, so it is made once per view and reused while the
+    /// pointer moves — and made again when the geometry changes.
+    #[test]
+    fn the_decode_map_is_built_once_per_view() {
+        let ctx = egui::Context::default();
+        let mut app = remove_app(&ctx);
+        let _ = canvas_centre(&mut app, &ctx);
+        let first = app
+            .session
+            .as_ref()
+            .unwrap()
+            .removal
+            .map_ptr()
+            .expect("built");
+        let _ = canvas_centre(&mut app, &ctx);
+        assert_eq!(
+            app.session.as_ref().unwrap().removal.map_ptr(),
+            Some(first),
+            "rebuilt for nothing"
+        );
+        app.session.as_mut().unwrap().edits.geometry.angle = 3.0;
+        let _ = canvas_centre(&mut app, &ctx);
+        assert_ne!(
+            app.session.as_ref().unwrap().removal.map_ptr(),
+            Some(first),
+            "a rotation kept the old map"
+        );
     }
 
     /// A drag in Heal mode places no removal — the mode decides.

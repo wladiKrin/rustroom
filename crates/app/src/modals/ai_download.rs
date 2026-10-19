@@ -7,7 +7,8 @@ use crate::RustroomApp;
 use eframe::egui;
 use std::sync::atomic::Ordering;
 
-/// The dialog's title: AI denoise's when it offers a denoise network's model.
+/// The dialog's title: AI denoise's when it offers a denoise network's model, Remove's when the inpainting
+/// network (M10.16c1) — with MobileSAM for Detect objects or not — else the AI masks'.
 fn title(proposed: &[ai_mask::ModelId]) -> &'static str {
     // ⚠ Either network's model (M10.16b6) — never DRUNet's alone.
     let denoise = rustroom_app::settings::DenoiseNetwork::ALL
@@ -15,6 +16,8 @@ fn title(proposed: &[ai_mask::ModelId]) -> &'static str {
         .any(|n| proposed.contains(&n.model()));
     if denoise {
         "AI denoise needs a model"
+    } else if proposed.contains(&rustroom_app::removal::MODEL) {
+        "Remove needs a model"
     } else {
         "AI masks need a model"
     }
@@ -106,5 +109,18 @@ mod tests {
             "AI masks need a model",
             "positive control"
         );
+    }
+
+    /// M10.16c1: the Remove brush's offer — LaMa alone, or with MobileSAM for Detect objects — is Remove's.
+    #[test]
+    fn the_inpainting_model_says_remove() {
+        let lama = rustroom_app::removal::MODEL;
+        assert_eq!(title(&[lama]), "Remove needs a model");
+        let detect = [
+            lama,
+            ai_mask::ModelId::SamEncoder,
+            ai_mask::ModelId::SamDecoder,
+        ];
+        assert_eq!(title(&detect), "Remove needs a model");
     }
 }

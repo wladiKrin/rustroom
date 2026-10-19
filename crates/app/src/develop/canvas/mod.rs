@@ -139,7 +139,12 @@ fn hoist(app: &RustroomApp, ui: &egui::Ui) -> CanvasInputs {
     let panning = ui
         .ctx()
         .input(|i| navigation::pan_button_down(i, app_pan_drag, text_focused));
-    let view_only_gesture = press_on_canvas && (panning || app_suppressed_mask);
+    // ⚠ M10.16c1: a Remove stroke changes no pixel until its release either — the view must stay sharp
+    // under the brush.
+    let app_remove_stroke =
+        tool == Tool::Retouch && app.remove_tool.active && app.eye_tool.active.is_none();
+    let view_only_gesture =
+        press_on_canvas && (panning || app_suppressed_mask || app_remove_stroke);
     // ⚠⚠ **`press_origin.is_some()` as well as `is_decidedly_dragging()`, and it was found by
     // instrumenting.** On the RELEASE frame egui still reports a decided drag while the press
     // origin is already gone — the edge the comment above calls benign. It stops being benign
