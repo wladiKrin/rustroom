@@ -28,6 +28,7 @@ fn filled(s: &Session, i: usize) -> bool {
 /// The Removals list: one row per removal, a click selects it, `×` deletes it.
 pub(super) fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
     let n = s.edits.removals.len();
+    s.removal.sync(n);
     let count = match n {
         0 => "none".to_owned(),
         1 => "1 removal".to_owned(),
@@ -45,13 +46,17 @@ pub(super) fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
     if out.reset {
         s.edits.removals.clear();
         s.removal.selected = None;
+        s.removal.sync(0);
         ed.discrete();
     }
-    let (mut pick, mut delete) = (None, None);
+    let (mut pick, mut delete, mut eye, mut hold) = (None, None, None, None);
     let selected = s.removal.selected;
-    let shown: Vec<bool> = (0..s.edits.removals.len()).map(|i| filled(s, i)).collect();
+    let done: Vec<bool> = (0..s.edits.removals.len()).map(|i| filled(s, i)).collect();
+    let flags: Vec<(bool, bool)> = (0..done.len())
+        .map(|i| (s.removal.is_shown(i), s.removal.is_held(i)))
+        .collect();
     out.show_body(ui, |ui| {
-        for (i, done) in shown.iter().enumerate() {
+        for (i, done) in done.iter().enumerate() {
             let name = format!("Removal {}", i + 1);
             let meta = if *done { "" } else { "filling" };
             let row = mask_components::row(
@@ -67,21 +72,39 @@ pub(super) fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
                     deletable: true,
                     delete_hover: "Deletes this removal",
                     indent: 0.0,
-                    eye: None,
-                    hold: None,
+                    eye: Some(flags[i].0),
+                    hold: Some((
+                        flags[i].1,
+                        "Hold out",
+                        "Hides this removal in the view only, so you can see what it covers",
+                    )),
                     hover: "Selects this removal, to change its Opacity or fill it again",
                     draggable: false,
                 },
             );
             if row.delete {
                 delete = Some(i);
+            } else if row.eye {
+                eye = Some(i);
+            } else if row.hold {
+                hold = Some(i);
             } else if row.clicked {
                 pick = Some(i);
             }
         }
     });
+    if let Some(i) = eye {
+        s.removal.toggle_shown(i);
+    }
+    if let Some(i) = hold {
+        // ⚠ A VIEW MODE, not an edit (the patches' rule): it changes `view_edits`, so it re-renders, and
+        // pushes no history entry.
+        s.removal.toggle_held(i);
+        ed.changed = true;
+    }
     if let Some(i) = delete {
         s.edits.removals.remove(i);
+        s.removal.forget(i);
         s.removal.selected = match s.removal.selected {
             Some(j) if j == i => None,
             Some(j) if j > i => Some(j - 1),
@@ -271,6 +294,32 @@ mod tests {
         assert_eq!(p.s().edits.removals, vec![removal(0.3)]);
         assert_eq!(p.s().removal.selected, None);
         assert!(ed.settled, "a delete is one history step");
+    }
+
+    /// The author's ask (2026-10-19): a removal's row carries Hold out, as a patch's does — the view drops
+    /// it so what it covers shows, with no edit and no history step — and its eye hides its outline.
+    #[test]
+    fn hold_out_shows_what_a_removal_covers() {
+        let mut p = Panel::new(vec![removal(0.3), removal(0.7)]);
+        let ed = p.click("Hold out Removal 1");
+        assert!(
+            ed.changed && !ed.settled,
+            "a view change, never an undo step"
+        );
+        let s = p.s();
+        assert_eq!(s.edits.removals.len(), 2, "the photo's edits untouched");
+        let view = s.view_edits(rustroom_app::tool::Tool::Retouch);
+        assert_eq!(
+            view.removals,
+            vec![removal(0.7)],
+            "the held removal left the view"
+        );
+        p.click("Hold out Removal 1");
+        let view = p.s().view_edits(rustroom_app::tool::Tool::Retouch);
+        assert_eq!(view.removals.len(), 2, "and came back");
+        p.click("Show Removal 2");
+        assert!(!p.s().removal.is_shown(1), "the eye hid its outline");
+        assert!(p.s().removal.is_shown(0));
     }
 
     /// A row selects its removal and lights Opacity for it; with none selected there is no Opacity.

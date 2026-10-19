@@ -29,7 +29,8 @@ const DETECT_GROW: usize = 6;
 /// Refresh's direction step: each variant moves the window a golden angle further round.
 const GOLDEN_ANGLE: f32 = 2.399_963;
 /// ⚠ In every fill's key: bump it on ANY change to how a fill is made, or the old ones are served.
-const RECIPE: &str = "remove:v1";
+/// v2 (2026-10-19): the window encoded by its peak channel — v1's fills of a sky came back green.
+const RECIPE: &str = "remove:v2";
 
 /// The inpainting network: [`SIDE`]² display-referred RGB (interleaved, 0..1) and a hole mask (1 = fill)
 /// → the same RGB filled.
@@ -266,6 +267,37 @@ fn resample(img: &ImageBuf, win: [usize; 4], side: usize) -> Vec<f32> {
         .collect()
 }
 
+/// The encoding a window is filled in: its 99.5th-percentile CHANNEL at `ai_denoise::WHITE`.
+///
+/// ⚠⚠ Not `Encoding::of`, which scales by LUMINANCE — right for denoise, wrong here: in a blue sky the blue
+/// channel sits far above the luminance, clipped at 1, and the fill came back with 42 % of its blue gone —
+/// the green tint the author saw (2026-10-19, `the_fill_keeps_a_bright_sky_s_colour`).
+fn peak_encoding(img: &ImageBuf) -> ai_denoise::Encoding {
+    let (w, h) = (img.width(), img.height());
+    if w == 0 || h == 0 {
+        return ai_denoise::Encoding { scale: 1.0 };
+    }
+    let step = w.max(h).div_ceil(pipeline::lens_blur::GRID).max(1);
+    let mut peaks: Vec<f32> = (0..h)
+        .step_by(step)
+        .flat_map(|y| (0..w).step_by(step).map(move |x| (x, y)))
+        .map(|(x, y)| {
+            color::prophoto_to_srgb(img.pixel(x, y))
+                .into_iter()
+                .fold(0f32, f32::max)
+        })
+        .filter(|v| v.is_finite())
+        .collect();
+    if peaks.is_empty() {
+        return ai_denoise::Encoding { scale: 1.0 };
+    }
+    let k = ((peaks.len() - 1) as f32 * 0.995).round() as usize;
+    let (_, p, _) = peaks.select_nth_unstable_by(k, f32::total_cmp);
+    ai_denoise::Encoding {
+        scale: ai_denoise::WHITE / p.max(1e-6),
+    }
+}
+
 /// Rows of a `side × side` plane of `n` channels mirrored left to right, in place.
 fn mirror(v: &mut [f32], side: usize, n: usize) {
     for row in v.chunks_mut(side * n) {
@@ -384,7 +416,7 @@ pub fn fill(
     if negative.is_active() {
         crop = crop.map_pixels(|p| pipeline::negative::positive(p, negative));
     }
-    let enc = ai_denoise::Encoding::of(&crop);
+    let enc = peak_encoding(&crop);
     let rgb: Vec<f32> = resample(&crop, [0, 0, crop.width(), crop.height()], SIDE)
         .chunks(3)
         .flat_map(|p| enc.encode([p[0], p[1], p[2]]))
@@ -692,7 +724,7 @@ mod tests {
         };
         assert_eq!(
             id("photo-key", &r, ai_mask::ModelId::Lama),
-            "3ae6782efa6c8947a4e84aa832e1f1984097486a5c2d7a637202933366d10265"
+            "76ab71db4aef7ee6f18fa286c4accc58a49aaa4871784a55530b103adf132a14"
         );
     }
 
@@ -757,9 +789,8 @@ mod tests {
         ];
         assert_eq!(f.rect, want);
         assert_eq!((f.w, f.h), (ai_mask::inpaint::SIDE, ai_mask::inpaint::SIDE));
-        let grey =
-            ai_denoise::Encoding::of(&img.crop(win[0], win[1], win[2] - win[0], win[3] - win[1]))
-                .decode([0.5; 3]);
+        let grey = peak_encoding(&img.crop(win[0], win[1], win[2] - win[0], win[3] - win[1]))
+            .decode([0.5; 3]);
         let (rad, b) = (r.radius * w.max(h) as f32, hole_box(&r, w, h));
         let (mut core, mut far) = (0, 0);
         for fy in 0..f.h {
@@ -809,7 +840,7 @@ mod tests {
         let pos = img
             .crop(win[0], win[1], win[2] - win[0], win[3] - win[1])
             .map_pixels(|p| pipeline::negative::positive(p, &n));
-        let enc = ai_denoise::Encoding::of(&pos);
+        let enc = peak_encoding(&pos);
         let want_in = enc.encode(pipeline::negative::positive(film, &n));
         let mut seen = Vec::new();
         let f = fill(
@@ -859,6 +890,59 @@ mod tests {
                 "{back:?} vs {want:?}"
             );
         }
+    }
+
+    /// The author's report (2026-10-19): a removal in front of a sky came out greenish. A network that
+    /// changes nothing must give a bright blue sky back as it was — every channel, not just the luminance
+    /// the encoding was scaled by (blue sits far above it in a sky, and clipped there).
+    #[test]
+    fn the_fill_keeps_a_bright_sky_s_colour() {
+        let (w, h) = (1600, 1200);
+        // Linear sRGB, a saturated sky brightening downwards — as a decode holds it, in linear ProPhoto.
+        let sky = |y: f32| {
+            let t = y / h as f32;
+            [0.10 + 0.25 * t, 0.22 + 0.28 * t, 0.70 + 0.20 * t]
+        };
+        let mut img = ImageBuf::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                img.set_pixel(x, y, color::srgb_to_prophoto(sky(y as f32 + 0.5)));
+            }
+        }
+        let r = stroke(vec![[0.5, 0.5], [0.55, 0.5]], 0.02);
+        let f = fill(
+            &img,
+            &r,
+            &edit_model::Negative::default(),
+            &mut |rgb, _| Ok(rgb.to_vec()),
+            None,
+        )
+        .unwrap();
+        let win = window(&r, w, h);
+        let mut checked = 0;
+        for fy in (0..f.h).step_by(17) {
+            for fx in (0..f.w).step_by(17) {
+                let i = fy * f.w + fx;
+                if f.alpha[i] < 1.0 {
+                    continue;
+                }
+                let y = win[1] as f32 + (fy as f32 + 0.5) / f.h as f32 * (win[3] - win[1]) as f32;
+                let want = sky(y);
+                let got =
+                    color::prophoto_to_srgb([f.rgb[i * 3], f.rgb[i * 3 + 1], f.rgb[i * 3 + 2]]);
+                for c in 0..3 {
+                    assert!(
+                        (got[c] - want[c]).abs() <= 0.01 * want[c] + 1e-3,
+                        "channel {c} at ({fx}, {fy}): {got:?} against the sky's {want:?}"
+                    );
+                }
+                checked += 1;
+            }
+        }
+        assert!(
+            checked > 0,
+            "the fixture: no fill pixel in the stroke was checked"
+        );
     }
 
     /// The distance from decode pixel `(x, y)` to the stroke, in decode pixels — the test's own.

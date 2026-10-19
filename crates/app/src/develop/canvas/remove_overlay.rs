@@ -41,9 +41,58 @@ pub(crate) struct RemovalUi {
     /// The screen ↔ decode map and what it was built from. ⚠ Memoised: it builds a lens corrector, which
     /// samples its whole displacement field — not a per-frame cost while the pointer moves.
     map: Option<(MapKey, Arc<DecodeMap>)>,
+    /// Each removal's outline shown — the row's eye; view state, `spot_shown`'s.
+    shown: Vec<bool>,
+    /// Each removal held out of the view — the row's Hold out; view state, `spot_held`'s.
+    held: Vec<bool>,
 }
 
 impl RemovalUi {
+    /// One flag of each per removal — undo, paste and the canvas change the count without the panel.
+    pub(crate) fn sync(&mut self, n: usize) {
+        self.shown.resize(n, true);
+        self.held.resize(n, false);
+    }
+
+    pub(crate) fn is_shown(&self, i: usize) -> bool {
+        self.shown.get(i).copied().unwrap_or(true)
+    }
+
+    pub(crate) fn is_held(&self, i: usize) -> bool {
+        self.held.get(i).copied().unwrap_or(false)
+    }
+
+    pub(crate) fn toggle_shown(&mut self, i: usize) {
+        if let Some(on) = self.shown.get_mut(i) {
+            *on = !*on;
+        }
+    }
+
+    pub(crate) fn toggle_held(&mut self, i: usize) {
+        if let Some(on) = self.held.get_mut(i) {
+            *on = !*on;
+        }
+    }
+
+    /// Removal `i` was deleted: its flags go with it, so the next ones keep theirs.
+    pub(crate) fn forget(&mut self, i: usize) {
+        for flags in [&mut self.shown, &mut self.held] {
+            if i < flags.len() {
+                flags.remove(i);
+            }
+        }
+    }
+
+    /// The removals the view shows: the held ones left out, so what they cover shows.
+    pub(crate) fn hold_out(&self, removals: &mut Vec<edit_model::Removal>) {
+        let mut i = 0;
+        removals.retain(|_| {
+            let keep = !self.is_held(i);
+            i += 1;
+            keep
+        });
+    }
+
     /// The held map's address — the memo's test.
     #[cfg(test)]
     pub(crate) fn map_ptr(&self) -> Option<*const DecodeMap> {
@@ -62,15 +111,13 @@ fn decode_map(s: &mut Session, frame_rect: egui::Rect) -> Arc<DecodeMap> {
             return Arc::clone(m);
         }
     }
-    let m = Arc::new(DecodeMap::new(
+    let corr = s.lens_memo.get(s.lens.shot.as_ref(), &s.edits, dw, dh);
+    let m = Arc::new(DecodeMap::with_shared(
         &s.edits.geometry,
         s.edits.perspective,
         fw,
         fh,
-        s.lens
-            .shot
-            .as_ref()
-            .and_then(|l| rustroom_app::ai_space::corrector_for(l, &s.edits, dw, dh)),
+        corr,
         dw,
         dh,
     ));
@@ -191,6 +238,10 @@ pub(super) fn draw_remove_overlay(
         let Some(&first) = r.points.first() else {
             continue;
         };
+        // The row's eye: a hidden outline is not drawn at all.
+        if !s.removal.is_shown(i) {
+            continue;
+        }
         let rad = screen_radius(first, r.radius);
         let pts: Vec<egui::Pos2> = r.points.iter().map(|&p| to_screen(p)).collect();
         // ⚠ A removal still being filled is shaded — the object is still in the picture under it; a
@@ -376,6 +427,49 @@ mod tests {
             Some(first),
             "a rotation kept the old map"
         );
+    }
+
+    /// ⚠⚠ The author's report (2026-10-19): with a lens profile, moving over the photo in Retouch crawled
+    /// — every frame built a lens corrector (290–370 ms on an X-T4). Two frames, Heal and Remove alike,
+    /// must use the one the session holds.
+    #[test]
+    fn a_retouch_frame_reuses_the_held_lens_corrector() {
+        let ctx = egui::Context::default();
+        let mut app = remove_app(&ctx);
+        let db = lens_profile::Catalogue::shared().expect("the bundled lens database");
+        let profile = db
+            .find("Fujifilm", "X-T4", "XF23mmF2 R WR")
+            .or_else(|| db.find("Fujifilm", "X-T4", "XF16-80mmF4 R OIS WR"))
+            .expect("an X-T4 lens in the bundled database");
+        {
+            let s = app.session.as_mut().unwrap();
+            s.lens.shot = Some(lens_profile::LensShot {
+                profile,
+                shot: lens_profile::Shot {
+                    focal: 23.0,
+                    aperture: 4.0,
+                },
+            });
+            s.edits.lens_correction = Some(edit_model::LensCorrection {
+                distortion: true,
+                ..Default::default()
+            });
+        }
+        for remove in [false, true] {
+            app.remove_tool.active = remove;
+            let _ = canvas_centre(&mut app, &ctx);
+            let held = |app: &crate::RustroomApp| {
+                app.session
+                    .as_ref()
+                    .unwrap()
+                    .lens_memo
+                    .held()
+                    .map(std::sync::Arc::as_ptr)
+            };
+            let first = held(&app).expect("the frame mapped through the session's corrector");
+            let _ = canvas_centre(&mut app, &ctx);
+            assert_eq!(held(&app), Some(first), "built again (Remove {remove})");
+        }
     }
 
     /// A drag in Heal mode places no removal — the mode decides.
