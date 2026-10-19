@@ -108,13 +108,93 @@ pub struct Sources<F> {
     pub net: F,
 }
 
-impl Sources<fn(&Path) -> Result<Box<dyn TileNet + Send>, String>> {
-    /// The real folders and DRUNet.
-    pub fn user_default() -> Self {
+/// The real folders and the job's network — on the GPU when `gpu` (Settings' *Use the GPU*).
+pub fn user_sources(
+    gpu: bool,
+) -> Sources<impl FnOnce(&Path) -> Result<Box<dyn TileNet + Send>, String>> {
+    Sources {
+        cache: crate::denoise_cache::dir(),
+        models: crate::ai_cache::models_dir(),
+        net: move |models: &Path| network(models, gpu),
+    }
+}
+
+/// DRUNet's weights from the model file as the GPU crate's tensors.
+pub fn gpu_weights(model: &Path) -> Result<gpu_pipeline::Weights, String> {
+    Ok(ai_mask::denoise::weights(model)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|(name, shape, data)| (name, gpu_pipeline::Tensor { shape, data }))
+        .collect())
+}
+
+/// The network the job runs (M10.16b2): DRUNet on the GPU when `gpu` is asked and an adapter exists, with
+/// `tract`'s behind it for any tile the GPU fails; otherwise `tract`'s alone.
+pub fn network(models: &Path, gpu: bool) -> Result<Box<dyn TileNet + Send>, String> {
+    if gpu {
+        if let Some(ctx) = gpu_pipeline::shared().cloned() {
+            let file = models.join(ai_mask::ModelId::DrunetColor.spec().file);
+            match gpu_weights(&file).and_then(|w| gpu_pipeline::GpuDrunet::new(ctx, &w)) {
+                Ok(g) => {
+                    let m = models.to_path_buf();
+                    return Ok(Box::new(Engine::new(
+                        Some(Box::new(g)),
+                        Box::new(move || drunet(&m)),
+                    )));
+                }
+                Err(e) => eprintln!("rustroom: AI denoise runs on the CPU — {e}"),
+            }
+        }
+    }
+    drunet(models)
+}
+
+/// A factory for the fallback network, called at most once.
+pub type Fallback = Box<dyn FnOnce() -> Result<Box<dyn TileNet + Send>, String> + Send>;
+
+/// The primary network until it fails, then the fallback — made once, on the first failure — for that
+/// tile and every later one. ⚠ A failed tile is never kept: it runs again on the fallback (Review
+/// Focus 1).
+pub struct Engine {
+    primary: Option<Box<dyn TileNet + Send>>,
+    fallback: Option<Fallback>,
+    cpu: Option<Box<dyn TileNet + Send>>,
+}
+
+impl Engine {
+    pub fn new(primary: Option<Box<dyn TileNet + Send>>, fallback: Fallback) -> Self {
         Self {
-            cache: crate::denoise_cache::dir(),
-            models: crate::ai_cache::models_dir(),
-            net: drunet,
+            primary,
+            fallback: Some(fallback),
+            cpu: None,
+        }
+    }
+}
+
+impl TileNet for Engine {
+    fn run(&mut self, rgb: &[f32], w: usize, h: usize, sigma: f32) -> Result<Vec<f32>, String> {
+        if let Some(p) = self.primary.as_mut() {
+            match p.run(rgb, w, h, sigma) {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    eprintln!("rustroom: AI denoise on the GPU failed ({e}); the CPU takes over");
+                    self.primary = None;
+                }
+            }
+        }
+        if self.cpu.is_none() {
+            let make = self.fallback.take().ok_or("the CPU network did not load")?;
+            self.cpu = Some(make()?);
+        }
+        self.cpu.as_mut().expect("made above").run(rgb, w, h, sigma)
+    }
+
+    fn finished(&mut self) {
+        for n in [self.primary.as_mut(), self.cpu.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            n.finished();
         }
     }
 }
@@ -212,6 +292,112 @@ mod tests {
     impl TileNet for Lift {
         fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: f32) -> Result<Vec<f32>, String> {
             Ok(rgb.iter().map(|v| v + 0.1).collect())
+        }
+    }
+
+    /// A network that adds 0.1 for its first `ok` tiles, then fails like a lost device.
+    /// ⚠ The trait object needs `Send`, so its counter is an `Arc<AtomicUsize>`.
+    struct FailAfter {
+        ok: usize,
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl TileNet for FailAfter {
+        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: f32) -> Result<Vec<f32>, String> {
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n < self.ok {
+                Ok(rgb.iter().map(|v| v + 0.1).collect())
+            } else {
+                Err("device lost".into())
+            }
+        }
+    }
+
+    /// Review Focus 1: the GPU fails on its second tile — that tile and every later one run on the CPU,
+    /// and the CPU network is made once.
+    #[test]
+    fn a_failing_gpu_hands_the_rest_to_the_cpu() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let gpu_calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let made = std::sync::Arc::new(AtomicUsize::new(0));
+        let m = made.clone();
+        let mut e = Engine::new(
+            Some(Box::new(FailAfter {
+                ok: 1,
+                calls: gpu_calls.clone(),
+            })),
+            Box::new(move || {
+                m.fetch_add(1, Ordering::SeqCst);
+                Ok(Box::new(Lift) as Box<dyn TileNet + Send>)
+            }),
+        );
+        for _ in 0..3 {
+            let out = e.run(&[0.5; 3], 1, 1, 1.0).expect("a tile");
+            assert!((out[0] - 0.6).abs() < 1e-6);
+        }
+        assert_eq!(
+            gpu_calls.load(Ordering::SeqCst),
+            2,
+            "the GPU is not tried again"
+        );
+        assert_eq!(made.load(Ordering::SeqCst), 1, "the CPU network made once");
+    }
+
+    /// Review Focus 2: no primary — the fallback from the first tile.
+    #[test]
+    fn without_the_gpu_the_cpu_network_runs() {
+        let mut e = Engine::new(
+            None,
+            Box::new(|| Ok(Box::new(Lift) as Box<dyn TileNet + Send>)),
+        );
+        assert!((e.run(&[0.5; 3], 1, 1, 1.0).unwrap()[0] - 0.6).abs() < 1e-6);
+    }
+
+    /// The largest |GPU − tract| on the real model, in the network's 0…1 units — measured, never tuned
+    /// to pass. ⚠ Measured **exactly 0** on the M2 (2026-10-15): both engines sum each output over
+    /// `ci · 9 + tap` in order with fused multiply-adds, and add the residual and the skip in the file's
+    /// order, so the bits agree. 1e-5 leaves room for another GPU contracting differently.
+    const TOL: f32 = 1e-5;
+
+    /// DRUNet on the GPU against `tract` on the real model: a 64 × 64 tile and a 296 × 200 one (sides
+    /// multiples of 8, the second not of 64).
+    #[test]
+    #[ignore = "needs the model and a GPU; set RUSTROOM_DRUNET"]
+    fn gpu_drunet_matches_tract() {
+        let path =
+            std::path::PathBuf::from(std::env::var("RUSTROOM_DRUNET").expect("RUSTROOM_DRUNET"));
+        let Some(ctx) = gpu_pipeline::shared().cloned() else {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        };
+        let mut cpu = ai_mask::denoise::Drunet::load(&path).expect("tract");
+        let mut gpu =
+            gpu_pipeline::GpuDrunet::new(ctx, &gpu_weights(&path).expect("weights")).expect("gpu");
+        for (w, h) in [(64, 64), (296, 200)] {
+            let rgb: Vec<f32> = (0..w * h * 3)
+                .map(|i| ((i * 7919) % 1000) as f32 / 1000.0)
+                .collect();
+            let a = cpu.run(&rgb, w, h, 15.0).expect("cpu");
+            let b = gpu.run(&rgb, w, h, 15.0).expect("gpu");
+            // ⚠ NaN first: `f32::max` ignores it, and an all-NaN GPU output once read here as a perfect 0.
+            let bad = b.iter().filter(|v| !v.is_finite()).count();
+            eprintln!("{w}×{h}: tract {:?}…, GPU {:?}…", &a[..3], &b[..3]);
+            assert_eq!(bad, 0, "{w}×{h}: {bad} non-finite values from the GPU");
+            let worst = a
+                .iter()
+                .zip(&b)
+                .map(|(x, y)| (x - y).abs())
+                .fold(0.0f32, f32::max);
+            let moved = a
+                .iter()
+                .zip(&rgb)
+                .map(|(x, y)| (x - y).abs())
+                .fold(0.0f32, f32::max);
+            eprintln!("{w}×{h}: max |gpu − tract| = {worst:e} (the network moved values by up to {moved:.3})");
+            assert!(
+                moved > 0.01,
+                "the network changed nothing — the comparison would be empty"
+            );
+            assert!(worst < TOL, "{w}×{h}: {worst}");
         }
     }
 

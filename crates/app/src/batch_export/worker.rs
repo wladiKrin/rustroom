@@ -613,7 +613,7 @@ fn run(
                             &src.image,
                             opts.demosaic,
                             render.denoise,
-                            crate::denoised::Sources::user_default(),
+                            crate::denoised::user_sources(render.gpu_tail),
                             || {
                                 let _ = events.send(ExportEvent::Denoising { name });
                             },

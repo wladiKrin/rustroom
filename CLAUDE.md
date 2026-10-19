@@ -249,9 +249,11 @@ that had grown to ~170 lines by appending.)
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, M10.16d** (table above).
 
 **▶ NOW: M10.16b — AI denoise.** **b1** (DRUNet through `tract`, the job, the cache, Detail's Amount,
-export) is built on branch `m10.16b-ai-denoise`, **awaiting the author's look** — the GUI, and his call on
-`ai_denoise::CALIBRATION` from the probe's `calibrate` sheets (1.0 provisional). **Then b2**: DRUNet's
-convolutions on the GPU (spec §3). `grep -n 'M10.16b1' docs/JOURNAL.md`. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
+export; branch `m10.16b-ai-denoise`) — the author: *"works, but painfully slow"* and *"the effect is weak"*.
+**b2** (DRUNet on the GPU, ~2.8 min a 26 Mpx frame against 6.6; branch `m10.16b2-ai-denoise-gpu`, on b1)
+is built, **awaiting his look**. **Then the strength**: his call 2026-10-16 — *measure, then he picks*:
+the noise left in shadows vs mid-tones at Amount 100, and magnified crops of today, a 2× default, a
+per-brightness noise map (DRUNet takes σ per pixel), and both. `grep -n 'M10.16b' docs/JOURNAL.md`. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
 d), M10.14 f–h ⏸.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
@@ -371,6 +373,9 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   decode of its own size (`denoise_flow`; an export over its own), is answered per frame only as
   `downscale_to` of the full image (`denoised::Denoised`), and its step is the prefix's FIRST. ⚠ **A rendered
   preview never runs the network** (`DenoiseUse::Cached`): without a result its build fails and runs later.
+- ⚠⚠ **A long GPU job shares the render engine's queue, and Metal runs it in order** (M10.16b2): submitted
+  at once, DRUNet's tile made an editing frame wait 1,354 ms. It submits bands of ~2.7 ms, two in flight
+  (`drunet::conv::SUBMISSION_MACS`): 15 ms. Any future background GPU work must do the same.
 - ⚠⚠ **Every reader of the undeveloped decode (`Session.buffer`) sees the positive** (M10.11a): a pixel
   through `negative_tool::view`, an image through `pipeline::negative::positive` (Auto tone, the AI
   input), and a cache of anything derived from it keyed on `edits.negative` (`ai_cache::key`, the AI
@@ -390,7 +395,9 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   `asset("one")` with `original_file_name: "one.jpg"` made a UUID path and a display name coincide, and
   four tests passed against a catalog that could never find its own rows. **(b)** A query that finds
   **nothing** passes silently, so assert the sample first — `labels.len() > 12` caught three separate ways
-  the Color guard opened nothing, and a substring filter matching no tests exits 0. ⚠⚠ **It applies to shell
+  the Color guard opened nothing, and a substring filter matching no tests exits 0. ⚠⚠ **And `f32::max` IGNORES
+  NaN**, so a `fold(0.0, f32::max)` parity check reads an all-NaN output as a perfect 0 — every GPU-vs-CPU check
+  must fail on a non-finite value FIRST (M10.16b2; its real 0 was then proven by a sabotage, 3.4e18). ⚠⚠ **It applies to shell
   checks, and it cost an invented milestone (M10.1, now M11.1) on 2026-09-25:** `ls | grep -i license` returned
   nothing, so I reported no `LICENSE` — it had been committed since `e71330d`. **`ls` here is aliased to
   `eza --long`, which prints NOTHING to a pipe unless given a path argument**, exiting 0 with empty

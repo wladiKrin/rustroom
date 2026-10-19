@@ -13,6 +13,19 @@ use core_image::ImageBuf;
 /// `sigma` (0…255 units), the same layout back. The CPU's `tract` runner and b2's GPU engine both.
 pub trait TileNet {
     fn run(&mut self, rgb: &[f32], w: usize, h: usize, sigma: f32) -> Result<Vec<f32>, String>;
+
+    /// A job ended — what the network holds for one (the GPU's activations, M10.16b2) may go.
+    fn finished(&mut self) {}
+}
+
+impl TileNet for gpu_pipeline::GpuDrunet {
+    fn run(&mut self, rgb: &[f32], w: usize, h: usize, sigma: f32) -> Result<Vec<f32>, String> {
+        gpu_pipeline::GpuDrunet::run(self, rgb, w, h, sigma)
+    }
+
+    fn finished(&mut self) {
+        self.release();
+    }
 }
 
 impl TileNet for ai_mask::denoise::Drunet {

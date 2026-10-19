@@ -153,10 +153,12 @@ impl RustroomApp {
             }
         };
         if let Some(image) = image {
+            // ⚠ Read when the worker starts: a change in Settings reaches the next session's job.
+            let gpu = self.settings.gpu_tail;
             let worker = self.denoise.worker.get_or_insert_with(|| {
                 let repaint = ctx.clone();
                 DenoiseWorker::spawn(
-                    Box::new(move || denoised::drunet(&models)),
+                    Box::new(move || denoised::network(&models, gpu)),
                     Some(cache),
                     move || repaint.request_repaint(),
                 )
