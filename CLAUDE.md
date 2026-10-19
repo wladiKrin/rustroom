@@ -168,7 +168,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-10-19)
 
-**4028 tests** (20 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
+**4077 tests** (23 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
 gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
@@ -226,7 +226,7 @@ that had grown to ~170 lines by appending.)
   2026-09-29 — start from `docs/BACKLOG.md`'s reasons table. ⚠ The server is a **Tailscale Funnel**: a stopped
   Tailscale on the Mac is never the cause of an Immich error.
 
-**Phase 10 so far — M10.6 to M10.15, M10.16a, b and d, and M10.19c, merged 2026-09-29 – 10-19, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`; what stays open inside M10.12–14 is in the table below):
+**Phase 10 so far — M10.6 to M10.15, M10.16a, b, c1 and d, and M10.19c, merged 2026-09-29 – 10-19, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`; what stays open inside M10.12–14 is in the table below):
 
 | Id | What | The thing to remember |
 |---|---|---|
@@ -243,15 +243,17 @@ that had grown to ~170 lines by appending.)
 | M10.19c | ⌘/⇧-click marks folders in the rail; right-click forgets them, one confirmation, one undo step | marks keyed by PATH (rows move on collapse); `folder_tree::subtrees` lists a nested mark once, or its second delete fails mid-batch |
 | M10.16d | Lens Blur: a dense, level-adaptive gather of aperture discs (Circle · Blades · Ring · Cat-eye) in three layers, focus on the Subject map's person or a picked point; the section after Effects, Pick focus, Visualize depth; a GPU twin, live (30–32 ms a frame at 1600 px) | the prefix's LAST step, waiting (no step) until its maps and focus exist; keyed on both maps' content ids; ONE lookup (`lens_blur::inputs`) for the step and its twin; the focus and the planes memoised (*Warnings*) |
 | M10.16a | Depth masks: Depth Anything V2 Small (Apache-2.0) → the Depth range mask, a line picker, Show depth map; AI components now cover in a mask's NR/Dehaze/Defringe | `tract` needs the export's symbols BOUND per size and its shape annotations ignored; recipe `depth:v2` (1036, colour snap r8, equalised, 1536) — bump `DEPTH_QUERY` on any change; *Warnings* below |
+| M10.16c1 | Remove: Retouch's first mode — paint over a thing, **LaMa** (the author's pick) fills it in the background from the full decode (~6 s, cached 1.4 MB); Refresh, Detect objects (MobileSAM), Opacity, the eye and Hold out per removal | removals live in DECODE space, pasted after AI denoise and before lens and the negative (*Warnings*); a fill is the network's 512², encoded by its PEAK channel (luminance clipped a sky's blue); never build a lens corrector per frame (*Warnings*) |
 | M10.16b | AI denoise: **FFDNet** (default; a 26 Mpx frame 18 s on the GPU) or **DRUNet** (Settings), a background job per photo at the noise map × 2, the view's tiles first, "Full denoise" under Amount, cached on disk | the network is in EVERY key that holds its pixels and the worker carries its own (*Warnings*); `ai_mask::pth` is a CLOSED pickle subset; the result is ONE decode's, its step the prefix's first; a long GPU job submits bands |
 
 ### ▶ Next action — Phase 10, top down
 
-✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, d** (table above).
+✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1, d** (table above).
 
-**▶ NOW: M10.16c — Remove**, four parts (spec `2026-10-19-m10.16c-remove-design.md`): **c1 the Remove brush is built
-on `m10.16c-remove`, awaiting the author's look** (LaMa, his pick; `grep -n 'M10.16c1' docs/JOURNAL.md`); then c2 Dust,
-c3 People, c4 Reflections, each its own plan. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
+**▶ NEXT: M10.16c2 — Dust** (spec `2026-10-19-m10.16c-remove-design.md`, § c2: sensor spots found and healed as Heal
+spots, no network); then c3 People, c4 Reflections, each its own plan. ✅ c1 the Remove brush merged 2026-10-19
+(`grep -n 'M10.16c1' docs/JOURNAL.md`). ⬜ Unanswered from c1: Detect objects' effect is invisible — offered a clearer
+name, or shading the area it will fill; the author has not chosen. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
 d), M10.14 f–h ⏸.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is

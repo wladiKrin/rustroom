@@ -188,7 +188,8 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ### 2026-10-19 — M10.16c1: Remove — the content-aware brush, LaMa, Refresh, Detect objects, Opacity (branch `m10.16c-remove`)
 
-⏳ **Built and gated; awaiting the author's look.** The first of M10.16c's four parts (spec
+✅ **Confirmed by the author ("works") and merged 2026-10-19** (`--no-ff`, the branch deleted) — after his first
+look's three fixes below. The first of M10.16c's four parts (spec
 `2026-10-19-m10.16c-remove-design.md`; c2 Dust, c3 People, c4 Reflections each get their own plan). Plan
 `2026-10-19-m10.16c1-remove-brush.md`.
 
