@@ -51,6 +51,8 @@ pub enum Scope {
     DepthRange,
     /// The Lens Blur section (M10.16d).
     LensBlur,
+    /// Detail's AI denoise (M10.16b).
+    AiDenoise,
 }
 
 /// The HSL bands' three tabs.
@@ -167,6 +169,11 @@ const LENS_BLUR: &[(&str, &str)] = &[
         "Makes bright out-of-focus highlights bloom into discs",
     ),
 ];
+
+const AI_DENOISE: &[(&str, &str)] = &[(
+    "Amount",
+    "Blends in the photo denoised by a neural network, computed once in the background",
+)];
 
 const VIGNETTE: &[(&str, &str)] = &[
     (
@@ -288,6 +295,7 @@ fn table(scope: Scope) -> &'static [(&'static str, &'static str)] {
         Scope::MaskWhiteBalance => MASK_WHITE_BALANCE,
         Scope::DepthRange => DEPTH_RANGE,
         Scope::LensBlur => LENS_BLUR,
+        Scope::AiDenoise => AI_DENOISE,
     }
 }
 
@@ -342,7 +350,7 @@ pub fn text(scope: Scope, label: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    const SCOPES: [Scope; 20] = [
+    const SCOPES: [Scope; 21] = [
         Scope::Global,
         Scope::Parametric,
         Scope::Hsl(HslTab::Hue),
@@ -363,6 +371,7 @@ mod tests {
         Scope::MaskWhiteBalance,
         Scope::DepthRange,
         Scope::LensBlur,
+        Scope::AiDenoise,
     ];
 
     /// Every sentence the table can produce, with where it came from.

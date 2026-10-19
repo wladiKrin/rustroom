@@ -30,6 +30,7 @@
 //! and start an 11-second decode sixty times a second.
 
 pub mod ai_download;
+mod denoise_cache;
 pub mod edits;
 pub mod export;
 mod export_size;
@@ -42,6 +43,7 @@ pub mod rename;
 pub mod rule_edit;
 mod send_marks;
 pub mod settings;
+mod settings_denoise;
 mod settings_immich;
 mod settings_keyboard;
 mod settings_layout;
@@ -147,6 +149,13 @@ pub enum Modal {
         root: std::path::PathBuf,
         usage: rustroom_app::immich_cache::Usage,
     },
+    /// Clearing AI denoise's results (M10.16b) — at startup over the soft limit, or asked from Settings →
+    /// Performance, which it returns to. `dir` and `usage` are fixed when it opens.
+    DenoiseCache {
+        startup: bool,
+        dir: std::path::PathBuf,
+        usage: rustroom_app::denoise_cache::Usage,
+    },
     /// M10.15d: confirming a send of marks to Immich — every change, one line each.
     SendMarks {
         changes: Vec<rustroom_app::immich_send::Change>,
@@ -231,6 +240,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         ConfirmDeleteFolder,
         ConfirmForget,
         ImmichCache,
+        DenoiseCache,
         SendMarks,
         UndoSend,
         ConfirmDeleteKeyword,
@@ -258,6 +268,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::ConfirmDeletePresetFolder { .. } => Which::ConfirmDeleteFolder,
         Modal::ConfirmForgetFolders { .. } => Which::ConfirmForget,
         Modal::ImmichCache { .. } => Which::ImmichCache,
+        Modal::DenoiseCache { .. } => Which::DenoiseCache,
         Modal::SendMarks { .. } => Which::SendMarks,
         Modal::UndoSend { .. } => Which::UndoSend,
         Modal::ConfirmDeleteKeyword { .. } => Which::ConfirmDeleteKeyword,
@@ -287,6 +298,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::ConfirmDeleteFolder => presets::confirm_delete_folder(app, ctx),
         Which::ConfirmForget => confirm_forget_folder(app, ctx),
         Which::ImmichCache => immich_cache::show(app, ctx),
+        Which::DenoiseCache => denoise_cache::show(app, ctx),
         Which::SendMarks => send_marks::show(app, ctx),
         Which::UndoSend => send_marks::undo(app, ctx),
         Which::ConfirmDeleteKeyword => confirm_delete_keyword(app, ctx),

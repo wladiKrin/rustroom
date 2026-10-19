@@ -166,6 +166,10 @@ impl RustroomApp {
                 ai_subject: self.settings.ai_subject_model,
                 resampler: self.settings.resampler,
                 gpu_tail: self.settings.gpu_tail,
+                // ⚠ M10.16b: the cache only, at the SESSION's demosaic quality — where its jobs store.
+                // A preview never runs minutes of network; without a result its build fails, and runs
+                // again once there is one.
+                denoise: rustroom_app::denoised::DenoiseUse::Cached(self.settings.view_demosaic),
             },
             width,
             // ⚠ Looks only: a preview never carries a watermark — `build_options` leaves it at

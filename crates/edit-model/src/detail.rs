@@ -2,6 +2,30 @@
 
 use serde::{Deserialize, Serialize};
 
+/// AI denoise (M10.16b): how much of the network's result replaces the photo — 0 off, 100 all of it.
+/// The strength (σ) is measured from the photo, never set here; the result itself is cached, not
+/// stored in the edits.
+///
+/// ⚠ **Off is never written** (`Edits::ai_denoise`'s `skip_serializing_if`) — `negative`'s reason: a
+/// default block would change every rendered preview's key on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct AiDenoise {
+    /// 0..=100.
+    pub amount: f32,
+}
+
+impl AiDenoise {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Whether it changes the picture — once its result exists.
+    pub fn is_active(&self) -> bool {
+        self.amount > 0.0
+    }
+}
+
 /// Manual defringe (M9.6): removes the purple and green halos longitudinal chromatic aberration
 /// leaves beside high-contrast edges, which a lens profile's lateral (TCA) correction cannot touch.
 ///

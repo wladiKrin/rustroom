@@ -197,6 +197,7 @@ impl RustroomApp {
             exporter: None,
             import: None,
             ai: Default::default(),
+            denoise: Default::default(),
             export_progress: String::new(),
             export_collision: None,
             export_apply_all: false,
@@ -261,6 +262,10 @@ impl RustroomApp {
         app.load_immich_stacks();
         // M10.15b: the soft limit's warning — one directory listing, ~3 ms for 1,000 photos.
         app.check_immich_cache_at_startup();
+        // M10.16b: AI denoise's results, the same rule — after Immich's, never over its dialog.
+        if app.modal == crate::Modal::None {
+            app.check_denoise_cache_at_startup();
+        }
         // Last, so no other startup message covers it.
         app.report_unread_keys();
         app

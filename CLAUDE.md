@@ -248,8 +248,10 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, M10.16d** (table above).
 
-**▶ NEXT: M10.16b — AI denoise** (P-23; the `ai-mask` crate's `tract` runtime and model registry are the
-shared half — start from `docs/BACKLOG.md`'s P-23). Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
+**▶ NOW: M10.16b — AI denoise.** **b1** (DRUNet through `tract`, the job, the cache, Detail's Amount,
+export) is built on branch `m10.16b-ai-denoise`, **awaiting the author's look** — the GUI, and his call on
+`ai_denoise::CALIBRATION` from the probe's `calibrate` sheets (1.0 provisional). **Then b2**: DRUNet's
+convolutions on the GPU (spec §3). `grep -n 'M10.16b1' docs/JOURNAL.md`. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
 d), M10.14 f–h ⏸.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
@@ -286,9 +288,9 @@ GPU device for the window and the pipeline.
 
 ### The GPU port — closed (reopened once, for geometry, 2026-09-26)
 
-⚠⚠ **22 of the 26 stages that `impl PipelineStage`** have GPU twins (2026-10-15, Lens Blur's the newest;
-`per_pixel`'s three test doubles and the GPU crate's four probes not counted). The four without — `spot_removal` (measured and closed unbuilt), `defringe`
-(parked, M10.14f), `red_eye` and `negative` — are all **prefix steps**: every TAIL stage has a twin.
+⚠⚠ **22 of the 27 stages that `impl PipelineStage`** have GPU twins (2026-10-15, Lens Blur's the newest;
+`per_pixel`'s three test doubles and the GPU crate's four probes not counted). The five without — `spot_removal` (measured and closed unbuilt), `defringe`
+(parked, M10.14f), `red_eye`, `negative` and `ai_denoise` (a blend; its network's GPU engine is M10.16b2) — are all **prefix steps**: every TAIL stage has a twin.
 ⚠⚠ **Geometry was declined too, and that decline was WRONG for one reason worth remembering: it priced the COMPUTE and missed the TRANSFERS.** On a
 fitted rung of 6.8 Mpx a Straighten frame was 63 ms, and the twin's value was that it let the pixels
 stay on the GPU: a resident input and a no-download handoff to the tail. ⚠ **Do not re-propose from a
@@ -365,6 +367,10 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   its planes in `ai_coverage::PlaneMemo` — keyed by an exhaustive destructure of `MapRaster`, so a field
   added there must join the key. Its CPU step and GPU twin read them through ONE lookup,
   `pipeline::lens_blur::inputs`.
+- ⚠⚠ **AI denoise's result belongs to ONE decode** (M10.16b): it enters the maps only over the full-resolution
+  decode of its own size (`denoise_flow`; an export over its own), is answered per frame only as
+  `downscale_to` of the full image (`denoised::Denoised`), and its step is the prefix's FIRST. ⚠ **A rendered
+  preview never runs the network** (`DenoiseUse::Cached`): without a result its build fails and runs later.
 - ⚠⚠ **Every reader of the undeveloped decode (`Session.buffer`) sees the positive** (M10.11a): a pixel
   through `negative_tool::view`, an image through `pipeline::negative::positive` (Auto tone, the AI
   input), and a cache of anything derived from it keyed on `edits.negative` (`ai_cache::key`, the AI

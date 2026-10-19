@@ -27,15 +27,18 @@ pub enum ModelId {
     SamDecoder,
     /// M10.16a — the Depth range mask's network.
     DepthAnythingV2Small,
+    /// M10.16b — AI denoise's network.
+    DrunetColor,
 }
 
 impl ModelId {
-    pub const ALL: [ModelId; 5] = [
+    pub const ALL: [ModelId; 6] = [
         Self::IsNet,
         Self::BiRefNetLite,
         Self::SamEncoder,
         Self::SamDecoder,
         Self::DepthAnythingV2Small,
+        Self::DrunetColor,
     ];
 
     pub const fn spec(self) -> ModelSpec {
@@ -85,6 +88,18 @@ impl ModelId {
                 sha256: "46c4e8eeda3a27f34701831b6a2ec7753d7b38779b215acb5633424703deed8f",
                 licence: "Apache-2.0 (Depth Anything V2 Small, code and weights)",
                 licence_url: "https://github.com/DepthAnything/Depth-Anything-V2",
+            },
+            // ⚠ M10.16b: the hash and size measured from the file downloaded 2026-10-15. The weights
+            // are KAIR v1.0's unmodified `drunet_color.pth`, MIT; ⚠ its training data included DIV2K,
+            // whose own terms say research only, and whether that reaches the weights is unsettled —
+            // said in the dialog, as IS-Net's missing licence is.
+            Self::DrunetColor => ModelSpec {
+                file: "drunet_color.onnx",
+                url: "https://huggingface.co/synthscript/drunet-color-onnx/resolve/main/drunet_color.onnx",
+                bytes: 130_589_232,
+                sha256: "2ae3ab5eb15daac2ee79be984d584b908ce7f0f60b27be87d005f728c2aa0087",
+                licence: "MIT (DRUNet weights, KAIR) — trained partly on DIV2K, whose terms say research use only",
+                licence_url: "https://github.com/cszn/DPIR",
             },
         }
     }
@@ -137,6 +152,7 @@ mod tests {
             ModelId::SamEncoder => 2,
             ModelId::SamDecoder => 3,
             ModelId::DepthAnythingV2Small => 4,
+            ModelId::DrunetColor => 5,
         };
         let every = [
             ModelId::IsNet,
@@ -144,6 +160,7 @@ mod tests {
             ModelId::SamEncoder,
             ModelId::SamDecoder,
             ModelId::DepthAnythingV2Small,
+            ModelId::DrunetColor,
         ];
         for id in every {
             assert_eq!(
@@ -154,11 +171,37 @@ mod tests {
         }
     }
 
+    /// M10.16b: DRUNet's weights are MIT, but its training data included DIV2K, whose own terms say
+    /// research only — the download dialog must say so before anything is fetched.
+    #[test]
+    fn the_denoise_model_carries_its_licence_caveat() {
+        let s = ModelId::DrunetColor.spec();
+        assert_eq!(s.bytes, 130_589_232);
+        assert_eq!(
+            s.sha256,
+            "2ae3ab5eb15daac2ee79be984d584b908ce7f0f60b27be87d005f728c2aa0087"
+        );
+        assert!(
+            s.licence.contains("MIT") && s.licence.contains("DIV2K"),
+            "{}",
+            s.licence
+        );
+    }
+
     #[test]
     fn every_model_is_pinned_and_licensed() {
         for id in ModelId::ALL {
             let s = id.spec();
-            assert!(s.url.starts_with("https://github.com/"), "{id:?}");
+            // ⚠ M10.16b: Hugging Face beside GitHub — DRUNet's only ONNX export lives there. Both are
+            // HTTPS and both redirect to a CDN, which the downloader follows; the integrity is the
+            // pinned SHA-256, never the host.
+            assert!(
+                ["https://github.com/", "https://huggingface.co/"]
+                    .iter()
+                    .any(|h| s.url.starts_with(h)),
+                "{id:?}: {}",
+                s.url
+            );
             assert!(
                 s.url.ends_with(s.file),
                 "{id:?}: the URL names another file"

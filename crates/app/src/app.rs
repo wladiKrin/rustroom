@@ -1,8 +1,8 @@
 //! The application's state: the one `RustroomApp`, and the view and Library mode it is in.
 
 use crate::{
-    ai_flow, develop, import_flow, modals, multi, preview_flow, Library, Modal, PendingOpen,
-    Session,
+    ai_flow, denoise_flow, develop, import_flow, modals, multi, preview_flow, Library, Modal,
+    PendingOpen, Session,
 };
 use edit_model::{EditGroups, Edits};
 use eframe::egui;
@@ -323,6 +323,8 @@ pub(crate) struct RustroomApp {
     pub(crate) import: Option<import_flow::ImportState>,
     /// AI masks' worker, requests and model downloads (M9.13).
     pub(crate) ai: ai_flow::AiState,
+    /// AI denoise's job and the open photo's result (M10.16b).
+    pub(crate) denoise: denoise_flow::DenoiseState,
     /// The destination awaiting a collision answer; `Some` means the worker is blocked.
     pub(crate) export_collision: Option<PathBuf>,
     /// Scratch state for the collision dialog's "apply to all" tick.

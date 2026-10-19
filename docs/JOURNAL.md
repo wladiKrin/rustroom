@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.16b1: AI denoise — DRUNet on the CPU, a background job, its cache, the Amount in Detail (2026-10-15)](#2026-10-15--m1016b1-ai-denoise--drunet-on-the-cpu-a-background-job-its-cache-the-amount-in-detail-branch-m1016b-ai-denoise)
 - [M10.16d2: Lens Blur's GPU twin — live while dragging (2026-10-15)](#2026-10-15--m1016d2-lens-blurs-gpu-twin--live-while-dragging-branch-m1016d2-lens-blur-gpu-merged-2026-10-15)
 - [M10.16d1: Lens Blur — the CPU reference, the section, Pick focus and Visualize (2026-10-15)](#2026-10-15--m1016d1-lens-blur--the-cpu-reference-the-section-pick-focus-and-visualize-branch-m1016d-lens-blur-merged-2026-10-15)
 - [M10.16a: depth masks — an estimated depth map and the Depth range mask (2026-10-14)](#2026-10-14--m1016a-depth-masks--an-estimated-depth-map-and-the-depth-range-mask-branch-m1016a-depth-masks-merged-2026-10-14)
@@ -178,6 +179,60 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-15 — M10.16b1: AI denoise — DRUNet on the CPU, a background job, its cache, the Amount in Detail (branch `m10.16b-ai-denoise`)
+
+**The item:** P-23 — AI denoise. Spec `2026-10-15-m10.16b-ai-denoise-design.md`; **one spec, two plans**: b1
+(this — the `tract` path end to end, the fallback) and b2 (DRUNet's convolutions on the GPU, its own plan).
+**The author's calls in the brainstorm:** purpose *both* (high-ISO rescue and everyday cleanup); an
+**Amount slider** in Detail, the network run once per photo in the background and cached, today's NR sliders
+kept; **DRUNet on the GPU** as the engine (b2), `tract` first; **automatic σ + Amount**, no Strength slider;
+the cache on **disk with a soft limit** (M10.15b's rules).
+
+**Chosen with measurements:** SCUNet panics inside `tract` (ScatterND, optimised or not) — dropped. DRUNet
+colour (`drunet_color.onnx`, 131 MB, MIT weights with a DIV2K research-only caveat on the training data,
+carried in the registry and the download dialog) runs: input sRGB 0..1 plus a σ/255 plane, sides a multiple
+of 8, its `b`, `h`, `w` symbols bound per size.
+
+**Built:** `ai-mask::denoise::Drunet` and `ModelId::DrunetColor` (the registry's URL rule widened to Hugging
+Face); `rustroom_app::ai_denoise` — the encoding (linear sRGB × 0.9 / L₉₉.₅, the odd-symmetric OETF), the
+result as a **correction** `x + lin(d) − lin(e)` so clipped and out-of-gamut values keep their real values,
+the σ estimate (a 2 × 2 Haar diagonal MAD on the flattest quarter of 16 px blocks, **read binned 2 × 2**),
+512 px tiles with a 32 px linear overlap, reflection-padded; `denoise_cache` (`RRDN` v1, half-floats
+deflated, atomic, keyed on the file, the demosaic tier and `denoise:v1`, **not** the negative);
+`Edits.ai_denoise` in Detail's group; `AiDenoiseStage`, **the prefix's FIRST step** (before lens), keyed on
+the Amount's bits and the result's id; `denoise_worker` (one thread, the newest request wins, a cancelled job
+never delivered, a result stored even when no longer wanted); `denoised::Denoised` — the result answered at
+any frame's size as `downscale_to` of the full image, the prefix input's own call, a size it cannot answer
+exactly refused; `denoise_tool` (the decisions) and `denoise_flow` (the wiring, every frame); export loads
+the cache or computes (`ExportEvent::Denoising`, "minutes a photo"); **rendered previews read the cache
+only** (`DenoiseUse::Cached` at the session's tier) and fail without it; Detail's block (the Amount, the
+job's line); Settings → Performance's results total with Clear…, a GB limit and the startup warning; the
+download dialog names the feature and both hosts; the probe's `calibrate` sheets; goldens `ai_denoise_50`
+and `_100`.
+
+**Measured (the spike, `denoise_probe`):** a full 26 Mpx X-T4 frame through `tract` **397 s** (117 tiles);
+the cache file **134.6 MB** (half-floats barely deflate); σ at single pixels read **2–4× under the eye**
+(demosaic-correlated noise) — binned 2 × 2 it reads 7.57 on DSCF6990 (ISO 3200) where σ 8 looked right,
+4.61 on DSCF6993 (3200), 2.01 on DSCF7194 (1600), 1.60 on DSCF6801 (160). ⚠ **`CALIBRATION` is 1.0
+provisionally** — the calibrate sheets (0.5–2 × the estimate) are the author's to judge.
+
+**Sabotages, all red:** the key's Amount fixed; `merge_from` skipping the field; the worker's stubs; Denoised's
+exact-size check off; Cached computing; the worker skipping the cache; the flow's full-decode gate off;
+`AiRasters::denoised` → None; Detail without the block; the help emptied; Clear not removing; the warning flag
+ignored; Clear… opening nothing; the body without "edits stay"; the blend at t = 1 (golden 50, **64 levels**).
+⚠ Two tests that could not fail, fixed: the export's Cached-missing case had no models folder (so a compute
+failed for another reason), and the Detail-order test read the accessibility nodes' order, **which is not
+visual** — it compares screen positions now.
+
+**Final review (my own pass, no subagent unasked):** a corrupt cached result failed for the run (now removed
+and recomputed — `DenoiseResult::Missing`); "Not now" on the download was a dead end (re-armed when Amount
+returns to 0); the GPU prefix's resident input is keyed before the step it feeds, so it cannot skip the
+blend. Deferred minors: a one-frame grain flash at the full-resolution handover; a newer photo cancels a
+running job; a worker panic leaves "Denoising…" up; an N-wide export computing holds N networks.
+
+⚠ **A shell lesson, again:** a sabotage run's backup loop over `$F` did not word-split in zsh, the `&&` chain
+skipped the sabotage, and the run came back clean — the trap `CLAUDE.md` already names. Explicit lists.
 
 ### 2026-10-15 — M10.16d2: Lens Blur's GPU twin — live while dragging (branch `m10.16d2-lens-blur-gpu`, merged 2026-10-15)
 

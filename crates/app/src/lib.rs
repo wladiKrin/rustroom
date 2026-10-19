@@ -3,6 +3,7 @@
 pub mod action_log;
 pub mod ai_cache;
 pub mod ai_coverage;
+pub mod ai_denoise;
 pub mod ai_space;
 pub mod ai_worker;
 pub mod auto_tone_tool;
@@ -22,6 +23,10 @@ pub mod crop_tool;
 pub mod date_tree;
 pub mod decode_worker;
 pub mod defringe_tool;
+pub mod denoise_cache;
+pub mod denoise_tool;
+pub mod denoise_worker;
+pub mod denoised;
 pub mod depth_map;
 pub mod depth_tool;
 pub mod depth_view;

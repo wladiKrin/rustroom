@@ -93,6 +93,7 @@ fn main() {
                 ai_subject: ai_mask::SubjectModel::IsNet,
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: false,
+                denoise: rustroom_app::denoised::DenoiseUse::Compute,
             },
             &export::FileMetadata::resolve(&o.metadata, described()),
             None,

@@ -6,6 +6,7 @@
 //! ONNX Runtime on CPU, within the spec's "~3×" rule, and CoreML could not compile BiRefNet at all.
 //! No native library, identical on every platform. The spike's table is in the spec.
 
+pub mod denoise;
 pub mod depth;
 pub mod download;
 pub mod infer;

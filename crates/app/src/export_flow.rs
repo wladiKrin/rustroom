@@ -129,6 +129,7 @@ impl RustroomApp {
                 ai_subject: self.settings.ai_subject_model,
                 resampler: self.settings.resampler,
                 gpu_tail: self.settings.gpu_tail,
+                denoise: rustroom_app::denoised::DenoiseUse::Compute,
             },
             // ⚠ Read afresh when the run begins, and already repaired — a hand-edited 0 becomes 1
             // rather than spawning nothing, and a 64 becomes the core count rather than asking for
@@ -209,6 +210,9 @@ impl RustroomApp {
                     // keeps going. ⚠ No dialog can be open here — every collision is settled up
                     // front in `plan`, before anything is rendered or uploaded.
                     self.modal = crate::modals::Modal::UploadUnconfirmed { at, why };
+                }
+                ExportEvent::Denoising { name } => {
+                    self.export_progress = format!("Denoising {name} — minutes a photo…");
                 }
                 ExportEvent::Finished(report) => finished = Some(report),
             }

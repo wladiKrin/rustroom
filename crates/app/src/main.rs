@@ -44,6 +44,7 @@ mod commands;
 mod copies;
 mod date_rows;
 mod decode;
+mod denoise_flow;
 mod develop;
 #[cfg(target_os = "macos")]
 mod display_colorspace;
