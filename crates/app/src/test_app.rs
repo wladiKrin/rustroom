@@ -199,6 +199,7 @@ pub fn for_test() -> RustroomApp {
         import: None,
         ai: Default::default(),
         denoise: Default::default(),
+        removals: Default::default(),
         export_progress: String::new(),
         export_collision: None,
         export_apply_all: false,

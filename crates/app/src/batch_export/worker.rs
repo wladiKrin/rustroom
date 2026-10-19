@@ -621,6 +621,21 @@ fn run(
                         )?;
                         src.ai.set_denoised(Some(d));
                     }
+                    // ⚠ M10.16c1: the removals' fills too — the cache, or for the user's export the network
+                    // there and then: an export never shows the object a removal took away.
+                    if !p.edits.removals.is_empty() {
+                        let compute =
+                            matches!(render.denoise, crate::denoised::DenoiseUse::Compute);
+                        for (r, f) in crate::removal::for_export(
+                            &p.source,
+                            &src.image,
+                            &p.edits,
+                            compute,
+                            crate::removal::user_sources(),
+                        )? {
+                            src.ai.insert_fill(&r, f);
+                        }
+                    }
                     Ok(src)
                 });
 

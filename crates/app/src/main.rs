@@ -72,6 +72,7 @@ mod name_edit;
 mod native_menu;
 mod preset_ops;
 mod preview_flow;
+mod removal_flow;
 mod rename_flow;
 mod segmented;
 mod send_flow;

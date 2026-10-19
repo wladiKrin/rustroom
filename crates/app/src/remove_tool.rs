@@ -306,9 +306,15 @@ fn prompt(r: &Removal, win: [usize; 4], w: usize, h: usize) -> (Vec<[f32; 2]>, [
 /// One removal's fill from `img` — the undeveloped decode, positive, full resolution.
 ///
 /// `detect` is asked only when the removal has Detect objects; the object it finds joins the hole.
+///
+/// ⚠⚠ A film negative (`negative` active): the network sees the POSITIVE — the Warnings' rule for every
+/// reader of the undeveloped decode — and the fill goes back through [`pipeline::negative::negative_of`],
+/// because the removals' step runs before the negative's inversion. So a fill stays right when the
+/// negative's settings change later: it is what the film would have held there.
 pub fn fill(
     img: &ImageBuf,
     r: &Removal,
+    negative: &edit_model::Negative,
     net: Net<'_>,
     detect: Option<Detect<'_>>,
 ) -> Result<pipeline::Fill, String> {
@@ -317,8 +323,12 @@ pub fn fill(
         return Err("nothing to fill".into());
     }
     let win = window(r, w, h);
-    let enc = ai_denoise::Encoding::of(&img.crop(win[0], win[1], win[2] - win[0], win[3] - win[1]));
-    let rgb: Vec<f32> = resample(img, win, SIDE)
+    let mut crop = img.crop(win[0], win[1], win[2] - win[0], win[3] - win[1]);
+    if negative.is_active() {
+        crop = crop.map_pixels(|p| pipeline::negative::positive(p, negative));
+    }
+    let enc = ai_denoise::Encoding::of(&crop);
+    let rgb: Vec<f32> = resample(&crop, [0, 0, crop.width(), crop.height()], SIDE)
         .chunks(3)
         .flat_map(|p| enc.encode([p[0], p[1], p[2]]))
         .collect();
@@ -356,7 +366,7 @@ pub fn fill(
     }
     let rgb = out
         .chunks(3)
-        .flat_map(|p| enc.decode([p[0], p[1], p[2]]))
+        .flat_map(|p| pipeline::negative::negative_of(enc.decode([p[0], p[1], p[2]]), negative))
         .collect();
     Ok(pipeline::Fill {
         rect: [
@@ -509,6 +519,7 @@ mod tests {
                         variant,
                         ..r.clone()
                     },
+                    &edit_model::Negative::default(),
                     &mut |rgb, _| {
                         got = rgb.to_vec();
                         Ok(rgb.to_vec())
@@ -600,6 +611,7 @@ mod tests {
         let f = fill(
             &img,
             &r,
+            &edit_model::Negative::default(),
             &mut |rgb, mask| {
                 assert_eq!(
                     (rgb.len(), mask.len()),
@@ -666,6 +678,78 @@ mod tests {
         );
     }
 
+    /// Review Focus 4: on a film negative the network sees the positive, and the fill it returns lands back
+    /// in the negative's units — through the negative step it is the network's answer again.
+    #[test]
+    fn the_fill_reads_the_positive() {
+        let n = edit_model::Negative {
+            on: true,
+            base: [0.8, 0.5, 0.3],
+            gamma: 0.6,
+            low: [0.05; 3],
+            high: [1.6; 3],
+            mono: false,
+        };
+        // A flat negative: one film colour everywhere, so every resampled pixel is exactly it.
+        let film = [0.2, 0.15, 0.1];
+        let img = ImageBuf::from_vec(1200, 900, film.repeat(1200 * 900));
+        let r = stroke(vec![[0.5, 0.5]], 0.01);
+        let win = window(&r, 1200, 900);
+        let pos = img
+            .crop(win[0], win[1], win[2] - win[0], win[3] - win[1])
+            .map_pixels(|p| pipeline::negative::positive(p, &n));
+        let enc = ai_denoise::Encoding::of(&pos);
+        let want_in = enc.encode(pipeline::negative::positive(film, &n));
+        let mut seen = Vec::new();
+        let f = fill(
+            &img,
+            &r,
+            &n,
+            &mut |rgb, mask| {
+                seen = rgb[..3].to_vec();
+                Ok(rgb
+                    .chunks(3)
+                    .zip(mask)
+                    .flat_map(|(p, &m)| {
+                        if m >= 0.5 {
+                            [0.6, 0.4, 0.2]
+                        } else {
+                            [p[0], p[1], p[2]]
+                        }
+                    })
+                    .collect())
+            },
+            None,
+        )
+        .unwrap();
+        for c in 0..3 {
+            assert!(
+                (seen[c] - want_in[c]).abs() < 1e-5,
+                "the network saw {seen:?}, the positive is {want_in:?}"
+            );
+        }
+        let centre = (f.h / 2) * f.w + f.w / 2;
+        assert_eq!(
+            f.alpha[centre], 1.0,
+            "the fixture: the centre is in the stroke"
+        );
+        let back = pipeline::negative::positive(
+            [
+                f.rgb[centre * 3],
+                f.rgb[centre * 3 + 1],
+                f.rgb[centre * 3 + 2],
+            ],
+            &n,
+        );
+        let want = enc.decode([0.6, 0.4, 0.2]);
+        for c in 0..3 {
+            assert!(
+                (back[c] - want[c]).abs() < 1e-3 * want[c].max(0.1),
+                "{back:?} vs {want:?}"
+            );
+        }
+    }
+
     /// The distance from decode pixel `(x, y)` to the stroke, in decode pixels — the test's own.
     fn distance_to(r: &Removal, w: usize, h: usize, x: f32, y: f32) -> f32 {
         let p: Vec<[f32; 2]> = r
@@ -715,6 +799,7 @@ mod tests {
         fill(
             &img,
             &r,
+            &edit_model::Negative::default(),
             &mut |rgb, m| {
                 grown_hole = m.iter().filter(|&&v| v >= 0.5).count();
                 Ok(rgb.to_vec())
@@ -731,6 +816,7 @@ mod tests {
                 detect: false,
                 ..r.clone()
             },
+            &edit_model::Negative::default(),
             &mut |rgb, m| {
                 plain_hole = m.iter().filter(|&&v| v >= 0.5).count();
                 Ok(rgb.to_vec())
