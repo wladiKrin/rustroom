@@ -395,4 +395,95 @@ mod tests {
             );
         }
     }
+
+    /// Real-model measurement (M10.16c1) — `#[ignore]`, run with `RUSTROOM_AI_MODELS=<dir>
+    /// RUSTROOM_AI_PHOTO=<jpg> cargo test --workspace --release -- --ignored real_remove --nocapture`:
+    /// LaMa's load, one fill through `remove_tool::fill` on a real photo, its cache file, and the paste
+    /// over the whole frame — and the fill must differ from the photo under the stroke.
+    #[test]
+    #[ignore]
+    fn real_remove_fills_a_photo() {
+        let (Some(models), Some(photo)) = (
+            std::env::var("RUSTROOM_AI_MODELS").ok(),
+            std::env::var("RUSTROOM_AI_PHOTO").ok(),
+        ) else {
+            return;
+        };
+        let rgb = image::open(&photo).expect("the photo").to_rgb8();
+        let (w, h) = (rgb.width() as usize, rgb.height() as usize);
+        let img = ImageBuf::from_vec(
+            w,
+            h,
+            rgb.pixels()
+                .flat_map(|p| p.0.map(|v| color::srgb_to_linear(v as f32 / 255.0)))
+                .collect(),
+        );
+        let t = std::time::Instant::now();
+        let mut net = lama(Path::new(&models)).expect("LaMa loads");
+        eprintln!("load {:.1} s", t.elapsed().as_secs_f64());
+        let r = Removal {
+            points: vec![[0.45, 0.5], [0.5, 0.52], [0.55, 0.5]],
+            radius: 0.02,
+            detect: false,
+            variant: 0,
+            opacity: 100.0,
+        };
+        let t = std::time::Instant::now();
+        let f = remove_tool::fill(
+            &img,
+            &r,
+            &edit_model::Negative::default(),
+            net.as_mut(),
+            None,
+        )
+        .expect("filled");
+        eprintln!("fill {:.2} s ({w} x {h})", t.elapsed().as_secs_f64());
+        let d = test_dir::TempDir::new("removal-real");
+        crate::removal_cache::store(d.path(), "k", &f).unwrap();
+        let bytes = std::fs::metadata(d.path().join("k.rrfl")).unwrap().len();
+        eprintln!("cache {:.2} MB", bytes as f64 / 1e6);
+        struct One(Arc<Fill>);
+        impl pipeline::AiRasters for One {
+            fn source(
+                &self,
+                _: &edit_model::Mask,
+            ) -> Option<(Arc<dyn pipeline::RasterSource>, u64)> {
+                None
+            }
+            fn fill(&self, _: &Removal) -> Option<(Arc<Fill>, u64)> {
+                Some((Arc::clone(&self.0), 1))
+            }
+        }
+        let e = Edits {
+            removals: vec![r.clone()],
+            ..Edits::default()
+        };
+        let maps = One(Arc::new(f));
+        let steps = pipeline::build_prefix_steps(
+            &e,
+            pipeline::RenderScale::FULL,
+            None,
+            pipeline::Resampler::default(),
+            None,
+            Some(&maps),
+        );
+        assert_eq!(steps.len(), 1, "the removal's step");
+        // ⚠ The copy is made BEFORE the clock starts: a 312 MB clone inside it read as a 197 ms paste.
+        let mut out = img.clone();
+        for run in 0..3 {
+            let frame = img.clone();
+            let t = std::time::Instant::now();
+            out = steps[0].stage.apply(frame);
+            eprintln!("paste {run}: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+        }
+        let (cx, cy) = (w / 2, h / 2);
+        let moved: f32 = (0..3)
+            .map(|c| (out.pixel(cx, cy)[c] - img.pixel(cx, cy)[c]).abs())
+            .sum();
+        let corner = (0..3)
+            .map(|c| (out.pixel(5, 5)[c] - img.pixel(5, 5)[c]).abs())
+            .sum::<f32>();
+        assert!(corner == 0.0, "the paste reached the corner");
+        eprintln!("under the stroke the photo moved by {moved}");
+    }
 }
