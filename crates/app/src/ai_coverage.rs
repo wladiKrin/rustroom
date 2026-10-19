@@ -61,6 +61,30 @@ pub struct AiMaps {
     /// by [`AiMaps::clear`] and the generation: a film negative's pick does not change the decode it was
     /// computed on, and the tint does not read it.
     denoised: Option<(std::sync::Arc<crate::denoised::Denoised>, u64)>,
+    /// The Remove brush's fills (M10.16c1), each under its removal with Opacity zeroed — a fill does not
+    /// depend on it — and its content id. ⚠ Not maps either: [`AiMaps::clear`] leaves them, and a fill is
+    /// stored in the decode's own units, right whatever the negative's settings become.
+    fills: Vec<(edit_model::Removal, std::sync::Arc<pipeline::Fill>, u64)>,
+}
+
+/// A removal as its fill knows it: everything but Opacity, which only blends the fill.
+fn fill_identity(r: &edit_model::Removal) -> edit_model::Removal {
+    edit_model::Removal {
+        opacity: 0.0,
+        ..r.clone()
+    }
+}
+
+/// A fill's identity by CONTENT — `content_id`'s rule.
+fn fill_content_id(f: &pipeline::Fill) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    f.rect.map(f32::to_bits).hash(&mut h);
+    (f.w, f.h).hash(&mut h);
+    for v in f.rgb.iter().chain(&f.alpha) {
+        v.to_bits().hash(&mut h);
+    }
+    h.finish().max(1)
 }
 
 /// A map's identity by CONTENT — the same pixels are the same map wherever they came from. What the
@@ -115,6 +139,29 @@ impl AiMaps {
     /// ⚠ Only over the decode it was computed on — the session's full-resolution one, an export's own.
     pub fn set_denoised(&mut self, d: Option<(std::sync::Arc<crate::denoised::Denoised>, u64)>) {
         self.denoised = d;
+    }
+
+    /// `r`'s fill and its content id, whatever `r`'s Opacity.
+    pub fn fill(&self, r: &edit_model::Removal) -> Option<(std::sync::Arc<pipeline::Fill>, u64)> {
+        let want = fill_identity(r);
+        self.fills
+            .iter()
+            .find(|(k, _, _)| *k == want)
+            .map(|(_, f, id)| (std::sync::Arc::clone(f), *id))
+    }
+
+    /// `f` as `r`'s fill — over any it had. A fill is normalised over the decode, so it fits every decode.
+    pub fn insert_fill(&mut self, r: &edit_model::Removal, f: std::sync::Arc<pipeline::Fill>) {
+        let key = fill_identity(r);
+        let id = fill_content_id(&f);
+        self.fills.retain(|(k, _, _)| *k != key);
+        self.fills.push((key, f, id));
+    }
+
+    /// Only the fills of `removals` kept — a deleted removal's goes.
+    pub fn retain_fills(&mut self, removals: &[edit_model::Removal]) {
+        let keep: Vec<_> = removals.iter().map(fill_identity).collect();
+        self.fills.retain(|(k, _, _)| keep.contains(k));
     }
 }
 
@@ -485,6 +532,11 @@ impl pipeline::AiRasters for AiSource<'_> {
         ))
     }
 
+    /// M10.16c1: a removal's fill, as [`AiMaps::insert_fill`] was given it.
+    fn fill(&self, r: &edit_model::Removal) -> Option<(std::sync::Arc<pipeline::Fill>, u64)> {
+        self.maps.fill(r)
+    }
+
     /// M10.16d: the focus from the decode-space maps — `lens_blur_tool`'s rules; `None` while a map
     /// it is measured on has not arrived.
     fn lens_focus(&self, lb: &edit_model::LensBlur) -> Option<f32> {
@@ -612,6 +664,48 @@ pub fn to_frame(
 
 #[cfg(test)]
 mod tests {
+
+    /// M10.16c1: a fill is found by its removal whatever the removal's Opacity, follows a new fill's
+    /// content, and goes with its removal.
+    #[test]
+    fn a_fill_is_found_by_its_removal_whatever_its_opacity() {
+        let r = edit_model::Removal {
+            points: vec![[0.5, 0.5]],
+            radius: 0.02,
+            detect: false,
+            variant: 0,
+            opacity: 100.0,
+        };
+        let f = |v: f32| {
+            std::sync::Arc::new(pipeline::Fill {
+                rect: [0.1, 0.1, 0.4, 0.4],
+                w: 2,
+                h: 2,
+                rgb: vec![v; 12],
+                alpha: vec![1.0; 4],
+            })
+        };
+        let mut maps = AiMaps::default();
+        assert!(maps.fill(&r).is_none());
+        maps.insert_fill(&r, f(0.2));
+        let faint = edit_model::Removal {
+            opacity: 30.0,
+            ..r.clone()
+        };
+        let (_, a) = maps.fill(&faint).expect("found at any Opacity");
+        let refreshed = edit_model::Removal {
+            variant: 1,
+            ..r.clone()
+        };
+        assert!(maps.fill(&refreshed).is_none(), "Refresh is another fill");
+        maps.insert_fill(&r, f(0.3));
+        let (_, b) = maps.fill(&r).unwrap();
+        assert_ne!(a, b, "a new fill, a new id");
+        maps.clear();
+        assert!(maps.fill(&r).is_some(), "not a map: `clear` leaves it");
+        maps.retain_fills(&[refreshed]);
+        assert!(maps.fill(&r).is_none(), "its removal deleted");
+    }
     use super::*;
     use edit_model::AiMask;
     use edit_model::{Geometry, Perspective};

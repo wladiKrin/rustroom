@@ -222,6 +222,10 @@ pub struct Session {
     pub(crate) suppressed_eye: Option<usize>,
     /// The eye gesture across frames — on the session for `spot_drag`'s reason.
     pub(crate) eye_drag: crate::develop::canvas::eye_overlay::EyeDrag,
+    /// The lens corrector the canvas maps through, built once per lens and decode size (M10.16c1's review).
+    pub(crate) lens_memo: rustroom_app::ai_space::CorrectorMemo,
+    /// The Remove gesture and the selected removal (M10.16c1) — `spot_drag`'s reason.
+    pub(crate) removal: crate::develop::canvas::remove_overlay::RemovalUi,
     /// Drawn perspective guides.
     ///
     /// ⚠⚠ **View state, never `Edits`.** A guide is scaffolding for arriving at a slider value,

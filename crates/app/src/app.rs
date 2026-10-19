@@ -1,8 +1,8 @@
 //! The application's state: the one `RustroomApp`, and the view and Library mode it is in.
 
 use crate::{
-    ai_flow, denoise_flow, develop, import_flow, modals, multi, preview_flow, Library, Modal,
-    PendingOpen, Session,
+    ai_flow, denoise_flow, develop, import_flow, modals, multi, preview_flow, removal_flow,
+    Library, Modal, PendingOpen, Session,
 };
 use edit_model::{EditGroups, Edits};
 use eframe::egui;
@@ -186,6 +186,8 @@ pub(crate) struct RustroomApp {
     /// The red-eye tool's settings (M9.11) — `spot_tool`'s standing. Its `active` field is the
     /// Retouch tool's eye mode: `None` places patches, `Some(kind)` places eyes.
     pub(crate) eye_tool: rustroom_app::eye_tool::EyeTool,
+    /// The Remove brush (M10.16c1) — `spot_tool`'s standing; its `active` is Retouch's first mode.
+    pub(crate) remove_tool: rustroom_app::remove_tool::RemoveTool,
     /// Which HSL channel the Color section's selector is showing. View state, per app —
     /// like a brush size, it is a property of the tool and not of the photograph.
     pub(crate) hsl_channel: develop::panel::adjustments::HslChannel,
@@ -325,6 +327,8 @@ pub(crate) struct RustroomApp {
     pub(crate) ai: ai_flow::AiState,
     /// AI denoise's job and the open photo's result (M10.16b).
     pub(crate) denoise: denoise_flow::DenoiseState,
+    /// The Remove brush's fills for the open photo (M10.16c1).
+    pub(crate) removals: removal_flow::RemovalState,
     /// The destination awaiting a collision answer; `Some` means the worker is blocked.
     pub(crate) export_collision: Option<PathBuf>,
     /// Scratch state for the collision dialog's "apply to all" tick.

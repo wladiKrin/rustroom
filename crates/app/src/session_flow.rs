@@ -216,7 +216,8 @@ impl Session {
         for i in gone.into_iter().rev() {
             e.spots.remove(i);
         }
-        // M9.11: the eye being moved or resized leaves the view too, `suppressed_spot`'s reason.
+        self.removal.hold_out(&mut e.removals); // M10.16c1: a held-out removal shows what it covers
+                                                // M9.11: the eye being moved or resized leaves the view too, `suppressed_spot`'s reason.
         if let Some(i) = self.suppressed_eye {
             if i < e.eyes.len() {
                 e.eyes.remove(i);
@@ -749,6 +750,8 @@ impl RustroomApp {
             selected_eye: None,
             suppressed_eye: None,
             eye_drag: Default::default(),
+            removal: Default::default(),
+            lens_memo: Default::default(),
             active_mask_handle: None,
             guides: Vec::new(),
             active_guide: None,

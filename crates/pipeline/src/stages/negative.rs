@@ -56,6 +56,28 @@ pub fn positive(rgb: [f32; 3], n: &Negative) -> [f32; 3] {
     })
 }
 
+/// What the negative held where the positive is `p` — [`positive`]'s inverse wherever it did not clip at
+/// black (M10.16c1: a fill computed on the positive is pasted onto the negative, before this stage). A black
+/// and white negative gives back the neutral `p`'s mean through the base. `p` itself when `n` is not active.
+pub fn negative_of(p: [f32; 3], n: &Negative) -> [f32; 3] {
+    if !n.is_active() {
+        return p;
+    }
+    let (low, high, p) = if n.mono {
+        let mean = |v: [f32; 3]| (v[0] + v[1] + v[2]) / 3.0;
+        ([mean(n.low); 3], [mean(n.high); 3], [mean(p); 3])
+    } else {
+        (n.low, n.high, p)
+    };
+    let light = |d: f32| 10f32.powf(d / n.gamma);
+    std::array::from_fn(|c| {
+        let (black, white) = (light(low[c]), light(high[c]));
+        let l = (p[c].max(0.0) / TARGET * (white - black) + black).max(FLOOR);
+        let d = n.gamma * l.log10();
+        n.base[c] * 10f32.powf(-d)
+    })
+}
+
 /// The negative stage: [`positive`] over every pixel.
 pub struct NegativeStage {
     n: Negative,
@@ -209,5 +231,38 @@ mod tests {
         img.set_pixel(1, 0, BASE);
         let out = NegativeStage::new(&negative(0.0, 1.8)).apply(img);
         assert_eq!(out.pixel(1, 0), [0.0; 3], "the stage applies `positive`");
+    }
+
+    /// M10.16c1: a fill computed on the positive goes back onto the negative — what film would have held
+    /// there, so `positive` of it is the fill again, colour and black and white alike; with the negative off
+    /// both are the identity.
+    #[test]
+    fn negative_of_undoes_positive() {
+        for n in [
+            negative(0.05, 1.6),
+            Negative {
+                mono: true,
+                ..negative(0.1, 1.5)
+            },
+        ] {
+            for p in [
+                [0.05, 0.3, 0.8],
+                [0.9, 0.9, 0.9],
+                [0.2, 0.2, 0.2],
+                [0.6, 0.1, 0.4],
+            ] {
+                let p = if n.mono { [p[0]; 3] } else { p };
+                let back = positive(negative_of(p, &n), &n);
+                for c in 0..3 {
+                    assert!(
+                        (back[c] - p[c]).abs() < 1e-4,
+                        "{p:?} → {back:?} (mono {})",
+                        n.mono
+                    );
+                }
+            }
+        }
+        let off = Negative::default();
+        assert_eq!(negative_of([0.3, 0.4, 0.5], &off), [0.3, 0.4, 0.5]);
     }
 }

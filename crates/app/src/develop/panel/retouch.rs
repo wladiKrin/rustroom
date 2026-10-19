@@ -6,6 +6,7 @@
 //! lit whenever no patch is selected, so which patch the sliders edit is a row, not a sentence.
 
 use super::retouch_eyes::{self, Mode};
+use super::retouch_remove;
 use super::Edited;
 use crate::develop::panel::{mask_components, section};
 use crate::theme;
@@ -15,6 +16,7 @@ use edit_model::SpotMode;
 use eframe::egui;
 use rustroom_app::eye_tool::EyeTool;
 use rustroom_app::mask_tool;
+use rustroom_app::remove_tool::RemoveTool;
 use rustroom_app::spot_tool::{self, SpotTool, MAX_RADIUS, MIN_RADIUS};
 
 /// Draw the Retouch controls.
@@ -27,6 +29,7 @@ pub(crate) fn show_with(
     s: &mut Session,
     tool: &mut SpotTool,
     eyes: &mut EyeTool,
+    remove: &mut RemoveTool,
     ed: &mut Edited,
 ) {
     // ⚠ Once per frame, before anything reads them: undo, paste, snapshots and the canvas all
@@ -67,12 +70,17 @@ pub(crate) fn show_with(
         eyes.active = None;
         s.selected_eye = None;
     }
+    // ⚠ M10.16c1: the removals beside the patches, while there are any or Remove is the mode.
+    if !s.edits.removals.is_empty() || remove.active {
+        ui.add_space(6.0);
+        retouch_remove::list(ui, s, ed);
+    }
     if !s.edits.eyes.is_empty() || eyes.active.is_some() {
         ui.add_space(6.0);
         retouch_eyes::list(ui, s, eyes, ed);
     }
     ui.add_space(6.0);
-    settings(ui, s, tool, eyes, ed);
+    settings(ui, s, tool, eyes, remove, ed);
     find_dust(ui, s, ed);
 }
 
@@ -80,7 +88,16 @@ pub(crate) fn show_with(
 /// calls [`show_with`]; eye tests call it too.
 #[cfg(test)]
 pub(crate) fn show(ui: &mut egui::Ui, s: &mut Session, tool: &mut SpotTool, ed: &mut Edited) {
-    show_with(ui, s, tool, &mut EyeTool::default(), ed);
+    show_with(ui, s, tool, &mut EyeTool::default(), &mut patch_mode(), ed);
+}
+
+/// ⚠ Test-only: the Remove brush standing down, so a patch or eye test is in the mode it tests.
+#[cfg(test)]
+pub(crate) fn patch_mode() -> RemoveTool {
+    RemoveTool {
+        active: false,
+        ..RemoveTool::default()
+    }
 }
 
 /// The Next patch row and one row per patch.
@@ -230,6 +247,7 @@ fn settings(
     s: &mut Session,
     tool: &mut SpotTool,
     eyes: &mut EyeTool,
+    remove: &mut RemoveTool,
     ed: &mut Edited,
 ) {
     // ⚠ M9.11: four modes, one selector. The patch modes keep their old behaviour exactly — a
@@ -239,13 +257,14 @@ fn settings(
         .selected_spot
         .and_then(|i| s.edits.spots.get(i))
         .map_or(tool.mode, |sp| sp.mode);
-    let was = Mode::current(spot_mode, eyes.active);
+    let was = Mode::current(spot_mode, eyes.active, remove.active);
     let mut m = was;
     let font = egui::TextStyle::Body.resolve(ui.style());
     theme::segmented_sized(
         ui,
         &mut m,
         &[
+            (Mode::Remove, "Remove", retouch_remove::REMOVE_HINT),
             (Mode::Heal, "Heal", HEAL_HINT),
             (Mode::Clone, "Clone", CLONE_HINT),
             (Mode::RedEye, "Red eye", retouch_eyes::RED_EYE_HINT),
@@ -255,12 +274,16 @@ fn settings(
         font,
     );
     let chosen = if m != was {
-        retouch_eyes::apply_mode(s, eyes, m, ed)
+        retouch_eyes::apply_mode(s, eyes, remove, m, ed)
     } else {
         None
     };
     if eyes.active.is_some() {
         retouch_eyes::settings(ui, s, eyes, ed);
+        return;
+    }
+    if remove.active {
+        retouch_remove::settings(ui, s, remove, ed);
         return;
     }
 
@@ -684,7 +707,7 @@ mod tests {
             crate::test_ui::click(&ctx, label, |ui| {
                 let mut ed = Edited::default();
                 let s = self.app.session.as_mut().expect("session");
-                show_with(ui, s, &mut tool, &mut eyes, &mut ed);
+                show_with(ui, s, &mut tool, &mut eyes, &mut patch_mode(), &mut ed);
                 if ed.changed || ed.settled {
                     seen = ed;
                 }
@@ -771,7 +794,14 @@ mod tests {
         crate::test_app::open_test_photo(&mut app, &ctx, 64, 48);
         let found = crate::test_ui::find(&ctx, "Eyes", |ui| {
             let (mut t, mut e, mut ed) = (app.spot_tool, app.eye_tool, Edited::default());
-            show_with(ui, app.session.as_mut().unwrap(), &mut t, &mut e, &mut ed);
+            show_with(
+                ui,
+                app.session.as_mut().unwrap(),
+                &mut t,
+                &mut e,
+                &mut patch_mode(),
+                &mut ed,
+            );
         });
         assert!(
             found.is_none(),
@@ -780,7 +810,14 @@ mod tests {
         app.eye_tool.active = Some(edit_model::EyeKind::Red);
         let found = crate::test_ui::find(&ctx, "Eyes", |ui| {
             let (mut t, mut e, mut ed) = (app.spot_tool, app.eye_tool, Edited::default());
-            show_with(ui, app.session.as_mut().unwrap(), &mut t, &mut e, &mut ed);
+            show_with(
+                ui,
+                app.session.as_mut().unwrap(),
+                &mut t,
+                &mut e,
+                &mut patch_mode(),
+                &mut ed,
+            );
         });
         assert!(found.is_some(), "no Eyes list in an eye mode");
     }

@@ -47,11 +47,50 @@ pub fn lens_key(
     hsh.finish().max(1)
 }
 
+/// The lens corrector a decode gets, built once per lens, its corrections and the decode's size.
+///
+/// ⚠ A corrector samples its whole displacement field when it is built — 290–370 ms on an X-T4 decode —
+/// and Retouch built one on EVERY frame, so with a lens profile a hover over the photo ran at a few frames
+/// a second (the author's report on M10.16c1, 2026-10-19). Look it up here, never build it per frame.
+#[derive(Default)]
+pub struct CorrectorMemo {
+    held: Option<(u64, Option<std::sync::Arc<lens_profile::Corrector>>)>,
+}
+
+impl CorrectorMemo {
+    /// `corrector_for`'s answer for this lens, these edits' corrections and a `w × h` decode — the held one
+    /// while [`lens_key`] says nothing changed.
+    pub fn get(
+        &mut self,
+        shot: Option<&lens_profile::LensShot>,
+        edits: &edit_model::Edits,
+        w: usize,
+        h: usize,
+    ) -> Option<std::sync::Arc<lens_profile::Corrector>> {
+        let key = lens_key(shot, edits, w, h);
+        if let Some((k, c)) = &self.held {
+            if *k == key {
+                return c.clone();
+            }
+        }
+        let c = shot
+            .and_then(|s| corrector_for(s, edits, w, h))
+            .map(std::sync::Arc::new);
+        self.held = Some((key, c.clone()));
+        c
+    }
+
+    /// The corrector held now — what a test reads to see one was not built again.
+    pub fn held(&self) -> Option<&std::sync::Arc<lens_profile::Corrector>> {
+        self.held.as_ref().and_then(|(_, c)| c.as_ref())
+    }
+}
+
 /// Frame pixels → decode-normalised coordinates.
 pub struct DecodeMap {
     spot: SpotMap,
     frame: (f32, f32),
-    corr: Option<lens_profile::Corrector>,
+    corr: Option<std::sync::Arc<lens_profile::Corrector>>,
     /// The decode's size in pixels — the post-lens frame has the same size.
     decode: (f32, f32),
 }
@@ -65,6 +104,27 @@ impl DecodeMap {
         frame_w: usize,
         frame_h: usize,
         corr: Option<lens_profile::Corrector>,
+        decode_w: usize,
+        decode_h: usize,
+    ) -> Self {
+        Self::with_shared(
+            geometry,
+            perspective,
+            frame_w,
+            frame_h,
+            corr.map(std::sync::Arc::new),
+            decode_w,
+            decode_h,
+        )
+    }
+
+    /// [`Self::new`] with a corrector held elsewhere — a [`CorrectorMemo`]'s.
+    pub fn with_shared(
+        geometry: &Geometry,
+        perspective: Perspective,
+        frame_w: usize,
+        frame_h: usize,
+        corr: Option<std::sync::Arc<lens_profile::Corrector>>,
         decode_w: usize,
         decode_h: usize,
     ) -> Self {
@@ -96,6 +156,21 @@ impl DecodeMap {
     pub fn frame_size(&self) -> (f32, f32) {
         self.frame
     }
+
+    /// Decode-normalised `d` → frame pixel `(fx, fy)` — [`Self::frame_to_decode`]'s inverse, for drawing
+    /// what lives in decode space (M10.16c1's removals). ⚠ The lens has no forward map (M10.12c), so its
+    /// inverse is solved by fixed-point iteration — a distortion is a few percent, and eight steps land
+    /// within a hundredth of a pixel.
+    pub fn decode_to_frame(&self, d: [f32; 2]) -> (f32, f32) {
+        let mut p = d;
+        if self.corr.is_some() {
+            for _ in 0..8 {
+                let at = self.post_lens_to_decode(p);
+                p = [p[0] + d[0] - at[0], p[1] + d[1] - at[1]];
+            }
+        }
+        self.spot.point(p)
+    }
 }
 
 #[cfg(test)]
@@ -118,6 +193,103 @@ mod tests {
             (u - 0.25).abs() < 0.01 && (v - 0.25).abs() < 0.01,
             "{u},{v}"
         );
+    }
+
+    /// M10.16c1: a decode point drawn on the frame lands where the frame point it came from was — through
+    /// a rotation and crop, and through a lens's distortion.
+    #[test]
+    fn decode_to_frame_undoes_frame_to_decode() {
+        let mut g = Geometry {
+            angle: 4.0,
+            ..Default::default()
+        };
+        g.orientation.rotate_cw();
+        let xml = r#"<lensdatabase version="1">
+            <camera><maker>M</maker><model>C</model><mount>X</mount><cropfactor>1.0</cropfactor></camera>
+            <lens><maker>M</maker><model>L 50mm</model><mount>X</mount><cropfactor>1.0</cropfactor>
+                <calibration><distortion model="ptlens" focal="50" a="0.0" b="0.05" c="0.0"/></calibration>
+            </lens></lensdatabase>"#;
+        let db = lens_profile::Catalogue::from_xml(xml).unwrap();
+        let profile = db.find("M", "C", "L 50mm").unwrap();
+        let corr = lens_profile::Corrector::new(
+            &profile,
+            &lens_profile::Shot {
+                focal: 50.0,
+                aperture: 2.8,
+            },
+            300,
+            200,
+            lens_profile::Corrections {
+                distortion: true,
+                tca: false,
+                vignetting: false,
+                scale: 1.0,
+            },
+        );
+        assert!(corr.is_some(), "the fixture's lens corrects");
+        for corr in [None, corr] {
+            let lens = corr.is_some();
+            let m = DecodeMap::new(&g, Perspective::default(), 200, 300, corr, 300, 200);
+            for (fx, fy) in [(20.0, 30.0), (100.0, 150.0), (180.0, 270.0)] {
+                let d = m.frame_to_decode(fx, fy);
+                let (bx, by) = m.decode_to_frame(d);
+                assert!(
+                    (bx - fx).abs() < 0.05 && (by - fy).abs() < 0.05,
+                    "({fx}, {fy}) → {d:?} → ({bx}, {by}), lens {lens}"
+                );
+            }
+        }
+    }
+
+    /// The Retouch review (2026-10-19): a corrector samples its whole displacement field when built —
+    /// 290–370 ms on an X-T4 — so the memo hands back the same one while the lens, its corrections and the
+    /// decode's size stay, and a new one when any changes.
+    #[test]
+    fn a_corrector_is_built_once_per_lens_and_size() {
+        let xml = r#"<lensdatabase version="1">
+            <camera><maker>M</maker><model>C</model><mount>X</mount><cropfactor>1.0</cropfactor></camera>
+            <lens><maker>M</maker><model>L 50mm</model><mount>X</mount><cropfactor>1.0</cropfactor>
+                <calibration><distortion model="ptlens" focal="50" a="0.0" b="0.05" c="0.0"/></calibration>
+            </lens></lensdatabase>"#;
+        let db = lens_profile::Catalogue::from_xml(xml).unwrap();
+        let shot = lens_profile::LensShot {
+            profile: db.find("M", "C", "L 50mm").unwrap(),
+            shot: lens_profile::Shot {
+                focal: 50.0,
+                aperture: 2.8,
+            },
+        };
+        let mut edits = edit_model::Edits {
+            lens_correction: Some(edit_model::LensCorrection {
+                distortion: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut memo = CorrectorMemo::default();
+        let a = memo
+            .get(Some(&shot), &edits, 300, 200)
+            .expect("a corrector");
+        let b = memo
+            .get(Some(&shot), &edits, 300, 200)
+            .expect("a corrector");
+        assert!(
+            std::sync::Arc::ptr_eq(&a, &b),
+            "built twice for the same lens"
+        );
+        let c = memo
+            .get(Some(&shot), &edits, 600, 400)
+            .expect("a corrector");
+        assert!(
+            !std::sync::Arc::ptr_eq(&a, &c),
+            "another size, the same corrector"
+        );
+        edits.lens_correction = Some(edit_model::LensCorrection::default());
+        assert!(
+            memo.get(Some(&shot), &edits, 600, 400).is_none(),
+            "corrections off"
+        );
+        assert!(memo.get(None, &edits, 600, 400).is_none(), "no lens");
     }
 
     /// ⚠ The property the space exists for: a quarter turn moves the frame, and the decode point

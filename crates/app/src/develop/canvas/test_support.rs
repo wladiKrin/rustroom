@@ -189,6 +189,8 @@ pub(super) fn retouch_app(ctx: &egui::Context) -> crate::RustroomApp {
     let mut app = crate::test_app::for_test();
     crate::test_app::open_test_photo(&mut app, ctx, 80, 60);
     app.tool = rustroom_app::tool::Tool::Retouch;
+    // ⚠ M10.16c1: the patch tests' subject is Heal — Remove, the default, takes the same gestures.
+    app.remove_tool.active = false;
     app
 }
 

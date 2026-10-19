@@ -18,6 +18,7 @@ pub(crate) mod mask_tint;
 pub(crate) mod navigation;
 mod paint;
 mod readout;
+pub(crate) mod remove_overlay;
 pub(crate) mod spot_overlay;
 mod straighten_overlay;
 #[cfg(test)]
@@ -81,6 +82,8 @@ struct CanvasInputs {
     app_show_depth_map: bool,
     /// Lens Blur's Visualize depth (M10.16d) — view state on the app.
     app_show_lens_depth: bool,
+    /// Retouch's Remove brush (M10.16c1) — the canvas reads it, only the panel changes it.
+    app_remove_tool: rustroom_app::remove_tool::RemoveTool,
 }
 
 /// Copy out everything the canvas reads — with the **outer** `ui`, whose rect `press_on_canvas` asks about.
@@ -136,7 +139,12 @@ fn hoist(app: &RustroomApp, ui: &egui::Ui) -> CanvasInputs {
     let panning = ui
         .ctx()
         .input(|i| navigation::pan_button_down(i, app_pan_drag, text_focused));
-    let view_only_gesture = press_on_canvas && (panning || app_suppressed_mask);
+    // ⚠ M10.16c1: a Remove stroke changes no pixel until its release either — the view must stay sharp
+    // under the brush.
+    let app_remove_stroke =
+        tool == Tool::Retouch && app.remove_tool.active && app.eye_tool.active.is_none();
+    let view_only_gesture =
+        press_on_canvas && (panning || app_suppressed_mask || app_remove_stroke);
     // ⚠⚠ **`press_origin.is_some()` as well as `is_decidedly_dragging()`, and it was found by
     // instrumenting.** On the RELEASE frame egui still reports a decided drag while the press
     // origin is already gone — the edge the comment above calls benign. It stops being benign
@@ -185,6 +193,7 @@ fn hoist(app: &RustroomApp, ui: &egui::Ui) -> CanvasInputs {
         app_brush_flow: app.brush_flow,
         app_show_depth_map: app.show_depth_map,
         app_show_lens_depth: app.show_lens_depth,
+        app_remove_tool: app.remove_tool,
     }
 }
 

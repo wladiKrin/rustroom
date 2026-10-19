@@ -249,8 +249,9 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, d** (table above).
 
-**▶ NEXT: M10.16c — content-aware remove** (P-26; start from `docs/BACKLOG.md`'s P-26 and the vault's M10.16c —
-`ai-mask`'s `tract` runtime, its model registry and `ai_mask::pth` are the shared half). Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
+**▶ NOW: M10.16c — Remove**, four parts (spec `2026-10-19-m10.16c-remove-design.md`): **c1 the Remove brush is built
+on `m10.16c-remove`, awaiting the author's look** (LaMa, his pick; `grep -n 'M10.16c1' docs/JOURNAL.md`); then c2 Dust,
+c3 People, c4 Reflections, each its own plan. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
 d), M10.14 f–h ⏸.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
@@ -380,6 +381,14 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   paired with the network it was made for. A new place that stores or reads a result takes the network too, or one
   network's pixels pass for the other's. ⚠ `ai_mask::pth` reads a `.pth` through a CLOSED pickle subset: never
   widen it to "any global" — a pickle is a program.
+- ⚠⚠ **Never build a lens `Corrector` per frame** — it samples its whole displacement field (290–370 ms on an
+  X-T4); Retouch did, on every hover frame, until M10.16c1's review. Read it through the session's
+  `ai_space::CorrectorMemo` (`Session.lens_memo`).
+- ⚠⚠ **A removal (M10.16c1) lives in DECODE space and its fill is pasted right AFTER AI denoise, BEFORE lens and
+  the negative** — AI denoise's result still holds the object. The fill is computed on the positive and stored in the
+  film's units (`pipeline::negative::negative_of`), keyed by `remove_tool::id` (never Opacity; bump its `RECIPE` on any
+  change to how a fill is made), and reaches the prefix through `AiRasters::fill` on its content id. ⚠ A decode-space
+  stroke is drawn through `DecodeMap::decode_to_frame` — the lens has no forward map, its inverse is iterated.
 - ⚠⚠ **Every reader of the undeveloped decode (`Session.buffer`) sees the positive** (M10.11a): a pixel
   through `negative_tool::view`, an image through `pipeline::negative::positive` (Auto tone, the AI
   input), and a cache of anything derived from it keyed on `edits.negative` (`ai_cache::key`, the AI

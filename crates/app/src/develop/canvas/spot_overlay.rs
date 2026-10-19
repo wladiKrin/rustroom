@@ -447,23 +447,13 @@ fn place_with_source(
 /// ⚠ Returns an **owned** closure: everything it needs is cloned or `Copy`, so it does not borrow
 /// the session and can therefore be built before `draw_spot_overlay` takes `&mut Session`. The
 /// buffer is behind an `Arc`, so "cloning" it copies a pointer.
-pub(super) fn sampler_for(s: &Session) -> impl Fn([f32; 2]) -> [f32; 3] {
+pub(super) fn sampler_for(s: &mut Session) -> impl Fn([f32; 2]) -> [f32; 3] {
     let buf = s.buffer.clone();
     let (w, h) = (buf.width(), buf.height());
-    let corr = s.lens.shot.as_ref().and_then(|shot| {
-        lens_profile::Corrector::new(
-            &shot.profile,
-            &shot.shot,
-            w,
-            h,
-            lens_profile::Corrections {
-                distortion: s.edits.applied_lens_correction().distortion,
-                tca: s.edits.applied_lens_correction().tca,
-                vignetting: s.edits.applied_lens_correction().vignetting,
-                scale: s.edits.applied_lens_correction().scale,
-            },
-        )
-    });
+    // ⚠⚠ From the session's memo, never built here: this runs on EVERY Retouch frame, and building a
+    // corrector samples its whole displacement field — 290–370 ms on an X-T4, a hover at a few frames a
+    // second (M10.16c1's review). `ai_space::corrector_for` is the one construction.
+    let corr = s.lens_memo.get(s.lens.shot.as_ref(), &s.edits, w, h);
     // ⚠ M10.11a: what the patches and eyes see is the positive — a red eye on a negative is cyan.
     let edits = s.edits.clone();
     move |p: [f32; 2]| {

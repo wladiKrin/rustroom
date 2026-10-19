@@ -75,6 +75,40 @@ pub struct Eye {
     pub catchlight: Option<[f32; 2]>,
 }
 
+/// One content-aware removal (M10.16c1): a painted stroke whose area a network fills from its
+/// surroundings.
+///
+/// ⚠⚠ **In DECODE space, unlike [`Spot`] and [`Eye`]:** `points` are normalised over the undeveloped
+/// decode — sensor orientation, before lens correction — because the fill is computed from the decode
+/// and pasted onto it, right after AI denoise. A spot's post-lens frame would put the fill where the
+/// lens warp moved it.
+///
+/// ⚠ The fill itself is not here: it is derived (by the app, once, cached) from the stroke, `detect`,
+/// `variant` and the network — never from `opacity`, which only blends it.
+///
+/// ⚠ No container-level `serde(default)`, `Spot`'s reason: a removal with its points defaulted would be
+/// one nobody painted. Only the three settings are optional.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Removal {
+    /// The stroke's dab centres, normalised per axis over the decode.
+    pub points: Vec<[f32; 2]>,
+    /// The brush radius as a fraction of the decode's **long edge** ([`Spot::radius`]'s rule).
+    pub radius: f32,
+    /// Detect objects: the stroke grows to the object under it (MobileSAM) before the fill.
+    #[serde(default)]
+    pub detect: bool,
+    /// Refresh's counter: each value fills from another context window.
+    #[serde(default)]
+    pub variant: u32,
+    /// 0..=100: how much of the fill is laid over the photo.
+    #[serde(default = "full_opacity")]
+    pub opacity: f32,
+}
+
+fn full_opacity() -> f32 {
+    100.0
+}
+
 /// What kind of flash reflection an [`Eye`] corrects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum EyeKind {
@@ -122,6 +156,34 @@ mod tests {
         // An older sidecar has no `spots` key and must load with none.
         let e: Edits = serde_json::from_str(r#"{"exposure": 0.5}"#).unwrap();
         assert!(e.spots.is_empty());
+    }
+
+    /// M10.16c1: a removal round-trips; an unstated `detect`, `variant` and `opacity` mean off, the first
+    /// fill and full strength; a removal nobody painted (no points) is refused; none is not written.
+    #[test]
+    fn a_removal_round_trips_and_its_optional_fields_default() {
+        let e = Edits {
+            removals: vec![Removal {
+                points: vec![[0.1, 0.2], [0.15, 0.22]],
+                radius: 0.03,
+                detect: true,
+                variant: 4,
+                opacity: 55.0,
+            }],
+            ..Edits::default()
+        };
+        let back: Edits = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
+        assert_eq!(back, e);
+        let hand = r#"{"removals":[{"points":[[0.1,0.2]],"radius":0.03}]}"#;
+        let r = &serde_json::from_str::<Edits>(hand).unwrap().removals[0];
+        assert_eq!((r.detect, r.variant, r.opacity), (false, 0, 100.0));
+        let unpainted = r#"{"removals":[{"radius":0.03}]}"#;
+        assert!(
+            serde_json::from_str::<Edits>(unpainted).is_err(),
+            "a removal nobody painted must not be invented"
+        );
+        let none = serde_json::to_string(&Edits::default()).unwrap();
+        assert!(!none.contains("removals"), "{none}");
     }
 
     #[test]

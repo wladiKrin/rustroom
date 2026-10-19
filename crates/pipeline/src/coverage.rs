@@ -166,6 +166,15 @@ pub trait AiRasters {
     fn denoised(&self) -> Option<(std::sync::Arc<dyn ImageSource>, u64)> {
         None
     }
+
+    /// A removal's fill (M10.16c1) and its identity (`source`'s rule: it follows the CONTENT); `None`
+    /// until the job has computed it — the removal then pastes nothing.
+    fn fill(
+        &self,
+        _r: &edit_model::Removal,
+    ) -> Option<(std::sync::Arc<crate::stages::remove::Fill>, u64)> {
+        None
+    }
 }
 
 /// A whole image a prefix step reads, resolved at the frame it runs on (M10.16b: the denoised photo) —

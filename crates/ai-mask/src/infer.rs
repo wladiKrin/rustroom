@@ -104,9 +104,10 @@ pub struct Embedding {
 pub struct Sam {
     encoder_path: std::path::PathBuf,
     decoder_path: std::path::PathBuf,
-    /// ⚠ One decoder per resized size: `tract` needs `orig_im_size` as a **constant fact**, because
-    /// the decoder's `Resize` takes its output size from it (M9.13 spike). Building one is ~0.2 s.
-    decoders: HashMap<(u32, u32), Plan>,
+    /// ⚠ One decoder per resized size and point count: `tract` needs `orig_im_size` as a **constant
+    /// fact**, because the decoder's `Resize` takes its output size from it (M9.13 spike). Building one
+    /// is ~0.2 s.
+    decoders: HashMap<(u32, u32, usize), Plan>,
 }
 
 impl Sam {
@@ -138,17 +139,51 @@ impl Sam {
 
     /// The region at normalised point `p` of the embedded photo — ~0.1 s.
     pub fn click(&mut self, e: &Embedding, p: [f32; 2]) -> Result<ProbMap, InferError> {
+        self.prompt(e, &[p], None)
+    }
+
+    /// The region asked for by `points` (each "in it", normalised) and an optional `bbox` around it
+    /// (`[x0, y0, x1, y1]`, normalised) — M10.16c1's Detect objects; a click is one point and no box.
+    ///
+    /// ⚠ SAM's ONNX convention: points carry label 1, a box its two corners labels 2 and 3; without a
+    /// box one padding point (0, 0) with label −1 closes the list. The decoder is built per point count.
+    pub fn prompt(
+        &mut self,
+        e: &Embedding,
+        points: &[[f32; 2]],
+        bbox: Option<[f32; 4]>,
+    ) -> Result<ProbMap, InferError> {
+        if points.is_empty() && bbox.is_none() {
+            return Err(InferError::Model(
+                "a prompt with no point and no box".into(),
+            ));
+        }
         let (rw, rh) = (e.rw, e.rh);
-        if !self.decoders.contains_key(&(rw, rh)) {
+        let (sx, sy) = (rw as f32, rh as f32);
+        let mut coords: Vec<f32> = points.iter().flat_map(|p| [p[0] * sx, p[1] * sy]).collect();
+        let mut labels = vec![1.0f32; points.len()];
+        match bbox {
+            Some([x0, y0, x1, y1]) => {
+                coords.extend([x0 * sx, y0 * sy, x1 * sx, y1 * sy]);
+                labels.extend([2.0, 3.0]);
+            }
+            None => {
+                coords.extend([0.0, 0.0]);
+                labels.push(-1.0);
+            }
+        }
+        let n = labels.len();
+        let key = (rw, rh, n);
+        if !self.decoders.contains_key(&key) {
             let size = tract_ndarray::arr1(&[rh as f32, rw as f32]).into_tensor();
             let plan = tract_onnx::onnx()
                 .model_for_path(&self.decoder_path)
                 .map_err(err)?
                 .with_input_fact(0, f32::fact([1, 256, 64, 64]).into())
                 .map_err(err)?
-                .with_input_fact(1, f32::fact([1, 2, 2]).into())
+                .with_input_fact(1, f32::fact([1, n, 2]).into())
                 .map_err(err)?
-                .with_input_fact(2, f32::fact([1, 2]).into())
+                .with_input_fact(2, f32::fact([1, n]).into())
                 .map_err(err)?
                 .with_input_fact(3, f32::fact([1, 1, 256, 256]).into())
                 .map_err(err)?
@@ -160,13 +195,11 @@ impl Sam {
                 .map_err(err)?
                 .into_runnable()
                 .map_err(err)?;
-            self.decoders.insert((rw, rh), plan);
+            self.decoders.insert(key, plan);
         }
-        let plan = &self.decoders[&(rw, rh)];
-        // The point in the resized image's pixels, plus SAM's padding point (0, 0) with label −1.
-        let (px, py) = (p[0] * rw as f32, p[1] * rh as f32);
-        let coords = tract_ndarray::arr3(&[[[px, py], [0.0, 0.0]]]).into_tensor();
-        let labels = tract_ndarray::arr2(&[[1.0f32, -1.0]]).into_tensor();
+        let plan = &self.decoders[&key];
+        let coords = Tensor::from_shape(&[1, n, 2], &coords).map_err(err)?;
+        let labels = Tensor::from_shape(&[1, n], &labels).map_err(err)?;
         let mask_in = tract_ndarray::Array4::<f32>::zeros((1, 1, 256, 256)).into_tensor();
         let has = tract_ndarray::arr1(&[0.0f32]).into_tensor();
         let size = tract_ndarray::arr1(&[rh as f32, rw as f32]).into_tensor();
@@ -236,5 +269,56 @@ mod tests {
             m.at(0.5, 0.5) > 0.5,
             "the clicked point is not in its own region"
         );
+    }
+
+    /// M10.16c1 (Detect objects): a bright square on a dark ground, asked for by a box around it and
+    /// two points inside — the square's coverage high, the ground's low.
+    #[test]
+    #[ignore]
+    fn real_sam_box_prompt_returns_the_object() {
+        let Some(dir) = std::env::var("RUSTROOM_AI_MODELS").ok() else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        let inside = |x: u32, y: u32| (300..500).contains(&x) && (200..380).contains(&y);
+        let img = RgbImage::from_fn(800, 600, |x, y| {
+            if inside(x, y) {
+                image::Rgb([230, 200, 60])
+            } else {
+                image::Rgb([30, 40, 50])
+            }
+        });
+        let mut sam = Sam::new(
+            &dir.join(ModelId::SamEncoder.spec().file),
+            &dir.join(ModelId::SamDecoder.spec().file),
+        );
+        let e = sam.embed(&img).unwrap();
+        let (w, h) = (800.0, 600.0);
+        let m = sam
+            .prompt(
+                &e,
+                &[[350.0 / w, 290.0 / h], [450.0 / w, 290.0 / h]],
+                Some([280.0 / w, 180.0 / h, 520.0 / w, 400.0 / h]),
+            )
+            .unwrap();
+        let (mut cin, mut nin, mut cout, mut nout) = (0.0, 0, 0.0, 0);
+        for y in (0..600).step_by(4) {
+            for x in (0..800).step_by(4) {
+                let p = m.at((x as f32 + 0.5) / w, (y as f32 + 0.5) / h);
+                // A 12-px band around the edge is left out: the map is SAM's 256² low-res answer.
+                let near = (288..512).contains(&x) && (188..392).contains(&y);
+                let deep = (312..488).contains(&x) && (212..368).contains(&y);
+                if inside(x, y) && deep {
+                    cin += p;
+                    nin += 1;
+                } else if !near {
+                    cout += p;
+                    nout += 1;
+                }
+            }
+        }
+        let (cin, cout) = (cin / nin as f32, cout / nout as f32);
+        assert!(nin > 1000 && nout > 10_000, "{nin} inside, {nout} outside");
+        assert!(cin > 0.8 && cout < 0.1, "inside {cin}, outside {cout}");
     }
 }

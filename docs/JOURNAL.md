@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.16c1: Remove — the content-aware brush, LaMa, Refresh, Detect objects, Opacity (2026-10-19)](#2026-10-19--m1016c1-remove--the-content-aware-brush-lama-refresh-detect-objects-opacity-branch-m1016c-remove)
 - [M10.16b6: AI denoise — FFDNet by default, DRUNet in Settings, "Full denoise" under Amount (2026-10-18)](#2026-10-18--m1016b6-ai-denoise--ffdnet-by-default-drunet-in-settings-full-denoise-under-amount-branch-m1016b6-ai-denoise-pan-and-network)
 - [M10.16b5: AI denoise — a faster kernel: half precision and Winograd (2026-10-16)](#2026-10-16--m1016b5-ai-denoise--a-faster-kernel-half-precision-and-winograd-branch-m1016b3-ai-denoise-strength-speed)
 - [M10.16b4: AI denoise — your view first, shown as it lands (2026-10-16)](#2026-10-16--m1016b4-ai-denoise--your-view-first-shown-as-it-lands-branch-m1016b3-ai-denoise-strength-speed)
@@ -184,6 +185,83 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-19 — M10.16c1: Remove — the content-aware brush, LaMa, Refresh, Detect objects, Opacity (branch `m10.16c-remove`)
+
+⏳ **Built and gated; awaiting the author's look.** The first of M10.16c's four parts (spec
+`2026-10-19-m10.16c-remove-design.md`; c2 Dust, c3 People, c4 Reflections each get their own plan). Plan
+`2026-10-19-m10.16c1-remove-brush.md`.
+
+**The item:** the author, 2026-10-19: *"just go ahead with planning, try to do what lightroom offers already"* —
+so every call in the spec is mine and says so. Lightroom's Remove (Content-Aware, Refresh, Detect objects, Opacity;
+its generative fill is cloud-only) done locally: no photo leaves the computer.
+
+**The network, from a spike — the author picked LaMa** (*"LaMa, go ahead"*). LaMa (`Carve/LaMa-ONNX`
+`lama_fp32.onnx`, Apache-2.0, 208 MB, fixed 512²) against MI-GAN (MIT, 28 MB) on 11 objects in four of his photos,
+original · LaMa · MI-GAN: **LaMa clearly better on 9** (spotlight, lamp, unicorn, balloon, flag — MI-GAN invents
+blobs and ghosts). ⚠ MI-GAN's published `migan_pipeline_v2.onnx` does not analyse in `tract` (a `Range` rank, then a
+Reshape grouping, even pinned) — its generator was **cut out of the same file** (`/Concat_23` →
+`/model/synthesis/b512/Add_1`, `Graph::compact`), so no second download. ⚠ `tract` runs single-threaded here
+(`multithread-mm` off) — **measured with it on, 8 threads change nothing** for either network (LaMa 3.7–4.2 s vs
+3.5–3.8 s); not a lever.
+
+**Built:**
+- `ai_mask::inpaint` (LaMa at 512: the hole blanked, its 0…255 output scaled back — the export composites the known
+  pixels itself, measured at 3.6e-9) and `Sam::prompt` (points with label 1, a box's corners 2 and 3; a decoder per
+  size and point count).
+- `edit_model::Removal` — a stroke in **decode** space (points, radius of the long edge), Detect, Refresh's
+  `variant`, Opacity — on the Retouch group, not written while empty.
+- `pipeline::Fill` (a patch over the decode, at any resolution) and the **Remove step: right after AI denoise, before
+  lens** — AI denoise's result was computed with the object in it, so a fill pasted before it would be blended away
+  (`a_removal_after_ai_denoise_stays_removed`, sabotaged red). It waits for its fills (`AiRasters::fill`) and keys on
+  every removal and its fill's content id.
+- `remove_tool` — the context window (2.5 × the hole, ≥ 512 px, inside the decode, holding the hole; **Refresh scales
+  and moves it and mirrors the odd variants**, so a window that cannot move still asks another question), the
+  stroke's soft alpha (1 to the radius, 0 at 1.25 ×; the network's hole is everywhere the alpha touches), Detect's
+  object (SAM's, grown 6 px, softened) joined to the hole, the fill kept at **512² in linear decode units**.
+- A **film negative**: the network sees the positive and the fill goes back through a new
+  `pipeline::negative::negative_of` (round-trip tested) — the removal step precedes the negative's inversion, so a fill
+  sits in the film's own units and stays right when the negative's settings change.
+- `removal_cache` (RGB and alpha as half-floats, deflated), `removal_worker` (one fill at a time, LaMa and MobileSAM made
+  on first use, no "newest wins" — every removal is wanted), `removal` (the decision — a cached fill loads anywhere, a
+  new one waits for the full decode, never a ghost's — and export: a missing fill is computed there and then; a rendered
+  preview never runs it), `AiMaps` fills by removal (Opacity aside), `removal_flow` (held across an engine replacement,
+  the model offered once — the dialog says "Remove needs a model").
+- Retouch's **Remove mode, first and default**: paint a stroke (one removal, one undo step), click a stroke to select it,
+  every removal drawn — shaded while filling, outlined once filled, lit when selected — through
+  `DecodeMap::decode_to_frame` (the lens has no forward map, M10.12c: its inverse solved by 8 fixed-point steps, < 0.05 px
+  at a 5 % distortion); the panel's Removals list, Size, Detect objects, the selected removal's Opacity and Refresh. ⚠ A
+  stroke is a view-only gesture: the view no longer drops a rung under the brush (found in review — a red test first,
+  on `view.rs`'s pan fixture; the test photo's one-rung ladder made the first version pass with nothing exempting it).
+
+**Measured (the M2, DSCF6990, 6246 × 4170):** LaMa's load **5.3–5.5 s** (once a session, on the worker); one fill
+**5.7–5.9 s** end to end (the network ~3.7 s of it); a fill's cache file **1.38 MB**; the paste over the whole frame
+**12–17 ms**, inside a cached prefix checkpoint, so a pan never re-runs it.
+
+**Sabotages, all red:** the mask's polarity (fill 0.52 against the flat mean's 0.16); SAM's x/y scale swapped (inside
+0.0001); the step before AI denoise (2 tests); `window` ignoring `variant`; the fill skipping the positive; export
+skipping a missing fill.
+
+**Known, said plainly:** the fill is 512² — at 1:1 a large removal's area is softer than the photo around it (the
+spike's sheets show it); the network's fill is clean where the photo is noisy (the spec's grain note); AI masks and
+the depth map are computed from the decode WITH the object, so Select Subject can still find a removed person.
+
+**The author's first look (2026-10-19), four reports, three fixed the same day:**
+- *"really slow and stuttering, even though nothing is happening"* when moving over the photo in Remove — **measured,
+  not guessed**: a probe without a lens profile showed nothing (0.03 ms a frame); with the bundled X-T4 profile
+  **105–200 ms a hover frame in Heal and Remove alike**. Cause: `spot_overlay::sampler_for` built a whole lens
+  `Corrector` on EVERY Retouch frame (it samples the displacement field: **290–370 ms** a build, a sample 0.001 ms) —
+  old since M9.x, made visible by Remove becoming the default. Fixed with `ai_space::CorrectorMemo` on the session
+  (keyed by `lens_key`), read by the sampler and the Remove overlay's map: **0.03–0.10 ms a hover frame**
+  (`a_retouch_frame_reuses_the_held_lens_corrector`, red when the sampler bypasses the memo). ⚠ The drive tool could
+  not raise Rustroom over the Claude window, so the real app was not sampled — the probe reproduced it.
+- An **eye** per removal: the rows now carry the patches' pair — the eye hides the outline, **Hold out** drops the
+  removal from the view so what it covers shows (a view state, no history step; `hold_out_shows_what_a_removal_covers`).
+- *"a greenish tint"* removing something in front of a sky: the window was encoded like AI denoise's, its
+  99.5th-percentile LUMINANCE at 0.9 — in a sky blue sits far above luminance and **clipped: 42 % of the blue gone**
+  through a network that changes nothing (`the_fill_keeps_a_bright_sky_s_colour`: 0.46 against 0.80). Now its peak
+  CHANNEL lands at 0.9; `RECIPE` → `remove:v2`, so every v1 fill is computed again.
+- *"I don't understand what the detect objects option does"* — explained; the change is his call.
 
 ### 2026-10-18 — M10.16b6: AI denoise — FFDNet by default, DRUNet in Settings, "Full denoise" under Amount (branch `m10.16b6-ai-denoise-pan-and-network`)
 
