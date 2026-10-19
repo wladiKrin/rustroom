@@ -31,10 +31,12 @@ pub enum ModelId {
     DrunetColor,
     /// M10.16b6 — AI denoise's default network, ten times lighter than DRUNet.
     FfdnetColor,
+    /// M10.16c1 — the Remove brush's inpainting network.
+    Lama,
 }
 
 impl ModelId {
-    pub const ALL: [ModelId; 7] = [
+    pub const ALL: [ModelId; 8] = [
         Self::IsNet,
         Self::BiRefNetLite,
         Self::SamEncoder,
@@ -42,6 +44,7 @@ impl ModelId {
         Self::DepthAnythingV2Small,
         Self::DrunetColor,
         Self::FfdnetColor,
+        Self::Lama,
     ];
 
     pub const fn spec(self) -> ModelSpec {
@@ -114,6 +117,18 @@ impl ModelId {
                 licence: "MIT (FFDNet weights, KAIR) — trained partly on ImageNet images, whose terms say research use only",
                 licence_url: "https://github.com/cszn/KAIR",
             },
+            // ⚠ M10.16c1: the hash and size measured from the file downloaded 2026-10-19 for the spike,
+            // copied verbatim. Big LaMa exported to ONNX at a FIXED 512 × 512 (its Fourier layers
+            // rewritten for the export); the export and the original are Apache-2.0. Picked by the
+            // author over MI-GAN from the spike's sheets (better on 9 of 11 objects, ~1.5 s slower).
+            Self::Lama => ModelSpec {
+                file: "lama_fp32.onnx",
+                url: "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx",
+                bytes: 208_044_816,
+                sha256: "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6",
+                licence: "Apache-2.0 (LaMa, code and weights; the ONNX export by Carve)",
+                licence_url: "https://github.com/advimman/lama",
+            },
         }
     }
 }
@@ -167,6 +182,7 @@ mod tests {
             ModelId::DepthAnythingV2Small => 4,
             ModelId::DrunetColor => 5,
             ModelId::FfdnetColor => 6,
+            ModelId::Lama => 7,
         };
         let every = [
             ModelId::IsNet,
@@ -176,6 +192,7 @@ mod tests {
             ModelId::DepthAnythingV2Small,
             ModelId::DrunetColor,
             ModelId::FfdnetColor,
+            ModelId::Lama,
         ];
         for id in every {
             assert_eq!(
@@ -201,6 +218,18 @@ mod tests {
             "{}",
             s.licence
         );
+    }
+
+    /// M10.16c1: LaMa as downloaded for the spike, 2026-10-19 — size and hash measured, never retyped.
+    #[test]
+    fn the_registry_pins_the_inpainting_model() {
+        let s = ModelId::Lama.spec();
+        assert_eq!(s.bytes, 208_044_816);
+        assert_eq!(
+            s.sha256,
+            "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6"
+        );
+        assert!(s.licence.contains("Apache-2.0"), "{}", s.licence);
     }
 
     #[test]
