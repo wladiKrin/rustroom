@@ -246,6 +246,23 @@ skipping a missing fill.
 spike's sheets show it); the network's fill is clean where the photo is noisy (the spec's grain note); AI masks and
 the depth map are computed from the decode WITH the object, so Select Subject can still find a removed person.
 
+**The author's first look (2026-10-19), four reports, three fixed the same day:**
+- *"really slow and stuttering, even though nothing is happening"* when moving over the photo in Remove — **measured,
+  not guessed**: a probe without a lens profile showed nothing (0.03 ms a frame); with the bundled X-T4 profile
+  **105–200 ms a hover frame in Heal and Remove alike**. Cause: `spot_overlay::sampler_for` built a whole lens
+  `Corrector` on EVERY Retouch frame (it samples the displacement field: **290–370 ms** a build, a sample 0.001 ms) —
+  old since M9.x, made visible by Remove becoming the default. Fixed with `ai_space::CorrectorMemo` on the session
+  (keyed by `lens_key`), read by the sampler and the Remove overlay's map: **0.03–0.10 ms a hover frame**
+  (`a_retouch_frame_reuses_the_held_lens_corrector`, red when the sampler bypasses the memo). ⚠ The drive tool could
+  not raise Rustroom over the Claude window, so the real app was not sampled — the probe reproduced it.
+- An **eye** per removal: the rows now carry the patches' pair — the eye hides the outline, **Hold out** drops the
+  removal from the view so what it covers shows (a view state, no history step; `hold_out_shows_what_a_removal_covers`).
+- *"a greenish tint"* removing something in front of a sky: the window was encoded like AI denoise's, its
+  99.5th-percentile LUMINANCE at 0.9 — in a sky blue sits far above luminance and **clipped: 42 % of the blue gone**
+  through a network that changes nothing (`the_fill_keeps_a_bright_sky_s_colour`: 0.46 against 0.80). Now its peak
+  CHANNEL lands at 0.9; `RECIPE` → `remove:v2`, so every v1 fill is computed again.
+- *"I don't understand what the detect objects option does"* — explained; the change is his call.
+
 ### 2026-10-18 — M10.16b6: AI denoise — FFDNet by default, DRUNet in Settings, "Full denoise" under Amount (branch `m10.16b6-ai-denoise-pan-and-network`)
 
 ✅ **Confirmed by the author ("works") and merged 2026-10-19 — M10.16b complete** (b1, b2, b3–b5 and b6, each its

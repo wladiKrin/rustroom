@@ -381,6 +381,9 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   paired with the network it was made for. A new place that stores or reads a result takes the network too, or one
   network's pixels pass for the other's. ⚠ `ai_mask::pth` reads a `.pth` through a CLOSED pickle subset: never
   widen it to "any global" — a pickle is a program.
+- ⚠⚠ **Never build a lens `Corrector` per frame** — it samples its whole displacement field (290–370 ms on an
+  X-T4); Retouch did, on every hover frame, until M10.16c1's review. Read it through the session's
+  `ai_space::CorrectorMemo` (`Session.lens_memo`).
 - ⚠⚠ **A removal (M10.16c1) lives in DECODE space and its fill is pasted right AFTER AI denoise, BEFORE lens and
   the negative** — AI denoise's result still holds the object. The fill is computed on the positive and stored in the
   film's units (`pipeline::negative::negative_of`), keyed by `remove_tool::id` (never Opacity; bump its `RECIPE` on any
