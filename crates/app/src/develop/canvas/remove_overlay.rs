@@ -45,9 +45,63 @@ pub(crate) struct RemovalUi {
     shown: Vec<bool>,
     /// Each removal held out of the view — the row's Hold out; view state, `spot_held`'s.
     held: Vec<bool>,
+    /// The areas fills are being made for (M10.16c1b), by removal — `removal_flow` sets them each frame.
+    areas: Vec<(edit_model::Removal, Arc<rustroom_app::remove_tool::Area>)>,
+    /// Each area's texture, by the area's address — uploaded once, dropped with its area.
+    textures: Vec<(usize, egui::TextureHandle)>,
 }
 
 impl RemovalUi {
+    /// The areas being filled now.
+    pub(crate) fn set_areas(
+        &mut self,
+        areas: Vec<(edit_model::Removal, Arc<rustroom_app::remove_tool::Area>)>,
+    ) {
+        self.areas = areas;
+        let live: Vec<usize> = self
+            .areas
+            .iter()
+            .map(|(_, a)| Arc::as_ptr(a) as usize)
+            .collect();
+        self.textures.retain(|(k, _)| live.contains(k));
+    }
+
+    /// The texture `area` is drawn with — uploaded on its first frame, then the held one.
+    fn texture(
+        &mut self,
+        ctx: &egui::Context,
+        area: &Arc<rustroom_app::remove_tool::Area>,
+    ) -> egui::TextureId {
+        let key = Arc::as_ptr(area) as usize;
+        if let Some((_, t)) = self.textures.iter().find(|(k, _)| *k == key) {
+            return t.id();
+        }
+        let pixels = area
+            .alpha
+            .iter()
+            .map(|&a| egui::Color32::from_white_alpha((a.clamp(0.0, 1.0) * 255.0).round() as u8))
+            .collect();
+        let t = ctx.load_texture(
+            "remove_area",
+            egui::ColorImage::new([area.side, area.side], pixels),
+            egui::TextureOptions::LINEAR,
+        );
+        let id = t.id();
+        self.textures.push((key, t));
+        id
+    }
+
+    /// The area a fill is being made for `r`, whatever `r`'s Opacity.
+    pub(crate) fn area_of(
+        &self,
+        r: &edit_model::Removal,
+    ) -> Option<&Arc<rustroom_app::remove_tool::Area>> {
+        self.areas
+            .iter()
+            .find(|(k, _)| rustroom_app::remove_tool::same_fill(k, r))
+            .map(|(_, a)| a)
+    }
+
     /// One flag of each per removal — undo, paste and the canvas change the count without the panel.
     pub(crate) fn sync(&mut self, n: usize) {
         self.shown.resize(n, true);
@@ -234,6 +288,19 @@ pub(super) fn draw_remove_overlay(
             .collect()
     };
     let selected = s.removal.selected.filter(|&i| i < s.edits.removals.len());
+    // ⚠ M10.16c1b, the author's call: a removal being filled shades the AREA it will replace once the job has
+    // sent it — Detect objects' whole object, not only the stroke — through a grid that follows crop, rotation
+    // and lens. Each area's texture is uploaded once.
+    let mut shades: Vec<Option<(egui::TextureId, [f32; 4])>> = vec![None; s.edits.removals.len()];
+    for (i, shade) in shades.iter_mut().enumerate() {
+        if filled[i] {
+            continue;
+        }
+        let Some(area) = s.removal.area_of(&s.edits.removals[i]).cloned() else {
+            continue;
+        };
+        *shade = Some((s.removal.texture(ui.ctx(), &area), area.rect));
+    }
     for (i, r) in s.edits.removals.iter().enumerate() {
         let Some(&first) = r.points.first() else {
             continue;
@@ -246,7 +313,12 @@ pub(super) fn draw_remove_overlay(
         let pts: Vec<egui::Pos2> = r.points.iter().map(|&p| to_screen(p)).collect();
         // ⚠ A removal still being filled is shaded — the object is still in the picture under it; a
         // filled one is only outlined, faintly unless selected (the spot overlay's dimming).
-        let fill = if !filled[i] {
+        if let Some((tex, rect)) = shades[i] {
+            painter.add(area_mesh(tex, rect, &to_screen));
+        }
+        let fill = if shades[i].is_some() {
+            None
+        } else if !filled[i] {
             Some(egui::Color32::from_white_alpha(70))
         } else if selected == Some(i) {
             Some(egui::Color32::from_white_alpha(35))
@@ -277,6 +349,33 @@ pub(super) fn draw_remove_overlay(
         }
     }
     changed
+}
+
+/// An area's shading: its texture laid through [`rustroom_app::remove_tool::area_grid`], each vertex mapped
+/// decode → screen, at the pending stroke's tint.
+fn area_mesh(
+    tex: egui::TextureId,
+    rect: [f32; 4],
+    to_screen: &dyn Fn([f32; 2]) -> egui::Pos2,
+) -> egui::Mesh {
+    const N: usize = 24;
+    let mut mesh = egui::Mesh::with_texture(tex);
+    for (d, uv) in rustroom_app::remove_tool::area_grid(rect, N) {
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: to_screen(d),
+            uv: egui::pos2(uv[0], uv[1]),
+            color: egui::Color32::from_white_alpha(70),
+        });
+    }
+    let row = (N + 1) as u32;
+    for gy in 0..N as u32 {
+        for gx in 0..N as u32 {
+            let a = gy * row + gx;
+            mesh.add_triangle(a, a + 1, a + row);
+            mesh.add_triangle(a + 1, a + row + 1, a + row);
+        }
+    }
+    mesh
 }
 
 /// A stroke's band on screen: `fill` laid along it at its radius, and its outline — bright when lit.
@@ -316,6 +415,7 @@ fn band(
 mod tests {
     use crate::develop::canvas::test_support::{canvas_centre, drag_through, retouch_app};
     use eframe::egui;
+    use std::sync::Arc;
 
     /// Retouch open in Remove, its default mode.
     fn remove_app(ctx: &egui::Context) -> crate::RustroomApp {
@@ -470,6 +570,66 @@ mod tests {
             let _ = canvas_centre(&mut app, &ctx);
             assert_eq!(held(&app), Some(first), "built again (Remove {remove})");
         }
+    }
+
+    /// The meshes a frame paints with a texture of their own — the photo, and each area being shaded.
+    fn textured_meshes(app: &mut crate::RustroomApp, ctx: &egui::Context) -> usize {
+        fn count(s: &egui::Shape) -> usize {
+            match s {
+                egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default() => 1,
+                egui::Shape::Vec(v) => v.iter().map(count).sum(),
+                _ => 0,
+            }
+        }
+        let c = ctx.clone();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(crate::develop::canvas::test_support::screen()),
+                ..Default::default()
+            },
+            |ui| {
+                crate::develop::canvas::show(app, ui, &c);
+            },
+        );
+        out.shapes.iter().map(|s| count(&s.shape)).sum()
+    }
+
+    /// M10.16c1b, the author's call: while a fill is made, the canvas shades the area it will replace —
+    /// Detect objects' whole object, not just the stroke — and stops once the fill is in.
+    #[test]
+    fn a_removal_being_filled_shades_its_area() {
+        let ctx = egui::Context::default();
+        let mut app = remove_app(&ctx);
+        let r = edit_model::Removal {
+            points: vec![[0.5, 0.5]],
+            radius: 0.05,
+            detect: true,
+            variant: 0,
+            opacity: 100.0,
+        };
+        app.session.as_mut().unwrap().edits.removals = vec![r.clone()];
+        let plain = textured_meshes(&mut app, &ctx);
+        let area = Arc::new(rustroom_app::remove_tool::Area {
+            rect: [0.3, 0.3, 0.7, 0.7],
+            side: 4,
+            alpha: vec![1.0; 16],
+        });
+        app.session
+            .as_mut()
+            .unwrap()
+            .removal
+            .set_areas(vec![(r.clone(), area)]);
+        assert_eq!(
+            textured_meshes(&mut app, &ctx),
+            plain + 1,
+            "the area was not shaded"
+        );
+        app.session.as_mut().unwrap().removal.set_areas(Vec::new());
+        assert_eq!(
+            textured_meshes(&mut app, &ctx),
+            plain,
+            "its area outlived it"
+        );
     }
 
     /// A drag in Heal mode places no removal — the mode decides.

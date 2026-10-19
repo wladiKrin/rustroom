@@ -22,6 +22,11 @@ pub struct RemovalRequest {
 
 /// What came back.
 pub enum RemovalResult {
+    /// What the fill will cover, sent before the network runs (M10.16c1b) — only for a fill being computed.
+    Area {
+        key: String,
+        area: Arc<crate::remove_tool::Area>,
+    },
     Done {
         key: String,
         fill: Arc<Fill>,
@@ -65,7 +70,14 @@ impl RemovalWorker {
                 let mut detectors = Lazy::new(detect);
                 while let Ok(req) = jobs.recv() {
                     let key = req.key.clone();
-                    let result = run(req, cache.as_deref(), &mut nets, &mut detectors);
+                    let on_area = |area| {
+                        let _ = done.send(RemovalResult::Area {
+                            key: key.clone(),
+                            area,
+                        });
+                        repaint();
+                    };
+                    let result = run(req, cache.as_deref(), &mut nets, &mut detectors, &on_area);
                     let _ = done.send(match result {
                         Ok(Some(fill)) => RemovalResult::Done { key, fill },
                         Ok(None) => RemovalResult::Missing { key },
@@ -115,12 +127,13 @@ impl<T> Lazy<T> {
 }
 
 /// One request: the cached fill, `None` for a load that found none (a corrupt file removed), or the fill
-/// computed and stored.
+/// computed and stored — its area handed to `on_area` before the network runs.
 fn run(
     req: RemovalRequest,
     cache: Option<&std::path::Path>,
     nets: &mut Lazy<Net>,
     detectors: &mut Lazy<Detector>,
+    on_area: &dyn Fn(Arc<crate::remove_tool::Area>),
 ) -> Result<Option<Arc<Fill>>, String> {
     if let Some(f) = cache.and_then(|d| crate::removal_cache::load(d, &req.key)) {
         return Ok(Some(Arc::new(f)));
@@ -131,19 +144,20 @@ fn run(
         }
         return Ok(None);
     };
-    let net = nets.get()?;
     let detector = if req.removal.detect {
         Some(detectors.get()?)
     } else {
         None
     };
-    let fill = crate::remove_tool::fill(
+    let prepared = crate::remove_tool::prepare(
         &image,
         &req.removal,
         &req.negative,
-        net.as_mut(),
         detector.map(|d| d.as_mut() as crate::remove_tool::Detect<'_>),
     )?;
+    on_area(Arc::new(prepared.area()));
+    let net = nets.get()?;
+    let fill = crate::remove_tool::finish(prepared, &req.removal, &req.negative, net.as_mut())?;
     if let Some(d) = cache {
         let _ = crate::removal_cache::store(d, &req.key, &fill);
     }
@@ -183,6 +197,13 @@ mod tests {
         got
     }
 
+    /// The results that end a job — every one but an area.
+    fn ends(got: Vec<RemovalResult>) -> Vec<RemovalResult> {
+        got.into_iter()
+            .filter(|r| !matches!(r, RemovalResult::Area { .. }))
+            .collect()
+    }
+
     fn never() -> NetFactory {
         Box::new(|| panic!("the network was made"))
     }
@@ -212,13 +233,69 @@ mod tests {
             negative: edit_model::Negative::default(),
         };
         w.request(req(Some(image())));
-        let got = wait(&w, 1);
+        let got = ends(wait(&w, 2));
         assert!(matches!(&got[..], [RemovalResult::Done { key, .. }] if key == "k"));
         assert!(crate::removal_cache::exists(d.path(), "k"), "stored");
         w.request(req(None));
         let got = wait(&w, 1);
         assert!(matches!(&got[..], [RemovalResult::Done { .. }]), "loaded");
         assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    /// M10.16c1b: a computed fill sends its area BEFORE the network runs — so the canvas shades it while it
+    /// does — and the area is the fill's own mask. A cached fill sends no area: it is there at once.
+    ///
+    /// ⚠⚠ Order alone cannot see "before the network": an area sent after the network but ahead of the fill
+    /// still arrives first, and the first version of this test stayed green under exactly that sabotage. So
+    /// the stand-in network waits until the test has the area in hand, and records whether it was let go.
+    #[test]
+    fn the_area_arrives_before_the_network_runs() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let d = test_dir::TempDir::new("removal-worker-area");
+        let go = Arc::new(AtomicBool::new(false));
+        let let_go = Arc::new(AtomicBool::new(false));
+        let (g, l) = (go.clone(), let_go.clone());
+        let net: NetFactory = Box::new(move || {
+            Ok(Box::new(move |rgb: &[f32], _: &[f32]| {
+                let start = std::time::Instant::now();
+                while !g.load(Ordering::SeqCst)
+                    && start.elapsed() < std::time::Duration::from_secs(3)
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                l.store(g.load(Ordering::SeqCst), Ordering::SeqCst);
+                Ok(rgb.to_vec())
+            }) as Net)
+        });
+        let w = RemovalWorker::spawn(net, no_detector(), Some(d.path().to_path_buf()), || {});
+        let req = |image: Option<Arc<ImageBuf>>| RemovalRequest {
+            key: "k".into(),
+            image,
+            removal: removal(),
+            negative: edit_model::Negative::default(),
+        };
+        w.request(req(Some(image())));
+        let first = wait(&w, 1);
+        let area = match &first[..] {
+            [RemovalResult::Area { key, area }] if key == "k" => area.clone(),
+            _ => panic!("expected the area first"),
+        };
+        go.store(true, Ordering::SeqCst);
+        let fill = match &wait(&w, 1)[..] {
+            [RemovalResult::Done { fill, .. }] => fill.clone(),
+            _ => panic!("expected the fill"),
+        };
+        assert!(
+            let_go.load(Ordering::SeqCst),
+            "the network ran before the area was handed out"
+        );
+        assert_eq!((area.rect, &area.alpha), (fill.rect, &fill.alpha));
+        w.request(req(None));
+        let got = wait(&w, 1);
+        assert!(
+            matches!(&got[..], [RemovalResult::Done { .. }]),
+            "a cached fill sends no area"
+        );
     }
 
     /// A load with nothing cached is `Missing`, never a failure — and needs no network.
@@ -253,7 +330,8 @@ mod tests {
                 negative: edit_model::Negative::default(),
             });
         }
-        let got = wait(&w, 2);
+        // ⚠ Each sends its area first (M10.16c1b), then fails — the network is made after the area.
+        let got = ends(wait(&w, 4));
         assert_eq!(got.len(), 2);
         for r in got {
             assert!(matches!(r, RemovalResult::Failed { error, .. } if error.contains("no LaMa")));

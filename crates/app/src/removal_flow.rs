@@ -24,6 +24,8 @@ pub(crate) struct RemovalState {
     held: HashMap<String, Arc<pipeline::Fill>>,
     /// Keys a job runs for.
     pending: HashSet<String>,
+    /// The areas the running jobs will fill (M10.16c1b), by key — on the canvas until each fill lands.
+    areas: HashMap<String, Arc<remove_tool::Area>>,
     /// Keys that failed — not retried this run, or a broken model would loop forever.
     failed: HashSet<String>,
     /// The download was offered this run — once, and a Cancel is respected.
@@ -74,6 +76,16 @@ impl RustroomApp {
             .map(|r| remove_tool::id(&photo, r, removal::MODEL))
             .collect();
         self.removals.held.retain(|k, _| keys.contains(k));
+        self.removals.areas.retain(|k, _| keys.contains(k));
+        // What the canvas shades while a fill is made — by removal, so a stroke added this frame cannot take
+        // another's.
+        let areas: Vec<(edit_model::Removal, Arc<remove_tool::Area>)> = s
+            .edits
+            .removals
+            .iter()
+            .zip(&keys)
+            .filter_map(|(r, k)| Some((r.clone(), Arc::clone(self.removals.areas.get(k)?))))
+            .collect();
         let store = s.engine.ai_maps();
         // The held fills into the maps — only what is missing there, so a frame with nothing new takes no
         // write lock.
@@ -162,6 +174,9 @@ impl RustroomApp {
         if !self.removals.pending.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
+        if let Some(s) = self.session.as_mut() {
+            s.removal.set_areas(areas);
+        }
     }
 
     /// What the job sent: a fill held, a failure remembered, a job's end cleared — testable without a
@@ -169,15 +184,21 @@ impl RustroomApp {
     pub(crate) fn absorb_removals(&mut self, results: Vec<RemovalResult>) {
         for r in results {
             match r {
+                RemovalResult::Area { key, area } => {
+                    self.removals.areas.insert(key, area);
+                }
                 RemovalResult::Done { key, fill } => {
                     self.removals.pending.remove(&key);
+                    self.removals.areas.remove(&key);
                     self.removals.held.insert(key, fill);
                 }
                 RemovalResult::Missing { key } => {
                     self.removals.pending.remove(&key);
+                    self.removals.areas.remove(&key);
                 }
                 RemovalResult::Failed { key, error } => {
                     self.removals.pending.remove(&key);
+                    self.removals.areas.remove(&key);
                     self.status = format!("Remove failed: {error}");
                     self.removals.failed.insert(key);
                 }
@@ -258,6 +279,63 @@ mod tests {
             &r,
             removal::MODEL
         )));
+    }
+
+    /// M10.16c1b: the area a fill will cover reaches the canvas as soon as the job sends it, and leaves when
+    /// the fill lands — the photo shows the fill then.
+    #[test]
+    fn an_area_is_shown_until_its_fill_lands() {
+        let (mut app, ctx, r) = app_with_removal("area");
+        app.pump_removals(&ctx);
+        let key = remove_tool::id(
+            app.removals
+                .photo
+                .as_ref()
+                .map(|(_, k)| k.as_str())
+                .unwrap(),
+            &r,
+            removal::MODEL,
+        );
+        app.removals.pending.insert(key.clone());
+        let area = Arc::new(remove_tool::Area {
+            rect: [0.25, 0.25, 0.75, 0.75],
+            side: 2,
+            alpha: vec![1.0; 4],
+        });
+        app.absorb_removals(vec![RemovalResult::Area {
+            key: key.clone(),
+            area: area.clone(),
+        }]);
+        app.pump_removals(&ctx);
+        let shown = |app: &RustroomApp| app.session.as_ref().unwrap().removal.area_of(&r).cloned();
+        assert_eq!(
+            shown(&app).as_deref(),
+            Some(&*area),
+            "the area is on the canvas"
+        );
+        let faint = edit_model::Removal {
+            opacity: 30.0,
+            ..r.clone()
+        };
+        assert!(
+            app.session
+                .as_ref()
+                .unwrap()
+                .removal
+                .area_of(&faint)
+                .is_some(),
+            "found whatever the Opacity"
+        );
+        let fill = Arc::new(pipeline::Fill {
+            rect: [0.25, 0.25, 0.75, 0.75],
+            w: 2,
+            h: 2,
+            rgb: vec![0.5; 12],
+            alpha: vec![1.0; 4],
+        });
+        app.absorb_removals(vec![RemovalResult::Done { key, fill }]);
+        app.pump_removals(&ctx);
+        assert!(shown(&app).is_none(), "the fill landed; its area went");
     }
 
     /// No model: the download is offered, once, naming the inpainting network.
