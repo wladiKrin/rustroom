@@ -264,6 +264,16 @@ the depth map are computed from the decode WITH the object, so Select Subject ca
   CHANNEL lands at 0.9; `RECIPE` → `remove:v2`, so every v1 fill is computed again.
 - *"I don't understand what the detect objects option does"* — explained; the change is his call.
 
+**M10.16c1b (2026-10-19, branch `m10.16c1b-detect-area`) — his call: "Detect objects should show the area it
+will fill while it works".** The fill job is split: `remove_tool::prepare` (the window, its encoding, the stroke's
+alpha with Detect's object joined) and `finish` (the network); between them the worker sends
+`RemovalResult::Area` — the fill's own mask, so what is shaded is what is replaced. The flow holds each area until
+its fill lands (`removal_flow`, by key; the canvas reads them by removal, Opacity aside — `remove_tool::same_fill`),
+and the overlay lays the area's texture (uploaded once) through a 24 × 24 grid mapped decode → screen, so it follows
+crop, rotation and lens; a cached fill sends no area. ⚠ **The timing test's first version could not fail**: an area
+sent AFTER the network still reaches the app ahead of the fill, so order proved nothing — now the stand-in network
+waits until the test holds the area (`the_area_arrives_before_the_network_runs`, red under that sabotage).
+
 ### 2026-10-18 — M10.16b6: AI denoise — FFDNet by default, DRUNet in Settings, "Full denoise" under Amount (branch `m10.16b6-ai-denoise-pan-and-network`)
 
 ✅ **Confirmed by the author ("works") and merged 2026-10-19 — M10.16b complete** (b1, b2, b3–b5 and b6, each its

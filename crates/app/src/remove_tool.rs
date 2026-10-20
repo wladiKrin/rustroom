@@ -392,21 +392,42 @@ fn prompt(r: &Removal, win: [usize; 4], w: usize, h: usize) -> (Vec<[f32; 2]>, [
     (points, bbox)
 }
 
-/// One removal's fill from `img` — the undeveloped decode, positive, full resolution.
-///
-/// `detect` is asked only when the removal has Detect objects; the object it finds joins the hole.
-///
-/// ⚠⚠ A film negative (`negative` active): the network sees the POSITIVE — the Warnings' rule for every
-/// reader of the undeveloped decode — and the fill goes back through [`pipeline::negative::negative_of`],
-/// because the removals' step runs before the negative's inversion. So a fill stays right when the
-/// negative's settings change later: it is what the film would have held there.
-pub fn fill(
+/// What a removal will replace: its window, normalised over the decode, and the soft alpha over it at
+/// `side²` — the fill's own mask (M10.16c1b: the canvas shades it while the network works).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Area {
+    pub rect: [f32; 4],
+    pub side: usize,
+    pub alpha: Vec<f32>,
+}
+
+/// A removal's first step: its window, encoded for the network, and the area the fill will cover — known
+/// before the network runs, so it can be shown while it does.
+pub struct Prepared {
+    rect: [f32; 4],
+    enc: ai_denoise::Encoding,
+    rgb: Vec<f32>,
+    alpha: Vec<f32>,
+}
+
+impl Prepared {
+    pub fn area(&self) -> Area {
+        Area {
+            rect: self.rect,
+            side: SIDE,
+            alpha: self.alpha.clone(),
+        }
+    }
+}
+
+/// The first step of [`fill`]: the window around `r` in `img` — the undeveloped decode, positive, full
+/// resolution — encoded for the network, and the stroke's soft alpha with Detect objects' object joined.
+pub fn prepare(
     img: &ImageBuf,
     r: &Removal,
     negative: &edit_model::Negative,
-    net: Net<'_>,
     detect: Option<Detect<'_>>,
-) -> Result<pipeline::Fill, String> {
+) -> Result<Prepared, String> {
     let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 || r.points.is_empty() {
         return Err("nothing to fill".into());
@@ -435,6 +456,33 @@ pub fn fill(
             }
         }
     }
+    Ok(Prepared {
+        rect: [
+            win[0] as f32 / w as f32,
+            win[1] as f32 / h as f32,
+            win[2] as f32 / w as f32,
+            win[3] as f32 / h as f32,
+        ],
+        enc,
+        rgb,
+        alpha,
+    })
+}
+
+/// The second step of [`fill`]: the network over the prepared window, the result back in the decode's
+/// units — through the negative's inverse on a film scan.
+pub fn finish(
+    p: Prepared,
+    r: &Removal,
+    negative: &edit_model::Negative,
+    net: Net<'_>,
+) -> Result<pipeline::Fill, String> {
+    let Prepared {
+        rect,
+        enc,
+        rgb,
+        alpha,
+    } = p;
     let mut hole: Vec<f32> = alpha.iter().map(|&a| (a > 0.0) as u8 as f32).collect();
     let mut input = rgb;
     // Refresh: the odd variants ask about the window mirrored — another question even where it cannot move.
@@ -458,17 +506,55 @@ pub fn fill(
         .flat_map(|p| pipeline::negative::negative_of(enc.decode([p[0], p[1], p[2]]), negative))
         .collect();
     Ok(pipeline::Fill {
-        rect: [
-            win[0] as f32 / w as f32,
-            win[1] as f32 / h as f32,
-            win[2] as f32 / w as f32,
-            win[3] as f32 / h as f32,
-        ],
+        rect,
         w: SIDE,
         h: SIDE,
         rgb,
         alpha,
     })
+}
+
+/// One removal's fill from `img` — the undeveloped decode, positive, full resolution: [`prepare`], then
+/// [`finish`].
+///
+/// `detect` is asked only when the removal has Detect objects; the object it finds joins the hole.
+///
+/// ⚠⚠ A film negative (`negative` active): the network sees the POSITIVE — the Warnings' rule for every
+/// reader of the undeveloped decode — and the fill goes back through [`pipeline::negative::negative_of`],
+/// because the removals' step runs before the negative's inversion. So a fill stays right when the
+/// negative's settings change later: it is what the film would have held there.
+pub fn fill(
+    img: &ImageBuf,
+    r: &Removal,
+    negative: &edit_model::Negative,
+    net: Net<'_>,
+    detect: Option<Detect<'_>>,
+) -> Result<pipeline::Fill, String> {
+    finish(prepare(img, r, negative, detect)?, r, negative, net)
+}
+
+/// The vertices an area is drawn through: an `(n + 1)²` grid over `rect`, row-major, each a decode point and
+/// its texture coordinate — mapped to the screen one by one, so the shading follows crop, rotation and lens.
+pub fn area_grid(rect: [f32; 4], n: usize) -> Vec<([f32; 2], [f32; 2])> {
+    let n = n.max(1);
+    (0..=n)
+        .flat_map(|gy| (0..=n).map(move |gx| (gx, gy)))
+        .map(|(gx, gy)| {
+            let (u, v) = (gx as f32 / n as f32, gy as f32 / n as f32);
+            (
+                [
+                    rect[0] + u * (rect[2] - rect[0]),
+                    rect[1] + v * (rect[3] - rect[1]),
+                ],
+                [u, v],
+            )
+        })
+        .collect()
+}
+
+/// Whether two removals share one fill — everything but Opacity, which only blends it.
+pub fn same_fill(a: &Removal, b: &Removal) -> bool {
+    a.points == b.points && a.radius == b.radius && a.detect == b.detect && a.variant == b.variant
 }
 
 /// A fill's cache key: the photo, the stroke, Detect objects, Refresh's variant, the network and
@@ -943,6 +1029,83 @@ mod tests {
             checked > 0,
             "the fixture: no fill pixel in the stroke was checked"
         );
+    }
+
+    /// The author's call (2026-10-19): Detect objects shows the area it will fill while it works. That area is
+    /// handed out before the network runs — and it IS the fill's own mask: the same window, the same alpha.
+    #[test]
+    fn the_area_is_the_fills_own_mask() {
+        let img = gradient(2000, 1500);
+        let r = Removal {
+            detect: true,
+            ..stroke(vec![[0.5, 0.5], [0.52, 0.5]], 0.01)
+        };
+        let side = SIDE;
+        let object = move || -> Vec<f32> {
+            (0..side * side)
+                .map(|i| ((i % side) > side / 3 && (i % side) < side / 2) as u8 as f32)
+                .collect()
+        };
+        let neg = edit_model::Negative::default();
+        let prepared = prepare(&img, &r, &neg, Some(&mut |_, _, _| Ok(object()))).unwrap();
+        let area = prepared.area();
+        let f = fill(
+            &img,
+            &r,
+            &neg,
+            &mut |rgb, _| Ok(rgb.to_vec()),
+            Some(&mut |_, _, _| Ok(object())),
+        )
+        .unwrap();
+        assert_eq!(area.rect, f.rect);
+        assert_eq!((area.side, area.alpha.len()), (f.w, f.alpha.len()));
+        assert_eq!(area.alpha, f.alpha, "what is shown is what is replaced");
+        assert!(
+            area.alpha.iter().filter(|&&a| a > 0.0).count() > side * side / 8,
+            "the fixture: the detected object is in the area"
+        );
+        let done = finish(prepared, &r, &neg, &mut |rgb, _| Ok(rgb.to_vec())).unwrap();
+        assert_eq!(done, f, "prepare then finish is fill");
+    }
+
+    /// The area is drawn through a grid over its rect — its corners on the rect's, its texture spanning 0..1.
+    #[test]
+    fn the_area_grid_spans_its_rect() {
+        let rect = [0.2, 0.3, 0.6, 0.9];
+        let g = area_grid(rect, 4);
+        assert_eq!(g.len(), 25, "(4 + 1)² vertices");
+        assert_eq!(g[0], ([0.2, 0.3], [0.0, 0.0]));
+        assert_eq!(g[24], ([0.6, 0.9], [1.0, 1.0]));
+        assert_eq!(g[4], ([0.6, 0.3], [1.0, 0.0]), "row-major, left to right");
+        let ([x, y], [u, v]) = g[12];
+        assert!((x - 0.4).abs() < 1e-6 && (y - 0.6).abs() < 1e-6 && u == 0.5 && v == 0.5);
+    }
+
+    #[test]
+    fn same_fill_ignores_opacity_alone() {
+        let r = stroke(vec![[0.5, 0.5]], 0.01);
+        assert!(same_fill(
+            &r,
+            &Removal {
+                opacity: 20.0,
+                ..r.clone()
+            }
+        ));
+        assert!(!same_fill(
+            &r,
+            &Removal {
+                variant: 1,
+                ..r.clone()
+            }
+        ));
+        assert!(!same_fill(
+            &r,
+            &Removal {
+                detect: true,
+                ..r.clone()
+            }
+        ));
+        assert!(!same_fill(&r, &stroke(vec![[0.6, 0.5]], 0.01)));
     }
 
     /// The distance from decode pixel `(x, y)` to the stroke, in decode pixels — the test's own.
