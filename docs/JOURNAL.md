@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.16c2: Remove dust — sensor spots found and healed as patches (2026-10-20)](#2026-10-20--m1016c2-remove-dust--sensor-spots-found-and-healed-as-patches-branch-m1016c2-dust)
 - [M10.16c1: Remove — the content-aware brush, LaMa, Refresh, Detect objects, Opacity (2026-10-19)](#2026-10-19--m1016c1-remove--the-content-aware-brush-lama-refresh-detect-objects-opacity-branch-m1016c-remove)
 - [M10.16b6: AI denoise — FFDNet by default, DRUNet in Settings, "Full denoise" under Amount (2026-10-18)](#2026-10-18--m1016b6-ai-denoise--ffdnet-by-default-drunet-in-settings-full-denoise-under-amount-branch-m1016b6-ai-denoise-pan-and-network)
 - [M10.16b5: AI denoise — a faster kernel: half precision and Winograd (2026-10-16)](#2026-10-16--m1016b5-ai-denoise--a-faster-kernel-half-precision-and-winograd-branch-m1016b3-ai-denoise-strength-speed)
@@ -185,6 +186,38 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-20 — M10.16c2: Remove dust — sensor spots found and healed as patches (branch `m10.16c2-dust`)
+
+⏳ **Built and gated; awaiting the author's look.** Spec `2026-10-19-m10.16c-remove-design.md` § c2, plan
+`2026-10-20-m10.16c2-dust.md`. The author: *"let's start with M10.16c2"*.
+
+**Built:** `dust_tool::find` (lib, no network) — a disc's contrast against its ring in log luminance over five radii
+(3–15 working px, the decode at ≤ 3000 px), box-iterated blurs for the wide ones (true Gaussians cost 60 s+ a test in
+debug), gated by the texture around it (4× at Sensitivity 0, 2× at 100), by the frame's brightness (no dust in
+near-black), and by the ring itself: brighter all round in 16 directions, darkened at most ~45 % against a nearly
+sharp centre (`dust_like`); `dust_tool::to_spots` — each find through the lens's inverse
+(`DecodeMap::post_lens_of`, moved out of `decode_to_frame`) into the patches' space, 1.6 × its radius, a source from
+`spot_source::pick`, skipped under an existing patch. Retouch: **Remove dust** beside the Find dust view (the spec's
+button name was the view's) and its **Sensitivity**; one press, one undo step, the count in the status line; the
+stand-in shown while a photo loads is refused. ⚠ It reads the decode as captured, a film negative included: dust
+blocks light wherever it sits, so it is dark in what was captured either way.
+
+**Measured on the author's f/16–f/22 frames** (`examples/dust_probe`, ten X-T4 frames): the first detector found 0–12
+a frame whatever the Sensitivity — stones in gravel, insulators on wires, distant birds, 8–270 % darker; DSCF6385 and
+6386 share three finds shifted WITH the scene, so not sensor dust; **no find repeats at a fixed sensor position — no
+confirmed sensor dust in his library.** After the ring and the ceiling: 0 finds on eight frames, one each on DSCF6386
+and DSCF6390 at the default (soft round spots on sky; the first is a bird by its movement), 3–4 at 70. **0.40–1.06 s a
+press** on a 26 Mpx decode, synchronous.
+
+**Sabotages:** the texture gate off → `none_on_texture` 200 finds; the ring rule off → `dust_is_brighter_all_round`
+red; the darkening ceiling off → `a_scene_object_too_dark_for_dust_is_not_dust` red. ⚠ **Two fixtures could not fail
+at first** (a knot on a line, a stone among stones — the texture gate already rejected them), so the ring rule is tested
+on ring samples directly; and a ceiling first set on the detection contrast read a 70 %-darker disc as 0.30–0.48
+depending on the radius (that ring is a blur centred on the spot) — now judged against the ring's own median.
+
+**Known, said plainly:** a distant bird and a dust shadow look alike in one frame — each find is an ordinary patch,
+deleted like any; it is proven on constructed dust and against false finds on real photos, never yet on real dust.
 
 ### 2026-10-19 — M10.16c1: Remove — the content-aware brush, LaMa, Refresh, Detect objects, Opacity (branch `m10.16c-remove`)
 
