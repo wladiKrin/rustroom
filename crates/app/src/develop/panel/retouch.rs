@@ -93,12 +93,7 @@ pub(crate) fn show_with(
     ui.add_space(6.0);
     settings(ui, s, tool, eyes, remove, ed);
     find_dust(ui, s, ed);
-    if retouch_dust::show(ui, s, tool, ed) {
-        remove.active = false;
-        eyes.active = None;
-        s.selected_eye = None;
-        s.removal.selected = None;
-    }
+    retouch_dust::show(ui, s, tool);
 }
 
 /// ⚠ Test-only: the patch-mode panel, so the patch tests keep their four-argument call. The app

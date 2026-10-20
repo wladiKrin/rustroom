@@ -5,8 +5,6 @@
 
 use crate::develop::panel::Edited;
 use crate::theme;
-use crate::theme::tokens;
-use crate::theme::Hover as _;
 use eframe::egui;
 use rustroom_app::denoise_tool::Line;
 use rustroom_app::slider_help::Scope;
@@ -38,35 +36,16 @@ pub(super) fn body(
     }
 }
 
-/// "Full denoise" over a 3 px line across the section, its done part neutral (M10.16b6, the author's
-/// variant C): quiet, never the accent, no percentage — `docs/DESIGN.md` §7.16's one exception.
+/// "Full denoise" over the quiet line (M10.16b6, the author's variant C) — `docs/DESIGN.md` §7.16.
 fn full_denoise(ui: &mut egui::Ui, done: f32) {
-    let t = tokens::of(ui);
-    ui.add(
-        egui::Label::new(
-            egui::RichText::new("Full denoise")
-                .size(tokens::CAPTION)
-                .color(t.text2),
-        )
-        .selectable(false),
-    )
-    .hover(LINE_HOVER);
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), tokens::PROGRESS_LINE),
-        egui::Sense::hover(),
-    );
-    let round = egui::CornerRadius::same((tokens::PROGRESS_LINE / 2.0) as u8);
-    ui.painter().rect_filled(rect, round, t.line);
-    let mut part = rect;
-    part.set_width(rect.width() * done.clamp(0.0, 1.0));
-    ui.painter().rect_filled(part, round, t.text3);
-    response.hover(LINE_HOVER);
+    super::progress_line::show(ui, "Full denoise", done, LINE_HOVER);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_ui;
+    use crate::theme::tokens;
 
     /// M10.16b6: while the whole-photo job runs, "Full denoise" over a quiet line — no percentage.
     #[test]

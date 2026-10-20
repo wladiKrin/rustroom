@@ -226,6 +226,17 @@ removal row picked returns to Remove, and a press that adds patches switches to 
 (`picking_a_patch_row_shows_the_patches`, `picking_a_removal_row_returns_to_remove`,
 `remove_dust_shows_the_patches_it_made` — each red first).
 
+**His second look (2026-10-20):** *"When I click remove dust, often nothing is happening"* — the search ran on the UI
+thread (the window froze 0.4–1 s) and its result went only to the status row, where the next message replaced it. Now
+the search is a background job (`dust_tool::Search`, its progress after the preparation and each of the five radii),
+pumped by Develop's body (`dust_flow`, so it lands with the panel closed and its undo step is recorded with the frame's
+edits); "Looking for dust" over the quiet progress line while it looks, the button waiting; then what it did stays
+under the button — "No dust found", "No new dust found", "Removed 3 dust spots" — until the next press. A press while
+the photo still loads waits for it instead of saying so and doing nothing. The line is AI denoise's, now
+`develop/panel/progress_line.rs`; `docs/DESIGN.md` §7.16 names it as the second exception. Five sabotages, each red
+on its own test (`while_it_looks_the_line_says_so_and_the_button_waits`, `a_photo_without_dust_says_so`,
+`remove_dust_waits_for_the_photo`, `remove_dust_shows_the_patches_it_made`, `find_reports_each_step`).
+
 ### 2026-10-19 — M10.16c1: Remove — the content-aware brush, LaMa, Refresh, Detect objects, Opacity (branch `m10.16c-remove`)
 
 ✅ **Confirmed by the author ("works") and merged 2026-10-19** (`--no-ff`, the branch deleted) — after his first

@@ -2,32 +2,35 @@
 //!
 //! ⚠ Its own file, `retouch_eyes`'s reason: `retouch.rs` sits at the line ceiling.
 
-use super::Edited;
+use crate::theme;
 use crate::theme::Hover as _;
 use crate::Session;
 use eframe::egui;
 use rustroom_app::slider_help::{self, Scope};
 use rustroom_app::spot_tool::SpotTool;
 
-/// Below this long side the decode is the stand-in shown while the photo loads — too small to find dust in.
-const LOADED: usize = 1500;
+/// The line under the button while it looks.
+const LOOKING_HOVER: &str =
+    "Each spot of sensor dust it finds becomes a Heal patch you can move or delete";
 
-/// Remove dust and its Sensitivity. `true` when a press added patches — the caller then shows them, in a patch
-/// mode (in Remove they are drawn nowhere).
-pub(super) fn show(
-    ui: &mut egui::Ui,
-    s: &mut Session,
-    tool: &mut SpotTool,
-    ed: &mut Edited,
-) -> bool {
+/// Remove dust, what it is doing or what it did, and its Sensitivity (the author, 2026-10-20: a press
+/// "often" seemed to do nothing). The search and its patches are `dust_flow`'s.
+pub(super) fn show(ui: &mut egui::Ui, s: &mut Session, tool: &mut SpotTool) {
     ui.add_space(6.0);
-    let mut added = false;
+    let looking = s.dust.search.is_some();
     if ui
-        .button("Remove dust")
+        .add_enabled(!looking, egui::Button::new("Remove dust"))
         .hover("Finds sensor dust in the photo and heals each spot with a patch")
         .clicked()
     {
-        added = remove(s, tool, ed) > 0;
+        s.press_remove_dust(tool.dust);
+    }
+    if let Some(search) = &s.dust.search {
+        super::progress_line::show(ui, "Looking for dust", search.progress(), LOOKING_HOVER);
+    } else if s.dust.queued.is_some() {
+        theme::hint(ui, "Waits for the photo to load");
+    } else if let Some(said) = &s.dust.said {
+        theme::hint(ui, said);
     }
     ui.add(
         super::slider::Slider::new(&mut tool.dust, 0.0..=100.0)
@@ -35,57 +38,11 @@ pub(super) fn show(
             .help(slider_help::text(Scope::Patch, "Sensitivity"))
             .reset_to(rustroom_app::dust_tool::DEFAULT_SENSITIVITY),
     );
-    added
-}
-
-/// The dust in the decode, healed: one Heal patch per spot not already patched, one undo step. Returns how
-/// many it added.
-fn remove(s: &mut Session, tool: &SpotTool, ed: &mut Edited) -> usize {
-    let (dw, dh) = (s.buffer.width(), s.buffer.height());
-    if dw.max(dh) < LOADED {
-        ed.note = Some("Waits for the photo to load".to_string());
-        return 0;
-    }
-    let finds = rustroom_app::dust_tool::find(&s.buffer, tool.dust);
-    // The patches live after the lens — the decode's own size, so its own aspect.
-    let corr = s.lens_memo.get(s.lens.shot.as_ref(), &s.edits, dw, dh);
-    let lens = rustroom_app::ai_space::DecodeMap::with_shared(
-        &edit_model::Geometry::default(),
-        edit_model::Perspective::default(),
-        dw,
-        dh,
-        corr,
-        dw,
-        dh,
-    );
-    let sample = crate::develop::canvas::spot_overlay::sampler_for(s);
-    let spots = rustroom_app::dust_tool::to_spots(
-        &finds,
-        &|d| lens.post_lens_of(d),
-        dw as f32 / dh as f32,
-        &s.edits.spots,
-        *tool,
-        &sample,
-    );
-    let n = spots.len();
-    s.edits.spots.extend(spots);
-    s.sync_spot_flags();
-    ed.note = Some(match (n, finds.is_empty()) {
-        (0, true) => "Found no dust".to_string(),
-        (0, false) => "Found no new dust".to_string(),
-        (1, _) => "Removed 1 dust spot".to_string(),
-        (n, _) => format!("Removed {n} dust spots"),
-    });
-    if n > 0 {
-        ed.discrete();
-    }
-    n
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::develop::panel::retouch;
+    use crate::develop::panel::{retouch, Edited};
 
     /// A 1600 × 1200 grey-blue frame with three soft dark discs — dust on a smooth sky.
     fn dusty() -> core_image::ImageBuf {
@@ -123,13 +80,11 @@ mod tests {
             Self { ctx, app }
         }
 
-        fn click(&mut self, label: &str) -> Edited {
-            let ctx = self.ctx.clone();
-            let mut seen = Edited::default();
+        fn draw(&mut self) -> impl FnMut(&mut eframe::egui::Ui) + '_ {
             // ⚠ The app's own tools — Remove, Retouch's default mode, included: where the author pressed it.
-            let (mut t, mut e, mut r) =
-                (self.app.spot_tool, self.app.eye_tool, self.app.remove_tool);
-            crate::test_ui::click(&ctx, label, |ui| {
+            |ui| {
+                let (mut t, mut e, mut r) =
+                    (self.app.spot_tool, self.app.eye_tool, self.app.remove_tool);
                 let mut ed = Edited::default();
                 retouch::show_with(
                     ui,
@@ -139,30 +94,69 @@ mod tests {
                     &mut r,
                     &mut ed,
                 );
-                if ed.changed || ed.settled || ed.note.is_some() {
-                    seen = ed;
+                (self.app.spot_tool, self.app.eye_tool, self.app.remove_tool) = (t, e, r);
+            }
+        }
+
+        fn click(&mut self, label: &str) {
+            let ctx = self.ctx.clone();
+            crate::test_ui::click(&ctx, label, self.draw());
+        }
+
+        /// Frames until the search has landed — `true` when its patches were one undo step.
+        fn settle(&mut self) -> bool {
+            let start = std::time::Instant::now();
+            let mut pushed = false;
+            loop {
+                pushed |= self.app.pump_dust(&self.ctx);
+                let d = &self.session().dust;
+                if d.search.is_none() && d.queued.is_none() {
+                    return pushed;
                 }
-            });
-            self.app.spot_tool = t;
-            self.app.remove_tool = r;
-            seen
+                assert!(start.elapsed().as_secs() < 120, "the search never landed");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+
+        fn labels(&mut self) -> Vec<String> {
+            let ctx = self.ctx.clone();
+            crate::test_ui::nodes(&ctx, self.draw())
+                .into_iter()
+                .map(|n| n.label)
+                .collect()
+        }
+
+        fn session(&self) -> &crate::Session {
+            self.app.session.as_ref().unwrap()
         }
 
         fn spots(&self) -> Vec<edit_model::Spot> {
-            self.app.session.as_ref().unwrap().edits.spots.clone()
+            self.session().edits.spots.clone()
+        }
+
+        fn said(&self) -> Option<&str> {
+            self.session().dust.said.as_deref()
         }
     }
 
-    /// Review Focus 5: one press, the dust healed — Heal patches, one undo step, the count said.
+    /// Review Focus 5: one press, the dust healed — Heal patches, one undo step, the count said under the
+    /// button and on the status row.
     #[test]
     fn remove_dust_adds_heal_patches_as_one_step() {
         let mut p = Panel::new(dusty());
-        let ed = p.click("Remove dust");
+        let depth = p.session().history.undo_depth();
+        p.click("Remove dust");
+        assert!(p.settle(), "one undo step");
         let spots = p.spots();
         assert_eq!(spots.len(), 3, "{spots:?}");
         assert!(spots.iter().all(|s| s.mode == edit_model::SpotMode::Heal));
-        assert!(ed.changed && ed.settled, "one undo step");
-        assert_eq!(ed.note.as_deref(), Some("Removed 3 dust spots"));
+        assert_eq!(p.session().history.undo_depth(), depth + 1);
+        assert_eq!(p.said(), Some("Removed 3 dust spots"));
+        assert_eq!(p.app.status, "Removed 3 dust spots");
+        assert!(
+            p.labels().iter().any(|l| l == "Removed 3 dust spots"),
+            "said under the button"
+        );
     }
 
     /// The author (2026-10-20): "I can't see the patches" — pressed in Remove, the mode Retouch opens in, the
@@ -172,6 +166,7 @@ mod tests {
         let mut p = Panel::new(dusty());
         assert!(p.app.remove_tool.active, "the fixture: pressed in Remove");
         p.click("Remove dust");
+        p.settle();
         assert_eq!(p.spots().len(), 3);
         assert!(
             !p.app.remove_tool.active,
@@ -180,17 +175,51 @@ mod tests {
         assert_eq!(p.app.eye_tool.active, None);
     }
 
+    /// The author (2026-10-20): "if it's not finding dust, it would be good to get a status message saying
+    /// so" — and it stays under the button.
+    #[test]
+    fn a_photo_without_dust_says_so() {
+        let mut p = Panel::new(core_image::ImageBuf::from_vec(
+            1600,
+            1200,
+            vec![0.4; 1600 * 1200 * 3],
+        ));
+        p.click("Remove dust");
+        assert!(!p.settle(), "no step for nothing");
+        assert!(p.spots().is_empty());
+        assert_eq!(p.said(), Some("No dust found"));
+        assert!(p.labels().iter().any(|l| l == "No dust found"));
+    }
+
     #[test]
     fn pressing_remove_dust_twice_adds_nothing_more() {
         let mut p = Panel::new(dusty());
         p.click("Remove dust");
-        let ed = p.click("Remove dust");
+        p.settle();
+        p.click("Remove dust");
+        assert!(!p.settle(), "no step for nothing");
         assert_eq!(p.spots().len(), 3);
-        assert!(!ed.settled, "no step for nothing");
-        assert_eq!(ed.note.as_deref(), Some("Found no new dust"));
+        assert_eq!(p.said(), Some("No new dust found"));
     }
 
-    /// Review Focus 4: on the stand-in a photo shows while it loads, nothing is looked for.
+    /// "Or if it's still looking for anything a progress bar": while it looks, the line says so — and the
+    /// button waits, so a second press cannot start a second search over the first.
+    #[test]
+    fn while_it_looks_the_line_says_so_and_the_button_waits() {
+        let mut p = Panel::new(dusty());
+        let (search, answer) = rustroom_app::dust_tool::Search::answered_by(0.4);
+        p.app.session.as_mut().unwrap().dust.search = Some(search);
+        assert!(p.labels().iter().any(|l| l == "Looking for dust"));
+        p.click("Remove dust");
+        answer.send(Vec::new()).unwrap();
+        p.settle();
+        assert!(p.spots().is_empty(), "a second search ran: {:?}", p.spots());
+        assert_eq!(p.said(), Some("No dust found"));
+        assert!(!p.labels().iter().any(|l| l == "Looking for dust"));
+    }
+
+    /// Review Focus 4: on the stand-in a photo shows while it loads, nothing is looked for — the press waits,
+    /// says so, and is answered once the photo is there.
     #[test]
     fn remove_dust_waits_for_the_photo() {
         let mut p = Panel::new(core_image::ImageBuf::from_vec(
@@ -198,8 +227,15 @@ mod tests {
             300,
             vec![0.4; 400 * 300 * 3],
         ));
-        let ed = p.click("Remove dust");
+        p.click("Remove dust");
+        p.app.pump_dust(&p.ctx.clone());
         assert!(p.spots().is_empty());
-        assert_eq!(ed.note.as_deref(), Some("Waits for the photo to load"));
+        assert!(p
+            .labels()
+            .iter()
+            .any(|l| l == "Waits for the photo to load"));
+        p.app.session.as_mut().unwrap().buffer = std::sync::Arc::new(dusty());
+        p.settle();
+        assert_eq!(p.spots().len(), 3);
     }
 }

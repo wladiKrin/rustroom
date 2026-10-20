@@ -126,6 +126,13 @@ const RADIUS_OF: f32 = 1.6;
 
 /// The dust in `img` (the undeveloped decode, any size) at `sensitivity` — strongest first.
 pub fn find(img: &ImageBuf, sensitivity: f32) -> Vec<Find> {
+    find_with_progress(img, sensitivity, &|_| {})
+}
+
+/// [`find`], telling `progress` how far it has got (0..=1, never going back) — after the preparation and
+/// after each radius, the six steps of about equal cost.
+pub fn find_with_progress(img: &ImageBuf, sensitivity: f32, progress: &dyn Fn(f32)) -> Vec<Find> {
+    let steps = (RADII.len() + 1) as f32;
     let (dw, dh) = (img.width(), img.height());
     if dw < 16 || dh < 16 {
         return Vec::new();
@@ -168,8 +175,9 @@ pub fn find(img: &ImageBuf, sensitivity: f32) -> Vec<Find> {
     // The centre's darkness read nearly sharp: the radius's own blur dilutes a small dark core, and a stone
     // 70 % darker then reads as dust (measured).
     let sharp = blur(&log, 1.0);
+    progress(1.0 / steps);
     let mut candidates: Vec<(usize, f32, f32)> = Vec::new();
-    for &r in &RADII {
+    for (step, &r) in RADII.iter().enumerate() {
         let inner = blur(&log, 0.6 * r);
         let ring = blur(&log, 2.5 * r);
         let mean = blur(&detail, 4.0 * r);
@@ -223,6 +231,7 @@ pub fn find(img: &ImageBuf, sensitivity: f32) -> Vec<Find> {
             })
             .collect();
         candidates.extend(found);
+        progress((step + 2) as f32 / steps);
     }
     // Strongest first; a weaker candidate near a stronger one is the same spot at another radius, or its edge.
     candidates.sort_by(|a, b| b.2.total_cmp(&a.2));
@@ -251,6 +260,72 @@ pub fn find(img: &ImageBuf, sensitivity: f32) -> Vec<Find> {
             contrast: v,
         })
         .collect()
+}
+
+/// A [`find`] on its own thread, so the window keeps drawing while it looks (the author, 2026-10-20: a press
+/// froze the window and then often showed nothing).
+pub struct Search {
+    /// How far it has got, as `f32` bits.
+    progress: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    finds: std::sync::mpsc::Receiver<Vec<Find>>,
+}
+
+impl Search {
+    /// Starts looking for the dust in `img` at `sensitivity`.
+    pub fn spawn(img: std::sync::Arc<ImageBuf>, sensitivity: f32) -> Self {
+        let (search, tx) = Self::answered_by(0.0);
+        let progress = std::sync::Arc::clone(&search.progress);
+        std::thread::Builder::new()
+            .name("rustroom-dust".into())
+            .spawn(move || {
+                let store = |p: f32| {
+                    progress.store(p.to_bits(), std::sync::atomic::Ordering::Relaxed);
+                };
+                let finds = find_with_progress(&img, sensitivity, &store);
+                store(1.0);
+                let _ = tx.send(finds);
+            })
+            .expect("the dust thread starts");
+        search
+    }
+
+    /// A search whose finds arrive through the sender, standing at `progress` — the panel's tests hold one
+    /// open to see the window while it looks.
+    pub fn answered_by(progress: f32) -> (Self, std::sync::mpsc::Sender<Vec<Find>>) {
+        let (tx, finds) = std::sync::mpsc::channel();
+        let progress = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(progress.to_bits()));
+        (Self { progress, finds }, tx)
+    }
+
+    /// How far it has got, 0..=1.
+    pub fn progress(&self) -> f32 {
+        f32::from_bits(self.progress.load(std::sync::atomic::Ordering::Relaxed)).clamp(0.0, 1.0)
+    }
+
+    /// The finds, once they are there — handed over once.
+    pub fn poll(&self) -> Option<Vec<Find>> {
+        self.finds.try_recv().ok()
+    }
+}
+
+/// Remove dust over one photo — it lives on the session, so another photo starts clean.
+#[derive(Default)]
+pub struct Run {
+    /// The Sensitivity of a press made while the photo was still loading: the search starts once it has.
+    pub queued: Option<f32>,
+    pub search: Option<Search>,
+    /// What the last press did, shown under the button until the next one.
+    pub said: Option<String>,
+}
+
+/// What a press did, given how many patches it `added` out of `found` finds.
+pub fn outcome(added: usize, found: usize) -> String {
+    match (added, found) {
+        (0, 0) => "No dust found".to_string(),
+        (0, _) => "No new dust found".to_string(),
+        (1, _) => "Removed 1 dust spot".to_string(),
+        (n, _) => format!("Removed {n} dust spots"),
+    }
 }
 
 #[cfg(test)]
@@ -462,6 +537,49 @@ mod tests {
         assert!(!dust_like(edge), "an edge");
         assert!(!dust_like([0.9; RING_DIRECTIONS]), "far too dark for dust");
         assert!(!dust_like([-0.1; RING_DIRECTIONS]), "a bright spot");
+    }
+
+    /// The author (2026-10-20): pressing Remove dust "often nothing is happening". The search runs in the
+    /// background, says how far it has got, and hands back what `find` would.
+    #[test]
+    fn a_search_reports_its_progress_and_its_finds() {
+        let (w, h) = (1600, 1200);
+        let img = std::sync::Arc::new(image(&with_discs(gradient(w, h), w, &DISCS), w, h));
+        let search = Search::spawn(std::sync::Arc::clone(&img), DEFAULT_SENSITIVITY);
+        let start = std::time::Instant::now();
+        let mut seen = Vec::new();
+        let finds = loop {
+            seen.push(search.progress());
+            if let Some(f) = search.poll() {
+                break f;
+            }
+            assert!(start.elapsed().as_secs() < 120, "the search never finished");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(
+            finds,
+            find(&img, DEFAULT_SENSITIVITY),
+            "the same finds as `find`"
+        );
+        assert!(
+            seen.windows(2).all(|p| p[1] >= p[0]),
+            "progress never goes back: {seen:?}"
+        );
+        assert!((0.0..=1.0).contains(&search.progress()));
+        assert_eq!(search.progress(), 1.0, "done is all the way");
+        assert!(search.poll().is_none(), "handed over once");
+    }
+
+    /// The steps are reported as they finish — the preparation and each radius — ending at 1.
+    #[test]
+    fn find_reports_each_step() {
+        let (w, h) = (400, 300);
+        let img = image(&gradient(w, h), w, h);
+        let seen = std::cell::RefCell::new(Vec::new());
+        find_with_progress(&img, DEFAULT_SENSITIVITY, &|p| seen.borrow_mut().push(p));
+        let steps = (RADII.len() + 1) as f32;
+        let want: Vec<f32> = (1..=RADII.len() + 1).map(|k| k as f32 / steps).collect();
+        assert_eq!(seen.into_inner(), want);
     }
 
     fn finds() -> Vec<Find> {

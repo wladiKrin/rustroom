@@ -18,6 +18,7 @@ pub mod parametric_curve;
 pub mod preset_rows;
 pub mod presets;
 pub mod profile;
+mod progress_line;
 pub mod retouch;
 mod retouch_dust;
 mod retouch_eyes;
