@@ -59,6 +59,8 @@ cargo run --release -p rustroom -- decode photo.RAF out.tiff
 cargo run --release -p rustroom -- render photo.RAF out.jpg --edits edits.json
 ```
 
+The built CLI is `target/release/rustroom-cli`; the app is `target/release/Rustroom`.
+
 Example `edits.json`:
 
 ```json
