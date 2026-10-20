@@ -168,7 +168,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-10-19)
 
-**4077 tests** (23 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
+**4083 tests** (23 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
 gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
@@ -252,7 +252,7 @@ that had grown to ~170 lines by appending.)
 
 **▶ NEXT: M10.16c2 — Dust** (spec `2026-10-19-m10.16c-remove-design.md`, § c2: sensor spots found and healed as Heal
 spots, no network); then c3 People, c4 Reflections, each its own plan. ✅ c1 the Remove brush merged 2026-10-19
-(`grep -n 'M10.16c1' docs/JOURNAL.md`). M10.16c1b (the author's call): a removal being filled shades the
+(`grep -n 'M10.16c1' docs/JOURNAL.md`). ✅ M10.16c1b merged 2026-10-20: a removal being filled shades the
 AREA it will replace — Detect objects' whole object — sent by the job before the network runs. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
 d), M10.14 f–h ⏸.
 

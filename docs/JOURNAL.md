@@ -265,7 +265,7 @@ the depth map are computed from the decode WITH the object, so Select Subject ca
 - *"I don't understand what the detect objects option does"* — explained; the change is his call.
 
 **M10.16c1b (2026-10-19, branch `m10.16c1b-detect-area`) — his call: "Detect objects should show the area it
-will fill while it works".** The fill job is split: `remove_tool::prepare` (the window, its encoding, the stroke's
+will fill while it works".** ✅ Confirmed by the author ("works") and merged 2026-10-20. The fill job is split: `remove_tool::prepare` (the window, its encoding, the stroke's
 alpha with Detect's object joined) and `finish` (the network); between them the worker sends
 `RemovalResult::Area` — the fill's own mask, so what is shaded is what is replaced. The flow holds each area until
 its fill lands (`removal_flow`, by key; the canvas reads them by removal, Opacity aside — `remove_tool::same_fill`),
