@@ -162,6 +162,13 @@ impl DecodeMap {
     /// inverse is solved by fixed-point iteration — a distortion is a few percent, and eight steps land
     /// within a hundredth of a pixel.
     pub fn decode_to_frame(&self, d: [f32; 2]) -> (f32, f32) {
+        self.spot.point(self.post_lens_of(d))
+    }
+
+    /// Decode-normalised `d` → the post-lens point it lands on — [`Self::post_lens_to_decode`]'s inverse,
+    /// solved by fixed-point iteration (the lens has no forward map; eight steps land within a hundredth of
+    /// a pixel). Where a patch must sit for something found in the decode (M10.16c2's dust).
+    pub fn post_lens_of(&self, d: [f32; 2]) -> [f32; 2] {
         let mut p = d;
         if self.corr.is_some() {
             for _ in 0..8 {
@@ -169,7 +176,7 @@ impl DecodeMap {
                 p = [p[0] + d[0] - at[0], p[1] + d[1] - at[1]];
             }
         }
-        self.spot.point(p)
+        p
     }
 }
 

@@ -35,6 +35,61 @@ pub struct Find {
     pub contrast: f32,
 }
 
+/// A patch's radius against its dust's — the soft edge covered, and the ring Heal measures off the dust.
+pub const SPOT_SCALE: f32 = 1.6;
+
+/// Each find as a Heal patch in the patches' space: its centre through `post_lens` (decode → post-lens),
+/// [`SPOT_SCALE`] × its radius within the spot tool's limits, the tool's feather, a source picked by
+/// `spot_source::pick` over `sample` (3 radii up, else down, when it finds none — the click's rule). A find
+/// whose centre sits inside an existing patch, or one already made, is skipped.
+pub fn to_spots(
+    finds: &[Find],
+    post_lens: &dyn Fn([f32; 2]) -> [f32; 2],
+    aspect: f32,
+    existing: &[edit_model::Spot],
+    tool: crate::spot_tool::SpotTool,
+    sample: &dyn Fn([f32; 2]) -> [f32; 3],
+) -> Vec<edit_model::Spot> {
+    let (sx, sy) = crate::spot_tool::long_edge_scale(aspect);
+    let inside = |p: [f32; 2], s: &edit_model::Spot| {
+        (((p[0] - s.centre[0]) * sx).powi(2) + ((p[1] - s.centre[1]) * sy).powi(2)).sqrt()
+            < s.radius
+    };
+    let mut made: Vec<edit_model::Spot> = Vec::new();
+    for f in finds {
+        let centre = post_lens(f.centre);
+        if !centre.iter().all(|v| (0.0..=1.0).contains(v)) {
+            continue;
+        }
+        if existing.iter().chain(&made).any(|s| inside(centre, s)) {
+            continue;
+        }
+        let radius = (SPOT_SCALE * f.radius)
+            .clamp(crate::spot_tool::MIN_RADIUS, crate::spot_tool::MAX_RADIUS);
+        let taken: Vec<edit_model::Spot> = existing.iter().chain(&made).copied().collect();
+        let source = crate::spot_source::pick(sample, centre, radius, aspect, &taken)
+            .unwrap_or_else(|| {
+                let up = centre[1] - 3.0 * radius;
+                [
+                    centre[0],
+                    if up >= 0.0 {
+                        up
+                    } else {
+                        (centre[1] + 3.0 * radius).min(1.0)
+                    },
+                ]
+            });
+        made.push(edit_model::Spot {
+            centre,
+            source,
+            radius,
+            feather: tool.feather,
+            mode: edit_model::SpotMode::Heal,
+        });
+    }
+    made
+}
+
 /// The least contrast a find needs at `sensitivity` (0..=100): 8 % darker at 0, ten times fainter at 100 —
 /// 2.5 % at the default.
 fn min_contrast(sensitivity: f32) -> f32 {
@@ -296,6 +351,105 @@ mod tests {
         assert!(
             hi >= mid && mid >= lo && hi > lo,
             "10: {lo}, 50: {mid}, 90: {hi}"
+        );
+    }
+
+    fn finds() -> Vec<Find> {
+        [[0.2, 0.3], [0.5, 0.5], [0.8, 0.6]]
+            .iter()
+            .map(|&centre| Find {
+                centre,
+                radius: 0.004,
+                contrast: 0.05,
+            })
+            .collect()
+    }
+
+    fn flat(_: [f32; 2]) -> [f32; 3] {
+        [0.4, 0.45, 0.5]
+    }
+
+    #[test]
+    fn every_find_becomes_a_heal_patch() {
+        let tool = crate::spot_tool::SpotTool::default();
+        let spots = to_spots(&finds(), &|d| d, 1.5, &[], tool, &flat);
+        assert_eq!(spots.len(), 3);
+        for (s, f) in spots.iter().zip(finds()) {
+            assert_eq!(s.mode, edit_model::SpotMode::Heal);
+            assert_eq!(s.centre, f.centre);
+            assert!(
+                (s.radius - SPOT_SCALE * f.radius).abs() < 1e-7,
+                "{}",
+                s.radius
+            );
+            assert_eq!(s.feather, tool.feather);
+            assert_ne!(s.source, s.centre, "a patch copied onto itself");
+        }
+    }
+
+    /// Review Focus 2: Remove dust pressed again adds nothing where a patch already sits — nor twice for one
+    /// spot found twice.
+    #[test]
+    fn a_find_under_an_existing_patch_is_skipped() {
+        let tool = crate::spot_tool::SpotTool::default();
+        let first = to_spots(&finds(), &|d| d, 1.5, &[], tool, &flat);
+        assert!(to_spots(&finds(), &|d| d, 1.5, &first, tool, &flat).is_empty());
+        let twice: Vec<Find> = finds().into_iter().chain(finds()).collect();
+        assert_eq!(to_spots(&twice, &|d| d, 1.5, &[], tool, &flat).len(), 3);
+    }
+
+    /// Review Focus 3: through a lens's distortion each patch lands where its dust is — the patches' space is
+    /// after the lens, the finds are in the decode.
+    #[test]
+    fn a_find_lands_on_its_dust_through_the_lens() {
+        let xml = r#"<lensdatabase version="1">
+            <camera><maker>M</maker><model>C</model><mount>X</mount><cropfactor>1.0</cropfactor></camera>
+            <lens><maker>M</maker><model>L 50mm</model><mount>X</mount><cropfactor>1.0</cropfactor>
+                <calibration><distortion model="ptlens" focal="50" a="0.0" b="0.05" c="0.0"/></calibration>
+            </lens></lensdatabase>"#;
+        let db = lens_profile::Catalogue::from_xml(xml).unwrap();
+        let corr = lens_profile::Corrector::new(
+            &db.find("M", "C", "L 50mm").unwrap(),
+            &lens_profile::Shot {
+                focal: 50.0,
+                aperture: 2.8,
+            },
+            3000,
+            2000,
+            lens_profile::Corrections {
+                distortion: true,
+                tca: false,
+                vignetting: false,
+                scale: 1.0,
+            },
+        );
+        assert!(corr.is_some(), "the fixture's lens corrects");
+        let dm = crate::ai_space::DecodeMap::new(
+            &edit_model::Geometry::default(),
+            edit_model::Perspective::default(),
+            3000,
+            2000,
+            corr,
+            3000,
+            2000,
+        );
+        let tool = crate::spot_tool::SpotTool::default();
+        let spots = to_spots(&finds(), &|d| dm.post_lens_of(d), 1.5, &[], tool, &flat);
+        assert_eq!(spots.len(), 3);
+        let mut moved = 0f32;
+        for (s, f) in spots.iter().zip(finds()) {
+            let back = dm.post_lens_to_decode(s.centre);
+            assert!(
+                (back[0] - f.centre[0]).abs() < 1e-4 && (back[1] - f.centre[1]).abs() < 1e-4,
+                "{:?} came back as {back:?}",
+                f.centre
+            );
+            moved =
+                moved.max((s.centre[0] - f.centre[0]).abs() + (s.centre[1] - f.centre[1]).abs());
+        }
+        assert!(
+            moved > 1e-3,
+            "the fixture: the lens moved nothing ({moved})"
         );
     }
 }
