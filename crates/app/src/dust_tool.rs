@@ -15,12 +15,27 @@ pub const MAX_FINDS: usize = 200;
 /// The working image's long side: dust 10–60 px across on a 26 Mpx frame stays 5–30 px here.
 const WORK: usize = 3000;
 /// The radii looked at, in working pixels.
-const RADII: [f32; 6] = [2.0, 3.0, 4.5, 7.0, 10.0, 15.0];
+///
+/// ⚠ From 3, not 2 (measured on the author's f/18–f/22 frames, 2026-10-20): radius 2 found specks of one to
+/// three pixels — distant birds, single dead pixels — never sensor dust, whose shadow is soft and wider.
+const RADII: [f32; 5] = [3.0, 4.5, 7.0, 10.0, 15.0];
 /// The blur the texture's background is taken against, in working pixels — four times the widest dust, or
 /// a large disc would be taken for background and lose its contrast.
 const BACKGROUND: f32 = 60.0;
-/// A disc must stand this many times above the texture around it.
-const SNR: f32 = 3.0;
+/// A disc must stand this many times above the texture around it — 4 at Sensitivity 0, 2 at 100.
+fn snr(sensitivity: f32) -> f32 {
+    4.0 - 2.0 * sensitivity.clamp(0.0, 100.0) / 100.0
+}
+/// The darkest dust, in log luminance — the centre against its ring's median, 2.5 radii out (~45 % darker).
+/// ⚠ Not the detection contrast: that ring is a blur centred on the spot, so it takes in the spot and reads a
+/// disc 70 % darker as 0.30–0.48 depending on the radius. The author's frames showed stones and birds far
+/// darker than any dust shadow.
+const MAX_DARKENING: f32 = 0.6;
+/// Every direction around a find must be this share of its contrast brighter than its centre: a line, an
+/// edge or a stone among stones has a dark direction, a dust shadow on a smooth sky none.
+const RING_SHARE: f32 = 0.35;
+/// The directions the ring is read in.
+const RING_DIRECTIONS: usize = 16;
 /// Below this fraction of the frame's 99th-percentile luminance a spot is noise, not dust.
 const DARK_FLOOR: f32 = 0.05;
 
@@ -90,6 +105,15 @@ pub fn to_spots(
     made
 }
 
+/// Whether a spot whose ring reads `ring` (each direction's brightness above the centre, log luminance) is
+/// dust: brighter all round — every direction at least [`RING_SHARE`] of the median, so no line, edge or
+/// neighbouring stone runs through it — and darkened by no more than [`MAX_DARKENING`].
+fn dust_like(mut ring: [f32; RING_DIRECTIONS]) -> bool {
+    ring.sort_by(f32::total_cmp);
+    let darkening = ring[RING_DIRECTIONS / 2];
+    darkening > 0.0 && darkening <= MAX_DARKENING && ring[0] >= RING_SHARE * darkening
+}
+
 /// The least contrast a find needs at `sensitivity` (0..=100): 8 % darker at 0, ten times fainter at 100 —
 /// 2.5 % at the default.
 fn min_contrast(sensitivity: f32) -> f32 {
@@ -140,6 +164,10 @@ pub fn find(img: &ImageBuf, sensitivity: f32) -> Vec<Find> {
     };
     let background = blur(&lum, 24.0);
     let need = min_contrast(sensitivity);
+    let snr = snr(sensitivity);
+    // The centre's darkness read nearly sharp: the radius's own blur dilutes a small dark core, and a stone
+    // 70 % darker then reads as dust (measured).
+    let sharp = blur(&log, 1.0);
     let mut candidates: Vec<(usize, f32, f32)> = Vec::new();
     for &r in &RADII {
         let inner = blur(&log, 0.6 * r);
@@ -150,7 +178,8 @@ pub fn find(img: &ImageBuf, sensitivity: f32) -> Vec<Find> {
         let found: Vec<(usize, f32, f32)> = (1..h - 1)
             .into_par_iter()
             .flat_map_iter(|y| {
-                let (c, mean, energy, background) = (&c, &mean, &energy, &background);
+                let (c, mean, energy, background, inner, sharp) =
+                    (&c, &mean, &energy, &background, &inner, &sharp);
                 (1..w - 1).filter_map(move |x| {
                     let i = y * w + x;
                     let v = c[i];
@@ -158,7 +187,7 @@ pub fn find(img: &ImageBuf, sensitivity: f32) -> Vec<Find> {
                         return None;
                     }
                     let texture = (energy[i] - mean[i] * mean[i]).max(0.0).sqrt();
-                    if v < SNR * texture {
+                    if v < snr * texture {
                         return None;
                     }
                     let peak = [
@@ -173,7 +202,23 @@ pub fn find(img: &ImageBuf, sensitivity: f32) -> Vec<Find> {
                     ]
                     .iter()
                     .all(|&j| c[j] <= v);
-                    peak.then_some((i, r, v))
+                    if !peak {
+                        return None;
+                    }
+                    // The ring itself — 16 directions, 2.5 r out, on the radius's blur — against the centre
+                    // read nearly sharp: brighter than it in every direction (no line, edge or neighbouring
+                    // stone), and not too much brighter for dust.
+                    let centre = sharp[i];
+                    let mut ring = [0f32; RING_DIRECTIONS];
+                    for (k, s) in ring.iter_mut().enumerate() {
+                        let a = k as f32 / RING_DIRECTIONS as f32 * std::f32::consts::TAU;
+                        let (sx, sy) = (x as f32 + 2.5 * r * a.cos(), y as f32 + 2.5 * r * a.sin());
+                        if sx < 0.0 || sy < 0.0 || sx >= (w - 1) as f32 || sy >= (h - 1) as f32 {
+                            return None;
+                        }
+                        *s = inner[sy.round() as usize * w + sx.round() as usize] - centre;
+                    }
+                    dust_like(ring).then_some((i, r, v))
                 })
             })
             .collect();
@@ -352,6 +397,71 @@ mod tests {
             hi >= mid && mid >= lo && hi > lo,
             "10: {lo}, 50: {mid}, 90: {hi}"
         );
+    }
+
+    /// Measured on the author's frames (2026-10-20): dark stones in gravel were found — one stone among
+    /// others is darker than its ring's AVERAGE, but its neighbours make dark directions in the ring itself.
+    #[test]
+    fn a_stone_among_stones_is_not_dust() {
+        let (w, h) = (800, 600);
+        // A row of three discs 2.5 radii apart — stones — and a lone control disc on clear sky.
+        let discs = [
+            (385.0, 400.0, 6.0, 0.2),
+            (400.0, 400.0, 6.0, 0.2),
+            (415.0, 400.0, 6.0, 0.2),
+            (400.0, 150.0, 6.0, 0.2),
+        ];
+        let finds = find(
+            &image(&with_discs(gradient(w, h), w, &discs), w, h),
+            DEFAULT_SENSITIVITY,
+        );
+        assert!(
+            finds
+                .iter()
+                .any(|f| (f.centre[1] * h as f32 - 150.0).abs() < 4.0),
+            "the lone control was missed: {finds:?}"
+        );
+        assert!(
+            finds
+                .iter()
+                .all(|f| (f.centre[1] * h as f32 - 400.0).abs() > 20.0),
+            "a stone among stones was taken for dust: {finds:?}"
+        );
+    }
+
+    /// A disc 70 % darker than the sky is a thing in the scene, never a dust shadow.
+    #[test]
+    fn a_scene_object_too_dark_for_dust_is_not_dust() {
+        let (w, h) = (800, 600);
+        let discs = [(250.0, 300.0, 6.0, 0.7), (550.0, 300.0, 6.0, 0.15)];
+        let finds = find(
+            &image(&with_discs(gradient(w, h), w, &discs), w, h),
+            DEFAULT_SENSITIVITY,
+        );
+        assert_eq!(finds.len(), 1, "{finds:?}");
+        assert!(
+            (finds[0].centre[0] * w as f32 - 550.0).abs() < 4.0,
+            "{finds:?}"
+        );
+    }
+
+    /// The ring rule itself: an even ring is dust; a line through the spot (two opposite directions as dark
+    /// as the centre), an edge (half the ring dark) or a spot far too dark is not.
+    #[test]
+    fn dust_is_brighter_all_round() {
+        let even = [0.12; RING_DIRECTIONS];
+        assert!(dust_like(even));
+        let mut line = even;
+        line[0] = 0.0;
+        line[RING_DIRECTIONS / 2] = 0.0;
+        assert!(!dust_like(line), "a line through the spot");
+        let mut edge = even;
+        for v in edge.iter_mut().take(RING_DIRECTIONS / 2 - 1) {
+            *v = -0.05;
+        }
+        assert!(!dust_like(edge), "an edge");
+        assert!(!dust_like([0.9; RING_DIRECTIONS]), "far too dark for dust");
+        assert!(!dust_like([-0.1; RING_DIRECTIONS]), "a bright spot");
     }
 
     fn finds() -> Vec<Find> {
