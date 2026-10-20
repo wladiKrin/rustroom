@@ -19,6 +19,7 @@ pub mod preset_rows;
 pub mod presets;
 pub mod profile;
 pub mod retouch;
+mod retouch_dust;
 mod retouch_eyes;
 mod retouch_remove;
 pub mod section;

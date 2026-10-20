@@ -447,7 +447,7 @@ fn place_with_source(
 /// ⚠ Returns an **owned** closure: everything it needs is cloned or `Copy`, so it does not borrow
 /// the session and can therefore be built before `draw_spot_overlay` takes `&mut Session`. The
 /// buffer is behind an `Arc`, so "cloning" it copies a pointer.
-pub(super) fn sampler_for(s: &mut Session) -> impl Fn([f32; 2]) -> [f32; 3] {
+pub(crate) fn sampler_for(s: &mut Session) -> impl Fn([f32; 2]) -> [f32; 3] {
     let buf = s.buffer.clone();
     let (w, h) = (buf.width(), buf.height());
     // ⚠⚠ From the session's memo, never built here: this runs on EVERY Retouch frame, and building a

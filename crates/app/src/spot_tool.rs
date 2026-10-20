@@ -139,6 +139,8 @@ pub struct SpotTool {
     pub radius: f32,
     pub feather: f32,
     pub mode: SpotMode,
+    /// Remove dust's sensitivity, 0..=100 (M10.16c2) — `dust_tool::find`'s.
+    pub dust: f32,
 }
 
 impl Default for SpotTool {
@@ -150,6 +152,7 @@ impl Default for SpotTool {
             radius: 0.02,
             feather: 50.0,
             mode: SpotMode::Heal,
+            dust: crate::dust_tool::DEFAULT_SENSITIVITY,
         }
     }
 }

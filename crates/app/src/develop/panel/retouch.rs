@@ -5,6 +5,7 @@
 //! view so what it covers shows) and a `×`, mirroring the Masks list. A **Next patch** row is
 //! lit whenever no patch is selected, so which patch the sliders edit is a row, not a sentence.
 
+use super::retouch_dust;
 use super::retouch_eyes::{self, Mode};
 use super::retouch_remove;
 use super::Edited;
@@ -82,6 +83,7 @@ pub(crate) fn show_with(
     ui.add_space(6.0);
     settings(ui, s, tool, eyes, remove, ed);
     find_dust(ui, s, ed);
+    retouch_dust::show(ui, s, tool, ed);
 }
 
 /// ⚠ Test-only: the patch-mode panel, so the patch tests keep their four-argument call. The app
