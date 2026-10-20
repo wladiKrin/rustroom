@@ -219,6 +219,13 @@ depending on the radius (that ring is a blur centred on the spot) — now judged
 **Known, said plainly:** a distant bird and a dust shadow look alike in one frame — each find is an ordinary patch,
 deleted like any; it is proven on constructed dust and against false finds on real photos, never yet on real dust.
 
+**The author's first look (2026-10-20):** *"I can't see the patches"* Remove dust created — pressed in Remove (the mode
+Retouch opens in), whose canvas draws only removals; and picking a patch row selected it without leaving Remove. Now a
+patch row picked switches to the patch's own mode (its outline, its source and the line between drawn, the pick lit), a
+removal row picked returns to Remove, and a press that adds patches switches to the patch mode
+(`picking_a_patch_row_shows_the_patches`, `picking_a_removal_row_returns_to_remove`,
+`remove_dust_shows_the_patches_it_made` — each red first).
+
 ### 2026-10-19 — M10.16c1: Remove — the content-aware brush, LaMa, Refresh, Detect objects, Opacity (branch `m10.16c-remove`)
 
 ✅ **Confirmed by the author ("works") and merged 2026-10-19** (`--no-ff`, the branch deleted) — after his first
