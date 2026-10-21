@@ -72,6 +72,160 @@ pub fn real_finder(models: PathBuf) -> Finder {
     })
 }
 
+/// What looks again where the author drew (M10.16c3, the author's (a)): the upright area, the drawing's box over it
+/// (normalised, upright), the progress — the people there, or what is under the drawing.
+pub type ThereFinder = Box<
+    dyn FnOnce(&image::RgbImage, [f32; 4], &dyn Fn(f32)) -> Result<Vec<UprightPerson>, String>
+        + Send,
+>;
+
+/// YOLOX-m's whole-frame pass over the area — close enough for a small person to be many pixels tall — then
+/// MobileSAM; nobody found, MobileSAM's object under the drawing ([`there_people`]).
+pub fn real_there_finder(models: PathBuf) -> ThereFinder {
+    Box::new(move |img, drawn, progress| {
+        let yolox = models.join(ai_mask::ModelId::YoloxM.spec().file);
+        let people = ai_mask::people::People::load(&yolox).map_err(|e| e.to_string())?;
+        let found = people.find_whole(img).map_err(|e| e.to_string())?;
+        progress(0.4);
+        let [enc, dec] = ai_mask::registry::CLICK_MODELS.map(|m| models.join(m.spec().file));
+        let mut sam = ai_mask::Sam::new(&enc, &dec);
+        let e = sam.embed(img).map_err(|e| e.to_string())?;
+        progress(0.9);
+        there_people(found, drawn, &mut |b| {
+            sam.prompt(&e, &[], Some(b)).map_err(|e| e.to_string())
+        })
+    })
+}
+
+/// The people under a drawing: each find outlined from its box — or, the author's (a), nobody found, the object
+/// under the drawing outlined from the drawing's box and offered as one, its box the outline's extent. An empty
+/// outline is nobody.
+pub fn there_people(
+    found: Vec<ai_mask::people::Found>,
+    drawn: [f32; 4],
+    outline: &mut dyn FnMut([f32; 4]) -> Result<ai_mask::ProbMap, String>,
+) -> Result<Vec<UprightPerson>, String> {
+    if !found.is_empty() {
+        return found
+            .into_iter()
+            .map(|f| {
+                Ok(UprightPerson {
+                    bbox: f.bbox,
+                    score: f.score,
+                    mask: outline(f.bbox)?,
+                })
+            })
+            .collect();
+    }
+    let mask = outline(drawn)?;
+    Ok(extent(&mask)
+        .map(|bbox| UprightPerson {
+            bbox,
+            score: 0.0,
+            mask,
+        })
+        .into_iter()
+        .collect())
+}
+
+/// The box of a map's pixels at one half or above, normalised — `None` for an empty map.
+fn extent(m: &ai_mask::ProbMap) -> Option<[f32; 4]> {
+    let (w, h) = (m.w as usize, m.h as usize);
+    let mut b = [usize::MAX, usize::MAX, 0, 0];
+    let mut any = false;
+    for (i, &v) in m.data.iter().enumerate() {
+        if v >= 128 {
+            let (x, y) = (i % w, i / w);
+            b = [b[0].min(x), b[1].min(y), b[2].max(x + 1), b[3].max(y + 1)];
+            any = true;
+        }
+    }
+    any.then(|| {
+        [
+            b[0] as f32 / w as f32,
+            b[1] as f32 / h as f32,
+            b[2] as f32 / w as f32,
+            b[3] as f32 / h as f32,
+        ]
+    })
+}
+
+/// The area looked at around a drawing grows by this share of the drawing's size on each side.
+const LOOK_GROW: f32 = 0.5;
+/// …and is at least this many decode pixels a side — the network's own square.
+const LOOK_MIN: f32 = ai_mask::people::SIDE as f32;
+
+/// The area to look again in, decode-normalised: the drawing's box (`points`, its brush `radius` a share of the long
+/// edge, in a `w × h` decode), grown by half its size on each side, at least [`LOOK_MIN`] decode pixels a side,
+/// moved inside the photo.
+pub fn look_rect(points: &[[f32; 2]], radius: f32, w: usize, h: usize) -> [f32; 4] {
+    let (wf, hf) = (w.max(1) as f32, h.max(1) as f32);
+    let r = radius.max(0.0) * wf.max(hf);
+    let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    for p in points {
+        let (x, y) = (p[0] * wf, p[1] * hf);
+        b = [
+            b[0].min(x - r),
+            b[1].min(y - r),
+            b[2].max(x + r),
+            b[3].max(y + r),
+        ];
+    }
+    if b[0] > b[2] {
+        return [0.0, 0.0, 1.0, 1.0];
+    }
+    let side = |lo: f32, hi: f32, full: f32| {
+        let want = ((hi - lo) * (1.0 + 2.0 * LOOK_GROW))
+            .max(LOOK_MIN)
+            .min(full);
+        let c = (lo + hi) / 2.0;
+        let start = (c - want / 2.0).clamp(0.0, full - want);
+        (start / full, (start + want) / full)
+    };
+    let (x0, x1) = side(b[0], b[2], wf);
+    let (y0, y1) = side(b[1], b[3], hf);
+    [x0, y0, x1, y1]
+}
+
+/// `p`, found in the area `rect` (decode-normalised), placed in the photo: its box, shading and border mapped from
+/// the area's units into the decode's. Its `tall` stays the area's — the pre-tick is the whole search's.
+pub fn place(p: Person, rect: [f32; 4]) -> Person {
+    let (rw, rh) = (rect[2] - rect[0], rect[3] - rect[1]);
+    let at = |q: [f32; 2]| [rect[0] + q[0] * rw, rect[1] + q[1] * rh];
+    let bx = |b: [f32; 4]| {
+        let (a, c) = (at([b[0], b[1]]), at([b[2], b[3]]));
+        [a[0], a[1], c[0], c[1]]
+    };
+    let area = Area {
+        rect: bx(p.area.rect),
+        side: p.area.side,
+        alpha: p.area.alpha.clone(),
+    };
+    Person {
+        bbox: bx(p.bbox),
+        score: p.score,
+        tall: p.tall,
+        area: Arc::new(area),
+        outline: p
+            .outline
+            .into_iter()
+            .map(|l| l.into_iter().map(at).collect())
+            .collect(),
+    }
+}
+
+/// Of `new`, those neither on the list (`existing`) nor removed — a find overlapping one by half (IoU) is it.
+pub fn fresh(
+    new: Vec<Person>,
+    existing: &[Person],
+    removals: &[edit_model::Removal],
+) -> Vec<Person> {
+    not_removed(new, removals)
+        .into_iter()
+        .filter(|p| !existing.iter().any(|e| iou(e.bbox, p.bbox) > SAME_PERSON))
+        .collect()
+}
+
 /// A normalised box turned `turns` clockwise quarter turns — its corners turned, put back in order.
 fn turn_box(b: [f32; 4], turns: u8) -> [f32; 4] {
     let a = crate::ai_worker::turn_point([b[0], b[1]], turns);
@@ -181,18 +335,19 @@ pub fn hit(people: &[Person], at: [f32; 2]) -> Option<usize> {
 /// A find overlapping a person's removal this much (IoU) is that person again.
 const SAME_PERSON: f32 = 0.5;
 
+fn iou(a: [f32; 4], b: [f32; 4]) -> f32 {
+    let area = |r: [f32; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
+    let i = area([
+        a[0].max(b[0]),
+        a[1].max(b[1]),
+        a[2].min(b[2]),
+        a[3].min(b[3]),
+    ]);
+    i / (area(a) + area(b) - i).max(1e-9)
+}
+
 /// The people `removals` has not removed yet — the search reads the decode, where removed people still stand.
 pub fn not_removed(people: Vec<Person>, removals: &[edit_model::Removal]) -> Vec<Person> {
-    let iou = |a: [f32; 4], b: [f32; 4]| {
-        let area = |r: [f32; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
-        let i = area([
-            a[0].max(b[0]),
-            a[1].max(b[1]),
-            a[2].min(b[2]),
-            a[3].min(b[3]),
-        ]);
-        i / (area(a) + area(b) - i).max(1e-9)
-    };
     people
         .into_iter()
         .filter(|p| {
@@ -231,14 +386,45 @@ pub struct Search {
 impl Search {
     /// Starts finding the people in `img` — the photo turned upright by `turns` — with `finder`.
     pub fn spawn(img: Arc<image::RgbImage>, turns: u8, finder: Finder) -> Self {
+        Self::run(img, turns, finder, None)
+    }
+
+    /// Starts looking again in `img` — the area `rect` of the photo (decode-normalised), turned upright by `turns`
+    /// — where the author drew `drawn` (normalised over `img`, upright).
+    pub fn spawn_there(
+        img: Arc<image::RgbImage>,
+        turns: u8,
+        rect: [f32; 4],
+        drawn: [f32; 4],
+        finder: ThereFinder,
+    ) -> Self {
+        Self::run(
+            img,
+            turns,
+            Box::new(move |img, progress| finder(img, drawn, progress)),
+            Some(rect),
+        )
+    }
+
+    /// The thread: the finder over `img`, each answer back in decode orientation, then into `rect` when it is an
+    /// area of the photo.
+    fn run(img: Arc<image::RgbImage>, turns: u8, finder: Finder, rect: Option<[f32; 4]>) -> Self {
         let (search, tx) = Self::answered_by(0.0);
         let progress = Arc::clone(&search.progress);
         std::thread::Builder::new()
             .name("rustroom-people".into())
             .spawn(move || {
                 let store = |p: f32| progress.store(p.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
-                let found = finder(&img, &store)
-                    .map(|people| people.into_iter().map(|p| to_decode(p, turns)).collect());
+                let found = finder(&img, &store).map(|people| {
+                    people
+                        .into_iter()
+                        .map(|p| to_decode(p, turns))
+                        .map(|p| match rect {
+                            Some(r) => place(p, r),
+                            None => p,
+                        })
+                        .collect()
+                });
                 store(1.0);
                 let _ = tx.send(found);
             })
@@ -274,11 +460,35 @@ pub enum Wait {
     Models,
 }
 
+/// What makes the finders — the real networks; a test hands in its own.
+#[derive(Clone, Copy)]
+pub struct Finders {
+    pub all: fn(PathBuf) -> Finder,
+    pub there: fn(PathBuf) -> ThereFinder,
+}
+
+impl Default for Finders {
+    fn default() -> Self {
+        Self {
+            all: real_finder,
+            there: real_there_finder,
+        }
+    }
+}
+
 /// Find people over one photo — it lives on the session, so another photo starts clean.
 #[derive(Default)]
 pub struct Run {
     /// Find people pressed this frame — the flow starts the search, or waits.
     pub pressed: bool,
+    /// The people view is on — from a search's landing, found or not, until Remove, Cancel, another press or
+    /// another photo. While it is, the canvas picks people and a drawing means "look there".
+    pub active: bool,
+    /// A drawing made in the people view, decode-normalised, for the flow to look again under (the author's (a)).
+    pub look: Option<Vec<[f32; 2]>>,
+    /// The running search is a look there — its people join the list rather than make it.
+    pub there: bool,
+    pub finders: Finders,
     pub waiting: Option<Wait>,
     pub search: Option<Search>,
     /// The people found, shown on the photo until Remove, Cancel, another press or another photo.
@@ -514,6 +724,158 @@ mod tests {
             boxes,
             vec![[0.40, 0.10, 0.50, 0.50], [0.70, 0.10, 0.80, 0.50]]
         );
+    }
+
+    fn near(a: [f32; 4], b: [f32; 4]) -> bool {
+        a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5)
+    }
+
+    /// Look there: the drawing's box, its brush included, grown by half its size on each side — and at least the
+    /// network's 640² square of decode pixels — inside the photo.
+    #[test]
+    fn the_area_looked_at_is_the_drawing_grown() {
+        let (w, h) = (6000, 4000);
+        // A stroke 300 decode px wide and 1000 tall, its brush 0.
+        let r = look_rect(&[[0.475, 0.375], [0.525, 0.625]], 0.0, w, h);
+        let (rw, rh) = ((r[2] - r[0]) * w as f32, (r[3] - r[1]) * h as f32);
+        assert!((rh - 2000.0).abs() < 2.0, "grown by half a side: {rh}");
+        assert!(
+            (rw - 640.0).abs() < 2.0,
+            "at least the network's square: {rw}"
+        );
+        assert!(
+            ((r[0] + r[2]) / 2.0 - 0.5).abs() < 1e-4,
+            "centred on the drawing: {r:?}"
+        );
+        // The brush counts: a single point with a radius of 0.05 of the long side is 600 px across.
+        let b = look_rect(&[[0.5, 0.5]], 0.05, w, h);
+        assert!(((b[2] - b[0]) * w as f32 - 1200.0).abs() < 2.0, "{b:?}");
+        // At the corner: inside the photo, still the square's size.
+        let e = look_rect(&[[0.01, 0.01]], 0.0, w, h);
+        assert_eq!([e[0], e[1]], [0.0, 0.0], "{e:?}");
+        assert!(((e[2] - e[0]) * w as f32 - 640.0).abs() < 2.0, "{e:?}");
+    }
+
+    /// A person found in the area is placed back in the photo — box, shading and border.
+    #[test]
+    fn a_person_found_there_is_placed_in_the_photo() {
+        let p = Person {
+            bbox: [0.5, 0.5, 1.0, 1.0],
+            score: 0.9,
+            tall: 0.5,
+            area: Arc::new(Area {
+                rect: [0.0, 0.0, 1.0, 1.0],
+                ..empty_area()
+            }),
+            outline: vec![vec![[0.5, 0.5], [1.0, 0.5], [1.0, 1.0]]],
+        };
+        let q = place(p, [0.2, 0.4, 0.6, 0.8]);
+        assert!(near(q.bbox, [0.4, 0.6, 0.6, 0.8]), "{:?}", q.bbox);
+        assert!(near(q.area.rect, [0.2, 0.4, 0.6, 0.8]), "{:?}", q.area.rect);
+        let o = q.outline[0][0];
+        assert!(
+            (o[0] - 0.4).abs() < 1e-5 && (o[1] - 0.6).abs() < 1e-5,
+            "{o:?}"
+        );
+    }
+
+    /// (a), the author's pick: people found there are each outlined; nobody found, what is under the drawing is
+    /// outlined from its box and offered — its box the outline's own extent; an empty answer, nobody.
+    #[test]
+    fn nobody_found_there_takes_what_is_under_the_drawing() {
+        // MobileSAM's stand-in: the middle half of the box it is asked about.
+        let half = |b: [f32; 4]| {
+            ai_mask::ProbMap::from_fn(100, 100, move |x, y| {
+                let (u, v) = ((x as f32 + 0.5) / 100.0, (y as f32 + 0.5) / 100.0);
+                let (cx, cy) = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+                ((u - cx).abs() < (b[2] - b[0]) / 4.0 && (v - cy).abs() < (b[3] - b[1]) / 4.0) as u8
+                    as f32
+            })
+        };
+        let drawn = [0.5, 0.2, 0.9, 0.9];
+        let mut asked = Vec::new();
+        let found = vec![ai_mask::people::Found {
+            bbox: [0.1, 0.1, 0.3, 0.6],
+            score: 0.8,
+        }];
+        let got = there_people(found, drawn, &mut |b| {
+            asked.push(b);
+            Ok(half(b))
+        })
+        .unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].bbox, [0.1, 0.1, 0.3, 0.6], "the network's find");
+        assert_eq!(
+            asked,
+            vec![[0.1, 0.1, 0.3, 0.6]],
+            "outlined from its own box"
+        );
+        asked.clear();
+        let got = there_people(Vec::new(), drawn, &mut |b| {
+            asked.push(b);
+            Ok(half(b))
+        })
+        .unwrap();
+        assert_eq!(asked, vec![drawn], "nobody found: the drawing's box asked");
+        assert_eq!(got.len(), 1, "what is under the drawing offered");
+        let b = got[0].bbox;
+        assert!(
+            (b[0] - 0.6).abs() < 0.02 && (b[2] - 0.8).abs() < 0.02,
+            "its box the outline's extent: {b:?}"
+        );
+        let none = there_people(Vec::new(), drawn, &mut |_| {
+            Ok(ai_mask::ProbMap::from_fn(8, 8, |_, _| 0.0))
+        })
+        .unwrap();
+        assert!(none.is_empty(), "an empty outline is nobody");
+    }
+
+    /// Only people neither on the list nor removed join it.
+    #[test]
+    fn only_new_people_join_the_list() {
+        let mk = |x: f32| Person {
+            bbox: [x, 0.1, x + 0.1, 0.5],
+            score: 0.9,
+            tall: 0.4,
+            area: Arc::new(empty_area()),
+            outline: Vec::new(),
+        };
+        let removed = edit_model::Removal {
+            points: Vec::new(),
+            radius: 0.0,
+            detect: false,
+            variant: 0,
+            opacity: 100.0,
+            person: Some([0.4, 0.1, 0.5, 0.5]),
+        };
+        let new = fresh(vec![mk(0.11), mk(0.41), mk(0.7)], &[mk(0.1)], &[removed]);
+        assert_eq!(new.len(), 1);
+        assert_eq!(new[0].bbox[0], 0.7);
+    }
+
+    /// A search there hands the finder the upright area and the drawing's box, and lands in the photo.
+    #[test]
+    fn a_search_there_lands_in_the_photo() {
+        let img = Arc::new(image::RgbImage::new(100, 100));
+        let finder: ThereFinder = Box::new(|img, drawn, _| {
+            assert_eq!((img.width(), img.height()), (100, 100));
+            Ok(vec![upright(
+                drawn,
+                [(drawn[0] + drawn[2]) / 2.0, (drawn[1] + drawn[3]) / 2.0],
+            )])
+        });
+        let s = Search::spawn_there(img, 0, [0.5, 0.5, 1.0, 1.0], [0.0, 0.0, 0.5, 0.5], finder);
+        let start = std::time::Instant::now();
+        let got = loop {
+            if let Some(r) = s.poll() {
+                break r;
+            }
+            assert!(start.elapsed().as_secs() < 10);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        let p = got.unwrap();
+        assert_eq!(p.len(), 1);
+        assert!(near(p[0].bbox, [0.5, 0.5, 0.75, 0.75]), "{:?}", p[0].bbox);
     }
 
     #[test]
