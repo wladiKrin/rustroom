@@ -296,6 +296,7 @@ fn settings(
     }
     if remove.active {
         retouch_remove::settings(ui, s, remove, ed);
+        super::retouch_people::show(ui, s, ed);
         return;
     }
 

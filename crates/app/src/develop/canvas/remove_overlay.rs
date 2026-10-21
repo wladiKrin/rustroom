@@ -155,7 +155,7 @@ impl RemovalUi {
 }
 
 /// The screen ↔ decode mapping for this view — the held one while nothing it is built from has changed.
-fn decode_map(s: &mut Session, frame_rect: egui::Rect) -> Arc<DecodeMap> {
+pub(super) fn decode_map(s: &mut Session, frame_rect: egui::Rect) -> Arc<DecodeMap> {
     let (dw, dh) = (s.buffer.width(), s.buffer.height());
     let (fw, fh) = (frame_rect.width() as usize, frame_rect.height() as usize);
     let lens = rustroom_app::ai_space::lens_key(s.lens.shot.as_ref(), &s.edits, dw, dh);
@@ -315,7 +315,12 @@ pub(super) fn draw_remove_overlay(
         // ⚠ A removal still being filled is shaded — the object is still in the picture under it; a
         // filled one is only outlined, faintly unless selected (the spot overlay's dimming).
         if let Some((tex, rect)) = shades[i] {
-            painter.add(area_mesh(tex, rect, &to_screen));
+            painter.add(area_mesh(
+                tex,
+                rect,
+                &to_screen,
+                egui::Color32::from_white_alpha(70),
+            ));
         }
         let fill = if shades[i].is_some() {
             None
@@ -353,11 +358,12 @@ pub(super) fn draw_remove_overlay(
 }
 
 /// An area's shading: its texture laid through [`rustroom_app::remove_tool::area_grid`], each vertex mapped
-/// decode → screen, at the pending stroke's tint.
-fn area_mesh(
+/// decode → screen, at `tint` — a pending stroke's, or a person's (M10.16c3).
+pub(super) fn area_mesh(
     tex: egui::TextureId,
     rect: [f32; 4],
     to_screen: &dyn Fn([f32; 2]) -> egui::Pos2,
+    tint: egui::Color32,
 ) -> egui::Mesh {
     const N: usize = 24;
     let mut mesh = egui::Mesh::with_texture(tex);
@@ -365,7 +371,7 @@ fn area_mesh(
         mesh.vertices.push(egui::epaint::Vertex {
             pos: to_screen(d),
             uv: egui::pos2(uv[0], uv[1]),
-            color: egui::Color32::from_white_alpha(70),
+            color: tint,
         });
     }
     let row = (N + 1) as u32;

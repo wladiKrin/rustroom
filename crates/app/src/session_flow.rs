@@ -753,6 +753,8 @@ impl RustroomApp {
             removal: Default::default(),
             lens_memo: Default::default(),
             dust: Default::default(),
+            people: Default::default(),
+            people_view: Default::default(),
             active_mask_handle: None,
             guides: Vec::new(),
             active_guide: None,

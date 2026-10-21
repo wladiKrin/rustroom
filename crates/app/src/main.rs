@@ -71,6 +71,7 @@ mod multi;
 mod name_edit;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod people_flow;
 mod preset_ops;
 mod preview_flow;
 mod removal_flow;

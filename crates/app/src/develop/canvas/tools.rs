@@ -199,7 +199,13 @@ pub(super) fn dispatch(
             // every mode but take gestures only in theirs — one click, one
             // meaning. Patch outlines are not drawn in an eye mode.
             // ⚠ M10.16c1: Remove is the first mode; its strokes take the gestures a patch would.
-            if out.app_eye_tool.active.is_none() && inp.app_remove_tool.active {
+            // ⚠ M10.16c3: people found stand in for Remove's overlay until Remove N people or Cancel.
+            if out.app_eye_tool.active.is_none()
+                && inp.app_remove_tool.active
+                && !s.people.people.is_empty()
+            {
+                super::people_overlay::draw(ui, s, img_rect, frame_rect);
+            } else if out.app_eye_tool.active.is_none() && inp.app_remove_tool.active {
                 out.photo_edited |= super::remove_overlay::draw_remove_overlay(
                     ui,
                     s,

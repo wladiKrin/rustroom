@@ -22,6 +22,7 @@ mod progress_line;
 pub mod retouch;
 mod retouch_dust;
 mod retouch_eyes;
+mod retouch_people;
 mod retouch_remove;
 pub mod section;
 pub mod slider;

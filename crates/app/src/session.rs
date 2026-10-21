@@ -227,6 +227,10 @@ pub struct Session {
     /// Remove dust (M10.16c2): a press waiting for the photo, its search, what the last one did — gone with the
     /// photo.
     pub(crate) dust: rustroom_app::dust_tool::Run,
+    /// Find people (M10.16c3): a press waiting, its search, the people found and which go — gone with the photo.
+    pub(crate) people: rustroom_app::people_tool::Run,
+    /// The people's outlines as textures, uploaded once each — the canvas's half of `people`.
+    pub(crate) people_view: crate::develop::canvas::people_overlay::PeopleView,
     /// The Remove gesture and the selected removal (M10.16c1) — `spot_drag`'s reason.
     pub(crate) removal: crate::develop::canvas::remove_overlay::RemovalUi,
     /// Drawn perspective guides.

@@ -17,6 +17,7 @@ mod mask_overlay;
 pub(crate) mod mask_tint;
 pub(crate) mod navigation;
 mod paint;
+pub(crate) mod people_overlay;
 mod readout;
 pub(crate) mod remove_overlay;
 pub(crate) mod spot_overlay;

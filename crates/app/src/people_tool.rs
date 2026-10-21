@@ -145,6 +145,22 @@ pub fn removals(people: &[Person], ticked: &[bool]) -> Vec<edit_model::Removal> 
         .collect()
 }
 
+/// The person a click at decode point `at` picks: the smallest box holding it — one standing in front of
+/// another is the smaller.
+pub fn hit(people: &[Person], at: [f32; 2]) -> Option<usize> {
+    people
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| {
+            (p.bbox[0]..=p.bbox[2]).contains(&at[0]) && (p.bbox[1]..=p.bbox[3]).contains(&at[1])
+        })
+        .min_by(|(_, a), (_, b)| {
+            let size = |p: &Person| (p.bbox[2] - p.bbox[0]) * (p.bbox[3] - p.bbox[1]);
+            size(a).total_cmp(&size(b))
+        })
+        .map(|(i, _)| i)
+}
+
 /// What the panel says of `n` people found, `ticked` of them to go.
 pub fn summary(n: usize, ticked: usize) -> String {
     match n {
@@ -373,6 +389,22 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(2));
         };
         assert_eq!(got.err().as_deref(), Some("no model"));
+    }
+
+    /// A click on the photo picks the person under it — the smallest box holding it, so one standing in front of
+    /// another can be picked.
+    #[test]
+    fn a_click_picks_the_smallest_person_under_it() {
+        let mk = |b: [f32; 4]| Person {
+            bbox: b,
+            score: 0.9,
+            tall: 0.4,
+            area: Arc::new(empty_area()),
+        };
+        let people = [mk([0.1, 0.1, 0.6, 0.9]), mk([0.3, 0.4, 0.4, 0.8])];
+        assert_eq!(hit(&people, [0.35, 0.5]), Some(1));
+        assert_eq!(hit(&people, [0.15, 0.5]), Some(0));
+        assert_eq!(hit(&people, [0.8, 0.5]), None);
     }
 
     #[test]
