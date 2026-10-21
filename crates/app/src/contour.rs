@@ -169,7 +169,7 @@ mod tests {
             (1..4).contains(&x) && (1..4).contains(&y) || (7..11).contains(&x) && y >= 2
         });
         assert_eq!(loops(&a, 12, 6, 0.5).len(), 2);
-        assert!(loops(&vec![0.0; 36], 6, 6, 0.5).is_empty());
+        assert!(loops(&[0.0; 36], 6, 6, 0.5).is_empty());
     }
 
     /// A hole is a loop of its own.

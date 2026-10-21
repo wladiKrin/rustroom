@@ -1,17 +1,27 @@
 //! Find people on the canvas (M10.16c3): every person found shaded with their outline — the ones to remove in the
 //! accent, the others faintly — and a click on one picking or unpicking them.
 //!
-//! ⚠ While people are shown it stands in for Remove's overlay (`tools.rs`): no stroke, no click-removal, so a click
-//! on the photo means one thing. The people live in DECODE space, mapped as the removals are.
+//! ⚠ While the people view is on it stands in for Remove's overlay (`tools.rs`): a click picks a person, and a
+//! drawing means "look again there" (the author's (a)) — never a removal. The people live in DECODE space, mapped
+//! as the removals are.
 
+use super::navigation::{tool_drag, tool_drag_started};
 use crate::Session;
 use eframe::egui;
+use rustroom_app::remove_tool::RemoveTool;
 use std::sync::Arc;
 
-/// The people's outlines as textures — each uploaded on its first frame, dropped with its person.
+/// The people's outlines as textures — each uploaded on its first frame, dropped with its person — and the drawing
+/// across frames.
 #[derive(Default)]
 pub(crate) struct PeopleView {
     textures: Vec<(usize, egui::TextureHandle)>,
+    /// The drawing being made, decode-normalised.
+    stroke: Vec<[f32; 2]>,
+    /// Where the press began, on screen — what tells a drawing from a click.
+    press: Option<egui::Pos2>,
+    /// The last drawing looked under — shown while the look runs.
+    looked: Vec<[f32; 2]>,
 }
 
 impl PeopleView {
@@ -40,8 +50,16 @@ impl PeopleView {
     }
 }
 
-/// The people shaded, and a click picking one. It edits nothing — Remove N people is the panel's step.
-pub(super) fn draw(ui: &egui::Ui, s: &mut Session, img_rect: egui::Rect, frame_rect: egui::Rect) {
+/// The people shaded and bordered, a click picking one, a drawing asking to look there. It edits nothing — Remove N
+/// people is the panel's step.
+pub(super) fn draw(
+    ui: &egui::Ui,
+    s: &mut Session,
+    resp: &egui::Response,
+    img_rect: egui::Rect,
+    frame_rect: egui::Rect,
+    tool: &RemoveTool,
+) {
     if frame_rect.width() <= f32::EPSILON || frame_rect.height() <= f32::EPSILON {
         return;
     }
@@ -58,6 +76,37 @@ pub(super) fn draw(ui: &egui::Ui, s: &mut Session, img_rect: egui::Rect, frame_r
         .and_then(|p| rustroom_app::people_tool::hit(&s.people.people, to_decode(p)));
     if hovered.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    // The author's (a): a drawing over someone it missed — the Remove brush's size — asks to look again there.
+    let (dw, dh) = (s.buffer.width(), s.buffer.height());
+    if tool_drag_started(resp) {
+        s.people_view.stroke.clear();
+        s.people_view.press = resp.interact_pointer_pos();
+    }
+    if tool_drag(resp) {
+        if let Some(p) = resp.interact_pointer_pos() {
+            let at = to_decode(p);
+            rustroom_app::remove_tool::add_point(
+                &mut s.people_view.stroke,
+                at,
+                tool.radius,
+                dw,
+                dh,
+            );
+        }
+    }
+    if resp.drag_stopped() {
+        let points = std::mem::take(&mut s.people_view.stroke);
+        let moved = match (s.people_view.press.take(), resp.interact_pointer_pos()) {
+            (Some(a), Some(b)) => (b - a).length() > super::remove_overlay::CLICK_SLOP,
+            (Some(_), None) => points.len() > 1,
+            _ => false,
+        };
+        // ⚠ One look at a time: a drawing while one runs asks for nothing.
+        if moved && !points.is_empty() && s.people.search.is_none() {
+            s.people_view.looked = points.clone();
+            s.people.look = Some(points);
+        }
     }
     if click.clicked() {
         if let Some(p) = click.interact_pointer_pos() {
@@ -79,6 +128,30 @@ pub(super) fn draw(ui: &egui::Ui, s: &mut Session, img_rect: egui::Rect, frame_r
     // ⚠ The accent for the ones to remove — set state, `docs/DESIGN.md`'s one use of it here.
     let accent = ui.visuals().selection.bg_fill.gamma_multiply(0.45);
     let faint = egui::Color32::from_white_alpha(45);
+    // A decode radius on screen, measured at `at`.
+    let screen_radius = |at: [f32; 2], radius: f32| {
+        let step = radius * dw.max(dh) as f32 / dw.max(1) as f32;
+        (to_screen([at[0] + step, at[1]]) - to_screen(at)).length()
+    };
+    // The drawing being made, and the last one while its look runs.
+    let drawing = if !s.people_view.stroke.is_empty() {
+        Some(&s.people_view.stroke)
+    } else if s.people.there && s.people.search.is_some() {
+        Some(&s.people_view.looked)
+    } else {
+        None
+    };
+    if let Some(stroke) = drawing.filter(|d| !d.is_empty()) {
+        let pts: Vec<egui::Pos2> = stroke.iter().map(|&p| to_screen(p)).collect();
+        let rad = screen_radius(stroke[0], tool.radius);
+        super::remove_overlay::band(
+            &painter,
+            &pts,
+            rad,
+            Some(egui::Color32::from_white_alpha(70)),
+            true,
+        );
+    }
     for i in 0..s.people.people.len() {
         let area = Arc::clone(&s.people.people[i].area);
         let tex = s.people_view.texture(ui.ctx(), &area);
@@ -119,6 +192,18 @@ pub(super) fn draw(ui: &egui::Ui, s: &mut Session, img_rect: egui::Rect, frame_r
             }
         }
     }
+    // The brush under the pointer, away from a person — what a drawing would cover.
+    if hovered.is_none() {
+        if let Some(p) = click.hover_pos().or_else(|| resp.hover_pos()) {
+            let rad = screen_radius(to_decode(p), tool.radius);
+            for (w, col) in [
+                (3.0, egui::Color32::from_black_alpha(140)),
+                (1.0, egui::Color32::from_white_alpha(255)),
+            ] {
+                painter.circle_stroke(p, rad, egui::Stroke::new(w, col));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -148,6 +233,7 @@ mod tests {
             outline: vec![vec![[0.5, 0.4], [0.6, 0.5], [0.5, 0.6], [0.4, 0.5]]],
         }];
         s.people.ticked = vec![false];
+        s.people.active = true;
         app
     }
 
@@ -259,7 +345,37 @@ mod tests {
         let mut app = app_with_a_person(&ctx);
         let c = canvas_centre(&mut app, &ctx);
         drag_through(&mut app, &ctx, c, c + egui::vec2(60.0, 10.0));
-        assert!(app.session.as_ref().unwrap().edits.removals.is_empty());
+        let s = app.session.as_ref().unwrap();
+        assert!(s.edits.removals.is_empty(), "no removal painted");
+        // The author's (a): the drawing is where to look again.
+        let look = s.people.look.as_ref().expect("a look there asked for");
+        assert!(look.len() >= 2, "{look:?}");
+    }
+
+    /// The view on with nobody found: a drawing still looks there — that is what the empty view is for.
+    #[test]
+    fn a_drawing_in_an_empty_view_looks_there() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_a_person(&ctx);
+        app.session.as_mut().unwrap().people.people.clear();
+        app.session.as_mut().unwrap().people.ticked.clear();
+        let c = canvas_centre(&mut app, &ctx);
+        drag_through(&mut app, &ctx, c, c + egui::vec2(60.0, 10.0));
+        let s = app.session.as_ref().unwrap();
+        assert!(s.edits.removals.is_empty());
+        assert!(s.people.look.is_some());
+    }
+
+    /// One look at a time: a drawing while it looks asks for nothing.
+    #[test]
+    fn a_drawing_while_it_looks_asks_for_nothing() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_a_person(&ctx);
+        let (search, _answer) = rustroom_app::people_tool::Search::answered_by(0.3);
+        app.session.as_mut().unwrap().people.search = Some(search);
+        let c = canvas_centre(&mut app, &ctx);
+        drag_through(&mut app, &ctx, c, c + egui::vec2(60.0, 10.0));
+        assert!(app.session.as_ref().unwrap().people.look.is_none());
     }
 
     /// Without people shown, Remove paints as before — the guard above is not just a dead canvas.
@@ -267,8 +383,10 @@ mod tests {
     fn without_people_a_drag_still_paints() {
         let ctx = egui::Context::default();
         let mut app = app_with_a_person(&ctx);
-        app.session.as_mut().unwrap().people.people.clear();
-        app.session.as_mut().unwrap().people.ticked.clear();
+        let s = app.session.as_mut().unwrap();
+        s.people.people.clear();
+        s.people.ticked.clear();
+        s.people.active = false;
         let c = canvas_centre(&mut app, &ctx);
         drag_through(&mut app, &ctx, c, c + egui::vec2(60.0, 10.0));
         assert_eq!(app.session.as_ref().unwrap().edits.removals.len(), 1);

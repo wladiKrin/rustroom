@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 /// A press that moved less than this many points is a click, left to the click path — the eye
 /// overlay's rule, for its reason: egui runs the whole drag lifecycle for a plain click.
-const CLICK_SLOP: f32 = 3.0;
+pub(super) const CLICK_SLOP: f32 = 3.0;
 
 /// What a screen ↔ decode map is built from: the geometry, the perspective, the frame's size, the lens
 /// (`ai_space::lens_key`) and the decode's size.
@@ -414,7 +414,7 @@ fn outline(painter: &egui::Painter, pts: &[egui::Pos2], lit: bool) {
 }
 
 /// A stroke's band on screen: `fill` laid along it at its radius, and its outline — bright when lit.
-fn band(
+pub(super) fn band(
     painter: &egui::Painter,
     pts: &[egui::Pos2],
     rad: f32,

@@ -187,6 +187,36 @@ pub fn look_rect(points: &[[f32; 2]], radius: f32, w: usize, h: usize) -> [f32; 
     [x0, y0, x1, y1]
 }
 
+/// The drawing's own box (`points`, its brush `radius`) normalised over the area `rect` of a `w × h` decode, turned
+/// upright by `turns` — the box MobileSAM is asked about when nobody is found there.
+pub fn drawn_in(
+    points: &[[f32; 2]],
+    radius: f32,
+    rect: [f32; 4],
+    w: usize,
+    h: usize,
+    turns: u8,
+) -> [f32; 4] {
+    let (wf, hf) = (w.max(1) as f32, h.max(1) as f32);
+    let r = radius.max(0.0) * wf.max(hf);
+    let (rw, rh) = ((rect[2] - rect[0]) * wf, (rect[3] - rect[1]) * hf);
+    let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    for p in points {
+        let (x, y) = (p[0] * wf - rect[0] * wf, p[1] * hf - rect[1] * hf);
+        b = [
+            b[0].min(x - r),
+            b[1].min(y - r),
+            b[2].max(x + r),
+            b[3].max(y + r),
+        ];
+    }
+    if b[0] > b[2] {
+        return [0.0, 0.0, 1.0, 1.0];
+    }
+    let n = [b[0] / rw, b[1] / rh, b[2] / rw, b[3] / rh].map(|v| v.clamp(0.0, 1.0));
+    turn_box(n, turns % 4)
+}
+
 /// `p`, found in the area `rect` (decode-normalised), placed in the photo: its box, shading and border mapped from
 /// the area's units into the decode's. Its `tall` stays the area's — the pre-tick is the whole search's.
 pub fn place(p: Person, rect: [f32; 4]) -> Person {
@@ -754,6 +784,20 @@ mod tests {
         let e = look_rect(&[[0.01, 0.01]], 0.0, w, h);
         assert_eq!([e[0], e[1]], [0.0, 0.0], "{e:?}");
         assert!(((e[2] - e[0]) * w as f32 - 640.0).abs() < 2.0, "{e:?}");
+    }
+
+    /// The drawing's own box over the area, upright — what MobileSAM is asked about when nobody is found there.
+    #[test]
+    fn the_drawing_is_given_upright_over_the_area() {
+        let (w, h) = (1000, 1000);
+        let rect = [0.2, 0.2, 0.6, 0.6];
+        // A stroke from (0.3, 0.3) to (0.4, 0.3), no brush: the area's (0.25, 0.25)–(0.5, 0.25).
+        let pts = [[0.3, 0.3], [0.4, 0.3]];
+        let d = drawn_in(&pts, 0.0, rect, w, h, 0);
+        assert!(near(d, [0.25, 0.25, 0.5, 0.25]), "{d:?}");
+        // A decode turned once to stand up: (u, v) → (1 − v, u).
+        let t = drawn_in(&pts, 0.0, rect, w, h, 1);
+        assert!(near(t, [0.75, 0.25, 0.75, 0.5]), "{t:?}");
     }
 
     /// A person found in the area is placed back in the photo — box, shading and border.

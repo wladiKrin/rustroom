@@ -230,6 +230,20 @@ re-find filter. The real network passes on DSCF8296 (an ignored test, `RUSTROOM_
 other — the accent shows it before Remove; while people are shown, existing removals' outlines are not drawn; each
 search loads YOLOX-m and MobileSAM's encoder afresh (~2 s).
 
+**The author's first look (2026-10-21), two asks:** *(1)* "a light, white border, so one knows they are clickable" —
+first a box, then, his correction, *"a tighter border, following the border of the tinted area"*: each person's outline
+traced once by the search (`contour::loops`, marching squares on the 128² shading at one half, chained into closed
+loops) and drawn white over a faint dark halo, brighter under the pointer, a pointing hand over a person. *(2)* "if
+the ai fails to find someone … draw over them, so the ai can check again" — his pick **(a)**: in the people view a
+drawing (the Remove brush's size) looks again in the area around it — grown by half on each side, at least 640 decode
+px — at full resolution, YOLOX-m's whole-frame pass then MobileSAM; nobody found there, MobileSAM's object under the
+drawing is offered, its box the outline's extent. Who is new joins the list ticked; "No one new there" otherwise. The
+view now stays on with nobody found (that is when a drawing is most wanted), until Remove, Cancel, a new press or
+another photo; a look landing after Remove or Cancel is dropped (found by my own review, red first). Finders are
+handed in through `people_tool::Finders`, so the flow's tests run without a network. ⚠ `image::open` ignores EXIF
+orientation: the real-network test read DSCF8296 sideways and `find_whole` found nobody — now loaded upright.
+`target/debug` had passed 300,000 files (builds of minutes); reclaimed with `rm -rf target/debug` (57,743 after).
+
 ### 2026-10-20 — M10.16c2: Remove dust — sensor spots found and healed as patches (branch `m10.16c2-dust`)
 
 ✅ **Confirmed by the author ("works") and merged 2026-10-21** (`--no-ff`, the branch deleted) — after his two

@@ -16,6 +16,8 @@ use std::sync::Arc;
 const LOADED: usize = 1500;
 /// How often the panel redraws while a search runs or a press waits.
 const REDRAW: std::time::Duration = std::time::Duration::from_millis(50);
+/// The long side an area drawn over is looked at — MobileSAM's own; YOLOX takes it at 640.
+const THERE_LONG: usize = 1024;
 /// The long side the people are found at — the tiles' own.
 const INPUT_LONG: usize = ai_mask::people::TILED_LONG as usize;
 
@@ -56,6 +58,8 @@ impl RustroomApp {
         };
         if std::mem::take(&mut s.people.pressed) {
             s.people.said = None;
+            s.people.active = false;
+            s.people.look = None;
             s.people.people.clear();
             s.people.ticked.clear();
             s.people.waiting = Some(Wait::Photo);
@@ -77,11 +81,43 @@ impl RustroomApp {
         }
         let loaded = !s.buffer_is_ghost && s.buffer.width().max(s.buffer.height()) >= LOADED;
         if s.people.waiting == Some(Wait::Photo) && loaded {
-            if let Some(models) = models {
+            if let Some(models) = models.clone() {
                 let turns = s.edits.geometry.orientation.rotate.turns();
                 let img = Arc::new(people_input(&s.buffer, turns, &s.edits.negative));
                 s.people.waiting = None;
-                s.people.search = Some(Search::spawn(img, turns, people_tool::real_finder(models)));
+                s.people.there = false;
+                s.people.search = Some(Search::spawn(img, turns, (s.people.finders.all)(models)));
+            }
+        }
+        // The author's (a): a drawing in the view looks again under it — one look at a time.
+        if s.people.search.is_none() && s.people.active && loaded && missing.is_empty() {
+            if let (Some(points), Some(models)) = (s.people.look.take(), models) {
+                let (w, h) = (s.buffer.width(), s.buffer.height());
+                let radius = self.remove_tool.radius;
+                let rect = people_tool::look_rect(&points, radius, w, h);
+                let turns = s.edits.geometry.orientation.rotate.turns();
+                let [x0, y0] = [(rect[0] * w as f32) as usize, (rect[1] * h as f32) as usize];
+                let [x1, y1] = [
+                    ((rect[2] * w as f32) as usize).clamp(x0 + 1, w),
+                    ((rect[3] * h as f32) as usize).clamp(y0 + 1, h),
+                ];
+                let crop = s.buffer.crop(x0, y0, x1 - x0, y1 - y0);
+                let img = Arc::new(rustroom_app::ai_worker::model_input(
+                    &crop,
+                    THERE_LONG,
+                    turns,
+                    &s.edits.negative,
+                ));
+                let drawn = people_tool::drawn_in(&points, radius, rect, w, h, turns);
+                s.people.said = None;
+                s.people.there = true;
+                s.people.search = Some(Search::spawn_there(
+                    img,
+                    turns,
+                    rect,
+                    drawn,
+                    (s.people.finders.there)(models),
+                ));
             }
         }
         if s.people.waiting.is_some() {
@@ -95,19 +131,32 @@ impl RustroomApp {
             return;
         };
         s.people.search = None;
-        // ⚠ Final review: the search reads the decode, where people already removed still stand.
-        let got = got.map(|found| {
-            let n = found.len();
-            (n, people_tool::not_removed(found, &s.edits.removals))
-        });
+        let there = std::mem::take(&mut s.people.there);
         match got {
-            Ok((0, _)) => s.people.said = Some(people_tool::summary(0, 0)),
-            Ok((_, people)) if people.is_empty() => {
-                s.people.said = Some("No new people found".to_string());
+            // Remove or Cancel while it looked: the view it was for has ended.
+            Ok(_) if there && !s.people.active => {}
+            // A look there: who is new joins the list, ticked — the author pointed at them.
+            Ok(found) if there => {
+                let new = people_tool::fresh(found, &s.people.people, &s.edits.removals);
+                if new.is_empty() {
+                    s.people.said = Some("No one new there".to_string());
+                }
+                for p in new {
+                    s.people.people.push(p);
+                    s.people.ticked.push(true);
+                }
             }
-            Ok((_, people)) => {
+            // ⚠ Final review: the search reads the decode, where people already removed still stand.
+            Ok(found) => {
+                let n = found.len();
+                let people = people_tool::not_removed(found, &s.edits.removals);
+                if n > 0 && people.is_empty() {
+                    s.people.said = Some("No new people found".to_string());
+                }
                 s.people.ticked = people_tool::pre_ticked(&people);
                 s.people.people = people;
+                // On even with nobody found — a drawing can still point at someone it missed.
+                s.people.active = true;
             }
             Err(e) => s.people.said = Some(format!("Could not find people: {e}")),
         }
@@ -254,6 +303,7 @@ mod tests {
         app.pump_people(&ctx);
         let p = people(&app);
         assert!(p.search.is_none());
+        assert!(p.active, "the people view is on");
         assert_eq!(p.people.len(), 3);
         assert_eq!(p.ticked, vec![false, true, true]);
         assert!(
@@ -279,8 +329,110 @@ mod tests {
         app.session.as_mut().unwrap().people.search = Some(search);
         tx.send(Ok(vec![found])).unwrap();
         app.pump_people(&ctx);
+        assert!(people(&app).active);
         assert!(people(&app).people.is_empty());
         assert_eq!(people(&app).said.as_deref(), Some("No new people found"));
+    }
+
+    /// The finder a look there gets in these tests: one person, the drawing's own box.
+    fn there_one(_: PathBuf) -> people_tool::ThereFinder {
+        Box::new(|_, drawn, _| {
+            Ok(vec![people_tool::UprightPerson {
+                bbox: drawn,
+                score: 0.0,
+                mask: ai_mask::ProbMap::from_fn(4, 4, |_, _| 1.0),
+            }])
+        })
+    }
+
+    /// An app in the people view, the models there, the photo loaded, one person found at the top left.
+    fn app_in_the_view(tag: &str) -> (RustroomApp, egui::Context) {
+        let (mut app, ctx, models) = app_with_models(tag);
+        for m in std::iter::once(ai_mask::ModelId::YoloxM).chain(ai_mask::registry::CLICK_MODELS) {
+            std::fs::File::create(models.join(m.spec().file))
+                .unwrap()
+                .set_len(m.spec().bytes)
+                .unwrap();
+        }
+        let s = app.session.as_mut().unwrap();
+        s.buffer = Arc::new(core_image::ImageBuf::from_vec(
+            2000,
+            1500,
+            vec![0.2; 2000 * 1500 * 3],
+        ));
+        s.people.active = true;
+        s.people.people = vec![person(0.20)];
+        s.people.ticked = vec![false];
+        s.people.finders.there = there_one;
+        (app, ctx)
+    }
+
+    fn land(app: &mut RustroomApp, ctx: &egui::Context) {
+        let start = std::time::Instant::now();
+        while people(app).search.is_some() {
+            app.pump_people(ctx);
+            assert!(start.elapsed().as_secs() < 30, "the search never landed");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// The author's (a): a drawing in the view looks again there, and who it finds joins the list, ticked.
+    #[test]
+    fn a_drawing_looks_there_and_adds_who_it_finds() {
+        let (mut app, ctx) = app_in_the_view("there");
+        app.session.as_mut().unwrap().people.look = Some(vec![[0.7, 0.5], [0.75, 0.6]]);
+        app.pump_people(&ctx);
+        assert!(people(&app).look.is_none(), "taken");
+        assert!(
+            people(&app).search.is_some() && people(&app).there,
+            "a look there runs"
+        );
+        land(&mut app, &ctx);
+        let p = people(&app);
+        assert!(p.active && !p.there);
+        assert_eq!(p.people.len(), 2, "the one found joins the list");
+        assert_eq!(p.ticked, vec![false, true], "ticked — it was pointed at");
+        let b = p.people[1].bbox;
+        assert!(
+            b[0] < 0.75 && b[2] > 0.7 && b[1] < 0.6 && b[3] > 0.5,
+            "found where it was drawn: {b:?}"
+        );
+    }
+
+    /// Remove or Cancel while a look runs: what it finds is dropped — the view it was for has ended.
+    #[test]
+    fn a_look_that_lands_after_the_view_ended_is_dropped() {
+        let (mut app, ctx) = app_in_the_view("there-ended");
+        let (search, tx) = Search::answered_by(0.5);
+        let s = app.session.as_mut().unwrap();
+        s.people.search = Some(search);
+        s.people.there = true;
+        // Cancel, pressed while it looked.
+        s.people.active = false;
+        s.people.people.clear();
+        s.people.ticked.clear();
+        tx.send(Ok(vec![person(0.10)])).unwrap();
+        app.pump_people(&ctx);
+        let p = people(&app);
+        assert!(p.search.is_none() && !p.there);
+        assert!(
+            p.people.is_empty() && p.ticked.is_empty(),
+            "nothing kept for a view that is gone"
+        );
+    }
+
+    /// Drawn over someone already on the list: nobody new, said.
+    #[test]
+    fn nobody_new_there_is_said() {
+        let (mut app, ctx) = app_in_the_view("there-again");
+        let b = people(&app).people[0].bbox;
+        // A drawing exactly over the one already found (the stand-in answers the drawing's box).
+        app.session.as_mut().unwrap().people.look = Some(vec![[b[0], b[1]], [b[2], b[3]]]);
+        app.remove_tool.radius = 0.0;
+        app.pump_people(&ctx);
+        land(&mut app, &ctx);
+        assert_eq!(people(&app).people.len(), 1);
+        assert_eq!(people(&app).said.as_deref(), Some("No one new there"));
     }
 
     /// Nobody found: said, and nothing shown.
@@ -291,7 +443,8 @@ mod tests {
         app.session.as_mut().unwrap().people.search = Some(search);
         tx.send(Ok(Vec::new())).unwrap();
         app.pump_people(&ctx);
-        assert_eq!(people(&app).said.as_deref(), Some("No people found"));
+        // The view stays on with nobody in it — so one can draw over someone it missed; the panel says so.
+        assert!(people(&app).active);
         assert!(people(&app).people.is_empty());
     }
 }
