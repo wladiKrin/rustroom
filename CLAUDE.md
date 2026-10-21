@@ -250,8 +250,8 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1, d** (table above).
 
-**▶ NEXT: M10.16c2 — Dust** (spec `2026-10-19-m10.16c-remove-design.md`, § c2: sensor spots found and healed as Heal
-spots, no network); then c3 People, c4 Reflections, each its own plan. ✅ c1 the Remove brush merged 2026-10-19
+**▶ NOW: M10.16c2 — Remove dust is built on `m10.16c2-dust`, awaiting the author's look** (`grep -n 'M10.16c2'
+docs/JOURNAL.md`); then c3 People, c4 Reflections, each its own plan. ✅ c1 the Remove brush merged 2026-10-19
 (`grep -n 'M10.16c1' docs/JOURNAL.md`). ✅ M10.16c1b merged 2026-10-20: a removal being filled shades the
 AREA it will replace — Detect objects' whole object — sent by the job before the network runs. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
 d), M10.14 f–h ⏸.

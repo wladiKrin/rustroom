@@ -232,6 +232,8 @@ mod tests {
                 }
             });
             self.app.remove_tool = r;
+            self.app.spot_tool = t;
+            self.app.eye_tool = e;
             seen
         }
 
@@ -320,6 +322,62 @@ mod tests {
         p.click("Show Removal 2");
         assert!(!p.s().removal.is_shown(1), "the eye hid its outline");
         assert!(p.s().removal.is_shown(0));
+    }
+
+    /// The author (2026-10-20): clicking a patch should show it and what it does. A patch row in Remove mode
+    /// leaves Remove for the patch's own mode, where the canvas draws the patches — its destination, its
+    /// source and the line between, the picked one lit.
+    #[test]
+    fn picking_a_patch_row_shows_the_patches() {
+        let mut p = Panel::new(vec![removal(0.3)]);
+        p.app.session.as_mut().unwrap().edits.spots = vec![edit_model::Spot {
+            centre: [0.6, 0.5],
+            source: [0.6, 0.3],
+            radius: 0.02,
+            feather: 50.0,
+            mode: edit_model::SpotMode::Clone,
+        }];
+        p.app.session.as_mut().unwrap().removal.selected = Some(0);
+        assert!(p.app.remove_tool.active, "the fixture: in Remove");
+        p.click("Patch 1");
+        assert!(
+            !p.app.remove_tool.active,
+            "the patch stayed unseen in Remove"
+        );
+        assert_eq!(p.s().selected_spot, Some(0));
+        assert_eq!(p.s().removal.selected, None, "one thing lit at a time");
+        use super::super::retouch_eyes::Mode;
+        assert_eq!(
+            Mode::current(
+                edit_model::SpotMode::Clone,
+                p.app.eye_tool.active,
+                p.app.remove_tool.active
+            ),
+            Mode::Clone,
+            "the panel shows the patch's own mode"
+        );
+    }
+
+    /// And the other way: a removal row picked in Heal returns to Remove, where removals are drawn.
+    #[test]
+    fn picking_a_removal_row_returns_to_remove() {
+        let mut p = Panel::new(vec![removal(0.3)]);
+        p.app.remove_tool.active = false;
+        p.app.session.as_mut().unwrap().edits.spots = vec![edit_model::Spot {
+            centre: [0.6, 0.5],
+            source: [0.6, 0.3],
+            radius: 0.02,
+            feather: 50.0,
+            mode: edit_model::SpotMode::Heal,
+        }];
+        p.app.session.as_mut().unwrap().selected_spot = Some(0);
+        p.click("Removal 1");
+        assert!(
+            p.app.remove_tool.active,
+            "the removal stayed unseen in Heal"
+        );
+        assert_eq!(p.s().removal.selected, Some(0));
+        assert_eq!(p.s().selected_spot, None);
     }
 
     /// A row selects its removal and lights Opacity for it; with none selected there is no Opacity.

@@ -5,6 +5,7 @@
 //! view so what it covers shows) and a `×`, mirroring the Masks list. A **Next patch** row is
 //! lit whenever no patch is selected, so which patch the sliders edit is a row, not a sentence.
 
+use super::retouch_dust;
 use super::retouch_eyes::{self, Mode};
 use super::retouch_remove;
 use super::Edited;
@@ -66,14 +67,24 @@ pub(crate) fn show_with(
     });
     // ⚠ M9.11: picking a patch row leaves eye mode, or the next click would place an eye while a
     // patch's settings are lit.
+    // ⚠ M10.16c2: and it leaves Remove — the canvas draws patches only in a patch mode (the author could not
+    // see his dust patches).
     if s.selected_spot.is_some() && s.selected_spot != picked_before {
         eyes.active = None;
         s.selected_eye = None;
+        remove.active = false;
+        s.removal.selected = None;
     }
     // ⚠ M10.16c1: the removals beside the patches, while there are any or Remove is the mode.
     if !s.edits.removals.is_empty() || remove.active {
         ui.add_space(6.0);
+        let before = s.removal.selected;
         retouch_remove::list(ui, s, ed);
+        // And a removal picked returns to Remove, where removals are drawn.
+        if s.removal.selected.is_some() && s.removal.selected != before {
+            remove.active = true;
+            eyes.active = None;
+        }
     }
     if !s.edits.eyes.is_empty() || eyes.active.is_some() {
         ui.add_space(6.0);
@@ -82,6 +93,7 @@ pub(crate) fn show_with(
     ui.add_space(6.0);
     settings(ui, s, tool, eyes, remove, ed);
     find_dust(ui, s, ed);
+    retouch_dust::show(ui, s, tool);
 }
 
 /// ⚠ Test-only: the patch-mode panel, so the patch tests keep their four-argument call. The app

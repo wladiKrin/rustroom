@@ -256,6 +256,10 @@ const COLOUR_RANGE: &[(&str, &str)] = &[
 const PATCH: &[(&str, &str)] = &[
     ("Size", "Sets the patch's radius, in pixels of the photo"),
     ("Feather", "Softens the patch's edge"),
+    (
+        "Sensitivity",
+        "Finds fainter dust, and with it more spots that are not dust",
+    ),
 ];
 
 const REMOVE: &[(&str, &str)] = &[

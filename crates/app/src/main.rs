@@ -48,6 +48,7 @@ mod denoise_flow;
 mod develop;
 #[cfg(target_os = "macos")]
 mod display_colorspace;
+mod dust_flow;
 mod export_flow;
 mod filmstrip;
 mod folder_rows;

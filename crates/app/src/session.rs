@@ -224,6 +224,9 @@ pub struct Session {
     pub(crate) eye_drag: crate::develop::canvas::eye_overlay::EyeDrag,
     /// The lens corrector the canvas maps through, built once per lens and decode size (M10.16c1's review).
     pub(crate) lens_memo: rustroom_app::ai_space::CorrectorMemo,
+    /// Remove dust (M10.16c2): a press waiting for the photo, its search, what the last one did — gone with the
+    /// photo.
+    pub(crate) dust: rustroom_app::dust_tool::Run,
     /// The Remove gesture and the selected removal (M10.16c1) — `spot_drag`'s reason.
     pub(crate) removal: crate::develop::canvas::remove_overlay::RemovalUi,
     /// Drawn perspective guides.
