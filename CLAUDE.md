@@ -166,9 +166,9 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 184 sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-10-19)
+### State (2026-10-21)
 
-**4083 tests** (23 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
+**4104 tests** (23 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
 gate green on `main`. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
@@ -226,7 +226,7 @@ that had grown to ~170 lines by appending.)
   2026-09-29 — start from `docs/BACKLOG.md`'s reasons table. ⚠ The server is a **Tailscale Funnel**: a stopped
   Tailscale on the Mac is never the cause of an Immich error.
 
-**Phase 10 so far — M10.6 to M10.15, M10.16a, b, c1 and d, and M10.19c, merged 2026-09-29 – 10-19, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`; what stays open inside M10.12–14 is in the table below):
+**Phase 10 so far — M10.6 to M10.15, M10.16a, b, c1, c2 and d, and M10.19c, merged 2026-09-29 – 10-21, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`; what stays open inside M10.12–14 is in the table below):
 
 | Id | What | The thing to remember |
 |---|---|---|
@@ -244,14 +244,15 @@ that had grown to ~170 lines by appending.)
 | M10.16d | Lens Blur: a dense, level-adaptive gather of aperture discs (Circle · Blades · Ring · Cat-eye) in three layers, focus on the Subject map's person or a picked point; the section after Effects, Pick focus, Visualize depth; a GPU twin, live (30–32 ms a frame at 1600 px) | the prefix's LAST step, waiting (no step) until its maps and focus exist; keyed on both maps' content ids; ONE lookup (`lens_blur::inputs`) for the step and its twin; the focus and the planes memoised (*Warnings*) |
 | M10.16a | Depth masks: Depth Anything V2 Small (Apache-2.0) → the Depth range mask, a line picker, Show depth map; AI components now cover in a mask's NR/Dehaze/Defringe | `tract` needs the export's symbols BOUND per size and its shape annotations ignored; recipe `depth:v2` (1036, colour snap r8, equalised, 1536) — bump `DEPTH_QUERY` on any change; *Warnings* below |
 | M10.16c1 | Remove: Retouch's first mode — paint over a thing, **LaMa** (the author's pick) fills it in the background from the full decode (~6 s, cached 1.4 MB); Refresh, Detect objects (MobileSAM), Opacity, the eye and Hold out per removal | removals live in DECODE space, pasted after AI denoise and before lens and the negative (*Warnings*); a fill is the network's 512², encoded by its PEAK channel (luminance clipped a sky's blue); never build a lens corrector per frame (*Warnings*) |
+| M10.16c2 | Remove dust: one press looks for sensor dust in the background (no network — a disc against its ring over five radii, the ring brighter all round) and heals each spot as a Heal patch, one undo step; "Looking for dust" over the quiet line, then what it found stays under the button | the search is pumped by Develop's body (`dust_flow`), never the panel, so it lands with Retouch closed; finds are in decode space, patches post-lens through `lens_memo`; a press while the photo loads waits for it; proven on constructed dust — none confirmed in the author's library |
 | M10.16b | AI denoise: **FFDNet** (default; a 26 Mpx frame 18 s on the GPU) or **DRUNet** (Settings), a background job per photo at the noise map × 2, the view's tiles first, "Full denoise" under Amount, cached on disk | the network is in EVERY key that holds its pixels and the worker carries its own (*Warnings*); `ai_mask::pth` is a CLOSED pickle subset; the result is ONE decode's, its step the prefix's first; a long GPU job submits bands |
 
 ### ▶ Next action — Phase 10, top down
 
-✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1, d** (table above).
+✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1, c2, d** (table above).
 
-**▶ NOW: M10.16c2 — Remove dust is built on `m10.16c2-dust`, awaiting the author's look** (`grep -n 'M10.16c2'
-docs/JOURNAL.md`); then c3 People, c4 Reflections, each its own plan. ✅ c1 the Remove brush merged 2026-10-19
+**▶ NEXT: M10.16c3 — People** (spec `2026-10-19-m10.16c-remove-design.md`, § c3); then c4 Reflections, each its
+own plan. ✅ c2 Remove dust merged 2026-10-21 (`grep -n 'M10.16c2' docs/JOURNAL.md`). ✅ c1 the Remove brush merged 2026-10-19
 (`grep -n 'M10.16c1' docs/JOURNAL.md`). ✅ M10.16c1b merged 2026-10-20: a removal being filled shades the
 AREA it will replace — Detect objects' whole object — sent by the job before the network runs. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
 d), M10.14 f–h ⏸.
@@ -267,7 +268,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | **M10.12** the mask model | c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · d camera-matching colour out of the box (P-22), **with b's `ProfileLookTable` and c's per-photo profile folded in** (re-scoped 2026-10-12: neither changes a photo until d brings such a profile; b's `CameraCalibration` ⛔ withdrawn — a DNG-file tag, never in a profile) |
 | **M10.14** performance & verification | f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h ⏸ the reference photo on the GPU (parked 2026-10-13 until a need shows — 1 of 74 photos; 111–125 ms at 3200, numbers in the backlog) |
-| **M10.16** AI tools | **c content-aware remove (next)** |
+| **M10.16** AI tools | **c content-aware remove — c3 People next, then c4 Reflections** |
 | **M10.17** merge | a HDR · b panorama |
 | **M10.18** new modules | a tethering · b GPS and a map · c people tagging · d publish services · e print |
 | **M10.19** found in use (added 2026-10-01) | a HEIC/HEIF photos — libraw cannot read them, so they never appear; needs a decoder · b Move to folder: download Immich assets first, then move (today skipped and counted) (c ✅ above) |

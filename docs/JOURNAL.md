@@ -189,7 +189,8 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ### 2026-10-20 — M10.16c2: Remove dust — sensor spots found and healed as patches (branch `m10.16c2-dust`)
 
-⏳ **Built and gated; awaiting the author's look.** Spec `2026-10-19-m10.16c-remove-design.md` § c2, plan
+✅ **Confirmed by the author ("works") and merged 2026-10-21** (`--no-ff`, the branch deleted) — after his two
+looks' fixes below. Spec `2026-10-19-m10.16c-remove-design.md` § c2, plan
 `2026-10-20-m10.16c2-dust.md`. The author: *"let's start with M10.16c2"*.
 
 **Built:** `dust_tool::find` (lib, no network) — a disc's contrast against its ring in log luminance over five radii
