@@ -59,19 +59,25 @@ impl People {
         Ok(Self { plan })
     }
 
-    /// The people in `img` (upright): the whole frame, then the tiles — `progress` told after each square, 1 at
-    /// the end.
-    pub fn find(&self, img: &RgbImage, progress: &dyn Fn(f32)) -> Result<Vec<Found>, InferError> {
-        let whole_sq = resize_long(img, SIDE);
-        let (sw, sh) = (whole_sq.width() as f32, whole_sq.height() as f32);
-        let whole = nms(self
-            .square(&whole_sq)?
+    /// The people in `img` (upright) at 640 long, without the tiles — a small area the author drew over, already
+    /// close enough for its people to be many pixels tall.
+    pub fn find_whole(&self, img: &RgbImage) -> Result<Vec<Found>, InferError> {
+        let sq = resize_long(img, SIDE);
+        let (sw, sh) = (sq.width() as f32, sq.height() as f32);
+        Ok(nms(self
+            .square(&sq)?
             .into_iter()
             .map(|(b, score)| Found {
                 bbox: norm(b, [0.0, 0.0], sw, sh),
                 score,
             })
-            .collect());
+            .collect()))
+    }
+
+    /// The people in `img` (upright): the whole frame, then the tiles — `progress` told after each square, 1 at
+    /// the end.
+    pub fn find(&self, img: &RgbImage, progress: &dyn Fn(f32)) -> Result<Vec<Found>, InferError> {
+        let whole = self.find_whole(img)?;
         let work = resize_long(img, TILED_LONG);
         let (w, h) = (work.width(), work.height());
         let (xs, ys) = (offsets(w), offsets(h));
@@ -371,7 +377,16 @@ mod tests {
         ) else {
             panic!("set RUSTROOM_PEOPLE_PHOTO and RUSTROOM_YOLOX");
         };
-        let img = image::open(photo).unwrap().to_rgb8();
+        // ⚠ Upright, as the app hands it — `image::open` ignores the EXIF orientation, and a portrait read sideways
+        // hides its people from the whole-frame pass (this test's first version, on DSCF8296).
+        let mut dec = image::ImageReader::open(photo)
+            .unwrap()
+            .into_decoder()
+            .unwrap();
+        let o = image::ImageDecoder::orientation(&mut dec).unwrap();
+        let mut img = image::DynamicImage::from_decoder(dec).unwrap();
+        img.apply_orientation(o);
+        let img = img.to_rgb8();
         let p = People::load(std::path::Path::new(&model)).unwrap();
         let steps = std::cell::RefCell::new(Vec::new());
         let found = p.find(&img, &|f| steps.borrow_mut().push(f)).unwrap();
@@ -381,5 +396,8 @@ mod tests {
             .all(|f| f.bbox.iter().all(|v| (0.0..=1.0).contains(v))));
         let steps = steps.into_inner();
         assert_eq!(steps.last(), Some(&1.0), "{steps:?}");
+        // The whole frame alone, as a drawn area is searched: the strongest find is the same person.
+        let whole = p.find_whole(&img).unwrap();
+        assert!(whole.iter().any(|f| f.score > 0.8), "{whole:?}");
     }
 }
