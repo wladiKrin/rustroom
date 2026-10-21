@@ -161,6 +161,32 @@ pub fn hit(people: &[Person], at: [f32; 2]) -> Option<usize> {
         .map(|(i, _)| i)
 }
 
+/// A find overlapping a person's removal this much (IoU) is that person again.
+const SAME_PERSON: f32 = 0.5;
+
+/// The people `removals` has not removed yet — the search reads the decode, where removed people still stand.
+pub fn not_removed(people: Vec<Person>, removals: &[edit_model::Removal]) -> Vec<Person> {
+    let iou = |a: [f32; 4], b: [f32; 4]| {
+        let area = |r: [f32; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
+        let i = area([
+            a[0].max(b[0]),
+            a[1].max(b[1]),
+            a[2].min(b[2]),
+            a[3].min(b[3]),
+        ]);
+        i / (area(a) + area(b) - i).max(1e-9)
+    };
+    people
+        .into_iter()
+        .filter(|p| {
+            !removals
+                .iter()
+                .filter_map(|r| r.person)
+                .any(|b| iou(b, p.bbox) > SAME_PERSON)
+        })
+        .collect()
+}
+
 /// What the panel says of `n` people found, `ticked` of them to go.
 pub fn summary(n: usize, ticked: usize) -> String {
     match n {
@@ -405,6 +431,45 @@ mod tests {
         assert_eq!(hit(&people, [0.35, 0.5]), Some(1));
         assert_eq!(hit(&people, [0.15, 0.5]), Some(0));
         assert_eq!(hit(&people, [0.8, 0.5]), None);
+    }
+
+    /// Final review: the search reads the decode, where people already removed still stand — a find on a person's
+    /// removal is them again, and is not offered twice. A stroke removal is not a person.
+    #[test]
+    fn people_already_removed_are_not_found_again() {
+        let mk = |b: [f32; 4]| Person {
+            bbox: b,
+            score: 0.9,
+            tall: 0.4,
+            area: Arc::new(empty_area()),
+        };
+        let removed = edit_model::Removal {
+            points: Vec::new(),
+            radius: 0.0,
+            detect: false,
+            variant: 0,
+            opacity: 100.0,
+            person: Some([0.10, 0.10, 0.20, 0.50]),
+        };
+        let stroke = edit_model::Removal {
+            points: vec![[0.75, 0.3]],
+            radius: 0.05,
+            person: None,
+            ..removed.clone()
+        };
+        let left = not_removed(
+            vec![
+                mk([0.11, 0.11, 0.21, 0.52]),
+                mk([0.40, 0.10, 0.50, 0.50]),
+                mk([0.70, 0.10, 0.80, 0.50]),
+            ],
+            &[removed, stroke],
+        );
+        let boxes: Vec<[f32; 4]> = left.iter().map(|p| p.bbox).collect();
+        assert_eq!(
+            boxes,
+            vec![[0.40, 0.10, 0.50, 0.50], [0.70, 0.10, 0.80, 0.50]]
+        );
     }
 
     #[test]

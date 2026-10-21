@@ -95,11 +95,17 @@ impl RustroomApp {
             return;
         };
         s.people.search = None;
+        // ⚠ Final review: the search reads the decode, where people already removed still stand.
+        let got = got.map(|found| {
+            let n = found.len();
+            (n, people_tool::not_removed(found, &s.edits.removals))
+        });
         match got {
-            Ok(people) if people.is_empty() => {
-                s.people.said = Some(people_tool::summary(0, 0));
+            Ok((0, _)) => s.people.said = Some(people_tool::summary(0, 0)),
+            Ok((_, people)) if people.is_empty() => {
+                s.people.said = Some("No new people found".to_string());
             }
-            Ok(people) => {
+            Ok((_, people)) => {
                 s.people.ticked = people_tool::pre_ticked(&people);
                 s.people.people = people;
             }
@@ -253,6 +259,27 @@ mod tests {
             p.said.is_none(),
             "the summary is drawn live from the people"
         );
+    }
+
+    /// Everyone found was already removed: said so, nothing shown.
+    #[test]
+    fn people_already_removed_are_said_not_shown() {
+        let (mut app, ctx, _) = app_with_models("again");
+        let found = person(0.20);
+        app.session.as_mut().unwrap().edits.removals = vec![edit_model::Removal {
+            points: Vec::new(),
+            radius: 0.0,
+            detect: false,
+            variant: 0,
+            opacity: 100.0,
+            person: Some(found.bbox),
+        }];
+        let (search, tx) = Search::answered_by(0.5);
+        app.session.as_mut().unwrap().people.search = Some(search);
+        tx.send(Ok(vec![found])).unwrap();
+        app.pump_people(&ctx);
+        assert!(people(&app).people.is_empty());
+        assert_eq!(people(&app).said.as_deref(), Some("No new people found"));
     }
 
     /// Nobody found: said, and nothing shown.
