@@ -582,6 +582,42 @@ fn main() {
                 }
             }
         }
+        // Whether MobileSAM outlines a person as well lying sideways (a portrait's decode orientation) as
+        // upright: per person the IoU of the two masks, compared upright.
+        Some("turned") => {
+            let models = PathBuf::from(&a[2]);
+            let plan = load_yolox(Path::new(&a[3]));
+            let mut sam = Sam::new(
+                &models.join(ModelId::SamEncoder.spec().file),
+                &models.join(ModelId::SamDecoder.spec().file),
+            );
+            for photo in &a[4..] {
+                let img = load_jpeg(Path::new(photo));
+                let people = whole(&plan, &img);
+                let side = imageops::rotate90(&img);
+                let (eu, es) = (sam.embed(&img).unwrap(), sam.embed(&side).unwrap());
+                println!("{photo}: {} people", people.len());
+                for p in &people {
+                    let up = sam.prompt(&eu, &[], Some(p.b)).unwrap();
+                    // A clockwise turn takes upright (u, v) to (1 − v, u).
+                    let b = [1.0 - p.b[3], p.b[0], 1.0 - p.b[1], p.b[2]];
+                    let turned = sam.prompt(&es, &[], Some(b)).unwrap();
+                    let (mut i, mut u) = (0u32, 0u32);
+                    for k in 0..4000 {
+                        let x = p.b[0] + (p.b[2] - p.b[0]) * ((k % 63) as f32 + 0.5) / 63.0;
+                        let y = p.b[1] + (p.b[3] - p.b[1]) * ((k / 63) as f32 + 0.5) / 63.0;
+                        let (a1, a2) = (at(&up, x, y), at(&turned, 1.0 - y, x));
+                        i += (a1 && a2) as u32;
+                        u += (a1 || a2) as u32;
+                    }
+                    println!(
+                        "  {:.1} % of the height: IoU upright vs sideways {:.3}",
+                        100.0 * (p.b[3] - p.b[1]),
+                        i as f32 / u.max(1) as f32
+                    );
+                }
+            }
+        }
         _ => eprintln!("people_probe scan YOLOX DIR… | sheet OUT MODELS YOLOX[,YOLOX…] JPG…"),
     }
 }
