@@ -12,6 +12,7 @@ pub mod download;
 pub mod infer;
 pub mod inpaint;
 pub mod map;
+pub mod people;
 pub mod prep;
 pub mod pth;
 pub mod registry;
