@@ -10,7 +10,10 @@ mod space_arg;
 const DEFAULT_JPEG_QUALITY: u8 = 92;
 
 #[derive(Parser)]
-#[command(name = "rustroom", about = "Rustroom — open-source RAW photo editor")]
+#[command(
+    name = "rustroom-cli",
+    about = "Rustroom — open-source RAW photo editor"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

@@ -447,6 +447,68 @@ fn c() {}
     /// over on 2026-09-30, each grown there one reasonable addition at a time, and were split by
     /// responsibility — this is what stops the tenth. Tests do not count: a file's test tail is
     /// excluded wherever it sits, and a file declared `#[cfg(test)] mod x;` is skipped whole.
+    /// The binaries a crate's manifest builds: its `[[bin]]` names, or its package's name when it has a
+    /// `src/main.rs` and no `[[bin]]`.
+    fn binary_names(manifest: &str, has_main: bool) -> Vec<String> {
+        let (mut section, mut package, mut bins) = (String::new(), None, Vec::new());
+        for line in manifest.lines().map(str::trim) {
+            if line.starts_with('[') {
+                section = line.to_string();
+                continue;
+            }
+            let Some(value) = line
+                .strip_prefix("name")
+                .and_then(|r| r.trim_start().strip_prefix('='))
+                .map(|v| v.trim().trim_matches('"').to_string())
+            else {
+                continue;
+            };
+            match section.as_str() {
+                "[package]" => package = Some(value),
+                "[[bin]]" => bins.push(value),
+                _ => {}
+            }
+        }
+        if bins.is_empty() && has_main {
+            bins.extend(package);
+        }
+        bins
+    }
+
+    /// ⚠⚠ macOS's file system ignores case: two binaries whose names differ only by case are ONE file in
+    /// `target/`, and whichever was built last wins. On 2026-10-20 `target/release/rustroom render …` opened
+    /// the GUI (`Rustroom`) and wrote nothing, exit 0. No two workspace binaries may share a name but for case.
+    #[test]
+    fn no_two_binaries_share_a_name_but_for_case() {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let mut names: Vec<(String, String)> = Vec::new();
+        for c in std::fs::read_dir(crates).unwrap().flatten() {
+            let manifest = c.path().join("Cargo.toml");
+            let Ok(text) = std::fs::read_to_string(&manifest) else {
+                continue;
+            };
+            let krate = c.file_name().to_string_lossy().to_string();
+            for n in binary_names(&text, c.path().join("src/main.rs").is_file()) {
+                names.push((n, krate.clone()));
+            }
+        }
+        // Positive controls: the GUI's binary and the CLI crate's are both seen.
+        assert!(
+            names.iter().any(|(n, c)| n == "Rustroom" && c == "app"),
+            "the GUI's binary was not found: {names:?}"
+        );
+        assert!(
+            names.iter().any(|(_, c)| c == "rustroom"),
+            "the CLI crate's binary was not found: {names:?}"
+        );
+        let mut seen: std::collections::HashMap<String, (String, String)> = Default::default();
+        for (n, c) in names {
+            if let Some((m, d)) = seen.insert(n.to_lowercase(), (n.clone(), c.clone())) {
+                panic!("`{n}` ({c}) and `{m}` ({d}) are one file on a case-insensitive disk");
+            }
+        }
+    }
+
     #[test]
     fn no_file_is_over_a_thousand_lines_of_code_and_doc() {
         let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
