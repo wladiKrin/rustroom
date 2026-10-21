@@ -18,6 +18,8 @@ pub struct RemovalRequest {
     pub removal: edit_model::Removal,
     /// The photo's film negative — the network sees the positive (`remove_tool::fill`).
     pub negative: edit_model::Negative,
+    /// The photo's clockwise quarter turns to upright — the detector sees the window so (M10.16c3).
+    pub turns: u8,
 }
 
 /// What came back.
@@ -153,6 +155,7 @@ fn run(
         &image,
         &req.removal,
         &req.negative,
+        req.turns,
         detector.map(|d| d.as_mut() as crate::remove_tool::Detect<'_>),
     )?;
     on_area(Arc::new(prepared.area()));
@@ -232,6 +235,7 @@ mod tests {
             image,
             removal: removal(),
             negative: edit_model::Negative::default(),
+            turns: 0,
         };
         w.request(req(Some(image())));
         let got = ends(wait(&w, 2));
@@ -274,6 +278,7 @@ mod tests {
             image,
             removal: removal(),
             negative: edit_model::Negative::default(),
+            turns: 0,
         };
         w.request(req(Some(image())));
         let first = wait(&w, 1);
@@ -309,6 +314,7 @@ mod tests {
             image: None,
             removal: removal(),
             negative: edit_model::Negative::default(),
+            turns: 0,
         });
         let got = wait(&w, 1);
         assert!(matches!(&got[..], [RemovalResult::Missing { key }] if key == "absent"));
@@ -329,6 +335,7 @@ mod tests {
                 image: Some(image()),
                 removal: removal(),
                 negative: edit_model::Negative::default(),
+                turns: 0,
             });
         }
         // ⚠ Each sends its area first (M10.16c1b), then fails — the network is made after the area.

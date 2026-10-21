@@ -30,7 +30,8 @@ const DETECT_GROW: usize = 6;
 const GOLDEN_ANGLE: f32 = 2.399_963;
 /// ⚠ In every fill's key: bump it on ANY change to how a fill is made, or the old ones are served.
 /// v2 (2026-10-19): the window encoded by its peak channel — v1's fills of a sky came back green.
-const RECIPE: &str = "remove:v2";
+/// v3 (2026-10-21, M10.16c3): the detector sees the window upright — Detect objects' fills on a portrait change.
+const RECIPE: &str = "remove:v3";
 
 /// The inpainting network: [`SIDE`]² display-referred RGB (interleaved, 0..1) and a hole mask (1 = fill)
 /// → the same RGB filled.
@@ -424,6 +425,35 @@ fn prompt(r: &Removal, win: [usize; 4], w: usize, h: usize) -> (Vec<[f32; 2]>, [
     (points, bbox)
 }
 
+/// A `side²` plane of `n` channels turned `turns` clockwise quarter turns.
+fn turn_square(v: &[f32], side: usize, n: usize, turns: u8) -> Vec<f32> {
+    let mut cur = v.to_vec();
+    for _ in 0..turns % 4 {
+        let mut next = vec![0f32; cur.len()];
+        for y in 0..side {
+            for x in 0..side {
+                // Clockwise: (x, y) → (side − 1 − y, x) — `ai_worker::turn_point` in pixels.
+                let to = (x * side + side - 1 - y) * n;
+                next[to..to + n].copy_from_slice(&cur[(y * side + x) * n..(y * side + x + 1) * n]);
+            }
+        }
+        cur = next;
+    }
+    cur
+}
+
+/// A normalised box turned `turns` clockwise quarter turns — its two corners turned, put back in order.
+fn turn_box(b: [f32; 4], turns: u8) -> [f32; 4] {
+    let a = crate::ai_worker::turn_point([b[0], b[1]], turns);
+    let c = crate::ai_worker::turn_point([b[2], b[3]], turns);
+    [
+        a[0].min(c[0]),
+        a[1].min(c[1]),
+        a[0].max(c[0]),
+        a[1].max(c[1]),
+    ]
+}
+
 /// What a removal will replace: its window, normalised over the decode, and the soft alpha over it at
 /// `side²` — the fill's own mask (M10.16c1b: the canvas shades it while the network works).
 #[derive(Debug, Clone, PartialEq)]
@@ -454,10 +484,13 @@ impl Prepared {
 
 /// The first step of [`fill`]: the window around `r` in `img` — the undeveloped decode, positive, full
 /// resolution — encoded for the network, and the stroke's soft alpha with Detect objects' object joined.
+/// The detector sees the window turned upright by `turns` clockwise quarter turns, and its answer is turned
+/// back (M10.16c3).
 pub fn prepare(
     img: &ImageBuf,
     r: &Removal,
     negative: &edit_model::Negative,
+    turns: u8,
     detect: Option<Detect<'_>>,
 ) -> Result<Prepared, String> {
     let (w, h) = (img.width(), img.height());
@@ -482,10 +515,19 @@ pub fn prepare(
     if needs_detector(r) {
         if let Some(detect) = detect {
             let (points, bbox) = prompt(r, win, w, h);
-            let probs = detect(&rgb, &points, bbox)?;
+            // ⚠ M10.16c3: upright for MobileSAM — the spike measured a small person lying sideways (a portrait's
+            // decode orientation) outlined at IoU 0.62–0.94 against upright. The window is square: a turn keeps
+            // its size.
+            let up_rgb = turn_square(&rgb, SIDE, 3, turns);
+            let up_points: Vec<[f32; 2]> = points
+                .iter()
+                .map(|&p| crate::ai_worker::turn_point(p, turns))
+                .collect();
+            let probs = detect(&up_rgb, &up_points, turn_box(bbox, turns))?;
             if probs.len() != SIDE * SIDE {
                 return Err(format!("the detector answered {} values", probs.len()));
             }
+            let probs = turn_square(&probs, SIDE, 1, (4 - turns % 4) % 4);
             let object = soften(&dilate(&probs, SIDE, DETECT_GROW), SIDE, DETECT_GROW / 2);
             for (a, o) in alpha.iter_mut().zip(object) {
                 *a = a.max(o);
@@ -553,7 +595,8 @@ pub fn finish(
 /// One removal's fill from `img` — the undeveloped decode, positive, full resolution: [`prepare`], then
 /// [`finish`].
 ///
-/// `detect` is asked only when the removal has Detect objects; the object it finds joins the hole.
+/// `detect` is asked only when the removal has Detect objects or is a person; the object it finds joins the
+/// hole. `turns` (clockwise quarter turns to upright) is the detector's: it sees the window upright.
 ///
 /// ⚠⚠ A film negative (`negative` active): the network sees the POSITIVE — the Warnings' rule for every
 /// reader of the undeveloped decode — and the fill goes back through [`pipeline::negative::negative_of`],
@@ -563,10 +606,11 @@ pub fn fill(
     img: &ImageBuf,
     r: &Removal,
     negative: &edit_model::Negative,
+    turns: u8,
     net: Net<'_>,
     detect: Option<Detect<'_>>,
 ) -> Result<pipeline::Fill, String> {
-    finish(prepare(img, r, negative, detect)?, r, negative, net)
+    finish(prepare(img, r, negative, turns, detect)?, r, negative, net)
 }
 
 /// The vertices an area is drawn through: an `(n + 1)²` grid over `rect`, row-major, each a decode point and
@@ -687,6 +731,7 @@ mod tests {
             &img,
             &r,
             &edit_model::Negative::default(),
+            0,
             Some(&mut detect),
         )
         .unwrap();
@@ -710,7 +755,7 @@ mod tests {
     fn a_person_needs_the_detector() {
         let img = ImageBuf::from_vec(600, 400, vec![0.3; 600 * 400 * 3]);
         let r = person([0.4, 0.4, 0.5, 0.7]);
-        assert!(prepare(&img, &r, &edit_model::Negative::default(), None).is_err());
+        assert!(prepare(&img, &r, &edit_model::Negative::default(), 0, None).is_err());
         assert!(needs_detector(&r));
         assert!(!needs_detector(&stroke(vec![[0.5, 0.5]], 0.02)));
     }
@@ -739,6 +784,78 @@ mod tests {
         let rs = vec![stroke(vec![[0.9, 0.9]], 0.01), person([0.2, 0.2, 0.4, 0.8])];
         assert_eq!(hit_test(&rs, [0.3, 0.5], 1000, 1000), Some(1));
         assert_eq!(hit_test(&rs, [0.5, 0.5], 1000, 1000), None);
+    }
+
+    /// M10.16c3: MobileSAM outlines a small person lying sideways worse (IoU 0.62–0.94 against upright, the
+    /// spike) — so the detector is handed the window and its prompt turned upright, and its answer is turned
+    /// back. The decode's bright top-left quarter shows each turn.
+    #[test]
+    fn the_detector_sees_the_window_upright() {
+        let (w, h) = (SIDE, SIDE);
+        let img = ImageBuf::from_vec(
+            w,
+            h,
+            (0..w * h)
+                .flat_map(|i| {
+                    let v = if i % w < w / 2 && i / w < h / 2 {
+                        0.8
+                    } else {
+                        0.05
+                    };
+                    [v, v, v]
+                })
+                .collect(),
+        );
+        // A stroke left of the middle with Detect objects; the window's floor is the whole 512² decode.
+        let r = Removal {
+            detect: true,
+            ..stroke(vec![[0.3, 0.5]], 0.05)
+        };
+        assert_eq!(
+            window(&r, w, h),
+            [0, 0, w, h],
+            "the fixture: the window is the decode"
+        );
+        // The upright window's corners, clockwise from the top-left.
+        let corners = [(5, 5), (SIDE - 6, 5), (SIDE - 6, SIDE - 6), (5, SIDE - 6)];
+        for turns in 0..4u8 {
+            let mut seen: Option<(Vec<f32>, [f32; 4])> = None;
+            let mut detect = |rgb: &[f32], _: &[[f32; 2]], bbox: [f32; 4]| {
+                seen = Some((rgb.to_vec(), bbox));
+                // The upright top-left corner marked.
+                Ok((0..SIDE * SIDE)
+                    .map(|i| (i % SIDE < 32 && i / SIDE < 32) as u8 as f32)
+                    .collect())
+            };
+            let p = prepare(
+                &img,
+                &r,
+                &edit_model::Negative::default(),
+                turns,
+                Some(&mut detect),
+            )
+            .unwrap();
+            let (rgb, bbox) = seen.expect("asked");
+            // The decode's bright top-left, turned `turns` times clockwise, is this corner of what it saw.
+            let lit: Vec<usize> = (0..4)
+                .filter(|&k| rgb[(corners[k].1 * SIDE + corners[k].0) * 3] > 0.3)
+                .collect();
+            assert_eq!(lit, vec![turns as usize], "turns {turns}");
+            // The prompt turned with it: its box's centre where the stroke's (0.3, 0.5) turns to.
+            let want = crate::ai_worker::turn_point([0.3, 0.5], turns);
+            let got = [(bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0];
+            assert!(
+                (got[0] - want[0]).abs() < 0.01 && (got[1] - want[1]).abs() < 0.01,
+                "turns {turns}: the prompt at {got:?}, the stroke turned to {want:?}"
+            );
+            // Its answer's upright top-left, turned back, sits at the decode corner the turn took there.
+            let back = corners[(4 - turns as usize) % 4];
+            let a = p.area();
+            assert!(
+                a.alpha[back.1 * SIDE + back.0] > 0.5,
+                "turns {turns}: the answer turned back"
+            );
+        }
     }
 
     #[test]
@@ -901,6 +1018,7 @@ mod tests {
                         ..r.clone()
                     },
                     &edit_model::Negative::default(),
+                    0,
                     &mut |rgb, _| {
                         got = rgb.to_vec();
                         Ok(rgb.to_vec())
@@ -963,7 +1081,8 @@ mod tests {
         };
         assert_eq!(
             id("photo-key", &r, ai_mask::ModelId::Lama),
-            "76ab71db4aef7ee6f18fa286c4accc58a49aaa4871784a55530b103adf132a14"
+            // ⚠ Re-pinned 2026-10-21 for `remove:v3` (M10.16c3) — a deliberate change to how a fill is made.
+            "35d3a9f88fc6da31e658df7c55630238a12c132c3d387c31d5a2213fa3f712ff"
         );
     }
 
@@ -994,6 +1113,7 @@ mod tests {
             &img,
             &r,
             &edit_model::Negative::default(),
+            0,
             &mut |rgb, mask| {
                 assert_eq!(
                     (rgb.len(), mask.len()),
@@ -1086,6 +1206,7 @@ mod tests {
             &img,
             &r,
             &n,
+            0,
             &mut |rgb, mask| {
                 seen = rgb[..3].to_vec();
                 Ok(rgb
@@ -1153,6 +1274,7 @@ mod tests {
             &img,
             &r,
             &edit_model::Negative::default(),
+            0,
             &mut |rgb, _| Ok(rgb.to_vec()),
             None,
         )
@@ -1200,12 +1322,13 @@ mod tests {
                 .collect()
         };
         let neg = edit_model::Negative::default();
-        let prepared = prepare(&img, &r, &neg, Some(&mut |_, _, _| Ok(object()))).unwrap();
+        let prepared = prepare(&img, &r, &neg, 0, Some(&mut |_, _, _| Ok(object()))).unwrap();
         let area = prepared.area();
         let f = fill(
             &img,
             &r,
             &neg,
+            0,
             &mut |rgb, _| Ok(rgb.to_vec()),
             Some(&mut |_, _, _| Ok(object())),
         )
@@ -1311,6 +1434,7 @@ mod tests {
             &img,
             &r,
             &edit_model::Negative::default(),
+            0,
             &mut |rgb, m| {
                 grown_hole = m.iter().filter(|&&v| v >= 0.5).count();
                 Ok(rgb.to_vec())
@@ -1328,6 +1452,7 @@ mod tests {
                 ..r.clone()
             },
             &edit_model::Negative::default(),
+            0,
             &mut |rgb, m| {
                 plain_hole = m.iter().filter(|&&v| v >= 0.5).count();
                 Ok(rgb.to_vec())

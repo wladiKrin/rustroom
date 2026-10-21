@@ -194,7 +194,8 @@ pub fn for_export(
         } else {
             None
         };
-        let f = remove_tool::fill(image, r, &edits.negative, n.as_mut(), d)?;
+        let turns = edits.geometry.orientation.rotate.turns();
+        let f = remove_tool::fill(image, r, &edits.negative, turns, n.as_mut(), d)?;
         if let Some(c) = &cache {
             let _ = crate::removal_cache::store(c, &id, &f);
         }
@@ -492,6 +493,7 @@ mod tests {
             &img,
             &r,
             &edit_model::Negative::default(),
+            0,
             net.as_mut(),
             None,
         )

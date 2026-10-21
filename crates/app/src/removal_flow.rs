@@ -144,6 +144,7 @@ impl RustroomApp {
                 image,
                 removal: r.clone(),
                 negative: s.edits.negative,
+                turns: s.edits.geometry.orientation.rotate.turns(),
             });
         }
         if need_model
