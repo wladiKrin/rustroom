@@ -229,6 +229,30 @@ mod tests {
         }
     }
 
+    /// How long a test waits for something that must happen — a ceiling against a hang, never a timing
+    /// assumption. ⚠ Fixed budgets of 1 s and 6 s lost the race on a loaded cold gate (2026-10-21).
+    const LONG: std::time::Duration = std::time::Duration::from_secs(120);
+
+    /// A network that returns its input, holding every tile after the first until the test lets `go` — so the
+    /// job is certain to stand between tiles, its progress readable, however loaded the machine.
+    struct Held {
+        go: Arc<std::sync::atomic::AtomicBool>,
+        calls: usize,
+    }
+    impl TileNet for Held {
+        fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: &[f32]) -> Result<Vec<f32>, String> {
+            self.calls += 1;
+            let start = std::time::Instant::now();
+            while self.calls > 1
+                && !self.go.load(std::sync::atomic::Ordering::SeqCst)
+                && start.elapsed() < LONG
+            {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Ok(rgb.to_vec())
+        }
+    }
+
     fn worker(cache: Option<std::path::PathBuf>) -> DenoiseWorker {
         DenoiseWorker::spawn(
             Box::new(|| Ok(Box::new(Slow) as Box<dyn TileNet + Send>)),
@@ -289,7 +313,8 @@ mod tests {
     /// one first (the M10.16b5 gate failed on it; the focus test had the same flaw in M10.16b4).
     fn wait_done(w: &DenoiseWorker) -> Vec<DenoiseResult> {
         let mut got = Vec::new();
-        for _ in 0..1000 {
+        let start = std::time::Instant::now();
+        while start.elapsed() < LONG {
             got.extend(w.poll());
             if matches!(got.last(), Some(DenoiseResult::Done { .. })) {
                 return got;
@@ -302,19 +327,29 @@ mod tests {
     #[test]
     fn a_job_runs_reports_progress_and_writes_the_cache() {
         let d = test_dir::TempDir::new("denoise-worker-run");
-        let w = worker(Some(d.path().to_path_buf()));
+        let go = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let g = go.clone();
+        let w = DenoiseWorker::spawn(
+            Box::new(move || Ok(Box::new(Held { go: g, calls: 0 }) as Box<dyn TileNet + Send>)),
+            Some(d.path().to_path_buf()),
+            || {},
+        );
         w.request(DenoiseRequest {
             key: "a".into(),
             image: Some(photo(600, 300)),
         });
-        let mut seen = None;
-        for _ in 0..200 {
+        // ⚠ The second tile waits for `go`, so the progress stands until it is read — no race to win.
+        let start = std::time::Instant::now();
+        let seen = loop {
             if let Some(p) = w.progress("a") {
-                seen = Some(p);
-                break;
+                break Some(p);
+            }
+            if start.elapsed() > LONG {
+                break None;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        };
+        go.store(true, std::sync::atomic::Ordering::SeqCst);
         assert_eq!(seen.map(|p| p.1), Some(2), "two tiles across: {seen:?}");
         let got = wait_done(&w);
         assert!(
@@ -452,7 +487,8 @@ mod tests {
         });
         let mut partials = 0;
         let mut done = false;
-        for _ in 0..600 {
+        let start = std::time::Instant::now();
+        while start.elapsed() < LONG {
             for r in w.poll() {
                 match r {
                     DenoiseResult::Partial { key, .. } => {
