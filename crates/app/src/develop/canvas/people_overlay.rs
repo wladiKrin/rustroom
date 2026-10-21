@@ -90,26 +90,33 @@ pub(super) fn draw(ui: &egui::Ui, s: &mut Session, img_rect: egui::Rect, frame_r
         painter.add(super::remove_overlay::area_mesh(
             tex, area.rect, &to_screen, tint,
         ));
-        // The author (2026-10-21): a light white border, so one knows a person can be clicked — brighter under the
-        // pointer, over a faint dark halo so it shows on a bright sky.
-        let b = s.people.people[i].bbox;
-        let corners: Vec<egui::Pos2> = [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]]
-            .into_iter()
-            .map(to_screen)
-            .collect();
+        // The author (2026-10-21): a light white border, so one knows a person can be clicked — following the tinted
+        // outline ("a tighter border"), brighter under the pointer, over a faint dark halo so it shows on a bright
+        // sky. A person without an outline keeps their box.
+        let p = &s.people.people[i];
+        let b = p.bbox;
+        let boxed = [vec![[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]]];
+        let loops: &[Vec<[f32; 2]>] = if p.outline.is_empty() {
+            &boxed
+        } else {
+            &p.outline
+        };
         let (halo, mark) = if hovered == Some(i) {
             (120, 255)
         } else {
             (60, 170)
         };
-        for (w, col) in [
-            (3.0, egui::Color32::from_black_alpha(halo)),
-            (1.0, egui::Color32::from_white_alpha(mark)),
-        ] {
-            painter.add(egui::Shape::closed_line(
-                corners.clone(),
-                egui::Stroke::new(w, col),
-            ));
+        for l in loops {
+            let pts: Vec<egui::Pos2> = l.iter().map(|&d| to_screen(d)).collect();
+            for (w, col) in [
+                (3.0, egui::Color32::from_black_alpha(halo)),
+                (1.0, egui::Color32::from_white_alpha(mark)),
+            ] {
+                painter.add(egui::Shape::closed_line(
+                    pts.clone(),
+                    egui::Stroke::new(w, col),
+                ));
+            }
         }
     }
 }
@@ -137,6 +144,8 @@ mod tests {
                 side: 4,
                 alpha: vec![1.0; 16],
             }),
+            // A diamond inside the box — the border follows it, not the box.
+            outline: vec![vec![[0.5, 0.4], [0.6, 0.5], [0.5, 0.6], [0.4, 0.5]]],
         }];
         s.people.ticked = vec![false];
         app
@@ -162,6 +171,55 @@ mod tests {
             },
         );
         out.shapes.iter().map(|s| count(&s.shape)).sum()
+    }
+
+    /// The closed outlines' horizontal extents on screen.
+    fn border_widths(app: &mut crate::RustroomApp, ctx: &egui::Context) -> Vec<f32> {
+        fn collect(s: &egui::Shape, out: &mut Vec<f32>) {
+            match s {
+                egui::Shape::Path(p) if p.closed => {
+                    let (lo, hi) = p
+                        .points
+                        .iter()
+                        .fold((f32::MAX, f32::MIN), |(a, b), q| (a.min(q.x), b.max(q.x)));
+                    out.push(hi - lo);
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
+                _ => {}
+            }
+        }
+        let c = ctx.clone();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(crate::develop::canvas::test_support::screen()),
+                ..Default::default()
+            },
+            |ui| {
+                crate::develop::canvas::show(app, ui, &c);
+            },
+        );
+        let mut w = Vec::new();
+        out.shapes.iter().for_each(|s| collect(&s.shape, &mut w));
+        w
+    }
+
+    /// The author (2026-10-21): "a tighter border, following the border of the tinted area" — the outline's
+    /// width (a fifth of the frame), not the box's (two fifths).
+    #[test]
+    fn the_border_follows_the_outline_not_the_box() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_a_person(&ctx);
+        let tight = border_widths(&mut app, &ctx);
+        assert!(!tight.is_empty(), "a border drawn");
+        let b = app.session.as_ref().unwrap().people.people[0].bbox;
+        app.session.as_mut().unwrap().people.people[0].outline =
+            vec![vec![[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]]];
+        let boxed = border_widths(&mut app, &ctx);
+        let ratio = tight[0] / boxed[0];
+        assert!(
+            (ratio - 0.5).abs() < 0.05,
+            "the border is the outline's: {ratio}"
+        );
     }
 
     /// The author (2026-10-21): each person found has a light white border, so one knows they can be clicked.

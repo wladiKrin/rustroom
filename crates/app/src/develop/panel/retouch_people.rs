@@ -96,6 +96,7 @@ mod tests {
                 side: 1,
                 alpha: vec![0.0],
             }),
+            outline: Vec::new(),
         }
     }
 

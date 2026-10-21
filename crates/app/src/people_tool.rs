@@ -27,6 +27,9 @@ pub struct Person {
     pub tall: f32,
     /// Their outline for the canvas — c1b's shading.
     pub area: Arc<Area>,
+    /// The shading's border, decode-normalised closed loops (`contour::loops` at one half) — computed once here,
+    /// never per frame.
+    pub outline: Vec<Vec<[f32; 2]>>,
 }
 
 /// One person as a finder answers: in the upright image, their outline over the whole of it.
@@ -97,7 +100,7 @@ pub fn to_decode(p: UprightPerson, turns: u8) -> Person {
         back,
     );
     let s = AREA_SIDE;
-    let alpha = (0..s * s)
+    let alpha: Vec<f32> = (0..s * s)
         .map(|i| {
             let (u, v) = (
                 ((i % s) as f32 + 0.5) / s as f32,
@@ -111,6 +114,19 @@ pub fn to_decode(p: UprightPerson, turns: u8) -> Person {
             p.mask.at(up[0], up[1])
         })
         .collect();
+    let outline = crate::contour::loops(&alpha, s, s, 0.5)
+        .into_iter()
+        .map(|l| {
+            l.into_iter()
+                .map(|[u, v]| {
+                    [
+                        rect[0] + u / s as f32 * (rect[2] - rect[0]),
+                        rect[1] + v / s as f32 * (rect[3] - rect[1]),
+                    ]
+                })
+                .collect()
+        })
+        .collect();
     Person {
         bbox: turn_box(p.bbox, back),
         score: p.score,
@@ -120,6 +136,7 @@ pub fn to_decode(p: UprightPerson, turns: u8) -> Person {
             side: s,
             alpha,
         }),
+        outline,
     }
 }
 
@@ -276,6 +293,19 @@ pub struct Run {
 mod tests {
     use super::*;
 
+    fn encloses(poly: &[[f32; 2]], p: [f32; 2]) -> bool {
+        let mut c = false;
+        for (i, a) in poly.iter().enumerate() {
+            let b = poly[(i + 1) % poly.len()];
+            if (a[1] > p[1]) != (b[1] > p[1])
+                && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]
+            {
+                c = !c;
+            }
+        }
+        c
+    }
+
     fn empty_area() -> Area {
         Area {
             rect: [0.0; 4],
@@ -343,6 +373,16 @@ mod tests {
             let off = crate::ai_worker::turn_point([0.22, 0.45], back);
             assert!(at(off) < 0.5, "turns {turns}: and only there");
             assert!((p.tall - 0.5).abs() < 1e-5, "the height is the upright one");
+            // The border follows the outline (the author, 2026-10-21): one loop, around the person.
+            assert_eq!(p.outline.len(), 1, "turns {turns}: {:?}", p.outline.len());
+            assert!(
+                encloses(&p.outline[0], d),
+                "turns {turns}: the border goes round them"
+            );
+            assert!(
+                !encloses(&p.outline[0], off),
+                "turns {turns}: and only them"
+            );
         }
     }
 
@@ -353,6 +393,7 @@ mod tests {
             score: 0.9,
             tall,
             area: Arc::new(empty_area()),
+            outline: Vec::new(),
         };
         assert_eq!(
             pre_ticked(&[mk(0.62), mk(0.12), mk(0.349), mk(0.35)]),
@@ -367,6 +408,7 @@ mod tests {
             score: 0.9,
             tall: 0.4,
             area: Arc::new(empty_area()),
+            outline: Vec::new(),
         };
         let rs = removals(&[mk(0.1), mk(0.4), mk(0.7)], &[true, false, true]);
         assert_eq!(rs.len(), 2);
@@ -426,6 +468,7 @@ mod tests {
             score: 0.9,
             tall: 0.4,
             area: Arc::new(empty_area()),
+            outline: Vec::new(),
         };
         let people = [mk([0.1, 0.1, 0.6, 0.9]), mk([0.3, 0.4, 0.4, 0.8])];
         assert_eq!(hit(&people, [0.35, 0.5]), Some(1));
@@ -442,6 +485,7 @@ mod tests {
             score: 0.9,
             tall: 0.4,
             area: Arc::new(empty_area()),
+            outline: Vec::new(),
         };
         let removed = edit_model::Removal {
             points: Vec::new(),
