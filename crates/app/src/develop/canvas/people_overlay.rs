@@ -53,6 +53,12 @@ pub(super) fn draw(ui: &egui::Ui, s: &mut Session, img_rect: egui::Rect, frame_r
         egui::pos2(frame_rect.left() + x, frame_rect.top() + y)
     };
     let click = ui.interact(img_rect, ui.id().with("people_click"), egui::Sense::click());
+    let hovered = click
+        .hover_pos()
+        .and_then(|p| rustroom_app::people_tool::hit(&s.people.people, to_decode(p)));
+    if hovered.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
     if click.clicked() {
         if let Some(p) = click.interact_pointer_pos() {
             if let Some(i) = rustroom_app::people_tool::hit(&s.people.people, to_decode(p)) {
@@ -84,6 +90,27 @@ pub(super) fn draw(ui: &egui::Ui, s: &mut Session, img_rect: egui::Rect, frame_r
         painter.add(super::remove_overlay::area_mesh(
             tex, area.rect, &to_screen, tint,
         ));
+        // The author (2026-10-21): a light white border, so one knows a person can be clicked — brighter under the
+        // pointer, over a faint dark halo so it shows on a bright sky.
+        let b = s.people.people[i].bbox;
+        let corners: Vec<egui::Pos2> = [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]]
+            .into_iter()
+            .map(to_screen)
+            .collect();
+        let (halo, mark) = if hovered == Some(i) {
+            (120, 255)
+        } else {
+            (60, 170)
+        };
+        for (w, col) in [
+            (3.0, egui::Color32::from_black_alpha(halo)),
+            (1.0, egui::Color32::from_white_alpha(mark)),
+        ] {
+            painter.add(egui::Shape::closed_line(
+                corners.clone(),
+                egui::Stroke::new(w, col),
+            ));
+        }
     }
 }
 
@@ -113,6 +140,43 @@ mod tests {
         }];
         s.people.ticked = vec![false];
         app
+    }
+
+    /// The closed outlines the canvas draws.
+    fn closed_paths(app: &mut crate::RustroomApp, ctx: &egui::Context) -> usize {
+        fn count(s: &egui::Shape) -> usize {
+            match s {
+                egui::Shape::Path(p) if p.closed => 1,
+                egui::Shape::Vec(v) => v.iter().map(count).sum(),
+                _ => 0,
+            }
+        }
+        let c = ctx.clone();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(crate::develop::canvas::test_support::screen()),
+                ..Default::default()
+            },
+            |ui| {
+                crate::develop::canvas::show(app, ui, &c);
+            },
+        );
+        out.shapes.iter().map(|s| count(&s.shape)).sum()
+    }
+
+    /// The author (2026-10-21): each person found has a light white border, so one knows they can be clicked.
+    #[test]
+    fn each_person_found_has_a_border() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_a_person(&ctx);
+        let one = closed_paths(&mut app, &ctx);
+        assert!(one >= 1, "a border around the one person");
+        let mut second = app.session.as_ref().unwrap().people.people[0].clone();
+        second.bbox = [0.05, 0.05, 0.15, 0.25];
+        let s = app.session.as_mut().unwrap();
+        s.people.people.push(second);
+        s.people.ticked.push(true);
+        assert_eq!(closed_paths(&mut app, &ctx), 2 * one, "one border each");
     }
 
     /// Review Focus 5: with people shown, a click inside one toggles them and paints no removal.
