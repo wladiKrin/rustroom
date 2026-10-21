@@ -55,9 +55,24 @@ pub(super) fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
     let flags: Vec<(bool, bool)> = (0..done.len())
         .map(|i| (s.removal.is_shown(i), s.removal.is_held(i)))
         .collect();
+    // M10.16c3: a person's row says so — each kind numbered on its own.
+    let names: Vec<String> = s
+        .edits
+        .removals
+        .iter()
+        .scan((0, 0), |(strokes, people), r| {
+            Some(if r.person.is_some() {
+                *people += 1;
+                format!("Person {people}")
+            } else {
+                *strokes += 1;
+                format!("Removal {strokes}")
+            })
+        })
+        .collect();
     out.show_body(ui, |ui| {
         for (i, done) in done.iter().enumerate() {
-            let name = format!("Removal {}", i + 1);
+            let name = names[i].clone();
             let meta = if *done { "" } else { "filling" };
             let row = mask_components::row(
                 ui,
@@ -382,6 +397,27 @@ mod tests {
     }
 
     /// A row selects its removal and lights Opacity for it; with none selected there is no Opacity.
+    #[test]
+    fn a_person_s_row_is_named_person() {
+        let person = |x: f32| edit_model::Removal {
+            points: Vec::new(),
+            person: Some([x, 0.2, x + 0.1, 0.6]),
+            ..removal(0.5)
+        };
+        let mut p = Panel::new(vec![removal(0.3), person(0.1), person(0.6)]);
+        let ctx = p.ctx.clone();
+        for name in ["Removal 1", "Person 1", "Person 2"] {
+            assert!(
+                crate::test_ui::find(&ctx, name, p.draw()).is_some(),
+                "{name}"
+            );
+        }
+        assert!(
+            crate::test_ui::find(&ctx, "Removal 2", p.draw()).is_none(),
+            "each kind numbered on its own"
+        );
+    }
+
     #[test]
     fn a_row_selects_its_removal_and_shows_its_opacity() {
         let mut p = Panel::new(vec![removal(0.3), removal(0.7)]);

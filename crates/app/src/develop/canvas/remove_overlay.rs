@@ -303,13 +303,27 @@ pub(super) fn draw_remove_overlay(
         *shade = Some((s.removal.texture(ui.ctx(), &area), area.rect));
     }
     for (i, r) in s.edits.removals.iter().enumerate() {
-        let Some(&first) = r.points.first() else {
-            continue;
-        };
         // The row's eye: a hidden outline is not drawn at all.
         if !s.removal.is_shown(i) {
             continue;
         }
+        // M10.16c3: a person has no stroke — their box is drawn, and the area being filled shaded as a stroke's.
+        if let Some(b) = r.person {
+            if let Some((tex, rect)) = shades[i] {
+                painter.add(area_mesh(
+                    tex,
+                    rect,
+                    &to_screen,
+                    egui::Color32::from_white_alpha(70),
+                ));
+            }
+            let corners = [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]].map(&to_screen);
+            outline(&painter, &corners, selected == Some(i));
+            continue;
+        }
+        let Some(&first) = r.points.first() else {
+            continue;
+        };
         let rad = screen_radius(first, r.radius);
         let pts: Vec<egui::Pos2> = r.points.iter().map(|&p| to_screen(p)).collect();
         // ⚠ A removal still being filled is shaded — the object is still in the picture under it; a
@@ -383,6 +397,20 @@ pub(super) fn area_mesh(
         }
     }
     mesh
+}
+
+/// A person's box on screen (M10.16c3), closed, in a band's two strokes — bright when lit.
+fn outline(painter: &egui::Painter, pts: &[egui::Pos2], lit: bool) {
+    let (halo, mark) = if lit { (140, 255) } else { (70, 90) };
+    for (w, col) in [
+        (3.0, egui::Color32::from_black_alpha(halo)),
+        (1.0, egui::Color32::from_white_alpha(mark)),
+    ] {
+        painter.add(egui::Shape::closed_line(
+            pts.to_vec(),
+            egui::Stroke::new(w, col),
+        ));
+    }
 }
 
 /// A stroke's band on screen: `fill` laid along it at its radius, and its outline — bright when lit.
@@ -580,6 +608,83 @@ mod tests {
     }
 
     /// The meshes a frame paints with a texture of their own — the photo, and each area being shaded.
+    /// The closed outlines the canvas draws — a person's box is one (M10.16c3).
+    fn closed_paths(app: &mut crate::RustroomApp, ctx: &egui::Context) -> usize {
+        fn count(s: &egui::Shape) -> usize {
+            match s {
+                egui::Shape::Path(p) if p.closed => 1,
+                egui::Shape::Vec(v) => v.iter().map(count).sum(),
+                _ => 0,
+            }
+        }
+        let c = ctx.clone();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(crate::develop::canvas::test_support::screen()),
+                ..Default::default()
+            },
+            |ui| {
+                crate::develop::canvas::show(app, ui, &c);
+            },
+        );
+        out.shapes.iter().map(|s| count(&s.shape)).sum()
+    }
+
+    fn person_removal() -> edit_model::Removal {
+        edit_model::Removal {
+            points: Vec::new(),
+            radius: 0.0,
+            detect: false,
+            variant: 0,
+            opacity: 100.0,
+            person: Some([0.3, 0.3, 0.7, 0.7]),
+        }
+    }
+
+    /// M10.16c3: a person's removal has no stroke — its box is drawn instead, so it can be seen and picked.
+    #[test]
+    fn a_person_s_removal_is_outlined_by_their_box() {
+        let ctx = egui::Context::default();
+        let mut app = remove_app(&ctx);
+        let none = closed_paths(&mut app, &ctx);
+        app.session.as_mut().unwrap().edits.removals = vec![person_removal()];
+        assert!(closed_paths(&mut app, &ctx) > none, "the box drawn");
+    }
+
+    /// While a person's fill is made, the area it will replace is shaded — their outline, c1b's rule.
+    #[test]
+    fn a_person_being_filled_shades_their_area() {
+        let ctx = egui::Context::default();
+        let mut app = remove_app(&ctx);
+        let r = person_removal();
+        app.session.as_mut().unwrap().edits.removals = vec![r.clone()];
+        let plain = textured_meshes(&mut app, &ctx);
+        let area = Arc::new(rustroom_app::remove_tool::Area {
+            rect: [0.3, 0.3, 0.7, 0.7],
+            side: 4,
+            alpha: vec![1.0; 16],
+        });
+        app.session
+            .as_mut()
+            .unwrap()
+            .removal
+            .set_areas(vec![(r, area)]);
+        assert_eq!(textured_meshes(&mut app, &ctx), plain + 1, "not shaded");
+    }
+
+    /// A click inside a person's box selects their removal — no point removal is placed there.
+    #[test]
+    fn a_click_inside_a_person_s_box_selects_their_removal() {
+        let ctx = egui::Context::default();
+        let mut app = remove_app(&ctx);
+        app.session.as_mut().unwrap().edits.removals = vec![person_removal()];
+        let c = canvas_centre(&mut app, &ctx);
+        crate::develop::canvas::test_support::click_through(&mut app, &ctx, c);
+        let s = app.session.as_ref().unwrap();
+        assert_eq!(s.edits.removals.len(), 1, "no point removal added");
+        assert_eq!(s.removal.selected, Some(0));
+    }
+
     fn textured_meshes(app: &mut crate::RustroomApp, ctx: &egui::Context) -> usize {
         fn count(s: &egui::Shape) -> usize {
             match s {
