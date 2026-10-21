@@ -187,6 +187,7 @@ fn removal(points: Vec<[f32; 2]>, tool: &RemoveTool) -> edit_model::Removal {
         detect: tool.detect,
         variant: 0,
         opacity: 100.0,
+        person: None,
     }
 }
 
@@ -606,6 +607,7 @@ mod tests {
             detect: true,
             variant: 0,
             opacity: 100.0,
+            person: None,
         };
         app.session.as_mut().unwrap().edits.removals = vec![r.clone()];
         let plain = textured_meshes(&mut app, &ctx);

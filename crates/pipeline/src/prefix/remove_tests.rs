@@ -69,6 +69,7 @@ fn removal() -> edit_model::Removal {
         detect: false,
         variant: 0,
         opacity: 100.0,
+        person: None,
     }
 }
 

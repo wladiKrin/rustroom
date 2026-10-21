@@ -27,13 +27,13 @@ pub fn photo_key(photo: &Path) -> String {
 }
 
 /// The models `edits`' removals need that `models` lacks: the inpainting network for any removal, and
-/// MobileSAM's two files once one has Detect objects.
+/// MobileSAM's two files once one has Detect objects or is a person (M10.16c3).
 pub fn missing_models(edits: &Edits, models: &Path) -> Vec<ai_mask::ModelId> {
     let mut want = Vec::new();
     if !edits.removals.is_empty() {
         want.push(MODEL);
     }
-    if edits.removals.iter().any(|r| r.detect) {
+    if edits.removals.iter().any(remove_tool::needs_detector) {
         want.extend(ai_mask::registry::CLICK_MODELS);
     }
     want.into_iter()
@@ -181,13 +181,13 @@ pub fn for_export(
                 models,
             )?);
         }
-        if r.detect && detector.is_none() {
+        if remove_tool::needs_detector(r) && detector.is_none() {
             if let Some(make) = detect_make.take() {
                 detector = Some(make(models)?);
             }
         }
         let n = net.as_mut().expect("made above");
-        let d = if r.detect {
+        let d = if remove_tool::needs_detector(r) {
             detector
                 .as_mut()
                 .map(|d| d.as_mut() as remove_tool::Detect<'_>)
@@ -214,6 +214,7 @@ mod tests {
             detect: false,
             variant: 0,
             opacity: 100.0,
+            person: None,
         }
     }
 
@@ -342,6 +343,63 @@ mod tests {
         assert!(missing_models(&Edits::default(), d.path()).is_empty());
     }
 
+    /// M10.16c3: a person's removal is filled with MobileSAM's object, so it needs MobileSAM.
+    #[test]
+    fn a_person_s_removal_needs_mobilesam() {
+        let d = test_dir::TempDir::new("removal-models-person");
+        let e = Edits {
+            removals: vec![Removal {
+                points: Vec::new(),
+                person: Some([0.2, 0.2, 0.3, 0.6]),
+                ..removal(0.5)
+            }],
+            ..Edits::default()
+        };
+        assert_eq!(
+            missing_models(&e, d.path()),
+            vec![
+                MODEL,
+                ai_mask::ModelId::SamEncoder,
+                ai_mask::ModelId::SamDecoder
+            ]
+        );
+    }
+
+    /// An export fills a person with the detector — made once, asked for the person.
+    #[test]
+    fn an_export_fills_a_person_with_the_detector() {
+        let d = test_dir::TempDir::new("removal-export-person");
+        let (p, img) = photo(&d);
+        let models = d.join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        std::fs::File::create(models.join(MODEL.spec().file))
+            .unwrap()
+            .set_len(MODEL.spec().bytes)
+            .unwrap();
+        let e = Edits {
+            removals: vec![Removal {
+                points: Vec::new(),
+                person: Some([0.4, 0.3, 0.5, 0.7]),
+                ..removal(0.5)
+            }],
+            ..Edits::default()
+        };
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut src = sources(&d.join("cache"), &models, calls.clone());
+        let a = asked.clone();
+        src.detect = Box::new(move |_| {
+            Ok(Box::new(move |_: &[f32], _: &[[f32; 2]], _: [f32; 4]| {
+                a.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(vec![1.0f32; remove_tool::SIDE * remove_tool::SIDE])
+            }) as Detector)
+        });
+        let got = for_export(&p, &img, &e, true, src).expect("filled");
+        assert_eq!(got.len(), 1);
+        assert_eq!(asked.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
     /// Never from a ghost session or the half decode; a cached fill loads whatever the decode.
     #[test]
     fn no_job_from_a_ghost_session() {
@@ -427,6 +485,7 @@ mod tests {
             detect: false,
             variant: 0,
             opacity: 100.0,
+            person: None,
         };
         let t = std::time::Instant::now();
         let f = remove_tool::fill(

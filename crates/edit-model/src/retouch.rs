@@ -103,6 +103,10 @@ pub struct Removal {
     /// 0..=100: how much of the fill is laid over the photo.
     #[serde(default = "full_opacity")]
     pub opacity: f32,
+    /// M10.16c3 — a person found by Find people: their box, normalised over the decode. Such a removal has no
+    /// stroke; its hole is MobileSAM's object from the box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub person: Option<[f32; 4]>,
 }
 
 fn full_opacity() -> f32 {
@@ -169,6 +173,7 @@ mod tests {
                 detect: true,
                 variant: 4,
                 opacity: 55.0,
+                person: None,
             }],
             ..Edits::default()
         };

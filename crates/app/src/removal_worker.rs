@@ -144,7 +144,7 @@ fn run(
         }
         return Ok(None);
     };
-    let detector = if req.removal.detect {
+    let detector = if crate::remove_tool::needs_detector(&req.removal) {
         Some(detectors.get()?)
     } else {
         None
@@ -175,6 +175,7 @@ mod tests {
             detect: false,
             variant: 0,
             opacity: 100.0,
+            person: None,
         }
     }
 

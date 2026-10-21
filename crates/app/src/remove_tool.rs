@@ -40,6 +40,12 @@ pub type Net<'a> = &'a mut dyn FnMut(&[f32], &[f32]) -> Result<Vec<f32>, String>
 /// probability per pixel.
 pub type Detect<'a> = &'a mut dyn FnMut(&[f32], &[[f32; 2]], [f32; 4]) -> Result<Vec<f32>, String>;
 
+/// Whether `r`'s fill asks the object finder: Detect objects' strokes, and every person (M10.16c3) — whose hole
+/// is the finder's object alone.
+pub fn needs_detector(r: &Removal) -> bool {
+    r.detect || r.person.is_some()
+}
+
 /// The Remove brush between strokes (M10.16c1) — Retouch's first and default mode.
 ///
 /// ⚠ On the app beside `SpotTool` and `EyeTool`: the mode the panel shows is derived from the three.
@@ -87,6 +93,11 @@ pub fn add_point(points: &mut Vec<[f32; 2]>, p: [f32; 2], radius: f32, w: usize,
 pub fn hit_test(removals: &[Removal], at: [f32; 2], w: usize, h: usize) -> Option<usize> {
     let (x, y) = (at[0] * w as f32, at[1] * h as f32);
     removals.iter().enumerate().rev().find_map(|(i, r)| {
+        // M10.16c3: a person is hit anywhere inside their box.
+        if let Some(b) = r.person {
+            let inside = (b[0]..=b[2]).contains(&at[0]) && (b[1]..=b[3]).contains(&at[1]);
+            return inside.then_some(i);
+        }
         let pts: Vec<[f32; 2]> = r
             .points
             .iter()
@@ -99,6 +110,15 @@ pub fn hit_test(removals: &[Removal], at: [f32; 2], w: usize, h: usize) -> Optio
 
 /// The hole's box in decode pixels — the stroke's points grown by its soft edge — clamped to the decode.
 fn hole_box(r: &Removal, w: usize, h: usize) -> [f32; 4] {
+    // M10.16c3: a person's hole is inside their box.
+    if let Some(b) = r.person {
+        return [
+            (b[0] * w as f32).clamp(0.0, w as f32),
+            (b[1] * h as f32).clamp(0.0, h as f32),
+            (b[2] * w as f32).clamp(0.0, w as f32),
+            (b[3] * h as f32).clamp(0.0, h as f32),
+        ];
+    }
     let rad = r.radius.max(0.0) * w.max(h) as f32 * HOLE_GROW;
     let (mut b, mut any) = ([f32::MAX, f32::MAX, f32::MIN, f32::MIN], false);
     for p in &r.points {
@@ -358,6 +378,18 @@ fn soften(plane: &[f32], side: usize, r: usize) -> Vec<f32> {
 /// stroke's box grown by 15 % a side — all normalised over `win`.
 fn prompt(r: &Removal, win: [usize; 4], w: usize, h: usize) -> (Vec<[f32; 2]>, [f32; 4]) {
     let (ww, wh) = ((win[2] - win[0]) as f32, (win[3] - win[1]) as f32);
+    // M10.16c3: a person by their box alone, as the network found it — the spike prompted MobileSAM so.
+    if let Some(b) = r.person {
+        return (
+            Vec::new(),
+            [
+                ((b[0] * w as f32 - win[0] as f32) / ww).clamp(0.0, 1.0),
+                ((b[1] * h as f32 - win[1] as f32) / wh).clamp(0.0, 1.0),
+                ((b[2] * w as f32 - win[0] as f32) / ww).clamp(0.0, 1.0),
+                ((b[3] * h as f32 - win[1] as f32) / wh).clamp(0.0, 1.0),
+            ],
+        );
+    }
     let to_win = |p: &[f32; 2]| {
         [
             ((p[0] * w as f32 - win[0] as f32) / ww).clamp(0.0, 1.0),
@@ -429,8 +461,11 @@ pub fn prepare(
     detect: Option<Detect<'_>>,
 ) -> Result<Prepared, String> {
     let (w, h) = (img.width(), img.height());
-    if w == 0 || h == 0 || r.points.is_empty() {
+    if w == 0 || h == 0 || (r.points.is_empty() && r.person.is_none()) {
         return Err("nothing to fill".into());
+    }
+    if r.person.is_some() && detect.is_none() {
+        return Err("a person needs the object finder".into());
     }
     let win = window(r, w, h);
     let mut crop = img.crop(win[0], win[1], win[2] - win[0], win[3] - win[1]);
@@ -442,8 +477,9 @@ pub fn prepare(
         .chunks(3)
         .flat_map(|p| enc.encode([p[0], p[1], p[2]]))
         .collect();
+    // ⚠ A person has no stroke: this alpha is 0 everywhere, and the finder's object is the whole hole.
     let mut alpha = mask(r, win, w, h, SIDE);
-    if r.detect {
+    if needs_detector(r) {
         if let Some(detect) = detect {
             let (points, bbox) = prompt(r, win, w, h);
             let probs = detect(&rgb, &points, bbox)?;
@@ -554,7 +590,11 @@ pub fn area_grid(rect: [f32; 4], n: usize) -> Vec<([f32; 2], [f32; 2])> {
 
 /// Whether two removals share one fill — everything but Opacity, which only blends it.
 pub fn same_fill(a: &Removal, b: &Removal) -> bool {
-    a.points == b.points && a.radius == b.radius && a.detect == b.detect && a.variant == b.variant
+    a.points == b.points
+        && a.radius == b.radius
+        && a.detect == b.detect
+        && a.variant == b.variant
+        && a.person == b.person
 }
 
 /// A fill's cache key: the photo, the stroke, Detect objects, Refresh's variant, the network and
@@ -569,6 +609,11 @@ pub fn id(photo_key: &str, r: &Removal, model: ai_mask::ModelId) -> String {
     );
     for p in &r.points {
         s.push_str(&format!("|{},{}", p[0].to_bits(), p[1].to_bits()));
+    }
+    // M10.16c3: only when there is one — a stroke's key is untouched by the field.
+    if let Some(b) = r.person {
+        let [a, c, d, e] = b.map(f32::to_bits);
+        s.push_str(&format!("|person,{a},{c},{d},{e}"));
     }
     ai_mask::digest_hex(s.as_bytes())
 }
@@ -586,7 +631,114 @@ mod tests {
             detect: false,
             variant: 0,
             opacity: 100.0,
+            person: None,
         }
+    }
+
+    fn person(b: [f32; 4]) -> Removal {
+        Removal {
+            points: Vec::new(),
+            radius: 0.0,
+            detect: false,
+            variant: 0,
+            opacity: 100.0,
+            person: Some(b),
+        }
+    }
+
+    /// M10.16c3: a person's window is built around their box and holds it whole.
+    #[test]
+    fn a_person_s_window_holds_their_box() {
+        let (w, h) = (3000, 2000);
+        let r = person([0.40, 0.30, 0.45, 0.60]);
+        let win = window(&r, w, h);
+        assert!(
+            win[0] as f32 <= 0.40 * w as f32 && win[2] as f32 >= 0.45 * w as f32,
+            "{win:?}"
+        );
+        assert!(
+            win[1] as f32 <= 0.30 * h as f32 && win[3] as f32 >= 0.60 * h as f32,
+            "{win:?}"
+        );
+        let ext = 0.30 * h as f32;
+        assert!(
+            (win[2] - win[0]) as f32 >= CONTEXT * ext * 0.99,
+            "the context around the person: {win:?}"
+        );
+    }
+
+    /// A person's hole is the detector's object only — no stroke to join — prompted by their box alone.
+    #[test]
+    fn a_person_s_hole_is_the_detector_s_object_only() {
+        let img = ImageBuf::from_vec(1200, 800, vec![0.3; 1200 * 800 * 3]);
+        let r = person([0.45, 0.40, 0.55, 0.70]);
+        let mut asked = None;
+        let mut detect = |_: &[f32], points: &[[f32; 2]], bbox: [f32; 4]| {
+            asked = Some((points.to_vec(), bbox));
+            // A disc in the window's middle.
+            Ok((0..SIDE * SIDE)
+                .map(|i| {
+                    let (x, y) = ((i % SIDE) as f32 - 256.0, (i / SIDE) as f32 - 256.0);
+                    ((x * x + y * y).sqrt() < 40.0) as u8 as f32
+                })
+                .collect())
+        };
+        let p = prepare(
+            &img,
+            &r,
+            &edit_model::Negative::default(),
+            Some(&mut detect),
+        )
+        .unwrap();
+        let (points, bbox) = asked.expect("the detector was asked");
+        assert!(points.is_empty(), "a person is prompted by the box alone");
+        assert!(
+            bbox[0] < bbox[2] && bbox[1] < bbox[3] && bbox.iter().all(|v| (0.0..=1.0).contains(v)),
+            "{bbox:?}"
+        );
+        let a = p.area();
+        assert!(a.alpha[256 * SIDE + 256] > 0.99, "the object is the hole");
+        assert_eq!(
+            a.alpha[10 * SIDE + 10],
+            0.0,
+            "nothing outside the object — no stroke was joined"
+        );
+    }
+
+    /// Without a detector a person cannot be filled — there is no stroke to fall back on.
+    #[test]
+    fn a_person_needs_the_detector() {
+        let img = ImageBuf::from_vec(600, 400, vec![0.3; 600 * 400 * 3]);
+        let r = person([0.4, 0.4, 0.5, 0.7]);
+        assert!(prepare(&img, &r, &edit_model::Negative::default(), None).is_err());
+        assert!(needs_detector(&r));
+        assert!(!needs_detector(&stroke(vec![[0.5, 0.5]], 0.02)));
+    }
+
+    #[test]
+    fn a_person_s_key_and_fill_follow_their_box() {
+        let (a, b) = (person([0.1, 0.1, 0.2, 0.5]), person([0.1, 0.1, 0.2, 0.6]));
+        assert!(!same_fill(&a, &b));
+        assert_ne!(
+            id("photo", &a, ai_mask::ModelId::Lama),
+            id("photo", &b, ai_mask::ModelId::Lama)
+        );
+        let c = Removal {
+            opacity: 40.0,
+            ..a.clone()
+        };
+        assert!(same_fill(&a, &c), "Opacity only blends");
+        assert_eq!(
+            id("photo", &a, ai_mask::ModelId::Lama),
+            id("photo", &c, ai_mask::ModelId::Lama)
+        );
+    }
+
+    #[test]
+    fn a_click_inside_a_person_s_box_hits_their_removal() {
+        let rs = vec![stroke(vec![[0.9, 0.9]], 0.01), person([0.2, 0.2, 0.4, 0.8])];
+        assert_eq!(hit_test(&rs, [0.3, 0.5], 1000, 1000), Some(1));
+        assert_eq!(hit_test(&rs, [0.5, 0.5], 1000, 1000), None);
     }
 
     #[test]
@@ -807,6 +959,7 @@ mod tests {
             detect: true,
             variant: 3,
             opacity: 60.0,
+            person: None,
         };
         assert_eq!(
             id("photo-key", &r, ai_mask::ModelId::Lama),

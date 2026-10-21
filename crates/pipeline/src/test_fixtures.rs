@@ -187,6 +187,7 @@ pub(crate) fn all_edits() -> Edits {
             detect: true,
             variant: 2,
             opacity: 70.0,
+            person: None,
         }],
         rendering: Some(edit_model::Rendering::Camera),
         look: edit_model::Look {
