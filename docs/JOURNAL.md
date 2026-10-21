@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.16c3: Find people — YOLOX-m with tiles, MobileSAM's outline, removed with c1's fill (2026-10-21)](#2026-10-21--m1016c3-find-people--yolox-m-with-tiles-mobilesams-outline-removed-with-c1s-fill-branch-m1016c3-people)
 - [M10.16c2: Remove dust — sensor spots found and healed as patches (2026-10-20)](#2026-10-20--m1016c2-remove-dust--sensor-spots-found-and-healed-as-patches-branch-m1016c2-dust)
 - [M10.16c1: Remove — the content-aware brush, LaMa, Refresh, Detect objects, Opacity (2026-10-19)](#2026-10-19--m1016c1-remove--the-content-aware-brush-lama-refresh-detect-objects-opacity-branch-m1016c-remove)
 - [M10.16b6: AI denoise — FFDNet by default, DRUNet in Settings, "Full denoise" under Amount (2026-10-18)](#2026-10-18--m1016b6-ai-denoise--ffdnet-by-default-drunet-in-settings-full-denoise-under-amount-branch-m1016b6-ai-denoise-pan-and-network)
@@ -186,6 +187,48 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-21 — M10.16c3: Find people — YOLOX-m with tiles, MobileSAM's outline, removed with c1's fill (branch `m10.16c3-people`)
+
+⏳ **Built and gated; awaiting the author's look.** Spec `2026-10-19-m10.16c-remove-design.md` § c3 (designed from its
+spike), plan `2026-10-21-m10.16c3-people.md`. The author: *"m with tiles, go ahead with the design"*, then *"yes, go
+ahead with the plan"*.
+
+**The spike** (`ai-mask/examples/people_probe.rs`, throwaway): the library scanned with YOLOX-s — people in 1,799 of
+2,041 JPEGs — and seven photos sheeted with YOLOX-s and -m, whole frame and tiled, MobileSAM's outline from each box,
+the bystanders (under 35 % of the frame's height) removed by LaMa. YOLOX-m: 0.43 s whole, 3.7 s tiled (YOLOX-s 0.25
+and 2.0 s); the tiles found 44 more people on the seven (12 on the Luxembourg alley alone); MobileSAM 1.8 s to embed,
+0.1 s a person; LaMa ~5.4 s a person. Seen: shadows stay, a dense far crowd is only partly removed, a few outlines miss
+part of a person. **Measured for the design:** MobileSAM on a person lying sideways (a portrait's decode orientation)
+against upright — IoU 0.95–0.99 above 40 % of the frame's height, 0.62–0.94 for small people — so the fill's detector
+now sees its window upright.
+
+**Built:** `ai_mask::people` (YOLOX-m, `ModelId::YoloxM` pinned at 101,259,744 bytes; the whole frame at 640 and
+640² tiles at 1920 long, merged) · `Removal.person` — a found person's box, its hole MobileSAM's object alone, its key
+and `same_fill` carrying the box · the detector handed the window and prompt turned upright and its answer turned back
+— **`RECIPE` `remove:v3`**, so every cached fill is made once more · `people_tool` (lib: the search on its thread, the
+finds turned back to decode space, the 35 % pre-tick, `hit`, `not_removed`) · `people_flow` (pumped by Develop's body:
+waits for the models — the download dialog — and the photo) · Retouch's Remove mode: **Find people**, "Looking for
+people" over the quiet line, "12 people · 9 to remove", **Everyone**, **Remove 9 people** (one step), **Cancel**; on
+the photo each person shaded, the ones to remove in the accent, a click toggling one; their removals named "Person N"
+and outlined by their box, shaded while their fill is made.
+
+**Rulings** (the ledger's): the people found stay, hidden, when leaving Remove mode (the spec had another mode end
+them — a search of seconds is not thrown away for a peek at Heal); the canvas's click picks the smallest box under it;
+the plan's 1024² fixture for the upright turn had a 512 window — a 512² decode instead, and the stroke off-centre, as a
+centred box looks the same after any turn (that sabotage stayed green until then); the merge test's first version stayed
+green with containment removed — a partial find added; the overlay skipped every removal without points before c1b's
+shading — a person's pending fill shades now, with its test. **The final self-review** found people already removed
+offered again (the search reads the decode, where they still stand): `not_removed`, "No new people found".
+
+**Sabotages, each red on its own test:** containment in NMS and in the merge, the inner tile edge, the box's and the
+outline's turn back, the prompt's turn, the answer's turn back, the window's turn, the canvas standing in for Remove,
+the cancelled download's wait, Remove N people's step, the person hit test (lib and canvas), the pending shading, the
+re-find filter. The real network passes on DSCF8296 (an ignored test, `RUSTROOM_YOLOX` / `RUSTROOM_PEOPLE_PHOTO`).
+
+**Known, said plainly:** shadows stay (paint over them with the brush); a find scoring 0.35–0.5 is pre-ticked like any
+other — the accent shows it before Remove; while people are shown, existing removals' outlines are not drawn; each
+search loads YOLOX-m and MobileSAM's encoder afresh (~2 s).
 
 ### 2026-10-20 — M10.16c2: Remove dust — sensor spots found and healed as patches (branch `m10.16c2-dust`)
 
