@@ -230,7 +230,7 @@ that had grown to ~170 lines by appending.)
   2026-09-29 — start from `docs/BACKLOG.md`'s reasons table. ⚠ The server is a **Tailscale Funnel**: a stopped
   Tailscale on the Mac is never the cause of an Immich error.
 
-**Phase 10 so far — M10.6 to M10.15, M10.16a, b, c1–c3 and d, and M10.19c, merged 2026-09-29 – 10-22, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`; what stays open inside M10.12–14 is in the table below):
+**Phase 10 so far — M10.6 to M10.15, M10.16a, b, c1–c3 and d, and M10.19c–d, merged 2026-09-29 – 10-22, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`; what stays open inside M10.12–14 is in the table below):
 
 | Id | What | The thing to remember |
 |---|---|---|
@@ -251,15 +251,14 @@ that had grown to ~170 lines by appending.)
 | M10.16c2 | Remove dust: one press looks for sensor dust in the background (no network — a disc against its ring over five radii, the ring brighter all round) and heals each spot as a Heal patch, one undo step; "Looking for dust" over the quiet line, then what it found stays under the button | the search is pumped by Develop's body (`dust_flow`), never the panel, so it lands with Retouch closed; finds are in decode space, patches post-lens through `lens_memo`; a press while the photo loads waits for it; proven on constructed dust — none confirmed in the author's library |
 | M10.16c3 | Find people: YOLOX-m (whole frame at 640 + 640² tiles at 1920) finds them, MobileSAM outlines each, the small ones pre-ticked (< 35 % of the frame's height); a light border along each outline, a click toggles, a drawing looks again closer (else takes what is under it); Remove N people, each a `Removal.person` filled by c1's job | the detector sees the fill's window UPRIGHT (`remove:v3`, *Warnings*); the search reads the decode, where removed people still stand (`people_tool::not_removed` / `fresh`); finders are handed in through `people_tool::Finders` |
 | M10.16b | AI denoise: **FFDNet** (default; a 26 Mpx frame 18 s on the GPU) or **DRUNet** (Settings), a background job per photo at the noise map × 2, the view's tiles first, "Full denoise" under Amount, cached on disk | the network is in EVERY key that holds its pixels and the worker carries its own (*Warnings*); `ai_mask::pth` is a CLOSED pickle subset; the result is ONE decode's, its step the prefix's first; a long GPU job submits bands |
+| M10.19d | Retouch as two tasks: **Paint** (one brush, Remove · Heal · Clone · Eye, for NEW retouches only) · **Find** (People · Dust, found and reviewed alike: On the photo **Pick · Add more**, Everyone, Remove N, Cancel); one **Retouches** list of every kind, a picked row selecting it alone with its settings under the list | the photo's gestures follow `RetouchState.task` — in Find only `find_overlay`, never a Paint overlay; the list is `retouch_list::rows`; a patch Find dust made carries `Spot.dust`; the dust view's one writer is `pump_dust`; a look landing after Cancel or Remove N is dropped (people and dust) |
 
 ### ▶ Next action — Phase 10, top down
 
-✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1–c3, d** (table above).
+✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1–c3, d, M10.19c–d** (table above).
 
-**▶ NOW: M10.19d — the Retouch panel as two tasks, Paint · Find — BUILT on `m10.19d-retouch-paint-find`, awaiting
-the author's look** (his option B, 2026-10-22, from `https://claude.ai/artifact/7ACHJJ2zFpWPJ3WspdRYcC`: one brush,
-people and dust found and reviewed the same way, "Pick · Add more" on the photo, one list of every retouch;
-`grep -n 'M10.19d' docs/JOURNAL.md`); then M10.16c4 Reflections, its own spike. ✅ c3 Find people merged
+**▶ NEXT: M10.16c4 Reflections — its own spike, possibly declined.** ✅ M10.19d the Retouch panel as Paint · Find
+merged 2026-10-22, confirmed by the author ("works, merge and delete"; `grep -n 'M10.19d' docs/JOURNAL.md`). ✅ c3 Find people merged
 2026-10-22 (`grep -n 'M10.16c3' docs/JOURNAL.md`). ✅ c2 Remove dust merged 2026-10-21. ✅ c1 the Remove brush merged 2026-10-19
 (`grep -n 'M10.16c1' docs/JOURNAL.md`). ✅ M10.16c1b merged 2026-10-20: a removal being filled shades the
 AREA it will replace — Detect objects' whole object — sent by the job before the network runs. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
@@ -279,7 +278,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | **M10.16** AI tools | c4 Reflections — its own spike, possibly declined |
 | **M10.17** merge | a HDR · b panorama |
 | **M10.18** new modules | a tethering · b GPS and a map · c people tagging · d publish services · e print |
-| **M10.19** found in use (added 2026-10-01) | **d the Retouch panel as Paint · Find (built, awaiting a look)** · a HEIC/HEIF photos — libraw cannot read them, so they never appear; needs a decoder · b Move to folder: download Immich assets first, then move (today skipped and counted) (c ✅ above) |
+| **M10.19** found in use (added 2026-10-01) | a HEIC/HEIF photos — libraw cannot read them, so they never appear; needs a decoder · b Move to folder: download Immich assets first, then move (today skipped and counted) (c, d ✅ above) |
 
 **Phase 11, last:** M11.2 Windows + the Linux GUI (never run; the in-window menu bar never seen;
 multi-monitor), M11.3 contributor docs, M11.4 `v0.1` (with the welcome screen and the empty Library's

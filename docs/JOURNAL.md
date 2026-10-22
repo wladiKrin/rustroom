@@ -190,7 +190,8 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ### 2026-10-22 — M10.19d: the Retouch panel as two tasks, Paint · Find (branch `m10.19d-retouch-paint-find`)
 
-⏳ **Built, awaiting the author's look.** Asked for after c3: *"several buttons, like detect objects, refresh, find
+✅ **Confirmed by the author ("works, merge and delete") and merged 2026-10-22** (`--no-ff`, the branch deleted).
+Asked for after c3: *"several buttons, like detect objects, refresh, find
 people, find dust, remove dust, and it's all in one place, and it's really hard to understand what is happening here.
 Also, removal and patches seem to be similar … but they are kept separately"*, and the draw-to-look-again of c3 "is
 not clear at all from the controls". Three options on a design canvas (`https://claude.ai/artifact/7ACHJJ2zFpWPJ3WspdRYcC`);
