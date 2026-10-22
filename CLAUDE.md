@@ -255,9 +255,10 @@ that had grown to ~170 lines by appending.)
 
 ### ▶ Next action — Phase 10, top down
 
-✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1–c3, d, M10.19c–d** (table above).
+✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1–c3, d, M10.19c–d** (table above); ⛔ M10.16c4 declined.
 
-**▶ NEXT: M10.16c4 Reflections — its own spike, possibly declined.** ✅ M10.19d the Retouch panel as Paint · Find
+**▶ NEXT: M10.17a HDR merge** (M10.16 complete: ⛔ c4 Reflections declined on its spike 2026-10-22 — no shippable
+network removes everyday reflections; `grep -n 'M10.16c4' docs/JOURNAL.md`). ✅ M10.19d the Retouch panel as Paint · Find
 merged 2026-10-22, confirmed by the author ("works, merge and delete"; `grep -n 'M10.19d' docs/JOURNAL.md`). ✅ c3 Find people merged
 2026-10-22 (`grep -n 'M10.16c3' docs/JOURNAL.md`). ✅ c2 Remove dust merged 2026-10-21. ✅ c1 the Remove brush merged 2026-10-19
 (`grep -n 'M10.16c1' docs/JOURNAL.md`). ✅ M10.16c1b merged 2026-10-20: a removal being filled shades the
@@ -275,7 +276,6 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | **M10.12** the mask model | c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · d camera-matching colour out of the box (P-22), **with b's `ProfileLookTable` and c's per-photo profile folded in** (re-scoped 2026-10-12: neither changes a photo until d brings such a profile; b's `CameraCalibration` ⛔ withdrawn — a DNG-file tag, never in a profile) |
 | **M10.14** performance & verification | f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h ⏸ the reference photo on the GPU (parked 2026-10-13 until a need shows — 1 of 74 photos; 111–125 ms at 3200, numbers in the backlog) |
-| **M10.16** AI tools | c4 Reflections — its own spike, possibly declined |
 | **M10.17** merge | a HDR · b panorama |
 | **M10.18** new modules | a tethering · b GPS and a map · c people tagging · d publish services · e print |
 | **M10.19** found in use (added 2026-10-01) | a HEIC/HEIF photos — libraw cannot read them, so they never appear; needs a decoder · b Move to folder: download Immich assets first, then move (today skipped and counted) (c, d ✅ above) |

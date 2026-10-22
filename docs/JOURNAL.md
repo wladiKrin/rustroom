@@ -188,6 +188,44 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-10-22 — M10.16c4: Reflections — ⛔ DECLINED on a spike (branch `m10.16c4-reflections-spike`)
+
+⛔ **Declined by the author ("decline") on the spike's numbers and sheets, 2026-10-22.** The spec
+(`2026-10-19-m10.16c-remove-design.md` § c4) built it only if a reflection-removal network loads in `tract`, runs in
+reasonable time and its sheets please the author. The author skipped the questions: *"go straight to the spike"*.
+
+**The field, by licence** (GitHub's own licence field, 2026-10-22): shippable — **DSRNet** (ICCV 2023, Apache-2.0;
+XReflection's retrained weights, 25.9 dB on Real20 + SIR²), YTMT (Apache-2.0), ERRNet (MIT), IBCLN (BSD-2). **No
+licence** — DSIT, RDNet, DIRS (2026-06, 26.4–26.9 dB): all rights reserved, never shippable. Huawei's WindowSeat is a
+20B-parameter image-edit LoRA, not local. **PINTO0309/reflection-removal** (MIT code, DINOv3 backbone under Meta's
+own licence) ships ONNX; its README says removal quality "is not important" to it.
+
+**Test photos** — found by contact sheets of 1,876 JPEGs (no keyword marks glass): DSCF7658 (a shop window, the
+street reflected across the frame), DSCF8288 (the Louvre pyramid from above, clouds dominating), DSCF7270 (a
+photo-booth door), DSCF8174 (a café window), DSCF8390 (a rooftop glass barrier), DSCF6392 (no glass — the control).
+The probe (`ai-mask/examples/reflection_probe.rs`, throwaway) runs a network at its own size and subtracts the
+removed layer, scaled up, from the photo at 2048 px, so the photo keeps its own detail.
+
+| | PINTO (ViT-S, 640²) | DSRNet (Apache-2.0) |
+|---|---|---|
+| In `tract` | loads; 1.2 s to plan | loads once the export's `32·h32 × 32·w32` symbols are BOUND (`set_symbols`, the depth recipe); 6–20 s to plan per size |
+| Per photo, CPU | **16 s** at 0.41 Mpx | **33–71 s at 0.18 Mpx** (PyTorch 24 s on the same input) → ~2–5 min at 1024 |
+| vs PyTorch | — | max 9.5e-7, all finite |
+| Shop window | darkened the red pot | **took out the cat's white chest**; reflections stayed |
+| Pyramid | almost nothing | partial: reflected sky and figures mostly gone, clouds stay |
+| Booth, café | recoloured | almost nothing (mean 0.4 %, 0.6 %) |
+| Rooftop | recoloured | took the sun's flare **and a faint copy of her face** |
+| Control (no glass) | changed by 0.96 % | 0.14 % |
+
+The export: DSRNet + its VGG19 features as one 551 MB ONNX (PyTorch 2.14.1's dynamo exporter, opset 18) — the
+checkpoint (1.66 GB, Lightning) carries the VGG weights; its pickle names only `OrderedDict`, `Counter` and tensors, so
+it opened with `weights_only=True`; the `LayerNorm2d` autograd Function was replaced by its forward's plain ops.
+
+**Why declined:** neither network removes everyday window reflections on these photos, and the one that may ship
+damages real content; a speed fix would be a hand-written GPU port of a 125M-parameter network. **Revisit** when a
+permissively licensed network does better on real photos — the probe and these six photos are the test. Small local
+reflections are already Remove's (c1) to paint out.
+
 ### 2026-10-22 — M10.19d: the Retouch panel as two tasks, Paint · Find (branch `m10.19d-retouch-paint-find`)
 
 ✅ **Confirmed by the author ("works, merge and delete") and merged 2026-10-22** (`--no-ff`, the branch deleted).
