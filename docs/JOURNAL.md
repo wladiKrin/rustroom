@@ -225,7 +225,9 @@ more is a one-point drawing; any gesture in Find keeps the view sharp (`retouch_
 brush did, so a drawing with Heal picked would have blurred the photo).
 
 **Found on the way:** a reset drew the same frame's stale rows — an index out of bounds, red before the fix (rows are
-read after the reset). **Sabotages, each red on its own test:** `fresh`, `drawn`, the dust view ignoring the task, the
+read after the reset). **The final self-review** found two in dust's review, each red first: nothing found read
+"No dust found" twice (`said` under a readout already saying it), and a look there landing after Cancel or Remove N
+spots pushed its finds into the ended review — dropped now, as people's. **Sabotages, each red on its own test:** `fresh`, `drawn`, the dust view ignoring the task, the
 dust mark dropped, the brush editing a selected patch, a pick staying in Find, a dust removal staying in Find, Pick
 drawing, a review left on overriding Paint, the sharp view without Find.
 
