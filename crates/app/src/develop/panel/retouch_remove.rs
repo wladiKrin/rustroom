@@ -352,6 +352,7 @@ mod tests {
             radius: 0.02,
             feather: 50.0,
             mode: edit_model::SpotMode::Clone,
+            dust: false,
         }];
         p.app.session.as_mut().unwrap().removal.selected = Some(0);
         assert!(p.app.remove_tool.active, "the fixture: in Remove");
@@ -385,6 +386,7 @@ mod tests {
             radius: 0.02,
             feather: 50.0,
             mode: edit_model::SpotMode::Heal,
+            dust: false,
         }];
         p.app.session.as_mut().unwrap().selected_spot = Some(0);
         p.click("Removal 1");

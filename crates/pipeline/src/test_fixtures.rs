@@ -170,6 +170,7 @@ pub(crate) fn all_edits() -> Edits {
             radius: 0.05,
             feather: 30.0,
             mode: edit_model::SpotMode::Heal,
+            dust: false,
         }],
         eyes: vec![edit_model::Eye {
             centre: [0.6, 0.35],

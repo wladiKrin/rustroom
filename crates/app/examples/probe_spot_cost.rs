@@ -42,6 +42,7 @@ fn spots(n: usize, radius: f32, mode: SpotMode) -> Vec<Spot> {
                 radius,
                 feather: 50.0,
                 mode,
+                dust: false,
             }
         })
         .collect()

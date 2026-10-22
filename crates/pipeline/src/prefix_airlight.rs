@@ -328,6 +328,7 @@ mod tests {
                 radius: 0.08,
                 feather: 20.0,
                 mode: edit_model::SpotMode::Clone,
+                dust: false,
             }]
         };
         let variants = [

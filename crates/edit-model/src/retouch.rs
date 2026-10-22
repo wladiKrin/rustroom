@@ -34,6 +34,13 @@ pub struct Spot {
     pub feather: f32,
     #[serde(default)]
     pub mode: SpotMode,
+    /// M10.19d: made by Find dust — the Retouches list says "Dust N". The patch renders as any other.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dust: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// How a [`Spot`]'s source pixels are laid onto its destination.
@@ -129,6 +136,28 @@ mod tests {
     use super::*;
     use crate::Edits;
 
+    /// M10.19d: a patch Find dust made is marked so the list can say "Dust N"; an unmarked patch serializes as it
+    /// always did, so no saved photo's file changes.
+    #[test]
+    fn a_dust_mark_round_trips_and_a_plain_spot_is_unchanged() {
+        let plain = Spot {
+            centre: [0.25, 0.75],
+            source: [0.5, 0.75],
+            radius: 0.02,
+            feather: 60.0,
+            mode: SpotMode::Heal,
+            dust: false,
+        };
+        let text = serde_json::to_string(&plain).unwrap();
+        assert!(!text.contains("dust"), "{text}");
+        let marked = Spot {
+            dust: true,
+            ..plain
+        };
+        let back: Spot = serde_json::from_str(&serde_json::to_string(&marked).unwrap()).unwrap();
+        assert!(back.dust);
+    }
+
     #[test]
     fn a_spot_round_trips_and_an_unstated_mode_means_heal() {
         let e = Edits {
@@ -138,6 +167,7 @@ mod tests {
                 radius: 0.02,
                 feather: 60.0,
                 mode: SpotMode::Clone,
+                dust: false,
             }],
             ..Edits::default()
         };

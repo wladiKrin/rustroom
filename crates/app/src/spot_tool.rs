@@ -181,6 +181,7 @@ pub fn place(centre: [f32; 2], source: [f32; 2], tool: SpotTool) -> Spot {
         radius: tool.radius.clamp(MIN_RADIUS, MAX_RADIUS),
         feather: tool.feather,
         mode: tool.mode,
+        dust: false,
     }
 }
 
@@ -196,6 +197,7 @@ mod tests {
             radius: r,
             feather: 50.0,
             mode: SpotMode::Heal,
+            dust: false,
         }
     }
 

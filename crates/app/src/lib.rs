@@ -100,6 +100,7 @@ pub mod removal_cache;
 pub mod removal_worker;
 pub mod remove_tool;
 pub mod render_engine;
+pub mod retouch_list;
 pub mod reveal;
 pub mod rule;
 pub mod rule_form;

@@ -100,6 +100,7 @@ pub fn to_spots(
             radius,
             feather: tool.feather,
             mode: edit_model::SpotMode::Heal,
+            dust: false,
         });
     }
     made

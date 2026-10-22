@@ -270,6 +270,7 @@ mod tests {
             radius: 0.125,
             feather: 0.0,
             mode: SpotMode::Clone,
+            dust: false,
         };
         // Fixture checks: the centre lands on a whole pixel and the radius on a whole number,
         // so `d == r` is reached exactly at the pixel `r` to the right of the centre — the one
@@ -392,6 +393,7 @@ mod tests {
             radius: 6.0 / 64.0,
             feather: 0.0,
             mode,
+            dust: false,
         };
         let cx = mk(SpotMode::Heal).centre[0] * (w - 1) as f32;
         let cy = mk(SpotMode::Heal).centre[1] * (h - 1) as f32;
@@ -476,6 +478,7 @@ mod tests {
             radius: 6.0 / 64.0,
             feather: 0.0,
             mode: SpotMode::Clone,
+            dust: false,
         };
         // Spot 1 cleans A from a clean area; spot 2 cleans B *from A*.
         let first = spot(a, (16, 10));
@@ -516,6 +519,7 @@ mod tests {
             radius: 0.125,
             feather: 0.0,
             mode: SpotMode::Clone,
+            dust: false,
         };
         let cx = spot.centre[0] * (W - 1) as f32;
         let cy = spot.centre[1] * (H - 1) as f32;
@@ -540,6 +544,7 @@ mod tests {
             radius: 6.0 / 32.0,
             feather: 0.0,
             mode: SpotMode::Clone,
+            dust: false,
         };
         let cx = 16.0;
         let disc = disc_pixels(W, H, cx, cx, 6.0);
@@ -616,6 +621,7 @@ mod tests {
                     radius,
                     feather: 50.0,
                     mode: SpotMode::Heal,
+                    dust: false,
                 }],
             );
             assert_eq!(out.data(), orig.data(), "radius {radius}");

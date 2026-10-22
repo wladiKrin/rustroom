@@ -412,6 +412,7 @@ mod tests {
             radius: 0.02,
             feather: 50.0,
             mode: SpotMode::Heal,
+            dust: false,
         }
     }
 
