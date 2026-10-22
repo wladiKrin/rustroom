@@ -11,13 +11,13 @@ mod crop_overlay;
 mod depth_overlay;
 pub(crate) mod eye_overlay;
 mod eyedropper;
+pub(crate) mod find_overlay;
 mod guide_overlay;
 mod loupe;
 mod mask_overlay;
 pub(crate) mod mask_tint;
 pub(crate) mod navigation;
 mod paint;
-pub(crate) mod people_overlay;
 mod readout;
 pub(crate) mod remove_overlay;
 pub(crate) mod spot_overlay;
@@ -85,6 +85,21 @@ struct CanvasInputs {
     app_show_lens_depth: bool,
     /// Retouch's Remove brush (M10.16c1) — the canvas reads it, only the panel changes it.
     app_remove_tool: rustroom_app::remove_tool::RemoveTool,
+    /// Retouch's Paint · Find and its gesture (M10.19d) — the canvas reads them, only the panel changes them.
+    app_retouch: rustroom_app::retouch_task::RetouchState,
+}
+
+/// A Retouch gesture that changes no pixel until its release, so the view must stay sharp under it: a Remove stroke
+/// (M10.16c1), and anything in Find, whatever the brush (M10.19d).
+fn retouch_view_only(
+    tool: Tool,
+    retouch: rustroom_app::retouch_task::RetouchState,
+    remove: &rustroom_app::remove_tool::RemoveTool,
+    eye: &rustroom_app::eye_tool::EyeTool,
+) -> bool {
+    tool == Tool::Retouch
+        && (retouch.task == rustroom_app::retouch_task::Task::Find
+            || (remove.active && eye.active.is_none()))
 }
 
 /// Copy out everything the canvas reads — with the **outer** `ui`, whose rect `press_on_canvas` asks about.
@@ -140,10 +155,7 @@ fn hoist(app: &RustroomApp, ui: &egui::Ui) -> CanvasInputs {
     let panning = ui
         .ctx()
         .input(|i| navigation::pan_button_down(i, app_pan_drag, text_focused));
-    // ⚠ M10.16c1: a Remove stroke changes no pixel until its release either — the view must stay sharp
-    // under the brush.
-    let app_remove_stroke =
-        tool == Tool::Retouch && app.remove_tool.active && app.eye_tool.active.is_none();
+    let app_remove_stroke = retouch_view_only(tool, app.retouch, &app.remove_tool, &app.eye_tool);
     let view_only_gesture =
         press_on_canvas && (panning || app_suppressed_mask || app_remove_stroke);
     // ⚠⚠ **`press_origin.is_some()` as well as `is_decidedly_dragging()`, and it was found by
@@ -195,6 +207,7 @@ fn hoist(app: &RustroomApp, ui: &egui::Ui) -> CanvasInputs {
         app_show_depth_map: app.show_depth_map,
         app_show_lens_depth: app.show_lens_depth,
         app_remove_tool: app.remove_tool,
+        app_retouch: app.retouch,
     }
 }
 
@@ -359,6 +372,45 @@ mod tests {
             |ui| {
                 super::show(&mut app, ui, &ctx.clone());
             },
+        );
+    }
+
+    /// ⚠ A gesture that changes no pixel keeps the view sharp: a Remove stroke, and anything in Find whatever the
+    /// brush (M10.19d) — a drawing in Add more would otherwise blur the photo one is looking at.
+    #[test]
+    fn find_and_a_remove_stroke_keep_the_view_sharp() {
+        use rustroom_app::retouch_task::{RetouchState, Task};
+        use rustroom_app::tool::Tool;
+        let find = RetouchState {
+            task: Task::Find,
+            ..Default::default()
+        };
+        let paint = RetouchState::default();
+        let remove = rustroom_app::remove_tool::RemoveTool::default();
+        let heal = rustroom_app::remove_tool::RemoveTool {
+            active: false,
+            ..remove
+        };
+        let no_eye = rustroom_app::eye_tool::EyeTool::default();
+        assert!(super::retouch_view_only(
+            Tool::Retouch,
+            find,
+            &heal,
+            &no_eye
+        ));
+        assert!(super::retouch_view_only(
+            Tool::Retouch,
+            paint,
+            &remove,
+            &no_eye
+        ));
+        assert!(
+            !super::retouch_view_only(Tool::Retouch, paint, &heal, &no_eye),
+            "a patch drag shows its result"
+        );
+        assert!(
+            !super::retouch_view_only(Tool::Edit, find, &remove, &no_eye),
+            "only in Retouch"
         );
     }
 }
