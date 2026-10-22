@@ -309,14 +309,132 @@ impl Search {
     }
 }
 
-/// Remove dust over one photo — it lives on the session, so another photo starts clean.
-#[derive(Default)]
+/// Find dust over one photo — it lives on the session, so another photo starts clean. Since M10.19d a search lands
+/// as a REVIEW, `people_tool::Run`'s shape: the spots shown on the photo, ticked, until Remove N spots heals them.
 pub struct Run {
     /// The Sensitivity of a press made while the photo was still loading: the search starts once it has.
     pub queued: Option<f32>,
     pub search: Option<Search>,
-    /// What the last press did, shown under the button until the next one.
+    /// What the last search ended with when it left nothing to review, or a look there found nothing new.
     pub said: Option<String>,
+    /// The review is on — from a search's landing until Remove, Cancel, another press or another photo.
+    pub active: bool,
+    /// The spots found, in decode space.
+    pub finds: Vec<Find>,
+    /// Which of them go — one per find.
+    pub ticked: Vec<bool>,
+    /// A drawing in Add more, decode-normalised, for the flow to look again under.
+    pub look: Option<Vec<[f32; 2]>>,
+    /// The running search is a look there, in this decode rectangle.
+    pub there: Option<[f32; 4]>,
+    /// The dust view (the high-contrast one) during the review.
+    pub view: bool,
+    /// The dust view's threshold.
+    pub contrast: f32,
+}
+
+impl Default for Run {
+    fn default() -> Self {
+        Self {
+            queued: None,
+            search: None,
+            said: None,
+            active: false,
+            finds: Vec::new(),
+            ticked: Vec::new(),
+            look: None,
+            there: None,
+            view: true,
+            contrast: crate::visualize::DEFAULT_THRESHOLD,
+        }
+    }
+}
+
+/// A look there searches at this sensitivity — the author pointed at the spot.
+pub const LOOK_SENSITIVITY: f32 = 100.0;
+
+/// A find's reach in decode pixels of a `w × h` decode — the patch it would become.
+fn reach(f: &Find, w: usize, h: usize) -> f32 {
+    SPOT_SCALE * f.radius * w.max(h) as f32
+}
+
+fn apart(a: [f32; 2], b: [f32; 2], w: usize, h: usize) -> f32 {
+    (((a[0] - b[0]) * w as f32).powi(2) + ((a[1] - b[1]) * h as f32).powi(2)).sqrt()
+}
+
+/// The find a click at decode-normalised `at` picks: the nearest whose patch-to-be holds it.
+pub fn hit(finds: &[Find], at: [f32; 2], w: usize, h: usize) -> Option<usize> {
+    finds
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (i, apart(f.centre, at, w, h), reach(f, w, h)))
+        .filter(|&(_, d, r)| d <= r)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _, _)| i)
+}
+
+/// `f`, found in the area `rect` of a `w × h` decode (normalised over the area), placed in the decode.
+pub fn place(f: Find, rect: [f32; 4], w: usize, h: usize) -> Find {
+    let (rw, rh) = (rect[2] - rect[0], rect[3] - rect[1]);
+    let area_long = (rw * w as f32).max(rh * h as f32);
+    Find {
+        centre: [rect[0] + f.centre[0] * rw, rect[1] + f.centre[1] * rh],
+        radius: f.radius * area_long / w.max(h) as f32,
+        contrast: f.contrast,
+    }
+}
+
+/// Of `new`, those not already in the review — a find inside one's patch-to-be is that one again.
+pub fn fresh(new: Vec<Find>, finds: &[Find], w: usize, h: usize) -> Vec<Find> {
+    new.into_iter()
+        .filter(|n| {
+            !finds
+                .iter()
+                .any(|f| apart(f.centre, n.centre, w, h) <= reach(f, w, h))
+        })
+        .collect()
+}
+
+/// The author's (a), for dust: the drawing itself as a spot — at the middle of its extent, half the extent plus the
+/// brush `radius` (a share of the long edge) as its radius.
+pub fn drawn(points: &[[f32; 2]], radius: f32, w: usize, h: usize) -> Find {
+    let (wf, hf) = (w.max(1) as f32, h.max(1) as f32);
+    let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    for p in points {
+        b = [
+            b[0].min(p[0] * wf),
+            b[1].min(p[1] * hf),
+            b[2].max(p[0] * wf),
+            b[3].max(p[1] * hf),
+        ];
+    }
+    if b[0] > b[2] {
+        b = [wf / 2.0, hf / 2.0, wf / 2.0, hf / 2.0];
+    }
+    let long = wf.max(hf);
+    let half = (b[2] - b[0]).max(b[3] - b[1]) / 2.0;
+    Find {
+        centre: [(b[0] + b[2]) / 2.0 / wf, (b[1] + b[3]) / 2.0 / hf],
+        radius: (half + radius.max(0.0) * long) / long,
+        contrast: 0.0,
+    }
+}
+
+/// What the review says of `n` spots found, `ticked` of them to go.
+pub fn summary(n: usize, ticked: usize) -> String {
+    match n {
+        0 => "No dust found".to_string(),
+        1 => format!("1 spot · {ticked} to remove"),
+        n => format!("{n} spots · {ticked} to remove"),
+    }
+}
+
+/// The button that heals them.
+pub fn remove_label(ticked: usize) -> String {
+    match ticked {
+        1 => "Remove 1 spot".to_string(),
+        n => format!("Remove {n} spots"),
+    }
 }
 
 /// What a press did, given how many patches it `added` out of `found` finds.
@@ -569,6 +687,89 @@ mod tests {
         assert!((0.0..=1.0).contains(&search.progress()));
         assert_eq!(search.progress(), 1.0, "done is all the way");
         assert!(search.poll().is_none(), "handed over once");
+    }
+
+    fn at(centre: [f32; 2], radius: f32) -> Find {
+        Find {
+            centre,
+            radius,
+            contrast: 0.1,
+        }
+    }
+
+    /// M10.19d: a click within a find's patch-to-be picks it — the nearest when two are close — and off it nothing.
+    #[test]
+    fn a_click_on_a_find_hits_it_and_off_it_nothing() {
+        let (w, h) = (6000, 4000);
+        // Radius 0.002 of 6000 = 12 px; the patch would be 1.6 × that, 19.2 px.
+        let finds = [at([0.5, 0.5], 0.002), at([0.505, 0.5], 0.002)];
+        assert_eq!(hit(&finds, [0.501, 0.5], w, h), Some(0));
+        assert_eq!(hit(&finds, [0.504, 0.5], w, h), Some(1));
+        assert_eq!(hit(&finds, [0.5, 0.51], w, h), None, "40 px away");
+    }
+
+    /// A find made over an area (normalised over it) is placed in the decode — its centre and its size.
+    #[test]
+    fn a_find_of_an_area_is_placed_in_the_decode() {
+        let (w, h) = (6000, 4000);
+        // The area: x 3000–3600, y 1000–1400 (long side 600); a find at its middle, radius 0.05 of 600 = 30 px.
+        let f = place(at([0.5, 0.5], 0.05), [0.5, 0.25, 0.6, 0.35], w, h);
+        assert!(
+            (f.centre[0] - 0.55).abs() < 1e-6 && (f.centre[1] - 0.3).abs() < 1e-6,
+            "{f:?}"
+        );
+        assert!((f.radius * 6000.0 - 30.0).abs() < 1e-3, "{f:?}");
+    }
+
+    /// Only new dust joins the review: a find on one already found is that one again.
+    #[test]
+    fn only_new_dust_joins_the_review() {
+        let (w, h) = (6000, 4000);
+        let finds = [at([0.5, 0.5], 0.002)];
+        let new = fresh(
+            vec![at([0.5005, 0.5], 0.002), at([0.7, 0.7], 0.002)],
+            &finds,
+            w,
+            h,
+        );
+        assert_eq!(new.len(), 1);
+        assert_eq!(new[0].centre, [0.7, 0.7]);
+    }
+
+    /// The author's (a), for dust: nobody found under a drawing, the drawing itself is a spot — at its middle, as large
+    /// as it is, at least the brush.
+    #[test]
+    fn a_drawing_becomes_a_spot_of_its_own_size() {
+        let (w, h) = (6000, 4000);
+        // A stroke from 3000 to 3060 px across, at y 2000; the brush 0.001 of 6000 = 6 px.
+        let f = drawn(&[[0.5, 0.5], [0.51, 0.5]], 0.001, w, h);
+        assert!(
+            (f.centre[0] - 0.505).abs() < 1e-6 && (f.centre[1] - 0.5).abs() < 1e-6,
+            "{f:?}"
+        );
+        // Half its 60-px extent plus the brush: 36 px.
+        assert!((f.radius * 6000.0 - 36.0).abs() < 1e-3, "{f:?}");
+        let dab = drawn(&[[0.5, 0.5]], 0.001, w, h);
+        assert!(
+            (dab.radius * 6000.0 - 6.0).abs() < 1e-3,
+            "a dab is the brush: {dab:?}"
+        );
+    }
+
+    #[test]
+    fn the_dust_summary_counts_spots_and_picks() {
+        assert_eq!(summary(0, 0), "No dust found");
+        assert_eq!(summary(1, 1), "1 spot · 1 to remove");
+        assert_eq!(summary(7, 5), "7 spots · 5 to remove");
+        assert_eq!(remove_label(1), "Remove 1 spot");
+        assert_eq!(remove_label(7), "Remove 7 spots");
+    }
+
+    #[test]
+    fn a_new_run_shows_the_dust_view() {
+        let r = Run::default();
+        assert!(r.view && !r.active && r.finds.is_empty());
+        assert_eq!(r.contrast, crate::visualize::DEFAULT_THRESHOLD);
     }
 
     /// The steps are reported as they finish — the preparation and each radius — ending at 1.
