@@ -256,9 +256,10 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1–c3, d** (table above).
 
-**▶ NEXT: M10.19d — the Retouch panel as two tasks, Paint · Find** (the author's option B, 2026-10-22, from
-`https://claude.ai/artifact/7ACHJJ2zFpWPJ3WspdRYcC`: one list of every retouch, one brush, people and dust found the
-same way, "Pick · Add more" on the photo); then M10.16c4 Reflections, its own spike. ✅ c3 Find people merged
+**▶ NOW: M10.19d — the Retouch panel as two tasks, Paint · Find — BUILT on `m10.19d-retouch-paint-find`, awaiting
+the author's look** (his option B, 2026-10-22, from `https://claude.ai/artifact/7ACHJJ2zFpWPJ3WspdRYcC`: one brush,
+people and dust found and reviewed the same way, "Pick · Add more" on the photo, one list of every retouch;
+`grep -n 'M10.19d' docs/JOURNAL.md`); then M10.16c4 Reflections, its own spike. ✅ c3 Find people merged
 2026-10-22 (`grep -n 'M10.16c3' docs/JOURNAL.md`). ✅ c2 Remove dust merged 2026-10-21. ✅ c1 the Remove brush merged 2026-10-19
 (`grep -n 'M10.16c1' docs/JOURNAL.md`). ✅ M10.16c1b merged 2026-10-20: a removal being filled shades the
 AREA it will replace — Detect objects' whole object — sent by the job before the network runs. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
@@ -278,7 +279,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | **M10.16** AI tools | c4 Reflections — its own spike, possibly declined |
 | **M10.17** merge | a HDR · b panorama |
 | **M10.18** new modules | a tethering · b GPS and a map · c people tagging · d publish services · e print |
-| **M10.19** found in use (added 2026-10-01) | **d the Retouch panel as Paint · Find (next)** · a HEIC/HEIF photos — libraw cannot read them, so they never appear; needs a decoder · b Move to folder: download Immich assets first, then move (today skipped and counted) (c ✅ above) |
+| **M10.19** found in use (added 2026-10-01) | **d the Retouch panel as Paint · Find (built, awaiting a look)** · a HEIC/HEIF photos — libraw cannot read them, so they never appear; needs a decoder · b Move to folder: download Immich assets first, then move (today skipped and counted) (c ✅ above) |
 
 **Phase 11, last:** M11.2 Windows + the Linux GUI (never run; the in-window menu bar never seen;
 multi-monitor), M11.3 contributor docs, M11.4 `v0.1` (with the welcome screen and the empty Library's

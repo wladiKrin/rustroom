@@ -188,6 +188,47 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-10-22 — M10.19d: the Retouch panel as two tasks, Paint · Find (branch `m10.19d-retouch-paint-find`)
+
+⏳ **Built, awaiting the author's look.** Asked for after c3: *"several buttons, like detect objects, refresh, find
+people, find dust, remove dust, and it's all in one place, and it's really hard to understand what is happening here.
+Also, removal and patches seem to be similar … but they are kept separately"*, and the draw-to-look-again of c3 "is
+not clear at all from the controls". Three options on a design canvas (`https://claude.ai/artifact/7ACHJJ2zFpWPJ3WspdRYcC`);
+the author: *"go with B, merge c3 first"*, then *"looks right, continue"* on the spec
+`2026-10-22-m10.19d-retouch-paint-find-design.md`; plan `2026-10-22-m10.19d-retouch-paint-find.md`.
+
+**Built:** **Paint · Find** at the top of Retouch decides what the photo does. **Paint** — one brush, Remove · Heal ·
+Clone · Eye (Detect objects is the Remove brush's *Whole object*), whose settings take NEW retouches only. **Find** —
+People · Dust, found and reviewed alike: shaded and bordered on the photo, **On the photo: Pick · Add more** (a click
+picks or unpicks one; a drawing or a click looks again there), Everyone, **Remove N** (the card's one primary),
+Cancel; Remove N goes back to Paint with the brush that made them. Under both, **one Retouches list**
+(`rustroom_app::retouch_list`: Removal, Person, Heal, Clone, Dust, Red eye, Pet eye, each kind numbered apart), a picked
+row selecting it alone, switching to its brush and showing its own settings under the list (a removal's Opacity and
+*Try another fill* — c1's Refresh — a patch's mode, Size, Feather, an eye's kind and sliders). **Dust is now reviewed
+before it is healed** (`dust_tool::Run`'s review; `dust_flow`): a landing opens the review all ticked, the dust view
+on (only in a dust review in Find), a look there searches the drawn area at `LOOK_SENSITIVITY` 100 and adds what is
+new — else the drawing itself, the author's (a) as for people; Remove N spots heals the ticked ones as Heal patches
+marked `Spot.dust` (serde default, skipped when false — the fingerprint unchanged), one step. The panel is
+`retouch` (composition) · `retouch_brush` · `retouch_find` · `retouch_items` · `retouch_eyes`; `retouch_remove`,
+`retouch_people` and `retouch_dust` are gone. The canvas's `people_overlay` became `find_overlay`. Icons PAINT
+`paint-brush` U+E6F0, FIND `binoculars` U+EA64, PICK `hand-pointing` U+E29A, ADD_MORE `selection-plus` U+E69C — named
+from Phosphor's GSUB ligatures (its `post` table is v3, without names; positive controls `bandaids` U+E0B2,
+`magnifying-glass` U+E30C).
+
+**Rulings** (the ledger's): in Find the photo draws no retouch outlines, eyes' neither (an Eye brush's clicks would
+compete with Pick); `fresh` dedupes against the review only (a find under an existing patch is skipped when patches are
+made); Pick again after a whole search lands, not after a look there; Remove N returns to Paint with the matching
+brush (c2's "I can't see the patches"); the Next patch row goes — a click on the selected row deselects it; a selected
+eye carries its own Red eye · Pet eye switch; the list is always drawn; the list's count is `retouch_list::summary`
+(the header's trailing text is painted, not a widget); `dust_tool::outcome` lost its caller and went; a click in Add
+more is a one-point drawing; any gesture in Find keeps the view sharp (`retouch_view_only` — before, only the Remove
+brush did, so a drawing with Heal picked would have blurred the photo).
+
+**Found on the way:** a reset drew the same frame's stale rows — an index out of bounds, red before the fix (rows are
+read after the reset). **Sabotages, each red on its own test:** `fresh`, `drawn`, the dust view ignoring the task, the
+dust mark dropped, the brush editing a selected patch, a pick staying in Find, a dust removal staying in Find, Pick
+drawing, a review left on overriding Paint, the sharp view without Find.
+
 ### 2026-10-21 — M10.16c3: Find people — YOLOX-m with tiles, MobileSAM's outline, removed with c1's fill (branch `m10.16c3-people`)
 
 ✅ **Confirmed by the author ("The functionality is working nicely") and merged 2026-10-22** (`--no-ff`, the branch
