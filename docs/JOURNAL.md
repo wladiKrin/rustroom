@@ -190,7 +190,9 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ### 2026-10-21 — M10.16c3: Find people — YOLOX-m with tiles, MobileSAM's outline, removed with c1's fill (branch `m10.16c3-people`)
 
-⏳ **Built and gated; awaiting the author's look.** Spec `2026-10-19-m10.16c-remove-design.md` § c3 (designed from its
+✅ **Confirmed by the author ("The functionality is working nicely") and merged 2026-10-22** (`--no-ff`, the branch
+deleted) — after his first look's two asks below. He then asked for the Retouch panel to be rethought as a whole
+(M10.19d, option B of `https://claude.ai/artifact/7ACHJJ2zFpWPJ3WspdRYcC`). Spec `2026-10-19-m10.16c-remove-design.md` § c3 (designed from its
 spike), plan `2026-10-21-m10.16c3-people.md`. The author: *"m with tiles, go ahead with the design"*, then *"yes, go
 ahead with the plan"*.
 
