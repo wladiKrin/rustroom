@@ -154,6 +154,8 @@ impl RustroomApp {
         s.dust.search = None;
         let (w, h) = (s.buffer.width(), s.buffer.height());
         match s.dust.there.take() {
+            // Remove or Cancel while it looked: the review it was for has ended (as people's).
+            Some(_) if !s.dust.active => {}
             // A look there: what is new joins the review, ticked — else the drawing itself.
             Some((rect, points)) => {
                 let placed: Vec<dust_tool::Find> = finds
@@ -173,10 +175,11 @@ impl RustroomApp {
                     s.dust.ticked.push(true);
                 }
             }
-            // A whole search: the review, every spot ticked — on even with none, so a drawing can still point.
+            // A whole search: the review, every spot ticked — on even with none, so a drawing can still point. ⚠ Nothing
+            // said: the review's readout already reads "No dust found".
             None => {
                 self.retouch.gesture = Gesture::Pick;
-                s.dust.said = finds.is_empty().then(|| dust_tool::summary(0, 0));
+                s.dust.said = None;
                 s.dust.ticked = vec![true; finds.len()];
                 s.dust.finds = finds;
                 s.dust.active = true;
@@ -248,19 +251,44 @@ mod tests {
         );
     }
 
-    /// Nothing found: said, and the review on with nothing in it.
+    /// Nothing found: the review on with nothing in it — its readout says so, nothing else does.
     #[test]
-    fn nothing_found_is_said() {
+    fn nothing_found_opens_an_empty_review() {
         let (mut app, ctx) = app();
         let (search, tx) = Search::answered_by(0.5);
         app.session.as_mut().unwrap().dust.search = Some(search);
         tx.send(Vec::new()).unwrap();
         app.pump_dust(&ctx);
-        assert_eq!(dust(&app).said.as_deref(), Some("No dust found"));
+        assert!(dust(&app).finds.is_empty());
+        assert_eq!(dust(&app).said, None, "said twice with the readout");
         assert!(
             dust(&app).active,
             "on, so a drawing can still point at a spot it missed"
         );
+    }
+
+    /// Final review: Cancel or Remove N while a look there runs — its landing is dropped, as people's is, or its finds
+    /// would sit in an ended review and "No new dust there" would read under the button.
+    #[test]
+    fn a_look_landing_after_the_review_ended_is_dropped() {
+        let (mut app, ctx) = app();
+        let s = app.session.as_mut().unwrap();
+        s.dust.active = true;
+        s.dust.look = Some(vec![[0.7, 0.6], [0.71, 0.6]]);
+        app.pump_dust(&ctx);
+        assert!(dust(&app).there.is_some(), "a look there runs");
+        // Cancel, as the panel's does.
+        let s = app.session.as_mut().unwrap();
+        s.dust.active = false;
+        s.dust.finds.clear();
+        s.dust.ticked.clear();
+        s.dust.look = None;
+        s.dust.said = None;
+        land(&mut app, &ctx);
+        let d = dust(&app);
+        assert!(d.finds.is_empty(), "{:?}", d.finds);
+        assert!(d.said.is_none(), "{:?}", d.said);
+        assert!(!d.active && d.there.is_none());
     }
 
     /// Review Focus 4: Remove N spots heals the ticked ones as Heal patches marked `dust`, and ends the review.

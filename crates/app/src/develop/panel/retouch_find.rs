@@ -540,6 +540,27 @@ mod tests {
         );
     }
 
+    /// Final review: nothing found reads once — the readout says it, nothing repeats it under it.
+    #[test]
+    fn an_empty_dust_review_says_so_once() {
+        let mut p = finding(FindKind::Dust);
+        let (search, tx) = dust_tool::Search::answered_by(0.5);
+        p.s_mut().dust.search = Some(search);
+        tx.send(Vec::new()).unwrap();
+        let ctx = p.ctx.clone();
+        p.app.pump_dust(&ctx);
+        assert!(p.s().dust.active, "the review is on");
+        // ⚠ A label is two accessibility nodes at one place: count the lines, not the nodes.
+        let mut lines: Vec<i32> = p
+            .all("No dust found")
+            .iter()
+            .map(|c| c.y.round() as i32)
+            .collect();
+        assert!(!lines.is_empty(), "the readout is missing");
+        lines.dedup();
+        assert_eq!(lines.len(), 1, "said on {lines:?}");
+    }
+
     #[test]
     fn find_dust_starts_a_search() {
         let mut p = finding(FindKind::Dust);
