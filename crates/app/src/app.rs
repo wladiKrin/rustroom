@@ -188,6 +188,9 @@ pub(crate) struct RustroomApp {
     pub(crate) eye_tool: rustroom_app::eye_tool::EyeTool,
     /// The Remove brush (M10.16c1) — `spot_tool`'s standing; its `active` is Retouch's first mode.
     pub(crate) remove_tool: rustroom_app::remove_tool::RemoveTool,
+    /// What Retouch is doing (M10.19d): Paint or Find, what Find looks for, the photo's gesture — `spot_tool`'s
+    /// standing.
+    pub(crate) retouch: rustroom_app::retouch_task::RetouchState,
     /// Which HSL channel the Color section's selector is showing. View state, per app —
     /// like a brush size, it is a property of the tool and not of the photograph.
     pub(crate) hsl_channel: develop::panel::adjustments::HslChannel,

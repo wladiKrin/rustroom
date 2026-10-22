@@ -325,8 +325,9 @@ pub struct Run {
     pub ticked: Vec<bool>,
     /// A drawing in Add more, decode-normalised, for the flow to look again under.
     pub look: Option<Vec<[f32; 2]>>,
-    /// The running search is a look there, in this decode rectangle.
-    pub there: Option<[f32; 4]>,
+    /// The running search is a look there: its decode rectangle and the drawing, which joins the review itself
+    /// when the look finds nothing new (the author's (a)).
+    pub there: Option<([f32; 4], Vec<[f32; 2]>)>,
     /// The dust view (the high-contrast one) during the review.
     pub view: bool,
     /// The dust view's threshold.
