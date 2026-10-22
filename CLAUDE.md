@@ -168,12 +168,12 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ Workflow:** every feature goes brainstorm → spec → plan → executing-plans, **inline** (the user has chosen inline every single time; offer the choice but expect that answer). Specs land in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`.
 >
-> **⚠ The history is in `docs/JOURNAL.md`** — 184 sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
+> **⚠ The history is in `docs/JOURNAL.md`** — 211 sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
 ### State (2026-10-22)
 
-**4104 tests** (23 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
-gate green on `main`. ⚠⚠ **Run the git command above rather than
+**4190 tests** (24 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
+gate green on `main` (re-gated 2026-10-22 after merging M10.16c4's decline and the denoise-test fix; no branch open). ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -318,6 +318,10 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   swept by the next run)** — unique per test and per run under `rustroom-tests/<pid>/`. A sweep in
   `test-dir` fails on `env::temp_dir()` anywhere else; the export staging directory is the one allowed
   site. Two gates at once are safe since M10.7c (on the old code they failed *and* hung).
+- ⚠⚠ **A test that waits for a background job waits on the EVENT, under a long ceiling (120 s) against a hang —
+  never a fixed time budget.** The denoise worker's 1 s and 6 s budgets lost the race on a loaded full gate and
+  failed `main` twice (fixed 2026-10-22, `denoise_worker.rs`'s `LONG` and its `Held` network, which holds a tile
+  until the test has read the progress).
 - ⚠⚠ **A keyword, collection, smart-collection or date view follows the catalog** (2026-10-01):
   `source_refresh::pump_source_membership`, last in the frame, re-reads `source_members` once
   `Catalog::change_count` has moved and settled — never a list of writers. A new catalog-backed source
@@ -332,8 +336,9 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   counts non-blank lines outside every `#[cfg(test)]` item **wherever it sits**, and skips a file
   declared `#[cfg(test)] mod x;`. ⚠ The old `awk` to the *first* `#[cfg(test)]` is blind past a
   mid-file test item — it read `main.rs` as 78 lines where it held 555; do not use it. Nearest the
-  ceiling on 2026-10-15: `app/src/session_flow.rs` 980, `modals/export.rs` 796,
-  `develop/panel/adjustments.rs` 787, `collections_panel.rs` 779, `modals/settings.rs` 759.
+  ceiling on 2026-10-22: `app/src/session_flow.rs` **987**, `modals/export.rs` 796,
+  `develop/panel/adjustments.rs` 794, `modals/settings.rs` 789, `collections_panel.rs` 779 — add nothing to
+  `session_flow.rs`.
   ⚠⚠ **Re-measure, never requote** — set `CEILING` to 600 for the list, then set it back. Split by responsibility, never to dodge the number: the M10.7d spec and plan are the method.
 - ⚠⚠ **A new `Edits` field is `#[serde(default, skip_serializing_if = "<T>::is_default")]`** (M10.11a/b),
   or the default's serialization changes and every rendered preview on disk misses at once.

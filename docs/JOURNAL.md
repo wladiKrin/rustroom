@@ -188,6 +188,16 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-10-22 — The denoise worker's tests wait on events, not on time budgets (branch `fix-flaky-denoise-tests`)
+
+✅ **Merged 2026-10-22 at the author's request** (`--no-ff`, the branch deleted), after
+`partial_results_arrive_and_only_the_finished_one_is_stored` failed `main`'s full gate twice in a row ("5 partials,
+done false") and passed three times alone. Two tests in `crates/app/src/denoise_worker.rs` raced the clock: one polled
+600 × 10 ms for the finished result, the other 200 × 5 ms to catch the job between tiles — budgets a loaded gate (cold
+builds, every test thread busy) loses. Now every wait is on the event under a **120 s ceiling against a hang**
+(`LONG`), and the progress test runs a `Held` network that keeps the second tile until the test has read the progress,
+so there is no race left to win. After the merge: fmt, clippy and **4,190 tests** green (24 ignored).
+
 ### 2026-10-22 — M10.16c4: Reflections — ⛔ DECLINED on a spike (branch `m10.16c4-reflections-spike`)
 
 ⛔ **Declined by the author ("decline") on the spike's numbers and sheets, 2026-10-22.** The spec
