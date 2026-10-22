@@ -371,8 +371,9 @@ Caption `text2` over a 3 px line across the section, the done part `text3` on `l
 accent, no percentage — because the view is done long before the photo is. **A second, the same
 line (2026-10-20, asked for by the author: a press of Remove dust "often" showed nothing):** Retouch's
 Remove dust draws it under its button while it looks — "Looking for dust" — and then leaves what it
-did there as a readout ("No dust found", "Removed 3 dust spots") until the next press. Both draw
-`develop/panel/progress_line.rs`.
+did there as a readout ("No dust found", "Removed 3 dust spots") until the next press. Find people
+(M10.16c3) does the same — "Looking for people", then "12 people · 9 to remove" or "No people found".
+All three draw `develop/panel/progress_line.rs`.
 
 ## 8. Hints and help
 

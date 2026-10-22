@@ -1008,6 +1008,7 @@ mod tests {
                 detect: true,
                 variant: 2,
                 opacity: 70.0,
+                person: None,
             }],
             rendering: Some(Rendering::Camera),
             look: Look {

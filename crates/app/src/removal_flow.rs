@@ -121,7 +121,7 @@ impl RustroomApp {
         let mut need_model = false;
         for (r, key) in s.edits.removals.iter().zip(&keys) {
             let models_present = !need.contains(&removal::MODEL)
-                && !(r.detect && need.iter().any(|m| *m != removal::MODEL));
+                && !(remove_tool::needs_detector(r) && need.iter().any(|m| *m != removal::MODEL));
             let facts = Facts {
                 has_fill: self.removals.held.contains_key(key),
                 cached: removal_cache::exists(&cache, key),
@@ -144,6 +144,7 @@ impl RustroomApp {
                 image,
                 removal: r.clone(),
                 negative: s.edits.negative,
+                turns: s.edits.geometry.orientation.rotate.turns(),
             });
         }
         if need_model
@@ -224,6 +225,7 @@ mod tests {
             detect: false,
             variant: 0,
             opacity: 100.0,
+            person: None,
         };
         app.session.as_mut().unwrap().edits.removals = vec![r.clone()];
         (app, ctx, r)

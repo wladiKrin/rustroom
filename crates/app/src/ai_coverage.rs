@@ -675,6 +675,7 @@ mod tests {
             detect: false,
             variant: 0,
             opacity: 100.0,
+            person: None,
         };
         let f = |v: f32| {
             std::sync::Arc::new(pipeline::Fill {

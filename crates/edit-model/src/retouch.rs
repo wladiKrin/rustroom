@@ -75,19 +75,20 @@ pub struct Eye {
     pub catchlight: Option<[f32; 2]>,
 }
 
-/// One content-aware removal (M10.16c1): a painted stroke whose area a network fills from its
-/// surroundings.
+/// One content-aware removal (M10.16c1): a painted stroke — or a person found by Find people (M10.16c3) —
+/// whose area a network fills from its surroundings.
 ///
 /// ⚠⚠ **In DECODE space, unlike [`Spot`] and [`Eye`]:** `points` are normalised over the undeveloped
 /// decode — sensor orientation, before lens correction — because the fill is computed from the decode
 /// and pasted onto it, right after AI denoise. A spot's post-lens frame would put the fill where the
 /// lens warp moved it.
 ///
-/// ⚠ The fill itself is not here: it is derived (by the app, once, cached) from the stroke, `detect`,
-/// `variant` and the network — never from `opacity`, which only blends it.
+/// ⚠ The fill itself is not here: it is derived (by the app, once, cached) from the stroke or the person's
+/// box, `detect`, `variant` and the network — never from `opacity`, which only blends it.
 ///
 /// ⚠ No container-level `serde(default)`, `Spot`'s reason: a removal with its points defaulted would be
-/// one nobody painted. Only the three settings are optional.
+/// one nobody painted. Only the three settings and `person` are optional — a person's removal says so with
+/// empty `points`, which it always writes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Removal {
     /// The stroke's dab centres, normalised per axis over the decode.
@@ -103,6 +104,10 @@ pub struct Removal {
     /// 0..=100: how much of the fill is laid over the photo.
     #[serde(default = "full_opacity")]
     pub opacity: f32,
+    /// M10.16c3 — a person found by Find people: their box, normalised over the decode. Such a removal has no
+    /// stroke; its hole is MobileSAM's object from the box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub person: Option<[f32; 4]>,
 }
 
 fn full_opacity() -> f32 {
@@ -169,6 +174,7 @@ mod tests {
                 detect: true,
                 variant: 4,
                 opacity: 55.0,
+                person: None,
             }],
             ..Edits::default()
         };

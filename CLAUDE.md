@@ -255,8 +255,8 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1, c2, d** (table above).
 
-**▶ NEXT: M10.16c3 — People** (spec `2026-10-19-m10.16c-remove-design.md`, § c3); then c4 Reflections, each its
-own plan. ✅ c2 Remove dust merged 2026-10-21 (`grep -n 'M10.16c2' docs/JOURNAL.md`). ✅ c1 the Remove brush merged 2026-10-19
+**▶ NOW: M10.16c3 — Find people is built on `m10.16c3-people`, awaiting the author's look** (`grep -n 'M10.16c3'
+docs/JOURNAL.md`); then c4 Reflections, its own spike and plan. ✅ c2 Remove dust merged 2026-10-21. ✅ c1 the Remove brush merged 2026-10-19
 (`grep -n 'M10.16c1' docs/JOURNAL.md`). ✅ M10.16c1b merged 2026-10-20: a removal being filled shades the
 AREA it will replace — Detect objects' whole object — sent by the job before the network runs. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
 d), M10.14 f–h ⏸.
@@ -396,6 +396,8 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   film's units (`pipeline::negative::negative_of`), keyed by `remove_tool::id` (never Opacity; bump its `RECIPE` on any
   change to how a fill is made), and reaches the prefix through `AiRasters::fill` on its content id. ⚠ A decode-space
   stroke is drawn through `DecodeMap::decode_to_frame` — the lens has no forward map, its inverse is iterated.
+  ⚠ Since M10.16c3 the detector (Detect objects, a person's removal) sees the fill's window UPRIGHT — the request
+  carries the photo's quarter turns (`RemovalRequest.turns`); a person's removal is `Removal.person`, a box, no stroke.
 - ⚠⚠ **Every reader of the undeveloped decode (`Session.buffer`) sees the positive** (M10.11a): a pixel
   through `negative_tool::view`, an image through `pipeline::negative::positive` (Auto tone, the AI
   input), and a cache of anything derived from it keyed on `edits.negative` (`ai_cache::key`, the AI

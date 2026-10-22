@@ -33,10 +33,12 @@ pub enum ModelId {
     FfdnetColor,
     /// M10.16c1 — the Remove brush's inpainting network.
     Lama,
+    /// M10.16c3 — Find people's detector.
+    YoloxM,
 }
 
 impl ModelId {
-    pub const ALL: [ModelId; 8] = [
+    pub const ALL: [ModelId; 9] = [
         Self::IsNet,
         Self::BiRefNetLite,
         Self::SamEncoder,
@@ -45,6 +47,7 @@ impl ModelId {
         Self::DrunetColor,
         Self::FfdnetColor,
         Self::Lama,
+        Self::YoloxM,
     ];
 
     pub const fn spec(self) -> ModelSpec {
@@ -129,6 +132,17 @@ impl ModelId {
                 licence: "Apache-2.0 (LaMa, code and weights; the ONNX export by Carve)",
                 licence_url: "https://github.com/advimman/lama",
             },
+            // ⚠ M10.16c3: the size and hash measured from the file downloaded 2026-10-21 for the spike, copied
+            // verbatim. Megvii's own ONNX export (release 0.1.1rc0); code and weights Apache-2.0. Picked by the
+            // author over YOLOX-s from the spike's sheets, with the tiled pass.
+            Self::YoloxM => ModelSpec {
+                file: "yolox_m.onnx",
+                url: "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_m.onnx",
+                bytes: 101_259_744,
+                sha256: "21ff6cfdeb53b013bac2249599e55f00bff3cfdfdab37ed7a4620818c1d15b3f",
+                licence: "Apache-2.0 (YOLOX, code and weights)",
+                licence_url: "https://github.com/Megvii-BaseDetection/YOLOX",
+            },
         }
     }
 }
@@ -183,6 +197,7 @@ mod tests {
             ModelId::DrunetColor => 5,
             ModelId::FfdnetColor => 6,
             ModelId::Lama => 7,
+            ModelId::YoloxM => 8,
         };
         let every = [
             ModelId::IsNet,
@@ -193,6 +208,7 @@ mod tests {
             ModelId::DrunetColor,
             ModelId::FfdnetColor,
             ModelId::Lama,
+            ModelId::YoloxM,
         ];
         for id in every {
             assert_eq!(
