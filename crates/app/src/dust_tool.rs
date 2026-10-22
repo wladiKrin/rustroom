@@ -438,16 +438,6 @@ pub fn remove_label(ticked: usize) -> String {
     }
 }
 
-/// What a press did, given how many patches it `added` out of `found` finds.
-pub fn outcome(added: usize, found: usize) -> String {
-    match (added, found) {
-        (0, 0) => "No dust found".to_string(),
-        (0, _) => "No new dust found".to_string(),
-        (1, _) => "Removed 1 dust spot".to_string(),
-        (n, _) => format!("Removed {n} dust spots"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

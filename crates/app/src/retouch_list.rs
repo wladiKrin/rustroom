@@ -114,6 +114,15 @@ pub fn count(e: &Edits) -> usize {
     e.removals.len() + e.spots.len() + e.eyes.len()
 }
 
+/// The list header's count: "none", "1 retouch", "N retouches".
+pub fn summary(e: &Edits) -> String {
+    match count(e) {
+        0 => "none".to_owned(),
+        1 => "1 retouch".to_owned(),
+        n => format!("{n} retouches"),
+    }
+}
+
 /// The brush `kind` is made and edited with.
 pub fn brush_of(kind: Kind) -> Brush {
     match kind {
@@ -257,5 +266,18 @@ mod tests {
         assert_eq!(selected(None, Some(1), None), Some(Item::Removal(1)));
         assert_eq!(selected(None, None, Some(0)), Some(Item::Eye(0)));
         assert_eq!(selected(None, None, None), None);
+    }
+
+    /// The list's header says how many, across every kind.
+    #[test]
+    fn the_summary_counts_every_kind() {
+        let mut e = Edits::default();
+        assert_eq!(summary(&e), "none");
+        e.removals = vec![stroke()];
+        assert_eq!(summary(&e), "1 retouch");
+        e.removals.push(person());
+        e.spots = vec![spot(SpotMode::Heal, true)];
+        e.eyes = vec![eye(EyeKind::Pet)];
+        assert_eq!(summary(&e), "4 retouches");
     }
 }

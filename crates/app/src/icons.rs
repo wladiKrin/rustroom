@@ -97,10 +97,23 @@ pub const MASK_SUBTRACT: char = '\u{e32a}';
 /// `intersect` — the mask mode that keeps only where the mask and the next shape overlap.
 pub const MASK_INTERSECT: char = '\u{e2d2}';
 
+/// `paint-brush` — Retouch's Paint task (M10.19d).
+///
+/// ⚠ This and the next three were looked up by name in the bundled 2.1.2 TTF itself — its ligature table maps each
+/// icon's name to its glyph — and the same parse put `bandaids` on [`RETOUCH`] and `magnifying-glass` on
+/// [`ZOOM_ACTUAL`], which is what made it trustworthy.
+pub const PAINT: char = '\u{e6f0}';
+/// `binoculars` — Retouch's Find task: looking for people or dust.
+pub const FIND: char = '\u{ea64}';
+/// `hand-pointing` — Find's Pick gesture: a click picks or unpicks what was found.
+pub const PICK: char = '\u{e29a}';
+/// `selection-plus` — Find's Add more gesture: a drawing looks again there and adds what it finds.
+pub const ADD_MORE: char = '\u{e69c}';
+
 /// Every icon the app draws.
 ///
 /// ⚠ The coverage tests sweep this, so an icon missing from it is one nothing checks.
-pub const ALL: [char; 28] = [
+pub const ALL: [char; 32] = [
     EDIT,
     CROP,
     MASKS,
@@ -129,6 +142,10 @@ pub const ALL: [char; 28] = [
     MASK_ADD,
     MASK_SUBTRACT,
     MASK_INTERSECT,
+    PAINT,
+    FIND,
+    PICK,
+    ADD_MORE,
 ];
 
 #[cfg(test)]

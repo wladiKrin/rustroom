@@ -116,6 +116,16 @@ impl RemovalUi {
         self.held.get(i).copied().unwrap_or(false)
     }
 
+    /// Whether every one of `n` removals' outlines is shown — false with none (M10.19d's Show all).
+    pub(crate) fn all_shown(&self, n: usize) -> bool {
+        n > 0 && (0..n).all(|i| self.is_shown(i))
+    }
+
+    /// Show or hide every one of `n` removals' outlines.
+    pub(crate) fn set_all_shown(&mut self, on: bool, n: usize) {
+        self.shown = vec![on; n];
+    }
+
     pub(crate) fn toggle_shown(&mut self, i: usize) {
         if let Some(on) = self.shown.get_mut(i) {
             *on = !*on;
