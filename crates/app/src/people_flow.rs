@@ -148,6 +148,8 @@ impl RustroomApp {
             }
             // ⚠ Final review: the search reads the decode, where people already removed still stand.
             Ok(found) => {
+                // M10.19d: Pick again after a whole search, so drawing to add is a choice made on purpose.
+                self.retouch.gesture = rustroom_app::retouch_task::Gesture::Pick;
                 let n = found.len();
                 let people = people_tool::not_removed(found, &s.edits.removals);
                 if n > 0 && people.is_empty() {
@@ -433,6 +435,21 @@ mod tests {
         land(&mut app, &ctx);
         assert_eq!(people(&app).people.len(), 1);
         assert_eq!(people(&app).said.as_deref(), Some("No one new there"));
+    }
+
+    /// Pick again after a whole search lands (M10.19d).
+    #[test]
+    fn a_landing_resets_the_gesture_to_pick() {
+        let (mut app, ctx, _) = app_with_models("gesture");
+        app.retouch.gesture = rustroom_app::retouch_task::Gesture::Add;
+        let (search, tx) = Search::answered_by(0.5);
+        app.session.as_mut().unwrap().people.search = Some(search);
+        tx.send(Ok(vec![person(0.1)])).unwrap();
+        app.pump_people(&ctx);
+        assert_eq!(
+            app.retouch.gesture,
+            rustroom_app::retouch_task::Gesture::Pick
+        );
     }
 
     /// Nobody found: said, and nothing shown.

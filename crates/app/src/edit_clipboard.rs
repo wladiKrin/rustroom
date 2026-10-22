@@ -196,6 +196,7 @@ mod tests {
                 radius: 0.05,
                 feather: 30.0,
                 mode: edit_model::SpotMode::Clone,
+                dust: false,
             }],
             eyes: vec![edit_model::Eye {
                 centre: [0.6, 0.35],

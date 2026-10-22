@@ -561,6 +561,7 @@ mod tests {
             radius: 0.05,
             feather: 50.0,
             mode: SpotMode::default(),
+            dust: false,
         }
     }
 
@@ -992,6 +993,7 @@ mod tests {
                 radius: 0.05,
                 feather: 30.0,
                 mode: SpotMode::Clone,
+                dust: false,
             }],
             eyes: vec![Eye {
                 centre: [0.6, 0.35],

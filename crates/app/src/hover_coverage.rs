@@ -334,6 +334,7 @@ fn every_clickable_control_says_what_it_does() {
             radius: 0.05,
             feather: 0.5,
             mode: edit_model::SpotMode::Heal,
+            dust: false,
         }];
         s.selected_spot = Some(0);
         s.sync_spot_flags();

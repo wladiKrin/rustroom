@@ -583,6 +583,7 @@ mod tests {
                 radius: 0.02,
                 feather: 50.0,
                 mode: Default::default(),
+                dust: false,
             }],
             ..Default::default()
         };

@@ -128,7 +128,7 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     }
     photo_edited |= canvas::show(app, ui, ctx);
     photo_edited |= delete_selected_retouch(app, ctx);
-    photo_edited |= app.pump_dust(ctx);
+    app.pump_dust(ctx);
     app.pump_people(ctx);
 
     // Recorded in the same order as everything else, so "delete a preset, move a slider,

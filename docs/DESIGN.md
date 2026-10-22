@@ -237,8 +237,8 @@ with Caption labels for a compact view switch in the panel (HSL, grading range).
 is the only segment lit with the accent.** A segment may carry a **mark** before its label
 (`segmented::Mark`): an icon (the mask modes) or a dot in its own colour (the curve's Red, Green and
 Blue); the mark counts in the width a cell must hold and never shrinks. Used for: app switch, mode
-switch, zoom group, the curve's mode and channels, Retouch modes, mask modes, Interface size, dialog
-tabs.
+switch, zoom group, the curve's mode and channels, Retouch's Paint · Find (with icons), its brush and
+its On the photo: Pick · Add more (with icons), mask modes, Interface size, dialog tabs.
 
 **When it does not fit:** labels shrink 15 % — **never below Caption** (`segmented::shrunk_size`) —
 and if that is not enough the items wrap into **balanced** rows: four that would fit three to a row
@@ -370,10 +370,12 @@ export, preview builds and Immich downloads (existing rule). **One exception (th
 Caption `text2` over a 3 px line across the section, the done part `text3` on `line`, never the
 accent, no percentage — because the view is done long before the photo is. **A second, the same
 line (2026-10-20, asked for by the author: a press of Remove dust "often" showed nothing):** Retouch's
-Remove dust draws it under its button while it looks — "Looking for dust" — and then leaves what it
-did there as a readout ("No dust found", "Removed 3 dust spots") until the next press. Find people
-(M10.16c3) does the same — "Looking for people", then "12 people · 9 to remove" or "No people found".
-All three draw `develop/panel/progress_line.rs`.
+Remove dust drew it under its button while it looked — "Looking for dust" — and then left what it
+did there as a readout until the next press; Find people (M10.16c3) did the same. **Since M10.19d
+both are Retouch's Find card** (§13, 2026-10-22): the line runs under Find people / Find dust —
+"Looking for people", "Looking for dust" — then gives way to the review's readout ("12 people · 9 to
+remove", "3 spots · 3 to remove", or "No people found" / "No dust found"); a look again there keeps
+the review and draws "Looking there" under it. All draw `develop/panel/progress_line.rs`.
 
 ## 8. Hints and help
 
@@ -493,3 +495,4 @@ data in the lib crate and testable headless; only the drawing lives in the bin m
 | 2026-09-29 | The list-row action glyph at rest **fainter**: `text3` at 55 % (`tokens::ACTION_REST`), below the 3:1 floor by choice | `text3` at rest |
 | 2026-09-30 | **Every clickable control carries one hover sentence, as its AccessKit description too** — one helper, required sentences on the shared widgets, and a walk over the drawn app (537 controls) | sentences at call sites under a source sweep only |
 | 2026-10-01 | **The panels move** (M10.8b): the Library rail, the edit panel with its tool rail, and the filmstrip each on a side set in **Settings → Appearance** (first built as View items, moved there by the author); a strip on the panel's side at the window edge; a vertical filmstrip; check marks in menus, on the *Filmstrip* toggle | fixed sides; a bottom-only filmstrip; marks-less toggles |
+| 2026-10-22 | **The Retouch panel as two tasks, Paint · Find** (M10.19d, the author's option B of three, from <https://claude.ai/artifact/7ACHJJ2zFpWPJ3WspdRYcC>): **Paint · Find** at the top decides what the photo does. Paint: one brush, **Remove · Heal · Clone · Eye**, whose settings take NEW retouches only. Find: **People · Dust** found and reviewed alike — shaded and bordered on the photo, **On the photo: Pick · Add more** (a click picks; a drawing looks again there, closer), Everyone, **Remove N** as the card's one primary, Cancel; Remove N returns to Paint with the brush that made them. Under both, **one Retouches list** of every kind (Removal, Person, Heal, Clone, Dust, Red eye, Pet eye, each numbered apart); a picked row selects it alone, switches to its brush, and shows its own settings under the list | five modes (Remove · Heal · Clone · Red eye · Pet eye); Detect objects, Refresh, Find people and Remove dust as buttons beside the brush; dust healed at once, unreviewed; three lists (removals, patches, eyes) and a Next patch row; a drawing over the people view that looked again with nothing on screen saying so |

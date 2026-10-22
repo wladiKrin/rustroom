@@ -1,223 +1,100 @@
-//! The Retouch panel's eye half (M9.11): the four-way mode, the Eyes list, and Pupil Size /
-//! Darken / Catchlight for the lit eye.
+//! The Retouch panel's eye settings (M9.11; split by M10.19d): the eye brush's Pupil Size, Darken and Catchlight
+//! for the NEXT eye, and a selected eye's own — its kind, Pupil Size, Darken and Catchlight — under the list.
 //!
-//! ⚠ Its own file because `retouch.rs` was already ~310 lines of code; the patch half stays there.
+//! ⚠ The brush never edits a selected eye (M10.19d): the two are separate calls, each owning one target.
 
 use super::Edited;
-use crate::develop::panel::{mask_components, section};
+use crate::theme;
 use crate::theme::Hover as _;
 use crate::Session;
-use edit_model::{EyeKind, SpotMode};
+use edit_model::EyeKind;
 use eframe::egui;
 use rustroom_app::eye_tool::{EyeTool, FALLBACK_CATCHLIGHT};
-use rustroom_app::{mask_tool, spot_tool};
-
-/// The Retouch tool's five modes. Derived, never stored: `SpotTool::mode`, `EyeTool::active` and
-/// `RemoveTool::active` (M10.16c1) are the facts, and this is their product.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Mode {
-    /// The content-aware brush — the first mode and the default.
-    Remove,
-    Heal,
-    Clone,
-    RedEye,
-    PetEye,
-}
-
-impl Mode {
-    pub(super) fn current(spot: SpotMode, eye: Option<EyeKind>, remove: bool) -> Self {
-        match (eye, spot) {
-            (Some(EyeKind::Red), _) => Self::RedEye,
-            (Some(EyeKind::Pet), _) => Self::PetEye,
-            (None, _) if remove => Self::Remove,
-            (None, SpotMode::Heal) => Self::Heal,
-            (None, SpotMode::Clone) => Self::Clone,
-        }
-    }
-
-    fn eye(self) -> Option<EyeKind> {
-        match self {
-            Self::RedEye => Some(EyeKind::Red),
-            Self::PetEye => Some(EyeKind::Pet),
-            Self::Remove | Self::Heal | Self::Clone => None,
-        }
-    }
-}
+use rustroom_app::slider_help::Scope;
 
 pub(super) const RED_EYE_HINT: &str = "Removes the red from a pupil you click";
 pub(super) const PET_EYE_HINT: &str = "Darkens an animal's glowing pupil you click";
+const CATCHLIGHT_HOVER: &str = "Adds a small highlight to the pupil so it looks alive";
 
-/// Apply a mode chosen in the selector to the eye side. Returns the spot mode to apply when the
-/// new mode is a patch mode (the caller owns the patch side), `None` otherwise.
-///
-/// ⚠ To an eye mode: the patch selection is dropped, and a selected eye takes the new kind — one
-/// undo step. To a patch mode: the eye selection is dropped and the tool leaves eye mode.
-pub(super) fn apply_mode(
-    s: &mut Session,
-    eyes: &mut EyeTool,
-    remove: &mut rustroom_app::remove_tool::RemoveTool,
-    to: Mode,
-    ed: &mut Edited,
-) -> Option<SpotMode> {
-    // ⚠ M10.16c1: to Remove, the patch and eye selections drop and both other tools stand down; from it,
-    // the removal selection drops.
-    remove.active = to == Mode::Remove;
-    if to == Mode::Remove {
-        eyes.active = None;
-        s.selected_eye = None;
-        s.selected_spot = None;
-        return None;
-    }
-    s.removal.selected = None;
-    match to.eye() {
-        Some(kind) => {
-            s.selected_spot = None;
-            eyes.active = Some(kind);
-            if let Some(e) = s
-                .selected_eye
-                .and_then(|i| s.edits.eyes.get_mut(i))
-                .filter(|e| e.kind != kind)
-            {
-                e.kind = kind;
-                e.catchlight = match kind {
-                    EyeKind::Red => None,
-                    EyeKind::Pet => eyes.catchlight.then_some(FALLBACK_CATCHLIGHT),
-                };
-                ed.discrete();
-            }
-            None
-        }
-        None => {
-            eyes.active = None;
-            s.selected_eye = None;
-            Some(if to == Mode::Clone {
-                SpotMode::Clone
-            } else {
-                SpotMode::Heal
-            })
-        }
+/// Red eye · Pet eye, the compact switch — the brush's or a selected eye's.
+pub(super) fn kind_switch(ui: &mut egui::Ui, kind: &mut EyeKind) {
+    theme::segmented(
+        ui,
+        kind,
+        &[
+            (EyeKind::Red, "Red eye", RED_EYE_HINT),
+            (EyeKind::Pet, "Pet eye", PET_EYE_HINT),
+        ],
+    );
+}
+
+/// The eye brush's Pupil Size, Darken and (pet) Catchlight — what the next eye takes. Tool values: no photo edit.
+pub(super) fn brush_settings(ui: &mut egui::Ui, tool: &mut EyeTool, ed: &mut Edited) {
+    let d = EyeTool::default();
+    let mut local = Edited {
+        help_scope: Scope::Eye,
+        ..Edited::default()
+    };
+    local.slider(
+        ui,
+        &mut tool.pupil_size,
+        0.0..=100.0,
+        "Pupil Size",
+        d.pupil_size,
+    );
+    local.slider(ui, &mut tool.darken, 0.0..=100.0, "Darken", d.darken);
+    ed.missing_help.append(&mut local.missing_help);
+    if tool.active == Some(EyeKind::Pet) {
+        ui.checkbox(&mut tool.catchlight, "Catchlight")
+            .hover(CATCHLIGHT_HOVER);
     }
 }
 
-/// The Eyes list: one row per eye, click selects, `×` deletes.
-pub(super) fn list(ui: &mut egui::Ui, s: &mut Session, eyes: &mut EyeTool, ed: &mut Edited) {
-    let n = s.edits.eyes.len();
-    let count = match n {
-        0 => "no eyes".to_owned(),
-        1 => "1 eye".to_owned(),
-        n => format!("{n} eyes"),
-    };
-    let mut out = section::header(
-        ui,
-        ui.make_persistent_id(("retouch", "Eyes")),
-        true,
-        section::Header::new("Eyes")
-            .modified(n > 0)
-            .resettable(true)
-            .trailing(&count),
-    );
-    if out.reset {
-        s.edits.eyes.clear();
-        s.selected_eye = None;
-        s.suppressed_eye = None;
+/// Eye `i`'s kind, Pupil Size, Darken and (pet) Catchlight. A kind or Catchlight change is one undo step; a slider
+/// settles one on release.
+pub(super) fn selected_settings(
+    ui: &mut egui::Ui,
+    s: &mut Session,
+    i: usize,
+    tool: &EyeTool,
+    ed: &mut Edited,
+) {
+    let mut kind = s.edits.eyes[i].kind;
+    let was = kind;
+    kind_switch(ui, &mut kind);
+    if kind != was {
+        let e = &mut s.edits.eyes[i];
+        e.kind = kind;
+        e.catchlight = match kind {
+            EyeKind::Red => None,
+            EyeKind::Pet => tool.catchlight.then_some(FALLBACK_CATCHLIGHT),
+        };
         ed.discrete();
     }
-    out.show_body(ui, |ui| {
-        let long = s.full_long;
-        let selected = s.selected_eye.filter(|&i| i < s.edits.eyes.len());
-        let (mut pick, mut remove) = (None, None);
-        for (i, e) in s.edits.eyes.iter().enumerate() {
-            let name = format!("Eye {}", i + 1);
-            let kind = match e.kind {
-                EyeKind::Red => "Red",
-                EyeKind::Pet => "Pet",
-            };
-            let meta = format!("{kind} · {:.0} px", spot_tool::radius_px(e.radius, long));
-            let row = mask_components::row(
-                ui,
-                mask_components::RowSpec {
-                    glyph: mask_components::RowGlyph::Eye(e.kind),
-                    op: None,
-                    name: &name,
-                    meta: &meta,
-                    accessible: &name,
-                    selected: selected == Some(i),
-                    current: false,
-                    deletable: true,
-                    delete_hover: "Deletes this correction",
-                    indent: 0.0,
-                    eye: None,
-                    hold: None,
-                    hover: "Selects this correction, so its sliders edit it",
-                    draggable: false,
-                },
-            );
-            if row.delete {
-                remove = Some(i);
-            } else if row.clicked {
-                pick = Some(i);
-            }
-        }
-        if let Some(i) = pick {
-            s.selected_eye = Some(i);
-            s.selected_spot = None;
-            eyes.active = Some(s.edits.eyes[i].kind);
-        }
-        if let Some(i) = remove {
-            let before = s.edits.eyes.len();
-            s.edits.eyes.remove(i);
-            s.selected_eye = mask_tool::selection_after_delete(s.selected_eye, i, before);
-            if s.suppressed_eye == Some(i) {
-                s.suppressed_eye = None;
-            }
-            ed.discrete();
-        }
-    });
-}
-
-/// Pupil Size, Darken and (pet) Catchlight for the selected eye — or, with none selected, the
-/// tool's values for the next one. A new eye inherits the last values used.
-pub(super) fn settings(ui: &mut egui::Ui, s: &mut Session, tool: &mut EyeTool, ed: &mut Edited) {
-    let sel = s.selected_eye.filter(|&i| i < s.edits.eyes.len());
     let d = EyeTool::default();
-    let (mut size, mut dark) = match sel {
-        Some(i) => (s.edits.eyes[i].pupil_size, s.edits.eyes[i].darken),
-        None => (tool.pupil_size, tool.darken),
-    };
-    // ⚠ A tool default is not a photo edit: with nothing selected the sliders must neither render
-    // nor push history — `retouch::settings`' rule for its Next patch row.
+    let (mut size, mut dark) = (s.edits.eyes[i].pupil_size, s.edits.eyes[i].darken);
     let mut local = Edited {
-        help_scope: rustroom_app::slider_help::Scope::Eye,
+        help_scope: Scope::Eye,
         ..Edited::default()
     };
     local.slider(ui, &mut size, 0.0..=100.0, "Pupil Size", d.pupil_size);
     local.slider(ui, &mut dark, 0.0..=100.0, "Darken", d.darken);
     ed.missing_help.append(&mut local.missing_help);
-    tool.pupil_size = size;
-    tool.darken = dark;
-    if let Some(i) = sel {
-        s.edits.eyes[i].pupil_size = size;
-        s.edits.eyes[i].darken = dark;
-        ed.changed |= local.changed;
-        ed.settled |= local.settled;
-    }
-    let pet = sel.map_or(tool.active == Some(EyeKind::Pet), |i| {
-        s.edits.eyes[i].kind == EyeKind::Pet
-    });
-    if pet {
-        let mut on = sel.map_or(tool.catchlight, |i| s.edits.eyes[i].catchlight.is_some());
+    s.edits.eyes[i].pupil_size = size;
+    s.edits.eyes[i].darken = dark;
+    ed.changed |= local.changed;
+    ed.settled |= local.settled;
+    if s.edits.eyes[i].kind == EyeKind::Pet {
+        let mut on = s.edits.eyes[i].catchlight.is_some();
         if ui
             .checkbox(&mut on, "Catchlight")
-            .hover("Adds a small highlight to the pupil so it looks alive")
+            .hover(CATCHLIGHT_HOVER)
             .changed()
         {
-            tool.catchlight = on;
-            if let Some(i) = sel {
-                // ⚠ Re-ticking uses a fixed up-left in the stage's pre-orientation frame: only a
-                // canvas click knows which way is up on screen.
-                s.edits.eyes[i].catchlight = on.then_some(FALLBACK_CATCHLIGHT);
-                ed.discrete();
-            }
+            // ⚠ Re-ticking uses a fixed up-left in the stage's pre-orientation frame: only a canvas click knows
+            // which way is up on screen.
+            s.edits.eyes[i].catchlight = on.then_some(FALLBACK_CATCHLIGHT);
+            ed.discrete();
         }
     }
 }

@@ -156,6 +156,7 @@ impl RustroomApp {
             spot_tool: Default::default(),
             eye_tool: Default::default(),
             remove_tool: Default::default(),
+            retouch: Default::default(),
             brush_size: rustroom_app::brush_tool::DEFAULTS.size,
             brush_hardness: rustroom_app::brush_tool::DEFAULTS.hardness,
             brush_flow: rustroom_app::brush_tool::DEFAULTS.flow,

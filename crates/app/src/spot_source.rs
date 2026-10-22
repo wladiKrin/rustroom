@@ -275,6 +275,7 @@ mod tests {
             radius: r,
             feather: 50.0,
             mode: SpotMode::Heal,
+            dust: false,
         }];
         let got = pick(|_| [0.5, 0.5, 0.5], dest, r, 1.0, &existing).expect("a source");
         let d = ((got[0] - occupied[0]).powi(2) + (got[1] - occupied[1]).powi(2)).sqrt();

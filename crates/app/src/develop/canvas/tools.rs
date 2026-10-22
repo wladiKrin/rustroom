@@ -191,6 +191,19 @@ pub(super) fn dispatch(
                 out.fringe_status = Some(m.0);
             }
         }
+        // ⚠ M10.19d: in Find the photo shows what was found and takes only Find's gestures — no retouch is drawn or
+        // made there, whatever the brush (the author's option B).
+        Tool::Retouch if inp.app_retouch.task == rustroom_app::retouch_task::Task::Find => {
+            super::find_overlay::draw(
+                ui,
+                s,
+                resp,
+                img_rect,
+                frame_rect,
+                &inp.app_remove_tool,
+                &inp.app_retouch,
+            );
+        }
         Tool::Retouch => {
             // ⚠ Built here rather than inside the overlay so the shared borrow of
             // `s` it holds ends before the overlay takes `&mut s`.
@@ -199,17 +212,7 @@ pub(super) fn dispatch(
             // every mode but take gestures only in theirs — one click, one
             // meaning. Patch outlines are not drawn in an eye mode.
             // ⚠ M10.16c1: Remove is the first mode; its strokes take the gestures a patch would.
-            // ⚠ M10.16c3: the people view stands in for Remove's overlay until Remove N people or Cancel.
-            if out.app_eye_tool.active.is_none() && inp.app_remove_tool.active && s.people.active {
-                super::people_overlay::draw(
-                    ui,
-                    s,
-                    resp,
-                    img_rect,
-                    frame_rect,
-                    &inp.app_remove_tool,
-                );
-            } else if out.app_eye_tool.active.is_none() && inp.app_remove_tool.active {
+            if out.app_eye_tool.active.is_none() && inp.app_remove_tool.active {
                 out.photo_edited |= super::remove_overlay::draw_remove_overlay(
                     ui,
                     s,

@@ -1101,6 +1101,7 @@ mod tests {
                         radius: 0.09,
                         feather: 10.0,
                         mode: edit_model::SpotMode::Clone,
+                        dust: false,
                     }],
                     ..base.clone()
                 },
@@ -1260,6 +1261,7 @@ mod tests {
                 radius: 0.02,
                 feather: 50.0,
                 mode: Default::default(),
+                dust: false,
             }],
             eyes: vec![edit_model::Eye {
                 centre: [0.4, 0.4],
@@ -1429,6 +1431,7 @@ mod tests {
             radius: 0.125,
             feather: 0.0,
             mode: edit_model::SpotMode::Clone,
+            dust: false,
         };
         // A quarter-frame crop whose window still contains the whole patch.
         let crop = edit_model::CropRect {

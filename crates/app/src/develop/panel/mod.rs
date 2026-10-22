@@ -20,10 +20,10 @@ pub mod presets;
 pub mod profile;
 mod progress_line;
 pub mod retouch;
-mod retouch_dust;
+mod retouch_brush;
 mod retouch_eyes;
-mod retouch_people;
-mod retouch_remove;
+mod retouch_find;
+mod retouch_items;
 pub mod section;
 pub mod slider;
 pub mod snapshots;
@@ -425,6 +425,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                             &mut app.spot_tool,
                             &mut app.eye_tool,
                             &mut app.remove_tool,
+                            &mut app.retouch,
                             &mut ed,
                         ),
                         // Drawn above, outside the session borrow — see the comment there.

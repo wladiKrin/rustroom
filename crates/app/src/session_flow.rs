@@ -754,7 +754,7 @@ impl RustroomApp {
             lens_memo: Default::default(),
             dust: Default::default(),
             people: Default::default(),
-            people_view: Default::default(),
+            find_view: Default::default(),
             active_mask_handle: None,
             guides: Vec::new(),
             active_guide: None,
@@ -1189,6 +1189,7 @@ mod tests {
             radius: 0.02,
             feather: 50.0,
             mode: edit_model::SpotMode::Heal,
+            dust: false,
         };
         s.edits.spots = vec![spot(0.2), spot(0.5), spot(0.8)];
         s.spot_held = vec![true, false, false];

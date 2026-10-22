@@ -87,6 +87,7 @@ fn main() {
             radius,
             feather: 40.0,
             mode,
+            dust: false,
         }],
         ..Edits::default()
     };

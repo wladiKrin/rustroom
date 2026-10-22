@@ -2133,6 +2133,7 @@ fn spot_cases() -> Vec<(&'static str, Edits)> {
             radius: SPOT_R / 64.0,
             feather: 40.0,
             mode,
+            dust: false,
         }],
         ..Edits::default()
     };
