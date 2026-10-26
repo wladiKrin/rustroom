@@ -72,6 +72,26 @@ pub struct DecodedRaw {
     pub metadata: RawMetadata,
 }
 
+/// libraw's demosaiced output in **camera space**, white-balanced, before any colour conversion —
+/// Develop's decode stopped before our camera matrix (M10.17a, the HDR merge's frames).
+#[derive(Debug, Clone)]
+pub struct CameraFrame {
+    pub width: usize,
+    pub height: usize,
+    /// Interleaved RGB, exactly as libraw produced it: `(raw − black) / (white − black) × pre_mul`,
+    /// clipped at 65535 — a saturated channel reads 65535 (libraw's highlight mode "clip").
+    pub samples: Vec<u16>,
+    /// The multipliers libraw applied, scaled so the smallest is 1. Dividing a sample by its
+    /// channel's undoes the white balance exactly.
+    pub pre_mul: [f32; 3],
+    /// XYZ → camera, as libraw holds it (its `cam_xyz`; a DNG's `ColorMatrix`, D65).
+    pub cam_xyz: [[f32; 3]; 3],
+    /// Camera → linear sRGB, libraw's `rgb_cam` — what `decode_raw` builds its matrix from.
+    pub rgb_cam: [[f32; 3]; 3],
+    pub metadata: RawMetadata,
+    pub capture: core_image::Capture,
+}
+
 pub use core_image::Thumbnail;
 
 /// Extract and decode the camera's embedded preview thumbnail (fast — no demosaic).
@@ -302,6 +322,14 @@ pub fn decode_raw(path: &Path, opts: &DecodeOptions) -> Result<DecodedRaw, Decod
     backend_rsraw::decode(&bytes, opts)
 }
 
+/// Decode a RAW to libraw's camera-space output — see [`CameraFrame`]. `camera_native` and
+/// `camera_profile` are ignored (no colour conversion happens); everything else is as
+/// [`decode_raw`].
+pub fn decode_camera(path: &Path, opts: &DecodeOptions) -> Result<CameraFrame, DecodeError> {
+    let bytes = std::fs::read(path)?;
+    backend_rsraw::decode_camera(&bytes, opts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,6 +507,69 @@ mod tests {
             full(Demosaic::Best).data(),
             "the demosaic setting never reached libraw"
         );
+    }
+
+    /// M10.17a: the camera-space decode is Develop's decode stopped before our matrix — applying
+    /// the matrix to it must give `decode_raw`'s pixels **exactly** (the same f32 operations).
+    /// ⚠ Gated on `RAW_FIXTURE`; it skips without it.
+    #[test]
+    fn decode_camera_then_our_matrix_is_decode_raw() {
+        let Some(path) = fixture() else {
+            eprintln!("skipping: set RAW_FIXTURE=/abs/path/to.raw to run this test");
+            return;
+        };
+        let cam = decode_camera(&path, &DecodeOptions::preview()).expect("camera decode");
+        let raw = decode_raw(&path, &DecodeOptions::preview()).expect("decode");
+        assert_eq!(
+            (cam.width, cam.height),
+            (raw.image.width(), raw.image.height())
+        );
+        let m = color::camera::camera_to_prophoto(cam.rgb_cam);
+        let mut worst = 0f32;
+        for (px, want) in cam.samples.chunks(3).zip(raw.image.data().chunks(3)) {
+            let got = color::spaces::apply(&m, [px[0], px[1], px[2]].map(|s| s as f32 / 65535.0));
+            for c in 0..3 {
+                worst = worst.max((got[c] - want[c]).abs());
+            }
+        }
+        eprintln!("decode_camera vs decode_raw: worst {worst}");
+        assert_eq!(worst, 0.0, "the camera decode is not Develop's decode");
+        assert_eq!(cam.metadata.as_shot, raw.metadata.as_shot);
+    }
+
+    /// The multipliers libraw applied, as it applied them: scaled so the smallest is 1 (probed on
+    /// DSCF7618, 2026-10-26: 1.937, 1, 1.636). ⚠ Gated on `RAW_FIXTURE`.
+    #[test]
+    fn pre_mul_is_normalised_to_a_minimum_of_one() {
+        let Some(path) = fixture() else {
+            eprintln!("skipping: set RAW_FIXTURE=/abs/path/to.raw to run this test");
+            return;
+        };
+        let cam = decode_camera(&path, &DecodeOptions::preview()).expect("camera decode");
+        let min = cam.pre_mul.iter().cloned().fold(f32::INFINITY, f32::min);
+        eprintln!("pre_mul {:?}", cam.pre_mul);
+        assert!((min - 1.0).abs() < 1e-6, "{:?}", cam.pre_mul);
+        assert!(cam.pre_mul.iter().all(|m| m.is_finite() && *m >= 1.0));
+    }
+
+    /// dcraw's `cam_xyz_coeff`, ours, gives the `rgb_cam` libraw computed for the camera — the
+    /// property the float DNG reader (M10.17a) depends on. ⚠ Gated on `RAW_FIXTURE`.
+    #[test]
+    fn our_rgb_cam_from_cam_xyz_matches_libraws() {
+        let Some(path) = fixture() else {
+            eprintln!("skipping: set RAW_FIXTURE=/abs/path/to.raw to run this test");
+            return;
+        };
+        let cam = decode_camera(&path, &DecodeOptions::preview()).expect("camera decode");
+        let ours = color::camera::rgb_cam_from_cam_xyz(&cam.cam_xyz).expect("invertible");
+        let mut worst = 0f32;
+        for i in 0..3 {
+            for j in 0..3 {
+                worst = worst.max((ours[i][j] - cam.rgb_cam[i][j]).abs());
+            }
+        }
+        eprintln!("rgb_cam ours vs libraw: worst {worst}");
+        assert!(worst < 1e-4, "ours {ours:?} libraw {:?}", cam.rgb_cam);
     }
 
     #[test]

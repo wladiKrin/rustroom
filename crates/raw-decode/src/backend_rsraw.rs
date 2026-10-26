@@ -129,7 +129,30 @@ struct ProfileTransform {
     hue_sat: Option<color::huesatmap::Table>,
 }
 
-pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, DecodeError> {
+/// What libraw knew once it had processed a file, beside the pixels.
+pub(crate) struct Facts {
+    pub width: usize,
+    pub height: usize,
+    /// The multipliers `dcraw_process` applied — `cam_mul` scaled so the smallest is 1. ⚠ Read
+    /// **after** processing: dcraw divides `pre_mul` in place there (probed on DSCF7618, 2026-10-26).
+    pub pre_mul: [f32; 3],
+    pub cam_mul: [f32; 3],
+    pub cam_xyz: [[f32; 3]; 3],
+    pub rgb_cam: [[f32; 3]; 3],
+    pub metadata: RawMetadata,
+    pub capture: Capture,
+}
+
+/// Open, unpack and process `bytes` per `opts`, handing libraw's 16-bit camera-space output to
+/// `take` while libraw still owns it — so `decode` converts straight to f32 and `decode_camera`
+/// copies, and neither pays for the other.
+///
+/// ⚠ `output_color` 0 or 4 per `opts.camera_native`; `decode_camera` always asks for 0.
+pub(crate) fn process<T>(
+    bytes: &[u8],
+    opts: &DecodeOptions,
+    take: impl FnOnce(&[u16]) -> T,
+) -> Result<(T, Facts), DecodeError> {
     let mut raw =
         RawImage::open(bytes).map_err(|e| DecodeError::Backend(format!("open: {e:?}")))?;
     raw.set_half_size(opts.half_size); // must be set before unpack()
@@ -185,8 +208,7 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, D
             samples.len()
         )));
     }
-
-    let data: Vec<f32> = samples.iter().map(|&s| s as f32 / U16_MAX_F).collect();
+    let taken = take(samples);
     drop(processed);
 
     // ⚠ Read **after** `dcraw_process`: `rgb_cam` is computed there, so asking earlier returns
@@ -196,46 +218,24 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, D
     // out identical whatever `output_color` is set to, because dcraw applies the output space
     // separately as `out_cam = out_rgb[output] × rgb_cam`. `camera_to_prophoto` supplies that
     // second half from our own matrices.
-    let as_shot = {
+    let (pre_mul, cam_mul, cam_xyz, rgb_cam) = {
         let c = &raw.as_mut().color;
         let mut cam_xyz = [[0.0f32; 3]; 3];
-        for (i, row) in cam_xyz.iter_mut().enumerate() {
-            row.copy_from_slice(&c.cam_xyz[i][..3]);
+        let mut rgb_cam = [[0.0f32; 3]; 3];
+        for i in 0..3 {
+            cam_xyz[i].copy_from_slice(&c.cam_xyz[i][..3]);
+            rgb_cam[i].copy_from_slice(&c.rgb_cam[i][..3]);
         }
-        as_shot_illuminant(&cam_xyz, [c.cam_mul[0], c.cam_mul[1], c.cam_mul[2]])
-    };
-
-    let image = if opts.camera_native {
-        let (m, hue_sat) = {
-            let c = &raw.as_mut().color;
-            let mut rgb_cam = [[0.0f32; 3]; 3];
-            for (i, row) in rgb_cam.iter_mut().enumerate() {
-                row.copy_from_slice(&c.rgb_cam[i][..3]);
-            }
+        (
+            [c.pre_mul[0], c.pre_mul[1], c.pre_mul[2]],
             // ⚠ `cam_mul` is the white balance libraw actually applied, which is what the DNG
             // interpolation is defined against — not a temperature anyone typed.
-            let cam_mul = [c.cam_mul[0], c.cam_mul[1], c.cam_mul[2]];
-            match opts
-                .camera_profile
-                .as_deref()
-                .and_then(|p| profile_transform(p, cam_mul))
-            {
-                Some(t) => (t.matrix, t.hue_sat),
-                None => (color::camera::camera_to_prophoto(rgb_cam), None),
-            }
-        };
-        // ⚠ **One pass, not two.** A second `map_pixels` over a full-resolution buffer would be a
-        // second traversal of ~313 MB for nothing.
-        ImageBuf::from_vec(width, height, data).map_pixels(|p| {
-            let p = color::spaces::apply(&m, p);
-            match &hue_sat {
-                Some(t) => t.apply(p),
-                None => p,
-            }
-        })
-    } else {
-        ImageBuf::from_vec(width, height, data)
+            [c.cam_mul[0], c.cam_mul[1], c.cam_mul[2]],
+            cam_xyz,
+            rgb_cam,
+        )
     };
+    let as_shot = as_shot_illuminant(&cam_xyz, cam_mul);
 
     let metadata = RawMetadata {
         width,
@@ -260,8 +260,80 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, D
         },
         as_shot,
     };
+    let capture = capture_of(&raw);
+    Ok((
+        taken,
+        Facts {
+            width,
+            height,
+            pre_mul,
+            cam_mul,
+            cam_xyz,
+            rgb_cam,
+            metadata,
+            capture,
+        },
+    ))
+}
 
-    Ok(DecodedRaw { image, metadata })
+pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, DecodeError> {
+    let (data, f) = process(bytes, opts, |samples| {
+        samples
+            .iter()
+            .map(|&s| s as f32 / U16_MAX_F)
+            .collect::<Vec<f32>>()
+    })?;
+
+    let image = if opts.camera_native {
+        let (m, hue_sat) = match opts
+            .camera_profile
+            .as_deref()
+            .and_then(|p| profile_transform(p, f.cam_mul))
+        {
+            Some(t) => (t.matrix, t.hue_sat),
+            None => (color::camera::camera_to_prophoto(f.rgb_cam), None),
+        };
+        // ⚠ **One pass, not two.** A second `map_pixels` over a full-resolution buffer would be a
+        // second traversal of ~313 MB for nothing.
+        ImageBuf::from_vec(f.width, f.height, data).map_pixels(|p| {
+            let p = color::spaces::apply(&m, p);
+            match &hue_sat {
+                Some(t) => t.apply(p),
+                None => p,
+            }
+        })
+    } else {
+        ImageBuf::from_vec(f.width, f.height, data)
+    };
+
+    Ok(DecodedRaw {
+        image,
+        metadata: f.metadata,
+    })
+}
+
+/// libraw's camera-space output and what it applied to get there (M10.17a) — see
+/// [`crate::decode_camera`].
+pub(crate) fn decode_camera(
+    bytes: &[u8],
+    opts: &DecodeOptions,
+) -> Result<crate::CameraFrame, DecodeError> {
+    let opts = DecodeOptions {
+        camera_native: true,
+        camera_profile: None,
+        ..opts.clone()
+    };
+    let (samples, f) = process(bytes, &opts, <[u16]>::to_vec)?;
+    Ok(crate::CameraFrame {
+        width: f.width,
+        height: f.height,
+        samples,
+        pre_mul: f.pre_mul,
+        cam_xyz: f.cam_xyz,
+        rgb_cam: f.rgb_cam,
+        metadata: f.metadata,
+        capture: f.capture,
+    })
 }
 
 /// The illuminant the camera balanced to, from the multipliers libraw applied.
@@ -442,8 +514,13 @@ mod tests {
 /// The read dominates, which is why the caller is a background pass and not the folder scan.
 pub fn read_capture(bytes: &[u8]) -> Result<Capture, DecodeError> {
     let raw = RawImage::open(bytes).map_err(|e| DecodeError::Backend(e.to_string()))?;
+    Ok(capture_of(&raw))
+}
+
+/// The capture facts of an opened file — `read_capture`'s, shared with `process` (M10.17a).
+fn capture_of(raw: &RawImage) -> Capture {
     let lens = raw.lens_info();
-    Ok(Capture {
+    Capture {
         // ⚠⚠ `.naive_local()`, NOT the UTC instant. EXIF carries no timezone at all, so storing
         // true instants would make a RAW exact and its JPEG sibling a guess about the machine's
         // zone — the pair could then differ by hours. See `Capture::taken`.
@@ -456,7 +533,7 @@ pub fn read_capture(bytes: &[u8]) -> Result<Capture, DecodeError> {
         shutter: non_zero_f32(raw.shutter()),
         aperture: non_zero_f32(raw.aperture()),
         focal_len: non_zero_f32(raw.focal_len()),
-    })
+    }
 }
 
 /// ⚠ libraw reports **0** for a value it does not have, not an absence. Storing 0 would put

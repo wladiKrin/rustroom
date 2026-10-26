@@ -137,6 +137,37 @@ pub fn invert(m: &[[f32; 3]; 3]) -> Option<[[f32; 3]; 3]> {
     Some(out)
 }
 
+/// dcraw's own linear sRGB (D65) → XYZ, which `cam_xyz_coeff` multiplies by.
+///
+/// ⚠ Deliberately **not** [`crate::spaces::SRGB_TO_XYZ`]: these are dcraw's digits, a few 1e-4 off
+/// ours, and [`rgb_cam_from_cam_xyz`] exists to reproduce the matrix libraw computes for a camera.
+const DCRAW_XYZ_RGB: [[f64; 3]; 3] = [
+    [0.412453, 0.357580, 0.180423],
+    [0.212671, 0.715160, 0.072169],
+    [0.019334, 0.119193, 0.950227],
+];
+
+/// Camera → linear sRGB from a DNG-style `ColorMatrix` (XYZ → camera) — dcraw's `cam_xyz_coeff`.
+///
+/// `cam_rgb = cam_xyz · xyz_rgb`, each row scaled to sum to 1 (so camera white lands on output
+/// white), then inverted. It is the matrix libraw hands back as `rgb_cam` for a raw it reads, which
+/// is what lets a DNG Rustroom wrote (M10.17a) render exactly as the raw it came from.
+/// `None` when the matrix is singular.
+pub fn rgb_cam_from_cam_xyz(cam_xyz: &[[f32; 3]; 3]) -> Option<[[f32; 3]; 3]> {
+    let mut cam_rgb = [[0.0f32; 3]; 3];
+    for (i, row) in cam_rgb.iter_mut().enumerate() {
+        for (j, v) in row.iter_mut().enumerate() {
+            *v = (0..3)
+                .map(|k| cam_xyz[i][k] as f64 * DCRAW_XYZ_RGB[k][j])
+                .sum::<f64>() as f32;
+        }
+    }
+    if cam_rgb.iter().any(|r| r.iter().sum::<f32>().abs() < 1e-9) {
+        return None;
+    }
+    invert(&normalize_rows(cam_rgb))
+}
+
 /// The colour temperature implied by a camera neutral, solved the way the DNG spec does.
 ///
 /// ⚠⚠ **Iterative because the answer depends on itself**: the matrix used to convert the neutral
@@ -405,6 +436,36 @@ mod tests {
                     composed[i]
                 );
             }
+        }
+    }
+
+    /// M10.17a: a camera whose native space IS sRGB has `rgb_cam` = the identity — dcraw's own
+    /// `cam_xyz_coeff` reduces to it. ⚠ Within 2e-3, not exactly: dcraw's `xyz_rgb` constants are
+    /// its own (0.412453…), a few 1e-4 off `SRGB_TO_XYZ`, and the function uses dcraw's on purpose
+    /// so it reproduces libraw's matrix for a real camera.
+    #[test]
+    fn rgb_cam_from_an_srgb_camera_is_the_identity() {
+        let cam_xyz = invert(&crate::spaces::SRGB_TO_XYZ).unwrap();
+        let m = rgb_cam_from_cam_xyz(&cam_xyz).expect("invertible");
+        for (i, row) in m.iter().enumerate() {
+            for (j, v) in row.iter().enumerate() {
+                let want = if i == j { 1.0 } else { 0.0 };
+                assert!((v - want).abs() < 2e-3, "{m:?}");
+            }
+        }
+    }
+
+    /// Camera white lands on output white: every row of `rgb_cam` sums to 1, for any matrix.
+    #[test]
+    fn rows_of_rgb_cam_sum_to_one() {
+        let cam_xyz = [
+            [1.3426, -0.6334, -0.1177],
+            [-0.4244, 1.2136, 0.2371],
+            [0.058, 0.1303, 0.598],
+        ];
+        let m = rgb_cam_from_cam_xyz(&cam_xyz).expect("invertible");
+        for row in m {
+            assert!((row.iter().sum::<f32>() - 1.0).abs() < 1e-5, "{m:?}");
         }
     }
 }
