@@ -42,6 +42,8 @@ pub enum CellAction {
     MakeTop,
     /// Stack by capture time, within this many seconds — `None` takes the time stacks apart.
     StackByTime(Option<u32>),
+    /// Photo merge → HDR on the targets (M10.17a).
+    MergeHdr,
     /// Take every target out of the collection on screen.
     RemoveFromCollection(i64),
     /// Assign a keyword across the targets, or remove it from all of them.
@@ -251,6 +253,17 @@ pub fn cell_menu(
             }
         }
     });
+    // M10.17a: Lightroom's Photo Merge, from the right-click as from the Photo menu.
+    ui.menu_button("Photo merge", |ui| {
+        if ui
+            .add_enabled(n >= 2, egui::Button::new("HDR…"))
+            .on_disabled_hover_text("Select two or more photos")
+            .clicked()
+        {
+            action = Some(CellAction::MergeHdr);
+            ui.close();
+        }
+    });
     let Some(cat) = catalog else {
         return action;
     };
@@ -431,6 +444,14 @@ pub fn apply_cell_action(
         }
         CellAction::MakeTop => app.make_top_of_stack(&id),
         CellAction::StackByTime(secs) => app.stack_by_capture_time(secs),
+        CellAction::MergeHdr => {
+            let targets = app
+                .library
+                .as_ref()
+                .map(|l| menu_targets(l, index))
+                .unwrap_or_default();
+            app.open_hdr_merge_for(&targets, false);
+        }
         CellAction::Reveal => {
             if let Err(e) = rustroom_app::reveal::in_file_manager(&id.path) {
                 app.status = format!("Could not show the file: {e}");

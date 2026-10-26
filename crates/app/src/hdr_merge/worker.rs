@@ -33,10 +33,10 @@ pub enum HdrEvent {
         tinted: Option<image::RgbImage>,
         transforms: Vec<Homography>,
     },
-    /// The merged DNG is at `path`; `edits` are what it opens with.
+    /// The merged DNG is at `path`; `edits` are what it opens with (boxed: an `Edits` is large).
     Done {
         path: PathBuf,
-        edits: Edits,
+        edits: Box<Edits>,
     },
     Failed(String),
     Cancelled,
@@ -199,7 +199,7 @@ impl HdrWorker {
             let ev = match run() {
                 Ok(edits) => HdrEvent::Done {
                     path: plan.output.clone(),
-                    edits,
+                    edits: Box::new(edits),
                 },
                 Err(MergeError::Cancelled) => HdrEvent::Cancelled,
                 Err(e) => HdrEvent::Failed(e.to_string()),

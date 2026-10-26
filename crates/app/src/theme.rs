@@ -407,6 +407,12 @@ pub fn describe(r: &egui::Response, sentence: &str) {
 /// grid and the develop toolbar and are deliberately left alone until the canvas split, where
 /// their call sites are. Two idioms that merely look alike should not be merged into one
 /// helper.
+/// Laid over a picture that is about to be replaced — light, so it reads as a crossfade rather than
+/// "a flash of a black image" (the canvas's dim, 2026-09-29; the HDR preview's, M10.17a).
+pub fn stale_dim() -> egui::Color32 {
+    egui::Color32::from_black_alpha(48)
+}
+
 pub fn hint(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).small());
 }

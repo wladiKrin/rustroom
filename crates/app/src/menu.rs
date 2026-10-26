@@ -44,6 +44,10 @@ pub enum Command {
     ToggleFilmstrip,
     /// Rename the selection's files from a template (M10.8d) — ⌘R.
     RenamePhotos,
+    /// Merge the selected bracket into one HDR photo, through the preview dialog (M10.17a) — ⇧⌘H.
+    MergeHdr,
+    /// The same with the options last used, no dialog — Lightroom's headless merge, ⌥⇧⌘H.
+    MergeHdrLast,
     /// Stack the selection by hand (M10.8c) — ⌘G.
     Stack,
     /// Take apart the hand stacks the selection touches — ⇧⌘G.
@@ -340,6 +344,19 @@ pub fn model_with(recent: &[PathBuf]) -> Vec<Section> {
                 Item::Separator,
                 // M10.8d. ⌘R is safe as a native accelerator — not a text chord.
                 action("Rename…", Command::RenamePhotos, Some(Shortcut::cmd('R'))),
+                // M10.17a. ⇧⌘H rather than Lightroom's ⌃H: ⌘H is the system's Hide. A submenu,
+                // Lightroom's shape, because M10.17b's Panorama joins it.
+                Item::Submenu {
+                    label: "Photo merge".to_owned(),
+                    items: vec![
+                        action("HDR…", Command::MergeHdr, Some(Shortcut::cmd_shift('H'))),
+                        action(
+                            "HDR with last settings",
+                            Command::MergeHdrLast,
+                            Some(Shortcut::cmd_shift('H').with_alt()),
+                        ),
+                    ],
+                },
                 Item::Separator,
                 // M10.8c: stacks by hand. ⌘G is safe as a native accelerator — not a text chord.
                 action("Stack", Command::Stack, Some(Shortcut::cmd('G'))),
@@ -840,5 +857,52 @@ mod tests {
         assert_eq!(checked(Command::ToggleFilmstrip, &shown), Some(true));
         assert_eq!(checked(Command::ToggleFilmstrip, &hidden), Some(false));
         assert_eq!(checked(Command::ZoomIn, &shown), None, "an ordinary action");
+    }
+
+    /// M10.17a: Photo → Photo merge → HDR… ⇧⌘H, and with the last settings ⌥⇧⌘H — chords no system
+    /// shortcut holds (⌘H is Hide, ⌥⌘H Hide others).
+    #[test]
+    fn the_photo_menu_offers_hdr_merge_with_its_shortcuts() {
+        let photo = model()
+            .into_iter()
+            .find(|s| s.title == "Photo")
+            .expect("Photo");
+        let merge = photo
+            .items
+            .iter()
+            .find_map(|i| match i {
+                Item::Submenu { label, items } if label == "Photo merge" => Some(items),
+                _ => None,
+            })
+            .expect("a Photo merge submenu");
+        let find = |c: Command| {
+            merge.iter().find_map(|i| match i {
+                Item::Action {
+                    label,
+                    command,
+                    shortcut,
+                } if *command == c => Some((label.clone(), *shortcut)),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            find(Command::MergeHdr),
+            Some(("HDR…".to_string(), Some(Shortcut::cmd_shift('H'))))
+        );
+        assert_eq!(
+            find(Command::MergeHdrLast),
+            Some((
+                "HDR with last settings".to_string(),
+                Some(Shortcut::cmd_shift('H').with_alt())
+            ))
+        );
+        for c in [Command::MergeHdr, Command::MergeHdrLast] {
+            let sc = crate::shortcuts::default_of(c).expect("bound");
+            assert_eq!(
+                crate::shortcuts::refusal(sc),
+                None,
+                "{c:?} sits on a system chord"
+            );
+        }
     }
 }

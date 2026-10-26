@@ -225,10 +225,19 @@ fn plain_row(bytes: &[u8], bytes_per_sample: usize) -> Vec<f32> {
         .collect()
 }
 
+/// One tile or strip, decoded: where it sits, its size, its samples.
+struct Block {
+    x0: usize,
+    y0: usize,
+    w: usize,
+    h: usize,
+    vals: Vec<f32>,
+}
+
 /// The image's samples, `width * height * 3`, as stored.
 fn samples(b: &[u8], l: &Layout) -> Result<Vec<f32>, DecodeError> {
     let bps = (l.bits / 8) as usize;
-    let decoded: Vec<Result<(usize, usize, usize, usize, Vec<f32>), DecodeError>> = l
+    let decoded: Vec<Result<Block, DecodeError>> = l
         .blocks
         .par_iter()
         .map(|&(x0, y0, bw, bh, off, len)| {
@@ -256,12 +265,24 @@ fn samples(b: &[u8], l: &Layout) -> Result<Vec<f32>, DecodeError> {
                     vals.extend(plain_row(row, bps));
                 }
             }
-            Ok((x0, y0, bw, bh, vals))
+            Ok(Block {
+                x0,
+                y0,
+                w: bw,
+                h: bh,
+                vals,
+            })
         })
         .collect();
     let mut out = vec![0f32; l.width * l.height * 3];
     for block in decoded {
-        let (x0, y0, bw, bh, vals) = block?;
+        let Block {
+            x0,
+            y0,
+            w: bw,
+            h: bh,
+            vals,
+        } = block?;
         for y in 0..bh {
             let gy = y0 + y;
             if gy >= l.height {

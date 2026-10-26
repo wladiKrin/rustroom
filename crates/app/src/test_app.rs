@@ -199,6 +199,7 @@ pub fn for_test() -> RustroomApp {
         export_draft: ExportOptions::default(),
         exporter: None,
         import: None,
+        hdr: Default::default(),
         ai: Default::default(),
         denoise: Default::default(),
         removals: Default::default(),

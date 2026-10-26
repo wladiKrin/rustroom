@@ -198,6 +198,7 @@ impl RustroomApp {
             export_draft: settings.export.clone(),
             exporter: None,
             import: None,
+            hdr: Default::default(),
             ai: Default::default(),
             denoise: Default::default(),
             removals: Default::default(),

@@ -35,6 +35,7 @@ pub mod edits;
 pub mod export;
 mod export_size;
 mod export_watermark;
+pub mod hdr_merge;
 mod immich_cache;
 pub mod import;
 pub mod info;
@@ -86,6 +87,8 @@ pub enum Modal {
     ExportSettings,
     /// Importing from a card or a folder (M9.12). Its state lives in `RustroomApp::import`.
     Import,
+    /// Photo merge → HDR's preview (M10.17a). Its state lives in `RustroomApp::hdr`.
+    HdrMerge,
     /// Offering to download the AI models a mask needs (M9.13). State in `RustroomApp::ai`.
     AiDownload,
     /// An upload did not confirm, and the file is at `at`. Raised for the **first** one in a run.
@@ -233,6 +236,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Sync,
         Export,
         Import,
+        HdrMerge,
         AiDownload,
         SaveExport,
         ConfirmDeleteExport,
@@ -260,6 +264,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::SyncSettings => Which::Sync,
         Modal::ExportSettings => Which::Export,
         Modal::Import => Which::Import,
+        Modal::HdrMerge => Which::HdrMerge,
         Modal::AiDownload => Which::AiDownload,
         Modal::UploadUnconfirmed { .. } => Which::UploadUnconfirmed,
         Modal::SaveExportPreset { .. } => Which::SaveExport,
@@ -291,6 +296,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::Sync => edits::sync(app, ctx),
         Which::Export => export::settings(app, ctx),
         Which::Import => import::show(app, ctx),
+        Which::HdrMerge => hdr_merge::show(app, ctx),
         Which::AiDownload => ai_download::show(app, ctx),
         Which::SaveExport => export::save_preset(app, ctx),
         Which::ConfirmDeleteExport => export::confirm_delete(app, ctx),

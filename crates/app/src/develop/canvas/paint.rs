@@ -241,11 +241,8 @@ fn paint_stale(ui: &mut egui::Ui, stale: Option<&egui::TextureHandle>) {
             // ⚠ A light dim (2026-09-29): at 140 the previous frame read as "a flash of a black
             // image" for the fraction of a second a preview takes. Lightly dimmed it reads as a
             // crossfade, and with the neighbours fetched ahead it is rarely seen at all.
-            ui.painter().rect_filled(
-                rect,
-                egui::CornerRadius::ZERO,
-                egui::Color32::from_black_alpha(48),
-            );
+            ui.painter()
+                .rect_filled(rect, egui::CornerRadius::ZERO, crate::theme::stale_dim());
         }
         None => {
             ui.centered_and_justified(|ui| {

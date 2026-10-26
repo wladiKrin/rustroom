@@ -575,12 +575,12 @@ mod tests {
         };
         let cam = decode_camera(&path, &DecodeOptions::preview()).expect("camera decode");
         let ours = color::camera::rgb_cam_from_cam_xyz(&cam.cam_xyz).expect("invertible");
-        let mut worst = 0f32;
-        for i in 0..3 {
-            for j in 0..3 {
-                worst = worst.max((ours[i][j] - cam.rgb_cam[i][j]).abs());
-            }
-        }
+        let worst = ours
+            .iter()
+            .flatten()
+            .zip(cam.rgb_cam.iter().flatten())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0f32, f32::max);
         eprintln!("rgb_cam ours vs libraw: worst {worst}");
         assert!(worst < 1e-4, "ours {ours:?} libraw {:?}", cam.rgb_cam);
     }
@@ -596,14 +596,8 @@ mod tests {
         export::dng::save(&img, &path).unwrap();
         let c = decode_camera(&path, &DecodeOptions::linear_scene()).expect("decodes");
         let back = color::camera::rgb_cam_from_cam_xyz(&c.cam_xyz).expect("a usable cam_xyz");
-        for i in 0..3 {
-            for j in 0..3 {
-                assert!(
-                    (back[i][j] - c.rgb_cam[i][j]).abs() < 1e-4,
-                    "{back:?} vs {:?}",
-                    c.rgb_cam
-                );
-            }
+        for (a, b) in back.iter().flatten().zip(c.rgb_cam.iter().flatten()) {
+            assert!((a - b).abs() < 1e-4, "{back:?} vs {:?}", c.rgb_cam);
         }
     }
 

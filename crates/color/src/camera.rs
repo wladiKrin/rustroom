@@ -496,13 +496,8 @@ mod tests {
         ];
         let rgb_cam = rgb_cam_from_cam_xyz(&cam_xyz).unwrap();
         let back = rgb_cam_from_cam_xyz(&cam_xyz_from_rgb_cam(&rgb_cam).unwrap()).unwrap();
-        for i in 0..3 {
-            for j in 0..3 {
-                assert!(
-                    (back[i][j] - rgb_cam[i][j]).abs() < 1e-4,
-                    "{back:?} vs {rgb_cam:?}"
-                );
-            }
+        for (a, b) in back.iter().flatten().zip(rgb_cam.iter().flatten()) {
+            assert!((a - b).abs() < 1e-4, "{back:?} vs {rgb_cam:?}");
         }
     }
 }
