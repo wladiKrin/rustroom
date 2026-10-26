@@ -308,7 +308,10 @@ impl RustroomApp {
                     lib.scan.push(entry);
                 }
             }
-            self.rebuild_entries(Some(&id));
+            // ⚠ The Library selects the result (Lightroom's way); Develop keeps the selection, or the
+            // filmstrip would highlight a photo the canvas is not showing.
+            let select = (self.view == crate::AppView::Library).then_some(&id);
+            self.rebuild_entries(select);
             if job.settings.create_stack {
                 let mut ids = vec![id.clone()];
                 ids.extend(job.plan.frames.iter().cloned().map(PhotoId::original));
@@ -413,6 +416,38 @@ mod tests {
             .and_then(|i| lib.entries.get(i))
             .map(|e| e.id.path.clone());
         assert_eq!(active.as_ref(), Some(&out), "the result is selected");
+    }
+
+    /// In Develop the open photo keeps the filmstrip's highlight: a merge landing in the background
+    /// must not move the selection off the photo being edited (the Library selects the result).
+    #[test]
+    fn a_merge_landing_in_develop_keeps_the_selection() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        let (dir, files) = bracket("develop");
+        open_all(&mut app, &ctx, dir.clone());
+        app.open_hdr_merge(true);
+        app.library.as_mut().unwrap().selection.select_indices(&[1]);
+        app.view = crate::AppView::Develop;
+        run_to_end(&mut app, &ctx);
+        assert!(dir.join("B0-HDR.dng").exists(), "{}", app.status);
+        let lib = app.library.as_ref().unwrap();
+        let active = lib
+            .selection
+            .active()
+            .and_then(|i| lib.entries.get(i))
+            .map(|e| e.id.path.clone());
+        assert_eq!(
+            active.as_ref(),
+            Some(&files[1]),
+            "the selection moved under Develop"
+        );
+        assert!(
+            lib.entries
+                .iter()
+                .any(|e| e.id.path == dir.join("B0-HDR.dng")),
+            "the row is there"
+        );
     }
 
     #[test]
