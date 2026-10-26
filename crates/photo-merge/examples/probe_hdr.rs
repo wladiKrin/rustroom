@@ -2,8 +2,8 @@
 //!
 //! `cargo run --release --example probe_hdr -- <out-dir> [--half] <raw…>`: per frame its EXIF exposure,
 //! the alignment (corner motion, the fitted offset, overlap, residual) and the measured scale; then
-//! the merge at every deghost level, a 1600-px render of each (overlay in red) and a sheet of 4×
-//! crops — None · Low · Medium · High side by side — where the overlay marks most.
+//! the merge at every deghost level, a 1600-px render of each (overlay in red) and two sheets of 4×
+//! crops — None · Low · Medium · High side by side, plain and with the overlay — where High marks most.
 
 use photo_merge::align::{self, COARSEST};
 use photo_merge::deghost::Deghost;
@@ -104,7 +104,7 @@ fn main() {
         )
         .expect("merges");
         let took = t.elapsed().as_secs_f32();
-        let mut img = photo_merge::preview::render(
+        let img = photo_merge::preview::render(
             &hdr::to_prophoto(&m, &d),
             &edit_model::Edits::default(),
             1600,
@@ -119,17 +119,19 @@ fn main() {
             level.label(),
             100.0 * marked
         );
+        let mut tinted = img.clone();
         if let Some(o) = &m.overlay {
-            photo_merge::preview::tint(&mut img, o);
+            photo_merge::preview::tint(&mut tinted, o);
         }
-        img.save(out.join(format!("{}.jpg", level.label().to_lowercase())))
+        tinted
+            .save(out.join(format!("{}.jpg", level.label().to_lowercase())))
             .unwrap();
-        renders.push(img);
+        renders.push((img, tinted));
         overlays.push(m.overlay);
     }
 
     // Where High marks most: the 160 × 120 window of the render with the most overlay.
-    let (rw, rh) = (renders[0].width(), renders[0].height());
+    let (rw, rh) = (renders[0].0.width(), renders[0].0.height());
     let (cw, ch) = (160u32, 120u32);
     let mut best = (0u32, 0u32, -1f32);
     if let Some(o) = overlays[3].as_ref() {
@@ -147,18 +149,26 @@ fn main() {
             }
         }
     }
+    // Two sheets: the merge as it is (does the ghost go?) and with the overlay (what was taken).
     let k = 4;
-    let mut sheet = image::RgbImage::new(cw * k * 4 + 3 * 8, ch * k);
-    for (n, img) in renders.iter().enumerate() {
-        let x0 = n as u32 * (cw * k + 8);
-        for y in 0..ch * k {
-            for x in 0..cw * k {
-                let p = *img.get_pixel((best.0 + x / k).min(rw - 1), (best.1 + y / k).min(rh - 1));
-                sheet.put_pixel(x0 + x, y, p);
+    for (file, tinted) in [
+        ("deghost-sheet.jpg", false),
+        ("deghost-overlay-sheet.jpg", true),
+    ] {
+        let mut sheet = image::RgbImage::new(cw * k * 4 + 3 * 8, ch * k);
+        for (n, (plain, tint)) in renders.iter().enumerate() {
+            let img = if tinted { tint } else { plain };
+            let x0 = n as u32 * (cw * k + 8);
+            for y in 0..ch * k {
+                for x in 0..cw * k {
+                    let p =
+                        *img.get_pixel((best.0 + x / k).min(rw - 1), (best.1 + y / k).min(rh - 1));
+                    sheet.put_pixel(x0 + x, y, p);
+                }
             }
         }
+        sheet.save(out.join(file)).unwrap();
     }
-    sheet.save(out.join("deghost-sheet.jpg")).unwrap();
     println!(
         "sheet at render ({}, {}) — None · Low · Medium · High",
         best.0, best.1
