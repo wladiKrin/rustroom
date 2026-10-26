@@ -127,39 +127,61 @@ pub fn reference_index(evs: &[Option<f32>], brightness: &[f32], active: Option<u
     middle.first().copied().unwrap_or(0)
 }
 
-/// Decode every photo of the bracket as libraw's camera-space output, one at a time; refuse two
-/// sizes or two cameras.
+/// How many photos are decoded at once. libraw demosaics a frame on one thread, so three at a time
+/// is nearly three times as fast; more would cost ~0.5 GB of libraw's buffers each for little more.
+const DECODE_AT_ONCE: usize = 3;
+
+/// Decode every photo of the bracket as libraw's camera-space output, [`DECODE_AT_ONCE`] at a time;
+/// refuse two sizes or two cameras. `Progress::Decoding` reports how many are done.
 pub fn decode_all(
     paths: &[PathBuf],
     half: bool,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(Progress),
 ) -> Result<Decoded, MergeError> {
+    use rayon::prelude::*;
     let opts = DecodeOptions {
         half_size: half,
         ..DecodeOptions::linear_scene()
     };
-    let (mut frames, mut metas) = (Vec::new(), Vec::new());
-    for (i, p) in paths.iter().enumerate() {
+    let mut cams: Vec<CameraFrame> = Vec::with_capacity(paths.len());
+    for chunk in paths.chunks(DECODE_AT_ONCE) {
         cancelled(cancel)?;
         progress(Progress::Decoding {
-            done: i,
+            done: cams.len(),
             total: paths.len(),
         });
-        cancelled(cancel)?;
-        let mut c =
-            raw_decode::decode_camera(p, &opts).map_err(|e| MergeError::Decode(p.clone(), e))?;
-        if let Some(first) = metas.first() {
-            let first: &CameraFrame = first;
-            if (first.width, first.height) != (c.width, c.height) {
-                return Err(MergeError::Sizes);
-            }
-            if (&first.metadata.make, &first.metadata.model)
-                != (&c.metadata.make, &c.metadata.model)
-            {
-                return Err(MergeError::Cameras);
-            }
+        let decoded: Vec<Result<CameraFrame, MergeError>> = chunk
+            .par_iter()
+            .map(|p| {
+                raw_decode::decode_camera(p, &opts).map_err(|e| MergeError::Decode(p.clone(), e))
+            })
+            .collect();
+        for c in decoded {
+            cams.push(c?);
         }
+    }
+    cancelled(cancel)?;
+    progress(Progress::Decoding {
+        done: cams.len(),
+        total: paths.len(),
+    });
+    let first = &cams[0];
+    let (size, camera) = (
+        (first.width, first.height),
+        (first.metadata.make.clone(), first.metadata.model.clone()),
+    );
+    if cams.iter().any(|c| (c.width, c.height) != size) {
+        return Err(MergeError::Sizes);
+    }
+    if cams
+        .iter()
+        .any(|c| (&c.metadata.make, &c.metadata.model) != (&camera.0, &camera.1))
+    {
+        return Err(MergeError::Cameras);
+    }
+    let mut frames = Vec::with_capacity(cams.len());
+    for c in &mut cams {
         let samples = std::mem::take(&mut c.samples);
         frames.push(Frame::new(
             c.width,
@@ -168,12 +190,10 @@ pub fn decode_all(
             c.pre_mul,
             exposure_ev(&c.capture),
         ));
-        metas.push(c);
     }
-    cancelled(cancel)?;
     Ok(Decoded {
         frames,
-        metas,
+        metas: cams,
         half,
     })
 }
@@ -192,8 +212,7 @@ fn brightness(f: &Frame) -> f32 {
     (s / n.max(1) as f64) as f32
 }
 
-/// Align, measure, deghost and merge `d`. `active` breaks a tie for the reference; `init` starts each
-/// frame's alignment (reference → frame, at `d`'s size) — the preview's, rescaled.
+/// Align, measure, deghost and merge `d` — [`align_all`] then [`merge_aligned`].
 pub fn merge(
     d: &Decoded,
     active: Option<usize>,
@@ -202,6 +221,32 @@ pub fn merge(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(Progress),
 ) -> Result<Merged, MergeError> {
+    let a = align_all(d, active, opts, init, cancel, progress)?;
+    merge_aligned(d, &a, opts.deghost, cancel, progress)
+}
+
+/// How a bracket sits on its reference — what a change of Deghost keeps (the dialog re-merges in
+/// well under a second without re-aligning).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Aligned {
+    pub reference: usize,
+    /// Reference pixels → each frame's, at the decode's size.
+    pub transforms: Vec<Homography>,
+    /// Each frame's `reference / frame` exposure.
+    pub scales: Vec<f32>,
+}
+
+/// Choose the reference and align every frame to it, measuring each one's exposure. `active` breaks
+/// a tie for the reference; `init` starts each frame's alignment (reference → frame, at `d`'s size)
+/// — the preview's, rescaled.
+pub fn align_all(
+    d: &Decoded,
+    active: Option<usize>,
+    opts: &HdrOptions,
+    init: Option<&[Homography]>,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<Aligned, MergeError> {
     let n = d.frames.len();
     let evs: Vec<Option<f32>> = d.frames.iter().map(|f| f.ev).collect();
     let bright: Vec<f32> = d.frames.iter().map(brightness).collect();
@@ -299,16 +344,31 @@ pub fn merge(
         })
         .collect();
 
-    progress(Progress::Merging);
-    cancelled(cancel)?;
-    let (ghost, overlay) = deghost::masks(&d.frames, reference, &transforms, &scales, opts.deghost);
-    cancelled(cancel)?;
-    let image = merging::merge(&d.frames, reference, &transforms, &scales, &ghost);
-    Ok(Merged {
-        image,
+    Ok(Aligned {
         reference,
         transforms,
         scales,
+    })
+}
+
+/// Deghost and merge an aligned bracket.
+pub fn merge_aligned(
+    d: &Decoded,
+    a: &Aligned,
+    level: Deghost,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<Merged, MergeError> {
+    progress(Progress::Merging);
+    cancelled(cancel)?;
+    let (ghost, overlay) = deghost::masks(&d.frames, a.reference, &a.transforms, &a.scales, level);
+    cancelled(cancel)?;
+    let image = merging::merge(&d.frames, a.reference, &a.transforms, &a.scales, &ghost);
+    Ok(Merged {
+        image,
+        reference: a.reference,
+        transforms: a.transforms.clone(),
+        scales: a.scales.clone(),
         overlay,
     })
 }
@@ -470,7 +530,8 @@ mod tests {
         let paths = dng_bracket("cancel", 64, 48, &[-1.0, 0.0]);
         let cancel = AtomicBool::new(false);
         let r = decode_all(&paths, false, &cancel, &mut |p| {
-            if let Progress::Decoding { done: 1, .. } = p {
+            // ⚠ Frames decode three at a time, so progress comes per chunk: cancel at the first.
+            if let Progress::Decoding { done: 0, .. } = p {
                 cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             }
         });
