@@ -3839,6 +3839,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "photo-merge"
+version = "0.1.0"
+dependencies = [
+ "color 0.1.0",
+ "core-image",
+ "pipeline",
+ "raw-decode",
+ "rayon",
+ "test-dir",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
