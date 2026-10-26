@@ -324,12 +324,19 @@ pub(crate) fn decode_camera(
         ..opts.clone()
     };
     let (samples, f) = process(bytes, &opts, <[u16]>::to_vec)?;
+    // ⚠ libraw leaves `cam_xyz` empty for a DNG — it builds `rgb_cam` from the file's matrix directly
+    // (found by M10.17a's DNG-bracket test: the merge wrote an all-zero ColorMatrix1). Derived back
+    // from `rgb_cam`, it gives the same matrix through dcraw's step.
+    let cam_xyz = match color::camera::invert(&f.cam_xyz) {
+        Some(_) => f.cam_xyz,
+        None => color::camera::cam_xyz_from_rgb_cam(&f.rgb_cam).unwrap_or(f.cam_xyz),
+    };
     Ok(crate::CameraFrame {
         width: f.width,
         height: f.height,
         samples,
         pre_mul: f.pre_mul,
-        cam_xyz: f.cam_xyz,
+        cam_xyz,
         rgb_cam: f.rgb_cam,
         metadata: f.metadata,
         capture: f.capture,

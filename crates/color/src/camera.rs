@@ -168,6 +168,22 @@ pub fn rgb_cam_from_cam_xyz(cam_xyz: &[[f32; 3]; 3]) -> Option<[[f32; 3]; 3]> {
     invert(&normalize_rows(cam_rgb))
 }
 
+/// An XYZ → camera matrix that [`rgb_cam_from_cam_xyz`] turns back into `rgb_cam` — for a file
+/// libraw gives a camera → sRGB matrix and no `cam_xyz` (a DNG, M10.17a): `rgb_cam⁻¹ · xyz_rgb⁻¹`.
+/// Its rows are scaled so the camera's reading of sRGB white is 1 in each channel.
+pub fn cam_xyz_from_rgb_cam(rgb_cam: &[[f32; 3]; 3]) -> Option<[[f32; 3]; 3]> {
+    let cam_rgb = invert(rgb_cam)?;
+    let xyz_rgb = DCRAW_XYZ_RGB.map(|r| r.map(|v| v as f32));
+    let rgb_xyz = invert(&xyz_rgb)?;
+    let mut out = [[0.0f32; 3]; 3];
+    for (i, row) in out.iter_mut().enumerate() {
+        for (j, v) in row.iter_mut().enumerate() {
+            *v = (0..3).map(|k| cam_rgb[i][k] * rgb_xyz[k][j]).sum();
+        }
+    }
+    Some(out)
+}
+
 /// The colour temperature implied by a camera neutral, solved the way the DNG spec does.
 ///
 /// ⚠⚠ **Iterative because the answer depends on itself**: the matrix used to convert the neutral
@@ -466,6 +482,27 @@ mod tests {
         let m = rgb_cam_from_cam_xyz(&cam_xyz).expect("invertible");
         for row in m {
             assert!((row.iter().sum::<f32>() - 1.0).abs() < 1e-5, "{m:?}");
+        }
+    }
+
+    /// M10.17a: for a DNG, libraw computes `rgb_cam` and leaves `cam_xyz` empty; deriving one back
+    /// must give the same `rgb_cam` through dcraw's step.
+    #[test]
+    fn cam_xyz_from_rgb_cam_round_trips() {
+        let cam_xyz = [
+            [1.3426, -0.6334, -0.1177],
+            [-0.4244, 1.2136, 0.2371],
+            [0.058, 0.1303, 0.598],
+        ];
+        let rgb_cam = rgb_cam_from_cam_xyz(&cam_xyz).unwrap();
+        let back = rgb_cam_from_cam_xyz(&cam_xyz_from_rgb_cam(&rgb_cam).unwrap()).unwrap();
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!(
+                    (back[i][j] - rgb_cam[i][j]).abs() < 1e-4,
+                    "{back:?} vs {rgb_cam:?}"
+                );
+            }
         }
     }
 }

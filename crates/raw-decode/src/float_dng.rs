@@ -496,6 +496,28 @@ mod tests {
         assert!(brightest > 3.0, "the highlights were clamped: {brightest}");
     }
 
+    /// One tile wider than the whole image — the shape libraw misreads in M9.10's DNGs — reads back.
+    #[test]
+    fn an_image_narrower_than_a_tile_reads_back() {
+        let (w, h) = (100, 60);
+        let d = data(w, h);
+        let path = tmp("narrow.dng");
+        write(&path, w, h, &d);
+        let got = decode_raw(&path, &DecodeOptions::linear_scene()).expect("reads");
+        let m = color::camera::camera_to_prophoto(
+            color::camera::rgb_cam_from_cam_xyz(&CAM_XYZ).unwrap(),
+        );
+        let k = mul();
+        let (src, out) = (&d[(37 * w + 81) * 3..], got.image.pixel(81, 37));
+        let want = color::spaces::apply(&m, [src[0] * k[0], src[1] * k[1], src[2] * k[2]]);
+        for c in 0..3 {
+            assert!(
+                (out[c] - want[c]).abs() <= 2e-3 * want[c].abs().max(1e-3),
+                "{out:?} vs {want:?}"
+            );
+        }
+    }
+
     #[test]
     fn half_size_averages_two_by_two() {
         let (w, h) = (300, 200);

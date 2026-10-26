@@ -7,8 +7,10 @@ pub mod align;
 pub mod deghost;
 pub mod exposure;
 pub mod frame;
+pub mod hdr;
 pub mod homography;
 pub mod merge;
+pub mod preview;
 pub mod pyramid;
 #[cfg(test)]
 mod synth;

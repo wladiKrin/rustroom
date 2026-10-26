@@ -585,6 +585,28 @@ mod tests {
         assert!(worst < 1e-4, "ours {ours:?} libraw {:?}", cam.rgb_cam);
     }
 
+    /// M10.17a: libraw leaves `cam_xyz` empty for a DNG; the camera decode derives one that gives
+    /// libraw's own `rgb_cam` back — a merge of DNGs must write a usable colour matrix.
+    #[test]
+    fn a_dngs_camera_decode_carries_a_usable_cam_xyz() {
+        let path = test_dir::path("camera-decode-dng").join("rendered.dng");
+        let mut img = core_image::ImageBuf::new(40, 30);
+        img.set_pixel(0, 0, [1.0, 1.0, 1.0]);
+        img.set_pixel(1, 0, [0.2, 0.4, 0.6]);
+        export::dng::save(&img, &path).unwrap();
+        let c = decode_camera(&path, &DecodeOptions::linear_scene()).expect("decodes");
+        let back = color::camera::rgb_cam_from_cam_xyz(&c.cam_xyz).expect("a usable cam_xyz");
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!(
+                    (back[i][j] - c.rgb_cam[i][j]).abs() < 1e-4,
+                    "{back:?} vs {:?}",
+                    c.rgb_cam
+                );
+            }
+        }
+    }
+
     #[test]
     fn decodes_fixture_to_nonempty_image() {
         let Some(path) = fixture() else {

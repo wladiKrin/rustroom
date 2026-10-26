@@ -9,10 +9,14 @@ license.workspace = true
 [dependencies]
 color = { path = "../color" }
 core-image = { path = "../core-image" }
+edit-model = { path = "../edit-model" }
+export = { path = "../export" }
+image = { workspace = true }
 pipeline = { path = "../pipeline" }
 raw-decode = { path = "../raw-decode" }
 rayon = { workspace = true }
 serde = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 test-dir = { path = "../test-dir" }

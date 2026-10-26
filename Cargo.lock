@@ -3844,11 +3844,15 @@ version = "0.1.0"
 dependencies = [
  "color 0.1.0",
  "core-image",
+ "edit-model",
+ "export",
+ "image",
  "pipeline",
  "raw-decode",
  "rayon",
  "serde",
  "test-dir",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
