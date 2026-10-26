@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 mod backend_rsraw;
+mod float_dng;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
@@ -317,9 +318,21 @@ impl Default for DecodeOptions {
 /// ⚠ [`DecodeOptions::display`] still asks libraw for sRGB, because it feeds `rustroom decode`'s
 /// viewable dump rather than the pipeline. The two paths differ deliberately.
 /// With [`DecodeOptions::display`] they are sRGB-encoded (display-referred).
+///
+/// ⚠ M10.17a: a floating-point linear DNG — the HDR merge's result — is read by
+/// [`float_dng`](crate::float_dng), never libraw, which clips it (see that module).
 pub fn decode_raw(path: &Path, opts: &DecodeOptions) -> Result<DecodedRaw, DecodeError> {
     let bytes = std::fs::read(path)?;
+    if float_dng::is_float_linear(&bytes) {
+        return float_dng::decode(&bytes, opts);
+    }
     backend_rsraw::decode(&bytes, opts)
+}
+
+/// Whether `path` is a floating-point linear DNG — an HDR merge's result — which Rustroom reads
+/// itself. Reads the file's header and IFDs (a whole-file read today, as every RAW path here).
+pub fn is_float_dng(path: &Path) -> bool {
+    std::fs::read(path).is_ok_and(|b| float_dng::is_float_linear(&b))
 }
 
 /// Decode a RAW to libraw's camera-space output — see [`CameraFrame`]. `camera_native` and

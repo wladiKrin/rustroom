@@ -4157,11 +4157,15 @@ dependencies = [
  "core-image",
  "edit-model",
  "export",
+ "flate2",
+ "half",
  "image",
  "pipeline",
+ "rayon",
  "rsraw",
  "serde",
  "serde_json",
+ "test-dir",
  "thiserror 2.0.19",
 ]
 

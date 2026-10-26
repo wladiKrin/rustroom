@@ -81,7 +81,7 @@ pub(crate) fn extract_preview(bytes: &[u8]) -> Result<Thumbnail, DecodeError> {
 /// ⚠ Returns `None` on any failure — a missing, malformed, or ForwardMatrix-less profile falls
 /// back to libraw's matrix rather than failing the decode. A photo that renders slightly
 /// differently beats a photo that does not open, and the fallback is the well-tested C1 path.
-fn profile_transform(path: &Path, cam_mul: [f32; 3]) -> Option<ProfileTransform> {
+pub(crate) fn profile_transform(path: &Path, cam_mul: [f32; 3]) -> Option<ProfileTransform> {
     let p = camera_profile::CameraProfile::from_file(path).ok()?;
     let forward1 = p.forward1?;
     let forward2 = p.forward2?;
@@ -124,9 +124,9 @@ fn profile_transform(path: &Path, cam_mul: [f32; 3]) -> Option<ProfileTransform>
 }
 
 /// What a camera profile contributes to the decode: a matrix, and optionally a look-up table.
-struct ProfileTransform {
-    matrix: [[f32; 3]; 3],
-    hue_sat: Option<color::huesatmap::Table>,
+pub(crate) struct ProfileTransform {
+    pub matrix: [[f32; 3]; 3],
+    pub hue_sat: Option<color::huesatmap::Table>,
 }
 
 /// What libraw knew once it had processed a file, beside the pixels.
@@ -351,7 +351,10 @@ pub(crate) fn decode_camera(
 /// control** — where `cam_xyz` gives 4762 K at 0.015 off, a plausible illuminant. This is the
 /// same matrix and the same reciprocal the DNG spec uses, and that `profile_transform` above
 /// already solves against.
-fn as_shot_illuminant(cam_xyz: &[[f32; 3]; 3], cam_mul: [f32; 3]) -> Option<color::wb::Illuminant> {
+pub(crate) fn as_shot_illuminant(
+    cam_xyz: &[[f32; 3]; 3],
+    cam_mul: [f32; 3],
+) -> Option<color::wb::Illuminant> {
     if cam_mul.iter().any(|v| !v.is_finite() || *v <= 0.0) {
         return None;
     }
