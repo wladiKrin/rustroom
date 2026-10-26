@@ -4505,6 +4505,7 @@ dependencies = [
  "export",
  "image",
  "lens-profile",
+ "photo-merge",
  "pipeline",
  "raw-decode",
 ]

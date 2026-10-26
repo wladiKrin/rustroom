@@ -534,4 +534,55 @@ mod tests {
         eprintln!("one-frame merge vs the raw: worst {worst:.5} over {n} px");
         assert!(worst < 2e-3, "{worst}");
     }
+
+    /// ⚠⚠ The author's own brackets: every frame aligns over most of the reference, and its measured
+    /// exposure agrees with an independent one — the plain median ratio of the frames' raw green,
+    /// pixel for pixel, no alignment (they barely moved). ⚠ Not with EXIF: on DSCF7753–55 the file
+    /// says 1/80 against 1/60 and the pixels say the same exposure (+0.002 EV), measured three ways.
+    /// ⚠ Gated on `HDR_FIXTURE` — the bracket's files joined by `:` — and skips without it.
+    #[test]
+    fn a_real_bracket_aligns_and_measures_like_its_pixels() {
+        let Ok(list) = std::env::var("HDR_FIXTURE") else {
+            eprintln!("skipping: set HDR_FIXTURE=a.raw:b.raw:c.raw to run this test");
+            return;
+        };
+        let paths: Vec<std::path::PathBuf> =
+            list.split(':').map(std::path::PathBuf::from).collect();
+        let cancel = AtomicBool::new(false);
+        let d = decode_all(&paths, true, &cancel, &mut |_| {}).unwrap();
+        let evs: Vec<Option<f32>> = d.frames.iter().map(|f| f.ev).collect();
+        let r = reference_index(&evs, &vec![0.0; evs.len()], None);
+        let pyr: Vec<LumPyramid> = d
+            .frames
+            .iter()
+            .map(|f| LumPyramid::build(f, COARSEST))
+            .collect();
+        for i in (0..paths.len()).filter(|&i| i != r) {
+            let a = align::align(&pyr[r], &pyr[i], None, 0);
+            let scale = exposure::measure(&d.frames[r], &d.frames[i], &a);
+            let (fr, ff) = (&d.frames[r], &d.frames[i]);
+            let mut ratios: Vec<f32> = Vec::new();
+            for y in (0..fr.height).step_by(7) {
+                for x in (0..fr.width).step_by(7) {
+                    let (p, q) = (fr.raw(x, y)[1], ff.raw(x, y)[1]);
+                    if !fr.clipped(x, y)
+                        && !ff.clipped(x, y)
+                        && (0.05..0.7).contains(&p)
+                        && (0.05..0.7).contains(&q)
+                    {
+                        ratios.push(p / q);
+                    }
+                }
+            }
+            ratios.sort_by(|a, b| a.total_cmp(b));
+            let naive = ratios[ratios.len() / 2];
+            eprintln!(
+                "{}: overlap {:.3}, scale {scale:.4}, unaligned {naive:.4}",
+                paths[i].display(),
+                a.overlap
+            );
+            assert!(a.overlap > 0.5, "overlap {}", a.overlap);
+            assert!((scale / naive - 1.0).abs() < 0.03, "{scale} vs {naive}");
+        }
+    }
 }

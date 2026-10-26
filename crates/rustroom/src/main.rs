@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 mod format_arg;
+mod merge_hdr;
 mod resampler_arg;
 mod space_arg;
 
@@ -56,6 +57,24 @@ enum Command {
         #[arg(long)]
         resampler: Option<String>,
     },
+    /// Merge a bracket of RAWs into one floating-point HDR DNG (M10.17a).
+    MergeHdr {
+        /// The bracket's RAW files, two or more.
+        #[arg(required = true, num_args = 2..)]
+        inputs: Vec<PathBuf>,
+        /// The DNG to write.
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Deghost: none, low, medium, high.
+        #[arg(long, default_value = "none")]
+        deghost: String,
+        /// Keep every frame where it is (a tripod).
+        #[arg(long)]
+        no_align: bool,
+        /// Merge half-size decodes — the dialog's preview — instead of full ones.
+        #[arg(long)]
+        half: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -81,6 +100,13 @@ fn main() -> Result<()> {
             space.as_deref(),
             resampler.as_deref(),
         ),
+        Command::MergeHdr {
+            inputs,
+            output,
+            deghost,
+            no_align,
+            half,
+        } => merge_hdr::run(&inputs, &output, &deghost, !no_align, half),
     }
 }
 
