@@ -50,6 +50,7 @@ pub mod full_res;
 pub mod ghost;
 pub mod grade_view;
 pub mod grid_nav;
+pub mod hdr_merge;
 pub mod histogram;
 pub mod history;
 pub mod history_store;

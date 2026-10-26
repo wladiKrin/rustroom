@@ -405,6 +405,14 @@ fn settings_round_trip_carries_the_export_options() {
         // Every field non-default, so a re-defaulted one cannot pass.
         // Non-default, so a re-defaulted field cannot pass.
         rename_template: "Trip-{seq:4}".into(),
+        // Every field non-default, so a re-defaulted one cannot pass.
+        hdr: crate::hdr_merge::HdrSettings {
+            auto_align: false,
+            auto_settings: false,
+            deghost: photo_merge::deghost::Deghost::High,
+            overlay: true,
+            create_stack: true,
+        },
         // Non-default, with ⌥ and a removal, so a re-defaulted field cannot pass.
         shortcuts: vec![
             crate::shortcuts::Rebinding {
@@ -433,6 +441,16 @@ fn settings_round_trip_carries_the_export_options() {
     };
     store.save(&s).unwrap();
     assert_eq!(store.load(), s);
+}
+
+/// M10.17a: a settings file from before the HDR merge opens its dialog with Lightroom's defaults.
+#[test]
+fn a_settings_file_from_before_hdr_merge_gets_lightrooms_defaults() {
+    let s: Settings = serde_json::from_str("{}").unwrap();
+    assert_eq!(s.hdr, crate::hdr_merge::HdrSettings::default());
+    let partial: Settings = serde_json::from_str(r#"{"hdr": {"deghost": "Medium"}}"#).unwrap();
+    assert_eq!(partial.hdr.deghost, photo_merge::deghost::Deghost::Medium);
+    assert!(partial.hdr.auto_align, "a missing option is its default");
 }
 
 /// ⚠⚠ The trap: a field-level `#[serde(default)]` on a `u32` yields **0**, i.e. a cache that
