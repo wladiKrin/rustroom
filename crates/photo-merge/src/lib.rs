@@ -4,8 +4,11 @@
 //! ⚠ Zero GUI: `rustroom-cli merge-hdr`, the app's worker and the tests drive it.
 
 pub mod align;
+pub mod deghost;
+pub mod exposure;
 pub mod frame;
 pub mod homography;
+pub mod merge;
 pub mod pyramid;
 #[cfg(test)]
 mod synth;

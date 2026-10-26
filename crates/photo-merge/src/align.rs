@@ -4,9 +4,10 @@
 //! **The method** (spec M10.17a): on log luminance ([`LumPyramid`]), the frame is modelled as the
 //! reference moved by `H` and offset by `b` stops: `Lf(H·x) ≈ Lref(x) + b`. Coarsest level first, an
 //! exhaustive search for the shift (±25 % of the frame) by zero-mean normalised cross-correlation,
-//! which the exposure offset cannot fool; then, level by level down to `finest`, Gauss–Newton with
-//! Tukey-biweight weights (a moving person gets no vote once it is clearly not the scene), centred on the
-//! frame and scaled by half its long edge so every parameter is of order one.
+//! which the exposure offset cannot fool, keeping several peaks ([`start`]); then, level by level
+//! down to `finest`, Gauss–Newton with Tukey-biweight weights (a moving person gets no vote once it is
+//! clearly not the scene), in coordinates centred on the frame and scaled by half its long edge so
+//! every parameter is of order one.
 //!
 //! A **similarity** (shift, turn, scale) is fitted through every level first; the full 8-parameter
 //! homography then refines it at the finest two, and is kept only when its robust residual is at
