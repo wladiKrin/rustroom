@@ -34,6 +34,12 @@ epaint_default_fonts = "0.35"
 # silently wrong: the CRC-32 argument again.
 chrono = "0.4.45"
 
+# ⚠ M10.17a's float DNG: half-precision samples and Deflate. Both already in this tree (`half` via
+# the GPU stack, `flate2` via `png`), so they add no compile unit.
+half = "2"
+flate2 = "1"
+rayon = { workspace = true }
+
 [dev-dependencies]
 # M10.7c: every test directory comes from here — unique per test and per run, and cleaned up.
 test-dir = { path = "../test-dir" }
