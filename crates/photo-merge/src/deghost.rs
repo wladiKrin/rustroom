@@ -1,7 +1,7 @@
 //! Deghost: what moved between frames is taken from one frame alone.
 //!
 //! On a quarter-size grid of the reference, every frame's luminance — aligned, scaled to the
-//! reference's exposure, in stops — is compared with a **local reference**: the reference frame where
+//! reference's exposure, averaged over 12 × 12 px, in stops — is compared with a **local reference**: the reference frame where
 //! it holds the light, else the frame nearest it in exposure that does (in the reference's clipped
 //! highlights, the next darker frame). A frame differing from it by more than the level's threshold
 //! is marked there; the marks are cleaned (a 3 × 3 vote), grown by the level's radius and feathered
@@ -81,7 +81,7 @@ pub fn masks(
     let planes: Vec<Vec<Option<f32>>> = frames
         .iter()
         .enumerate()
-        .map(|(i, f)| cells(f, &to_frame[i], scale[i], w, h, qw, qh))
+        .map(|(i, f)| smoothed_log(&cells(f, &to_frame[i], scale[i], w, h, qw, qh), qw, qh))
         .collect();
 
     // Nearest the reference in exposure first.
@@ -104,11 +104,27 @@ pub fn masks(
                 if l == i {
                     continue;
                 }
-                if let (Some(a), Some(b)) = (planes[i][q], planes[l][q]) {
-                    if (a - b).abs() > threshold {
-                        marks[q] = 1.0;
-                        any = true;
+                let Some(a) = planes[i][q] else { continue };
+                // ⚠ The closest of the local reference's cells within one cell, not the one under
+                // it: a fraction of a pixel of residual misalignment (or a little parallax) moves a
+                // 4 × 4 cell's mean across a hard edge by tenths of a stop — on the author's window
+                // bars High marked 39 % of a still frame. Something that moved differs from all nine.
+                let (qx, qy) = ((q % qw) as i64, (q / qw) as i64);
+                let mut nearest = f32::INFINITY;
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        let (x, y) = (qx + dx, qy + dy);
+                        if x < 0 || y < 0 || x >= qw as i64 || y >= qh as i64 {
+                            continue;
+                        }
+                        if let Some(b) = planes[l][y as usize * qw + x as usize] {
+                            nearest = nearest.min((a - b).abs());
+                        }
                     }
+                }
+                if nearest.is_finite() && nearest > threshold {
+                    marks[q] = 1.0;
+                    any = true;
                 }
             }
             if !any {
@@ -152,9 +168,36 @@ pub fn masks(
     )
 }
 
+/// Each cell's light as compared: the mean of its 3 × 3 neighbourhood — 12 × 12 reference pixels —
+/// in stops, `None` unless all nine hold the light.
+///
+/// ⚠⚠ Not the 4 × 4 cell alone (found by `a_sub_pixel_shift_across_hard_edges_is_not_a_ghost`, after
+/// the author's window bars): across a hard edge a cell's log mean swings 0.5–0.7 stops for a 0.4-px
+/// shift and no neighbour holds the value in between, so every bar was "a ghost". Over 12 px the
+/// same shift moves the mean under a tenth of a stop; anything that really moved still differs
+/// throughout its inside.
+fn smoothed_log(lin: &[Option<f32>], qw: usize, qh: usize) -> Vec<Option<f32>> {
+    (0..qw * qh)
+        .map(|q| {
+            let (qx, qy) = ((q % qw) as i64, (q / qw) as i64);
+            let mut sum = 0f32;
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let (x, y) = (
+                        (qx + dx).clamp(0, qw as i64 - 1),
+                        (qy + dy).clamp(0, qh as i64 - 1),
+                    );
+                    sum += lin[y as usize * qw + x as usize]?;
+                }
+            }
+            (sum > 0.0).then(|| (sum / 9.0).log2())
+        })
+        .collect()
+}
+
 /// One frame's cells: the mean scaled raw luminance of the reference pixels a cell covers, read where
-/// the alignment puts them, in stops — `None` unless every one is inside, unclipped, below the
-/// roll-off's end and above [`FLOOR`] as the frame itself showed it.
+/// the alignment puts them — `None` unless every one is inside, unclipped, below the roll-off's end
+/// and above [`FLOOR`] as the frame itself showed it.
 fn cells(
     f: &Frame,
     to: &Homography,
@@ -187,7 +230,7 @@ fn cells(
                         cnt += 1;
                     }
                 }
-                (cnt > 0 && sum > 0.0).then(|| (sum / cnt as f32 * scale).log2())
+                (cnt > 0 && sum > 0.0).then(|| sum / cnt as f32 * scale)
             })
         })
         .collect()
@@ -336,6 +379,46 @@ mod tests {
         let o = overlay.expect("an overlay at High");
         let marked = o.data.iter().filter(|v| **v > 0.5).count() as f32 / o.data.len() as f32;
         eprintln!("still scene, High: {:.4} of the frame marked", marked);
+        assert!(marked < 0.005, "{marked}");
+    }
+
+    /// ⚠⚠ Hard edges a fraction of a pixel apart are not a ghost. Found on the author's DSCF7753–55
+    /// (window bars and a railing, handheld): High marked 39 % of a still frame, every mark on an
+    /// edge — a 0.3-px residual moves a 4 × 4 cell's mean across a bar by tenths of a stop. Bars
+    /// rendered by exact area coverage, the second frame 0.4 px over and a stop darker, and told it
+    /// is aligned: nothing may be marked.
+    #[test]
+    fn a_sub_pixel_shift_across_hard_edges_is_not_a_ghost() {
+        let (w, h) = (240, 160);
+        let bars = |shift: f32, ev: f32| {
+            let cover = |x: f32| {
+                // The share of [x, x + 1) under a dark bar: bars 6 px wide every 20 px.
+                let mut dark = 0.0;
+                for k in 0..((w as f32 / 20.0) as i32 + 2) {
+                    let (a, b) = (
+                        k as f32 * 20.0 + 5.0 + shift,
+                        k as f32 * 20.0 + 11.0 + shift,
+                    );
+                    dark += (b.min(x + 1.0) - a.max(x)).max(0.0);
+                }
+                dark
+            };
+            let px: Vec<u16> = (0..w * h)
+                .flat_map(|i| {
+                    let (x, y) = (i % w, i / w);
+                    let d = cover(x as f32);
+                    let bright = 0.3 + 0.2 * (y as f32 / h as f32);
+                    let v = (bright * (1.0 - d) + 0.004 * d) * 2f32.powf(ev);
+                    [v; 3].map(|c| (c * 65535.0).round() as u16)
+                })
+                .collect();
+            crate::frame::Frame::new(w, h, px, [1.0; 3], Some(ev))
+        };
+        let frames = [bars(0.0, 0.0), bars(0.4, -1.0)];
+        let (_, overlay) = masks(&frames, 0, &ids(2), &[1.0, 2.0], Deghost::High);
+        let o = overlay.expect("an overlay");
+        let marked = o.data.iter().filter(|v| **v > 0.5).count() as f32 / o.data.len() as f32;
+        eprintln!("bars 0.4 px apart, High: {:.4} marked", marked);
         assert!(marked < 0.005, "{marked}");
     }
 
