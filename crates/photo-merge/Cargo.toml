@@ -6,6 +6,10 @@ license.workspace = true
 
 # Photo Merge (M10.17): a bracket into one HDR raw now, panoramas later. ⚠ Zero GUI — driven by
 # the CLI, the app's worker and the tests.
+[features]
+# The constructed panoramas (`synth_pano`) for other crates' tests.
+testing = []
+
 [dependencies]
 color = { path = "../color" }
 core-image = { path = "../core-image" }

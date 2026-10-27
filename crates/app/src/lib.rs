@@ -85,6 +85,7 @@ pub mod move_tracking;
 pub mod negative_tool;
 pub mod noise_curve;
 pub mod panel_order;
+pub mod pano_merge;
 pub mod people_tool;
 pub mod perspective_detect;
 pub mod photo_id;

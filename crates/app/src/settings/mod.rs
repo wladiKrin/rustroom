@@ -57,6 +57,8 @@ pub struct Settings {
     pub rename_template: String,
     /// The HDR merge dialog's options (M10.17a) — written only when a merge starts, `export`'s rule.
     pub hdr: crate::hdr_merge::HdrSettings,
+    /// The panorama merge dialog's options (M10.17b) — written only when a merge starts.
+    pub panorama: crate::pano_merge::PanoSettings,
     /// The keyboard shortcuts the user changed, over the menu's defaults (M10.9b) — only the changes.
     pub shortcuts: Vec<crate::shortcuts::Rebinding>,
     /// Which network *Select Subject* uses (M9.13) — IS-Net (fast, the default) or BiRefNet_lite
@@ -488,6 +490,7 @@ impl Default for Settings {
             import: Default::default(),
             rename_template: DEFAULT_RENAME_TEMPLATE.to_string(),
             hdr: crate::hdr_merge::HdrSettings::default(),
+            panorama: crate::pano_merge::PanoSettings::default(),
             shortcuts: Vec::new(),
             ai_subject_model: Default::default(),
             confirm_export_preset_delete: true,

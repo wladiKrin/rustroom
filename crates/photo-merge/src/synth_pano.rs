@@ -206,6 +206,26 @@ pub fn render(scene: &Scene, shots: &[Shot], w: usize, h: usize, focal: f64) -> 
         .collect()
 }
 
+/// The row written as M9.10 DNGs into `dir` — 16-bit linear, which libraw reads as a raw — frame `i` of
+/// `Scene::new(scenes[i])`. ⚠ Constructed: libraw decoding files of our own making. 300 px wide at least: a
+/// narrower M9.10 DNG reads back scrambled (M10.17a).
+pub fn write_dng_row(dir: &std::path::Path, r: &Row, scenes: &[u64]) -> Vec<std::path::PathBuf> {
+    (0..r.shots.len())
+        .map(|i| {
+            let f = &render(&Scene::new(scenes[i]), &r.shots[i..=i], r.w, r.h, r.focal)[0];
+            let mut img = core_image::ImageBuf::new(r.w, r.h);
+            for y in 0..r.h {
+                for x in 0..r.w {
+                    img.set_pixel(x, y, f.raw(x, y));
+                }
+            }
+            let p = dir.join(format!("frame{i}.dng"));
+            export::dng::save(&img, &p).expect("a constructed DNG");
+            p
+        })
+        .collect()
+}
+
 /// A synthetic row: its shots, frame size and focal length.
 pub struct Row {
     pub shots: Vec<Shot>,

@@ -53,14 +53,28 @@ pub enum Refusal {
     Missing,
 }
 
+/// Which merge refuses — the sentence names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeKind {
+    Hdr,
+    Panorama,
+}
+
 impl Refusal {
+    /// The HDR merge's sentence.
     pub fn sentence(&self) -> &'static str {
-        match self {
-            Refusal::TooFew => "Select two or more raw photos to merge",
-            Refusal::NotRaw => "HDR merge needs raw photos",
-            Refusal::Immich => "Download Immich photos to a folder before merging them",
-            Refusal::Merged => "A merged HDR cannot be merged again",
-            Refusal::Missing => "A photo's file is missing",
+        self.sentence_for(MergeKind::Hdr)
+    }
+
+    pub fn sentence_for(&self, kind: MergeKind) -> &'static str {
+        match (self, kind) {
+            (Refusal::TooFew, _) => "Select two or more raw photos to merge",
+            (Refusal::NotRaw, MergeKind::Hdr) => "HDR merge needs raw photos",
+            (Refusal::NotRaw, MergeKind::Panorama) => "Panorama merge needs raw photos",
+            (Refusal::Immich, _) => "Download Immich photos to a folder before merging them",
+            (Refusal::Merged, MergeKind::Hdr) => "A merged HDR cannot be merged again",
+            (Refusal::Merged, MergeKind::Panorama) => "A merged photo cannot be merged again",
+            (Refusal::Missing, _) => "A photo's file is missing",
         }
     }
 }
@@ -87,6 +101,24 @@ pub fn plan(
     taken: impl Fn(&Path) -> bool,
     exists: impl Fn(&Path) -> bool,
 ) -> Result<HdrPlan, Refusal> {
+    let (frames, active) = frames(photos, active, is_immich, is_float, exists)?;
+    let output = output_path(&frames[0], taken);
+    Ok(HdrPlan {
+        frames,
+        active,
+        output,
+    })
+}
+
+/// The selection's frames — every merge's rule (M10.17a; M10.17b shares it) — and the active photo's
+/// place among them.
+pub fn frames(
+    photos: &[Vec<PathBuf>],
+    active: Option<usize>,
+    is_immich: impl Fn(&Path) -> bool,
+    is_float: impl Fn(&Path) -> bool,
+    exists: impl Fn(&Path) -> bool,
+) -> Result<(Vec<PathBuf>, Option<usize>), Refusal> {
     let mut frames: Vec<PathBuf> = Vec::new();
     let mut active_frame = None;
     for (i, files) in photos.iter().enumerate() {
@@ -117,16 +149,16 @@ pub fn plan(
     if frames.len() < 2 {
         return Err(Refusal::TooFew);
     }
-    let output = output_path(&frames[0], taken);
-    Ok(HdrPlan {
-        frames,
-        active: active_frame,
-        output,
-    })
+    Ok((frames, active_frame))
 }
 
 /// `<stem>-HDR.dng` beside `first` — Lightroom's name — then `-HDR-2`, `-HDR-3`… past any taken.
 pub fn output_path(first: &Path, taken: impl Fn(&Path) -> bool) -> PathBuf {
+    output_path_with(first, "HDR", taken)
+}
+
+/// `<stem>-<suffix>.dng` beside `first`, then `-<suffix>-2`… past any taken.
+pub fn output_path_with(first: &Path, suffix: &str, taken: impl Fn(&Path) -> bool) -> PathBuf {
     let stem = first
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -135,9 +167,9 @@ pub fn output_path(first: &Path, taken: impl Fn(&Path) -> bool) -> PathBuf {
     (1..)
         .map(|n| {
             let name = if n == 1 {
-                format!("{stem}-HDR.dng")
+                format!("{stem}-{suffix}.dng")
             } else {
-                format!("{stem}-HDR-{n}.dng")
+                format!("{stem}-{suffix}-{n}.dng")
             };
             dir.join(name)
         })

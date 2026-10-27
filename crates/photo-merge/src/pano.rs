@@ -321,28 +321,12 @@ pub fn write_dng(
 mod tests {
     use super::*;
     use crate::hdr::decode_all;
-    use crate::synth_pano::{self, Row, Scene};
+    use crate::synth_pano::{self, Row};
 
     /// A synthetic row written as M9.10 DNGs — 16-bit linear, which libraw reads as a raw. ⚠ Constructed:
     /// libraw decoding files of our own making. Frames of `scenes[i]` (most of them seed 1).
     pub(crate) fn dng_row(tag: &str, r: &Row, scenes: &[u64]) -> Vec<std::path::PathBuf> {
-        let dir = test_dir::path(&format!("pano-{tag}"));
-        (0..r.shots.len())
-            .map(|i| {
-                let f =
-                    &synth_pano::render(&Scene::new(scenes[i]), &r.shots[i..=i], r.w, r.h, r.focal)
-                        [0];
-                let mut img = ImageBuf::new(r.w, r.h);
-                for y in 0..r.h {
-                    for x in 0..r.w {
-                        img.set_pixel(x, y, f.raw(x, y));
-                    }
-                }
-                let p = dir.join(format!("frame{i}.dng"));
-                export::dng::save(&img, &p).unwrap();
-                p
-            })
-            .collect()
+        synth_pano::write_dng_row(&test_dir::path(&format!("pano-{tag}")), r, scenes)
     }
 
     fn flat_row(n: usize) -> Row {

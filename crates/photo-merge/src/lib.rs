@@ -25,8 +25,10 @@ pub mod refine;
 pub mod rig;
 pub mod rotation;
 pub mod seam;
-#[cfg(test)]
+// The constructed scenes, also for other crates' tests through the `testing` feature (the app's).
+#[cfg(any(test, feature = "testing"))]
+#[cfg_attr(not(test), allow(dead_code))]
 mod synth;
-#[cfg(test)]
-mod synth_pano;
+#[cfg(any(test, feature = "testing"))]
+pub mod synth_pano;
 pub mod warp;
