@@ -14,6 +14,8 @@ pub mod lens;
 pub mod merge;
 pub mod preview;
 pub mod pyramid;
+pub mod rig;
+pub mod rotation;
 #[cfg(test)]
 mod synth;
 #[cfg(test)]
