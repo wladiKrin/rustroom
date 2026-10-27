@@ -197,27 +197,14 @@ pub fn align(
         .map(|f| LumPyramid::build(f, crate::align::COARSEST))
         .collect();
     let refined = refine::refine(&coarse, &pyr, 0);
-    let mut fine = coarse.clone();
-    if !refined.is_empty() {
-        // Pairs the refinement dropped keep their feature correspondences.
-        let done: Vec<(usize, usize)> = refined.iter().map(|c| (c.a, c.b)).collect();
-        let mut corrs = refined;
-        corrs.extend(
-            feature_corrs
-                .iter()
-                .filter(|c| !done.contains(&(c.a, c.b)) && !done.contains(&(c.b, c.a)))
-                .copied(),
-        );
-        let mut r = rig::solve(n, coarse.focal_px, size, &corrs, coarse.order.clone());
-        rig::level(&mut r);
-        // ⚠ Kept only if it does not fit the features worse: refinement on frames whose vignetting is not
-        // corrected (no lens profile) is biased (`refine`'s note), and the features are not.
-        if feature_corrs.is_empty()
-            || residual_px(&r, &feature_corrs) <= 1.5 * residual_px(&coarse, &feature_corrs) + 0.2
-        {
-            fine = r;
-        }
-    }
+    // ⚠⚠ From the preview's rig there are no features: its own correspondences stand in, so a pair the
+    // refinement drops keeps the preview's rotation and the bias guard below still has something to judge by.
+    let base = if feature_corrs.is_empty() {
+        rig_corrs(&coarse)
+    } else {
+        feature_corrs
+    };
+    let fine = refit(&coarse, &base, refined);
     let gains = gain::solve(
         &fine,
         &small,
@@ -238,6 +225,62 @@ pub fn align(
         lens,
         no_profile,
     })
+}
+
+/// Every neighbouring pair's correspondences under `rig` — a 16 × 12 grid over the first frame, where the
+/// second sees it.
+pub(crate) fn rig_corrs(rig: &Rig) -> Vec<Corr> {
+    let (w, h) = (rig.size.0 as f64, rig.size.1 as f64);
+    let mut out = Vec::new();
+    for pair in rig.order.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let hom = refine::pair_homography(rig, a, b);
+        for j in 0..12 {
+            for i in 0..16 {
+                let p = ((i as f64 + 0.5) / 16.0 * w, (j as f64 + 0.5) / 12.0 * h);
+                let q = hom.apply(p.0, p.1);
+                if (0.0..w).contains(&q.0) && (0.0..h).contains(&q.1) {
+                    out.push(Corr {
+                        a,
+                        b,
+                        pa: [p.0, p.1],
+                        pb: [q.0, q.1],
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The rig solved again from the dense refinement's correspondences, a pair it dropped keeping `base`'s —
+/// and kept only if it fits `base` no worse than `coarse` does (refinement on frames whose vignetting is not
+/// corrected is biased, `refine`'s note; `base` — features, or the preview's rig — is not).
+pub(crate) fn refit(coarse: &Rig, base: &[Corr], refined: Vec<Corr>) -> Rig {
+    if refined.is_empty() {
+        return coarse.clone();
+    }
+    let n = coarse.rotations.len();
+    let done: Vec<(usize, usize)> = refined.iter().map(|c| (c.a, c.b)).collect();
+    let mut corrs = refined;
+    corrs.extend(
+        base.iter()
+            .filter(|c| !done.contains(&(c.a, c.b)) && !done.contains(&(c.b, c.a)))
+            .copied(),
+    );
+    let mut r = rig::solve(
+        n,
+        coarse.focal_px,
+        coarse.size,
+        &corrs,
+        coarse.order.clone(),
+    );
+    rig::level(&mut r);
+    if base.is_empty() || residual_px(&r, base) <= 1.5 * residual_px(coarse, base) + 0.2 {
+        r
+    } else {
+        coarse.clone()
+    }
 }
 
 /// The mean reprojection error of `corrs` under `rig`, pixels.
@@ -403,6 +446,34 @@ mod tests {
             }
         }
         assert!(worst < 0.1, "{worst} px");
+    }
+
+    /// ⚠⚠ The review's Critical: a merge started from the preview's rig matches no features, so a pair the
+    /// dense refinement drops (it wandered, or found nothing) must keep the rotation the preview gave it —
+    /// never collapse onto its neighbour. Here every pair's refined correspondences but 0→1's are kept.
+    #[test]
+    fn a_pair_the_refinement_drops_keeps_the_inits_rotation() {
+        let r = flat_row(3);
+        let d = decode(&dng_row("dropped", &r, &[1, 1, 1]));
+        let a = align(&d, None, &AtomicBool::new(false), &mut |_| {}).unwrap();
+        let init = &a.align_rig;
+        let (p, q) = (init.order[0], init.order[1]);
+        let refined: Vec<Corr> = rig_corrs(init)
+            .into_iter()
+            .filter(|c| (c.a, c.b) != (p, q))
+            .collect();
+        let fit = refit(init, &rig_corrs(init), refined);
+        let angle = |rig: &Rig| {
+            rig.rotations[q]
+                .compose(&rig.rotations[p].transpose())
+                .angle()
+        };
+        let (want, got) = (angle(init), angle(&fit));
+        assert!(want > 0.3, "the fixture's frames are apart ({want} rad)");
+        assert!(
+            (got - want).abs() < 1e-3,
+            "the dropped pair collapsed: {got} rad, the preview's {want}"
+        );
     }
 
     #[test]
