@@ -2,9 +2,11 @@
 //! given its first value.
 
 use crate::decode::{decode_for_edit, full_res_worker};
+#[cfg(target_os = "macos")]
+use crate::{display_colorspace, native_menu};
 use crate::{
-    display_colorspace, native_menu, theme, AppView, LibraryMode, Modal, RustroomApp,
-    BUFFER_CACHE_CAP, MAX_CONCURRENT_DECODES, PREVIEW_TEXTURE_BUDGET,
+    theme, AppView, LibraryMode, Modal, RustroomApp, BUFFER_CACHE_CAP, MAX_CONCURRENT_DECODES,
+    PREVIEW_TEXTURE_BUDGET,
 };
 use edit_model::EditGroups;
 use rustroom_app::action_log::ActionLog;
