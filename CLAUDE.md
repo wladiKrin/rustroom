@@ -170,9 +170,9 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 211 sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-10-22)
+### State (2026-10-27)
 
-**@COUNT@ tests** (24 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
+**4274 tests** (24 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
 gate green on `main` (re-gated 2026-10-27 after merging M10.17a HDR merge; no branch open). ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
