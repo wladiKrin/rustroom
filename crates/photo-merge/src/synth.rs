@@ -39,10 +39,10 @@ pub fn scene(u: f64, v: f64, w: usize, h: usize) -> [f32; 3] {
 }
 
 /// A tiny deterministic generator: splitmix64 and Box–Muller.
-struct Noise(u64);
+pub(crate) struct Noise(pub(crate) u64);
 
 impl Noise {
-    fn next(&mut self) -> f64 {
+    pub(crate) fn next(&mut self) -> f64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -50,7 +50,7 @@ impl Noise {
         ((z ^ (z >> 31)) >> 11) as f64 / (1u64 << 53) as f64
     }
 
-    fn gauss(&mut self) -> f64 {
+    pub(crate) fn gauss(&mut self) -> f64 {
         let (a, b) = (self.next().max(1e-12), self.next());
         (-2.0 * a.ln()).sqrt() * (std::f64::consts::TAU * b).cos()
     }

@@ -6,6 +6,7 @@
 pub mod align;
 pub mod deghost;
 pub mod exposure;
+pub mod features;
 pub mod frame;
 pub mod hdr;
 pub mod homography;
@@ -15,4 +16,6 @@ pub mod preview;
 pub mod pyramid;
 #[cfg(test)]
 mod synth;
+#[cfg(test)]
+mod synth_pano;
 pub mod warp;
