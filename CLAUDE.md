@@ -321,7 +321,10 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
 - ⚠⚠ **A test that waits for a background job waits on the EVENT, under a long ceiling (120 s) against a hang —
   never a fixed time budget.** The denoise worker's 1 s and 6 s budgets lost the race on a loaded full gate and
   failed `main` twice (fixed 2026-10-22, `denoise_worker.rs`'s `LONG` and its `Held` network, which holds a tile
-  until the test has read the progress).
+  until the test has read the progress). ⚠⚠ **And a test that asserts an IN-BETWEEN state holds the job there
+  until it has looked** (2026-10-27): one `pump_people` spawns a search and polls it, so an instant finder landed
+  before "the search started" was read — held behind a `Gate` now; a held job says WHEN it is held (`Held.holding`),
+  since progress is published before the tile's partial is.
 - ⚠⚠ **A keyword, collection, smart-collection or date view follows the catalog** (2026-10-01):
   `source_refresh::pump_source_membership`, last in the frame, re-reads `source_members` once
   `Catalog::change_count` has moved and settled — never a list of writers. A new catalog-backed source

@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [Three load-flaky tests hold their jobs until they have looked (2026-10-27)](#2026-10-27--three-load-flaky-tests-hold-their-jobs-until-they-have-looked-branch-fix-flaky-people-denoise-tests)
 - [M10.16c3: Find people — YOLOX-m with tiles, MobileSAM's outline, removed with c1's fill (2026-10-21)](#2026-10-21--m1016c3-find-people--yolox-m-with-tiles-mobilesams-outline-removed-with-c1s-fill-branch-m1016c3-people)
 - [M10.16c2: Remove dust — sensor spots found and healed as patches (2026-10-20)](#2026-10-20--m1016c2-remove-dust--sensor-spots-found-and-healed-as-patches-branch-m1016c2-dust)
 - [M10.16c1: Remove — the content-aware brush, LaMa, Refresh, Detect objects, Opacity (2026-10-19)](#2026-10-19--m1016c1-remove--the-content-aware-brush-lama-refresh-detect-objects-opacity-branch-m1016c-remove)
@@ -187,6 +188,28 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-27 — Three load-flaky tests hold their jobs until they have looked (branch `fix-flaky-people-denoise-tests`)
+
+Found during M10.17a's gates (2026-10-26): three tests failed only under the full `cargo test --workspace`, each
+passing alone and on the tree before that milestone. ⏳ **Awaiting the author's merge.**
+- `people_flow::a_press_with_models_and_photo_starts_the_search` ("the search started") and
+  `people_flow::a_drawing_looks_there_and_adds_who_it_finds` ("a look there runs"). **One `pump_people` spawns a
+  search AND polls it**, so a finder that answers at once — the stand-in, or the real one failing on zero-filled
+  model files — could land inside the same pump and leave `search` `None` before the test read it. The finders are
+  now held behind a `Gate` (a `Mutex` + `Condvar`, one static per test, a 120 s ceiling) that the test opens after
+  it has looked. Production code unchanged.
+- `denoise_worker::a_job_for_another_photo_is_dropped` (its `wait` read nothing): it slept 60 ms hoping the first
+  job had started and polled a 12 s budget. Now the first job is **held inside its second tile** (`Held`, which
+  now raises `holding` when it holds — progress is set at the START of a tile's callback and its partial sent at
+  the END, so waiting on progress raced the partial), what it sent while still wanted is drained, the second is
+  asked for, and the wait is on its `Done` under `LONG`. ⚠ **Rewriting it found that its old assertion was
+  stricter than the guarantee:** the first job's noise curve takes over a second in a debug build, so its first tile
+  legitimately publishes a partial while it is still the photo wanted; the guarantee — and now the assertion — is
+  that nothing of it comes after it is overtaken. `wait` itself became a 120 s ceiling (was 600 × 20 ms).
+- **Sabotaged:** the worker no longer dropping an overtaken job (its tile check and its `Done` guard removed) →
+  `["first"]`; the press starting no search → "the search started"; a look not marked `there` → "a look there
+  runs". Gate: fmt and clippy clean, and the full suite three times in a row — **4,190 passed, 0 failed** (24 ignored) each time.
 
 ### 2026-10-22 — The denoise worker's tests wait on events, not on time budgets (branch `fix-flaky-denoise-tests`)
 
