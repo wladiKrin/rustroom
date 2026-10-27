@@ -15,8 +15,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
-/// The dialog preview's long edge, in pixels.
-pub const PREVIEW_LONG: usize = 1200;
+/// The dialog preview's long edge: none — the half-size merge at its own size, so the dialog can zoom
+/// into real detail (about half the photo's resolution; 0.68 s against 0.28 s at 1200 px on an X-T4).
+pub const PREVIEW_LONG: usize = usize::MAX;
 /// The DNG's own picture's long edge.
 pub const DNG_PREVIEW_LONG: usize = 1024;
 
@@ -238,8 +239,11 @@ mod tests {
     /// A bracket of M9.10 DNGs — libraw reads them as raws — at −1 / 0 / +1. ⚠ Constructed. 300 px
     /// wide: M9.10's DNG narrower than one tile reads back scrambled (journal, 2026-10-26).
     fn bracket(tag: &str) -> Vec<PathBuf> {
+        bracket_sized(tag, 300, 200)
+    }
+
+    fn bracket_sized(tag: &str, w: usize, h: usize) -> Vec<PathBuf> {
         let dir = test_dir::path(&format!("hdr-worker-{tag}"));
-        let (w, h) = (300, 200);
         [-1.0f32, 0.0, 1.0]
             .iter()
             .enumerate()
@@ -312,6 +316,32 @@ mod tests {
                 .ends_with(".partial")
         });
         assert!(!partial, "a partial file was left");
+    }
+
+    /// The preview is the half-size merge at its own size, so zooming into it shows real detail.
+    /// ⚠ Wider than the 1200 px the preview used to stop at, or the test could not tell the two apart;
+    /// and the size is the decode's — a linear DNG is not binned by libraw's half size.
+    #[test]
+    fn the_preview_keeps_the_half_size_merges_detail() {
+        let plan = plan_for(bracket_sized("detail", 1400, 600));
+        let half =
+            raw_decode::decode_camera(&plan.frames[0], &raw_decode::DecodeOptions::preview())
+                .unwrap();
+        assert!(
+            half.width > 1200,
+            "the fixture must be wider than the old cap"
+        );
+        let w = HdrWorker::preview(&plan, HdrSettings::default(), edit_model::Edits::default());
+        let e = next(&w, |e| {
+            matches!(e, HdrEvent::Preview { .. } | HdrEvent::Failed(_))
+        });
+        let HdrEvent::Preview { image, .. } = e else {
+            panic!("{e:?}")
+        };
+        assert_eq!(
+            (image.width() as usize, image.height() as usize),
+            (half.width, half.height)
+        );
     }
 
     /// The dialog's preview arrives, and a change of Deghost brings a new one without re-reading.

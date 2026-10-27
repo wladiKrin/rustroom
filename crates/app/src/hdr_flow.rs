@@ -33,6 +33,10 @@ pub(crate) struct HdrDialog {
     /// The half-size alignment the merge starts from.
     transforms: Option<Vec<Homography>>,
     pub(crate) failed: Option<String>,
+    /// The preview's zoom — 1 is fit, as on the canvas — and its pan in screen points. Kept across
+    /// option changes, so a new merge lands under the same view.
+    pub(crate) zoom: f32,
+    pub(crate) pan: egui::Vec2,
     /// What a new photo starts with — the Auto settings go on top.
     base: Edits,
 }
@@ -67,11 +71,16 @@ fn renders_differently(a: &HdrSettings, b: &HdrSettings) -> bool {
     (a.auto_align, a.auto_settings, a.deghost) != (b.auto_align, b.auto_settings, b.deghost)
 }
 
+/// ⚠ Mipmapped: the preview is the half-size merge at its own size (~3100 px), drawn far smaller at
+/// fit, and plain linear minification of that shimmers.
 fn texture(ctx: &egui::Context, name: &str, img: &image::RgbImage) -> egui::TextureHandle {
     ctx.load_texture(
         name,
         egui::ColorImage::from_rgb([img.width() as usize, img.height() as usize], img.as_raw()),
-        egui::TextureOptions::LINEAR,
+        egui::TextureOptions {
+            mipmap_mode: Some(egui::TextureFilter::Linear),
+            ..egui::TextureOptions::LINEAR
+        },
     )
 }
 
@@ -148,6 +157,8 @@ impl RustroomApp {
             stale: false,
             transforms: None,
             failed: None,
+            zoom: rustroom_app::view_region::MIN_ZOOM,
+            pan: egui::Vec2::ZERO,
             base,
         });
         self.modal = Modal::HdrMerge;

@@ -9,6 +9,7 @@ use crate::theme::Hover as _;
 use crate::{theme, RustroomApp};
 use eframe::egui;
 use photo_merge::deghost::Deghost;
+use rustroom_app::view_region;
 
 /// The options column's width.
 const OPTIONS_W: f32 = 220.0;
@@ -37,6 +38,8 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         .unwrap_or_default();
     let preview = d.preview.clone();
     let (stale, failed) = (d.stale, d.failed.clone());
+    let (mut zoom, mut pan) = (d.zoom, d.pan);
+    let pan_drag = app.settings.pan_drag;
 
     let out = dialog(
         ctx,
@@ -56,7 +59,33 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                     (ui.available_width() - OPTIONS_W - ui.spacing().item_spacing.x).max(160.0),
                     ui.available_height().max(160.0),
                 );
-                let (rect, response) = ui.allocate_exact_size(well, egui::Sense::hover());
+                let (rect, response) = ui.allocate_exact_size(well, egui::Sense::drag());
+                // Develop's gestures through the canvas's own code: pinch or ⌘-scroll zooms about
+                // the pointer, a swipe or the pan binding's drag moves, and at fit it centres.
+                let factor = ui.input(|i| i.zoom_delta());
+                if factor != 1.0 && response.hovered() {
+                    let old = zoom;
+                    zoom = view_region::zoom_step(old, factor);
+                    if let Some(p) = ui.input(|i| i.pointer.hover_pos()) {
+                        let anchor = rect.center() + pan;
+                        let (dx, dy) = view_region::zoom_anchor_shift(
+                            (p.x, p.y),
+                            (anchor.x, anchor.y),
+                            old,
+                            zoom,
+                        );
+                        pan += egui::vec2(dx, dy);
+                    }
+                }
+                let scroll = ui.input(|i| i.smooth_scroll_delta);
+                let space = ui.input(|i| i.key_down(egui::Key::Space));
+                let focused = ui.ctx().memory(|m| m.focused().is_some());
+                pan += crate::develop::canvas::navigation::pan_delta(
+                    &response, scroll, space, pan_drag, focused,
+                );
+                if zoom <= view_region::MIN_ZOOM {
+                    pan = egui::Vec2::ZERO;
+                }
                 let t = theme::tokens::of(ui);
                 ui.painter().rect_filled(
                     rect,
@@ -72,10 +101,13 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         };
                         let size = tex.size_vec2();
                         let fit = (rect.width() / size.x).min(rect.height() / size.y);
-                        let at = egui::Rect::from_center_size(rect.center(), size * fit);
-                        egui::Image::new(tex).paint_at(ui, at);
+                        let at =
+                            egui::Rect::from_center_size(rect.center() + pan, size * fit * zoom);
+                        let mut well_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                        well_ui.set_clip_rect(rect);
+                        egui::Image::new(tex).paint_at(&well_ui, at);
                         if stale {
-                            ui.painter().rect_filled(
+                            well_ui.painter().rect_filled(
                                 at,
                                 egui::CornerRadius::ZERO,
                                 theme::stale_dim(),
@@ -92,7 +124,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                     }
                 }
                 response.hover(format!(
-                    "{count} photos merged into {name}, as it will open"
+                    "{count} photos merged into {name}, as it will open; pinch to zoom, swipe to move"
                 ));
 
                 ui.vertical(|ui| {
@@ -126,6 +158,8 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
 
     if let Some(d) = app.hdr.dialog.as_mut() {
         d.draft = draft;
+        d.zoom = zoom;
+        d.pan = pan;
     }
     if out.primary {
         app.start_hdr_merge();
