@@ -242,6 +242,18 @@ render 0.03 s, 1:1 viewport 0.04 s, full-size export 1.6 s, peak RSS 3.0 GB — 
   (a ratio was committed at 0.4 from a measuring sweep); every later replace asserted its match.
 - Also fixed on the branch: the render engine's tests waited on a 1 s budget (0.8 s alone) — now a 120 s ceiling.
 
+**The whole-branch review (a fresh reviewer, one fix pass).** ⚠⚠ Critical, fixed: a merge started from the preview's
+rig matched no features, so a pair the dense refinement dropped had NO correspondences — `rig::solve` seeded it at
+identity and the frame stacked on its neighbour (0 rad where 0.68 was right; the preview was fine, the DNG not). The
+preview rig's own grid correspondences (`pano::rig_corrs`) now stand in, and the bias guard judges by them
+(`a_pair_the_refinement_drops_keeps_the_inits_rotation`, sabotage-proven). Important, fixed: a merge thread that dies
+without a last word no longer holds the queue (a closed channel is a failure); the HDR-behind-a-running-panorama order
+is tested (sabotage: a LIFO queue fails it); and the merge's **peak memory at the cap is measured: 5.2 GB** for six
+4160 × 6240 frames onto 16,000 × 5,240 (stitch 8.5 s) — after the seam's work was cut to the overlap's span, the blend
+collapsed in place and the worker's pictures rendered from a downscaled stitch. Twelve minors are deferred, listed in
+the hand-off (frame-count cap, clamping a fill at 0, a misplaced doc comment in `compat_tests.rs`, logic in
+`pano_flow.rs` that belongs in the lib, the status line's wording when Fill had no LaMa, …).
+
 ### 2026-10-27 — The app builds on Linux again (branch `fix-linux-build`)
 
 The first run on the author's Linux machine (Arch, X11) failed to compile: E0432, `crate::display_colorspace` and

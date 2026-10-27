@@ -172,7 +172,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-10-27)
 
-**4366 tests on Linux** (macOS last counted 4274 before M10.17b; 26 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
+**4369 tests on Linux** (macOS last counted 4274 before M10.17b; 27 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
 gate green on branch **`m10.17b-panorama`** (2026-10-27, not merged — waiting for the author's panoramas). ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ⚠ CI on Linux was **almost certainly red from 2026-09-30 to 2026-10-27** — the `Rustroom` binary did not
