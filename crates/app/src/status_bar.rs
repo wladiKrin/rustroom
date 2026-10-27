@@ -245,8 +245,11 @@ fn job_or_status(app: &mut RustroomApp, ui: &mut egui::Ui) {
             app.export_progress.clone(),
             Some(RustroomApp::cancel_export),
         )
-    } else if !app.hdr.progress.is_empty() {
-        (app.hdr.progress.clone(), Some(RustroomApp::cancel_hdr))
+    } else if !app.merges.progress.is_empty() {
+        (
+            app.merges.progress.clone(),
+            Some(RustroomApp::cancel_merges),
+        )
     } else if !app.preview_progress.is_empty() {
         (
             app.preview_progress.clone(),

@@ -200,6 +200,7 @@ pub fn for_test() -> RustroomApp {
         exporter: None,
         import: None,
         hdr: Default::default(),
+        merges: Default::default(),
         ai: Default::default(),
         denoise: Default::default(),
         removals: Default::default(),

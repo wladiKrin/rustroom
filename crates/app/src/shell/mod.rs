@@ -155,6 +155,7 @@ impl RustroomApp {
         self.pump_export(ctx);
         self.pump_import(ctx);
         self.pump_hdr(ctx);
+        self.pump_merges(ctx);
         self.pump_ai(ctx);
         self.pump_denoise(ctx);
         self.pump_removals(ctx);

@@ -14,7 +14,6 @@ use photo_merge::homography::Homography;
 use rustroom_app::hdr_merge::worker::{HdrEvent, HdrWorker};
 use rustroom_app::hdr_merge::{self, HdrPlan, HdrSettings};
 use rustroom_app::photo_id::PhotoId;
-use std::collections::VecDeque;
 use std::path::Path;
 use std::time::Duration;
 
@@ -41,29 +40,30 @@ pub(crate) struct HdrDialog {
     base: Edits,
 }
 
-/// A merge waiting its turn.
-struct Job {
+/// An HDR merge waiting its turn in [`crate::merge_queue`].
+pub(crate) struct HdrJob {
     plan: HdrPlan,
     settings: HdrSettings,
     base: Edits,
     init: Option<Vec<Homography>>,
 }
 
-/// The HDR merge's whole state: the dialog, the queue, the running merge.
+impl HdrJob {
+    /// Its worker, started.
+    pub(crate) fn start(&self) -> HdrWorker {
+        HdrWorker::merge(
+            self.plan.clone(),
+            self.settings,
+            self.base.clone(),
+            self.init.clone(),
+        )
+    }
+}
+
+/// The HDR dialog's state; the merges themselves queue in [`crate::merge_queue`].
 #[derive(Default)]
 pub(crate) struct HdrState {
     pub(crate) dialog: Option<HdrDialog>,
-    queue: VecDeque<Job>,
-    running: Option<(HdrWorker, Job)>,
-    /// The status row's line while a merge runs.
-    pub(crate) progress: String,
-}
-
-impl HdrState {
-    /// A merge is running or waiting.
-    pub(crate) fn busy(&self) -> bool {
-        self.running.is_some() || !self.queue.is_empty()
-    }
 }
 
 /// The options the preview renders from — the overlay and the stack change nothing it draws.
@@ -140,7 +140,7 @@ impl RustroomApp {
         let base = self.settings.initial_edits(None);
         let settings = self.settings.hdr;
         if last {
-            self.queue_hdr(Job {
+            self.queue_hdr(HdrJob {
                 plan,
                 settings,
                 base,
@@ -175,7 +175,7 @@ impl RustroomApp {
             self.settings.hdr = d.draft;
             self.save_settings();
         }
-        self.queue_hdr(Job {
+        self.queue_hdr(HdrJob {
             plan: d.plan,
             settings: d.draft,
             base: d.base,
@@ -192,35 +192,24 @@ impl RustroomApp {
         self.modal = Modal::None;
     }
 
-    fn queue_hdr(&mut self, job: Job) {
+    fn queue_hdr(&mut self, job: HdrJob) {
         let name = job
             .plan
             .output
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        self.hdr.progress = hdr_merge::progress_line(
+        let line = hdr_merge::progress_line(
             &photo_merge::hdr::Progress::Decoding {
                 done: 0,
                 total: job.plan.frames.len(),
             },
             &name,
         );
-        self.hdr.queue.push_back(job);
+        self.queue_merge(crate::merge_queue::Job::Hdr(job), line);
     }
 
-    /// The status row's Cancel: the running merge and every waiting one.
-    pub(crate) fn cancel_hdr(&mut self) {
-        self.hdr.queue.clear();
-        if let Some((w, _)) = &self.hdr.running {
-            w.cancel();
-        } else {
-            self.hdr.progress.clear();
-            self.status = "HDR merge cancelled".to_string();
-        }
-    }
-
-    /// Once per frame, beside the other jobs: the dialog's preview, the next merge, the running one.
+    /// Once per frame, beside the other jobs: the dialog's preview.
     pub(crate) fn pump_hdr(&mut self, ctx: &egui::Context) {
         if let Some(d) = self.hdr.dialog.as_mut() {
             if renders_differently(&d.draft, &d.sent) {
@@ -251,51 +240,25 @@ impl RustroomApp {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
         }
-        if self.hdr.running.is_none() {
-            if let Some(job) = self.hdr.queue.pop_front() {
-                let w = HdrWorker::merge(
-                    job.plan.clone(),
-                    job.settings,
-                    job.base.clone(),
-                    job.init.clone(),
-                );
-                self.hdr.running = Some((w, job));
-            }
-        }
-        let mut landed = None;
-        if let Some((w, _)) = &self.hdr.running {
-            while let Ok(e) = w.events().try_recv() {
-                match e {
-                    HdrEvent::Progress(line) => self.hdr.progress = line,
-                    HdrEvent::Preview { .. } => {}
-                    other => landed = Some(other),
-                }
-            }
-        }
-        if let Some(e) = landed {
-            let (_, job) = self.hdr.running.take().expect("running");
-            let name = job
-                .plan
-                .output
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            match e {
-                HdrEvent::Done { path, edits } => self.finish_hdr(&job, &path, &edits),
-                HdrEvent::Failed(why) => self.status = format!("Could not merge {name}: {why}"),
-                _ => self.status = format!("Merging {name} was cancelled"),
-            }
-            if self.hdr.queue.is_empty() {
-                self.hdr.progress.clear();
-            }
-        }
-        if self.hdr.busy() {
-            ctx.request_repaint_after(Duration::from_millis(100));
+    }
+
+    /// The running HDR merge ended with `e` (Done, Failed or Cancelled).
+    pub(crate) fn land_hdr(&mut self, job: &HdrJob, e: HdrEvent) {
+        let name = job
+            .plan
+            .output
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        match e {
+            HdrEvent::Done { path, edits } => self.finish_hdr(job, &path, &edits),
+            HdrEvent::Failed(why) => self.status = format!("Could not merge {name}: {why}"),
+            _ => self.status = format!("Merging {name} was cancelled"),
         }
     }
 
     /// A merge landed: its edits, the catalog, the Library row, the stack, the selection.
-    fn finish_hdr(&mut self, job: &Job, path: &Path, edits: &Edits) {
+    fn finish_hdr(&mut self, job: &HdrJob, path: &Path, edits: &Edits) {
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -379,8 +342,8 @@ mod tests {
 
     fn run_to_end(app: &mut RustroomApp, ctx: &egui::Context) {
         let start = Instant::now();
-        while app.hdr.busy() {
-            app.pump_hdr(ctx);
+        while app.merges.busy() {
+            app.pump_merges(ctx);
             assert!(start.elapsed() < LONG, "the merge never landed");
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -468,8 +431,8 @@ mod tests {
         let (dir, _) = bracket("cancel");
         open_all(&mut app, &ctx, dir.clone());
         app.open_hdr_merge(true);
-        app.pump_hdr(&ctx);
-        app.cancel_hdr();
+        app.pump_merges(&ctx);
+        app.cancel_merges();
         run_to_end(&mut app, &ctx);
         assert!(!dir.join("B0-HDR.dng").exists());
         let partial = std::fs::read_dir(&dir).unwrap().any(|e| {
@@ -499,7 +462,7 @@ mod tests {
             rustroom_app::hdr_merge::Refusal::TooFew.sentence()
         );
         assert!(matches!(app.modal, crate::modals::Modal::None));
-        assert!(!app.hdr.busy());
+        assert!(!app.merges.busy());
     }
 
     /// The dialog: its preview arrives as a texture, and Merge queues the merge with the options.

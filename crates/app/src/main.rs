@@ -66,6 +66,7 @@ mod library;
 mod library_state;
 mod list_row;
 mod menu_bar;
+mod merge_queue;
 mod modals;
 mod move_flow;
 mod multi;
