@@ -174,7 +174,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 **4190 tests** on `main` (24 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
 gate green on `main` (re-gated 2026-10-22). ⚠ Branch **`m10.17a-hdr-merge`** open (2026-10-26, unmerged): **4,270 tests**,
-fmt/clippy clean; three pre-existing load-flaky tests listed in `docs/BACKLOG.md` (*Found by M10.17a*). ⚠⚠ **Run the git command above rather than
+fmt/clippy clean; the three load-flaky tests it met are fixed on `main` (2026-10-27) — merge `main` in before closing it. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 

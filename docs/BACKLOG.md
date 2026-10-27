@@ -49,7 +49,8 @@ and a pointer, not deleted.
   (since removed): worst error **0.99** at 160 and 255 px wide, exact (1e-4) at 256, 257 and 300. An export sized
   below 256 px wide would write such a file. Not yet known whether the fault is libraw's tiled lossless-JPEG
   reader or our tile layout, nor what darktable makes of it — the first question for whoever takes it.
-- **Three tests flaky under the full gate's load**, each passing alone and on the pre-M10.17a tree:
+- ✅ **Fixed and merged to `main` 2026-10-27** (`grep -n 'hold their jobs' docs/JOURNAL.md` there) — **three tests
+  flaky under the full gate's load**, each passing alone and on the pre-M10.17a tree:
   `people_flow::a_drawing_looks_there_and_adds_who_it_finds` ("a look there runs") and
   `people_flow::a_press_with_models_and_photo_starts_the_search` ("the search started") — both assert the
   in-between state after ONE pump, which a finder that answers at once can already have left — and
