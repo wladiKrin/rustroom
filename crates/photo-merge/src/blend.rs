@@ -11,6 +11,7 @@ use crate::pano_warp::Warped;
 use crate::projection::Canvas;
 use crate::seam::Labels;
 use core_image::ImageBuf;
+use rayon::prelude::*;
 
 /// The pyramid's levels.
 pub const LEVELS: usize = 5;
@@ -39,47 +40,57 @@ pub fn multiband(
             (wk.y0 + wk.height).div_ceil(q) * q,
         );
         let (bw, bh) = (x1 - x0, y1 - y0);
-        let mut img = ImageBuf::new(bw, bh);
-        let mut covered = vec![false; bw * bh];
-        let mut mask = vec![0f32; bw * bh];
-        for y in 0..bh {
-            for x in 0..bw {
-                let (u, v) = (x0 + x, y0 + y);
-                if u >= canvas.width || v >= canvas.height {
-                    continue;
-                }
-                let owner = labels.owner[v * labels.width + u];
-                // ⚠⚠ Outside its own coverage a frame is given what the panorama shows there — its owner's
-                // pixel — never filler: the coarse levels of a mask near the coverage's edge reach across
-                // it, and edge-extended filler there put windows inside a neighbour's own area 0.05–0.13
-                // stops off on the synthetic row.
-                // …and the same where its own pixel is clipped and the owner's holds the light.
-                let theirs = (owner as usize != k)
-                    .then(|| warped.get(owner as usize))
-                    .flatten()
-                    .filter(|o| o.index(u, v).is_some_and(|i| o.valid[i] && !o.clipped[i]))
-                    .and_then(|o| o.at(u, v));
-                let mine = wk
-                    .index(u, v)
-                    .filter(|&i| wk.valid[i])
-                    .map(|i| (wk.clipped[i], wk.at(u, v)));
-                let p = match mine {
-                    Some((true, _)) if theirs.is_some() => theirs,
-                    Some((_, p)) => p,
-                    None => theirs.or_else(|| warped.get(owner as usize).and_then(|o| o.at(u, v))),
-                };
-                if let Some(p) = p {
-                    img.set_pixel(x, y, p);
-                    covered[y * bw + x] = true;
-                    if owner as usize == k {
-                        mask[y * bw + x] = 1.0;
+        // The frame over its box: its own pixels where it holds the light, else the owner's.
+        let rows: Vec<(Vec<f32>, Vec<bool>, Vec<f32>)> = (0..bh)
+            .into_par_iter()
+            .map(|y| {
+                let (mut rgb, mut covered, mut mask) =
+                    (vec![0f32; bw * 3], vec![false; bw], vec![0f32; bw]);
+                let v = y0 + y;
+                for x in 0..bw {
+                    let u = x0 + x;
+                    if u >= canvas.width || v >= canvas.height {
+                        continue;
+                    }
+                    let owner = labels.owner[v * labels.width + u];
+                    // ⚠⚠ Outside its own coverage a frame is given what the panorama shows there — its owner's
+                    // pixel — never filler: the coarse levels of a mask near the coverage's edge reach across
+                    // it, and edge-extended filler there put windows inside a neighbour's own area 0.05–0.13
+                    // stops off on the synthetic row. …and the same where its own pixel is clipped and the
+                    // owner's holds the light.
+                    let theirs = (owner as usize != k)
+                        .then(|| warped.get(owner as usize))
+                        .flatten()
+                        .filter(|o| o.index(u, v).is_some_and(|i| o.valid[i] && !o.clipped[i]))
+                        .and_then(|o| o.at(u, v));
+                    let mine = wk
+                        .index(u, v)
+                        .filter(|&i| wk.valid[i])
+                        .map(|i| (wk.clipped[i], wk.at(u, v)));
+                    let p = match mine {
+                        Some((true, _)) if theirs.is_some() => theirs,
+                        Some((_, p)) => p,
+                        None => {
+                            theirs.or_else(|| warped.get(owner as usize).and_then(|o| o.at(u, v)))
+                        }
+                    };
+                    if let Some(p) = p {
+                        rgb[3 * x..3 * x + 3].copy_from_slice(&p);
+                        covered[x] = true;
+                        if owner as usize == k {
+                            mask[x] = 1.0;
+                        }
                     }
                 }
-            }
-        }
+                (rgb, covered, mask)
+            })
+            .collect();
+        let mask: Vec<f32> = rows.iter().flat_map(|r| r.2.iter().copied()).collect();
         if !mask.iter().any(|&m| m > 0.0) {
             continue;
         }
+        let covered: Vec<bool> = rows.iter().flat_map(|r| r.1.iter().copied()).collect();
+        let mut img = ImageBuf::from_vec(bw, bh, rows.into_iter().flat_map(|r| r.0).collect());
         crate::crop::extend_edges(
             &mut img,
             &Valid {
@@ -101,57 +112,65 @@ pub fn multiband(
             let (gw, gh) = (g[l].1, g[l].2);
             let band: Vec<f32> = if l + 1 < levels {
                 let up = expand(&g[l + 1].0, g[l + 1].1, g[l + 1].2, gw, gh, 3);
-                g[l].0.iter().zip(&up).map(|(a, b)| a - b).collect()
+                g[l].0.par_iter().zip(&up).map(|(a, b)| a - b).collect()
             } else {
                 g[l].0.clone()
             };
             let (ox, oy) = (x0 >> l, y0 >> l);
             let aw = dims[l].0;
-            for y in 0..gh {
-                for x in 0..gw {
-                    let wt = m[l].0[y * gw + x];
-                    if wt == 0.0 {
-                        continue;
+            let weights = &m[l].0;
+            // The box's rows of the accumulators, one row per task.
+            acc[l][oy * aw * 3..(oy + gh) * aw * 3]
+                .par_chunks_mut(aw * 3)
+                .zip(wsum[l][oy * aw..(oy + gh) * aw].par_chunks_mut(aw))
+                .enumerate()
+                .for_each(|(y, (arow, wrow))| {
+                    for x in 0..gw {
+                        let wt = weights[y * gw + x];
+                        if wt == 0.0 {
+                            continue;
+                        }
+                        wrow[ox + x] += wt;
+                        for c in 0..3 {
+                            arow[3 * (ox + x) + c] += wt * band[3 * (y * gw + x) + c];
+                        }
                     }
-                    let gi = (oy + y) * aw + ox + x;
-                    wsum[l][gi] += wt;
-                    for c in 0..3 {
-                        acc[l][3 * gi + c] += wt * band[3 * (y * gw + x) + c];
-                    }
-                }
-            }
+                });
         }
     }
     // Normalise each level by its weights, then collapse from the top.
     for l in 0..levels {
-        for i in 0..wsum[l].len() {
-            let wt = wsum[l][i];
-            for c in 0..3 {
-                acc[l][3 * i + c] = if wt > 0.0 {
-                    acc[l][3 * i + c] / wt
-                } else {
-                    0.0
-                };
-            }
-        }
+        acc[l]
+            .par_chunks_mut(3)
+            .zip(wsum[l].par_iter())
+            .for_each(|(p, &wt)| {
+                for v in p.iter_mut() {
+                    *v = if wt > 0.0 { *v / wt } else { 0.0 };
+                }
+            });
     }
     let mut out = acc[levels - 1].clone();
     for l in (0..levels - 1).rev() {
         let up = expand(&out, dims[l + 1].0, dims[l + 1].1, dims[l].0, dims[l].1, 3);
-        out = up.iter().zip(&acc[l]).map(|(a, b)| a + b).collect();
+        out = up.par_iter().zip(&acc[l]).map(|(a, b)| a + b).collect();
     }
     let (w, h) = (canvas.width, canvas.height);
-    let mut img = ImageBuf::new(w, h);
-    let mut bits = vec![false; w * h];
-    for y in 0..h {
-        for x in 0..w {
-            if labels.owner[y * w + x] != crate::seam::NONE {
-                let i = 3 * (y * pw + x);
-                img.set_pixel(x, y, [out[i], out[i + 1], out[i + 2]]);
-                bits[y * w + x] = true;
+    let rows: Vec<(Vec<f32>, Vec<bool>)> = (0..h)
+        .into_par_iter()
+        .map(|y| {
+            let (mut rgb, mut bits) = (vec![0f32; w * 3], vec![false; w]);
+            for x in 0..w {
+                if labels.owner[y * w + x] != crate::seam::NONE {
+                    let i = 3 * (y * pw + x);
+                    rgb[3 * x..3 * x + 3].copy_from_slice(&out[i..i + 3]);
+                    bits[x] = true;
+                }
             }
-        }
-    }
+            (rgb, bits)
+        })
+        .collect();
+    let bits: Vec<bool> = rows.iter().flat_map(|r| r.1.iter().copied()).collect();
+    let img = ImageBuf::from_vec(w, h, rows.into_iter().flat_map(|r| r.0).collect());
     (
         img,
         Valid {
@@ -167,31 +186,33 @@ fn reduce(src: &[f32], w: usize, h: usize, ch: usize) -> Vec<f32> {
     const K: [f32; 5] = [1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0];
     let (ow, oh) = (w / 2, h / 2);
     let mut tmp = vec![0f32; ow * h * ch];
-    for y in 0..h {
-        for x in 0..ow {
-            for (j, k) in K.iter().enumerate() {
-                let sx = (2 * x as i64 + j as i64 - 2).clamp(0, w as i64 - 1) as usize;
-                for c in 0..ch {
-                    tmp[(y * ow + x) * ch + c] += k * src[(y * w + sx) * ch + c];
-                }
-            }
-        }
-    }
-    let mut out = vec![0f32; ow * oh * ch];
-    for y in 0..oh {
-        for (j, k) in K.iter().enumerate() {
-            let sy = (2 * y as i64 + j as i64 - 2).clamp(0, h as i64 - 1) as usize;
+    tmp.par_chunks_mut(ow * ch)
+        .enumerate()
+        .for_each(|(y, row)| {
             for x in 0..ow {
-                for c in 0..ch {
-                    out[(y * ow + x) * ch + c] += k * tmp[(sy * ow + x) * ch + c];
+                for (j, k) in K.iter().enumerate() {
+                    let sx = (2 * x as i64 + j as i64 - 2).clamp(0, w as i64 - 1) as usize;
+                    for c in 0..ch {
+                        row[x * ch + c] += k * src[(y * w + sx) * ch + c];
+                    }
                 }
             }
-        }
-    }
+        });
+    let mut out = vec![0f32; ow * oh * ch];
+    out.par_chunks_mut(ow * ch)
+        .enumerate()
+        .for_each(|(y, row)| {
+            for (j, k) in K.iter().enumerate() {
+                let sy = (2 * y as i64 + j as i64 - 2).clamp(0, h as i64 - 1) as usize;
+                for (o, t) in row.iter_mut().zip(&tmp[sy * ow * ch..(sy + 1) * ow * ch]) {
+                    *o += k * t;
+                }
+            }
+        });
     out
 }
 
-/// Coarse `cw × ch_` up to `w × h`: coarse sample `x` sits on fine `2x`, odd fines the mean of their two —
+/// Coarse `cw × chh` up to `w × h`: coarse sample `x` sits on fine `2x`, odd fines the mean of their two —
 /// bilinear, the same operator building the Laplacian and collapsing it, so one frame reconstructs exactly.
 fn expand(src: &[f32], cw: usize, chh: usize, w: usize, h: usize, ch: usize) -> Vec<f32> {
     let pick = |i: usize, n: usize| -> (usize, usize) {
@@ -204,7 +225,7 @@ fn expand(src: &[f32], cw: usize, chh: usize, w: usize, h: usize, ch: usize) -> 
         (a, b)
     };
     let mut out = vec![0f32; w * h * ch];
-    for y in 0..h {
+    out.par_chunks_mut(w * ch).enumerate().for_each(|(y, row)| {
         let (ya, yb) = pick(y, chh);
         for x in 0..w {
             let (xa, xb) = pick(x, cw);
@@ -213,10 +234,10 @@ fn expand(src: &[f32], cw: usize, chh: usize, w: usize, h: usize, ch: usize) -> 
                     + src[(ya * cw + xb) * ch + c]
                     + src[(yb * cw + xa) * ch + c]
                     + src[(yb * cw + xb) * ch + c];
-                out[(y * w + x) * ch + c] = v / 4.0;
+                row[x * ch + c] = v / 4.0;
             }
         }
-    }
+    });
     out
 }
 

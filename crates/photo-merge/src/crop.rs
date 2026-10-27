@@ -53,65 +53,94 @@ pub fn largest_rectangle(v: &Valid) -> Option<[usize; 4]> {
     best.map(|(_, r)| r)
 }
 
-/// Every invalid pixel of `img` takes the value of its nearest valid pixel (a two-pass propagation of the
-/// nearest valid pixel's position, 8-connected); valid pixels are left untouched.
+/// Every invalid pixel of `img` takes the value of its nearest valid pixel — exactly, by Euclidean distance
+/// (a separable distance transform carrying the source: per column, then the rows' lower envelopes, both in
+/// parallel); valid pixels are left untouched.
 pub fn extend_edges(img: &mut ImageBuf, v: &Valid) {
+    use rayon::prelude::*;
     let (w, h) = (v.width, v.height);
-    const NONE: u32 = u32::MAX;
-    // Per pixel, the index of the nearest valid pixel found so far.
-    let mut near: Vec<u32> = (0..w * h)
-        .map(|i| if v.bits[i] { i as u32 } else { NONE })
-        .collect();
-    let dist = |i: usize, src: u32| -> u64 {
-        if src == NONE {
-            return u64::MAX;
-        }
-        let (x, y) = ((i % w) as i64, (i / w) as i64);
-        let (sx, sy) = ((src as usize % w) as i64, (src as usize / w) as i64);
-        ((x - sx).pow(2) + (y - sy).pow(2)) as u64
-    };
-    let relax = |near: &mut Vec<u32>, x: usize, y: usize, nb: &[(i64, i64)]| {
-        let i = y * w + x;
-        let mut best = (dist(i, near[i]), near[i]);
-        for &(dx, dy) in nb {
-            let (nx, ny) = (x as i64 + dx, y as i64 + dy);
-            if nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64 {
-                continue;
-            }
-            let src = near[ny as usize * w + nx as usize];
-            let d = dist(i, src);
-            if d < best.0 {
-                best = (d, src);
-            }
-        }
-        near[i] = best.1;
-    };
-    let forward = [(-1, 0), (-1, -1), (0, -1), (1, -1)];
-    let backward = [(1, 0), (1, 1), (0, 1), (-1, 1)];
-    for _ in 0..2 {
-        for y in 0..h {
-            for x in 0..w {
-                relax(&mut near, x, y, &forward);
-            }
-            for x in (0..w).rev() {
-                relax(&mut near, x, y, &[(1, 0)]);
-            }
-        }
-        for y in (0..h).rev() {
-            for x in (0..w).rev() {
-                relax(&mut near, x, y, &backward);
-            }
-            for x in 0..w {
-                relax(&mut near, x, y, &[(-1, 0)]);
-            }
-        }
+    if w == 0 || h == 0 || v.bits.iter().all(|&b| b) || !v.bits.iter().any(|&b| b) {
+        return;
     }
-    for (i, &src) in near.iter().enumerate() {
-        if !v.bits[i] && src != NONE {
-            let s = src as usize;
-            let p = img.pixel(s % w, s / w);
-            img.set_pixel(i % w, i / w, p);
+    const FAR: u32 = u32::MAX;
+    // Pass 1, per column: the nearest valid row above or below each pixel.
+    let mut col_row = vec![FAR; w * h];
+    col_row.par_chunks_mut(h).enumerate().for_each(|(x, col)| {
+        let mut last = FAR;
+        for (y, c) in col.iter_mut().enumerate() {
+            if v.bits[y * w + x] {
+                last = y as u32;
+            }
+            *c = last;
         }
+        let mut next = FAR;
+        for y in (0..h).rev() {
+            if v.bits[y * w + x] {
+                next = y as u32;
+            }
+            let d = |r: u32| {
+                if r == FAR {
+                    u64::MAX
+                } else {
+                    (r as i64 - y as i64).unsigned_abs()
+                }
+            };
+            if d(next) < d(col[y]) {
+                col[y] = next;
+            }
+        }
+    });
+    // Pass 2, per row: the lower envelope of the columns' parabolas (Felzenszwalb–Huttenlocher), tracking
+    // which column — so each pixel learns its nearest valid pixel exactly.
+    let sources: Vec<u32> = (0..h)
+        .into_par_iter()
+        .flat_map_iter(|y| {
+            let g = |x: usize| -> Option<f64> {
+                let r = col_row[x * h + y];
+                (r != FAR).then(|| ((r as i64 - y as i64) as f64).powi(2))
+            };
+            let cols: Vec<usize> = (0..w).filter(|&x| g(x).is_some()).collect();
+            let mut hull: Vec<usize> = Vec::with_capacity(cols.len());
+            let mut from: Vec<f64> = Vec::with_capacity(cols.len());
+            let meet = |p: usize, q: usize| {
+                let (fp, fq) = (g(p).unwrap(), g(q).unwrap());
+                ((fq + (q * q) as f64) - (fp + (p * p) as f64)) / (2.0 * (q as f64 - p as f64))
+            };
+            for &q in &cols {
+                while let Some(&p) = hull.last() {
+                    if meet(p, q) <= *from.last().unwrap() {
+                        hull.pop();
+                        from.pop();
+                    } else {
+                        break;
+                    }
+                }
+                from.push(hull.last().map_or(f64::NEG_INFINITY, |&p| meet(p, q)));
+                hull.push(q);
+            }
+            let mut k = 0;
+            (0..w)
+                .map(|x| {
+                    while k + 1 < hull.len() && from[k + 1] <= x as f64 {
+                        k += 1;
+                    }
+                    let c = hull[k];
+                    col_row[c * h + y] * w as u32 + c as u32
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let data = img.data_mut();
+    let picked: Vec<(usize, [f32; 3])> = (0..w * h)
+        .into_par_iter()
+        .filter(|&i| !v.bits[i])
+        .map(|i| {
+            let s = sources[i] as usize;
+            (i, [data[3 * s], data[3 * s + 1], data[3 * s + 2]])
+        })
+        .collect();
+    for (i, p) in picked {
+        data[3 * i..3 * i + 3].copy_from_slice(&p);
     }
 }
 
@@ -251,6 +280,44 @@ mod tests {
         extend_edges(&mut img, &v);
         for y in 0..h {
             assert_eq!(img.pixel(9, y)[0], y as f32, "row {y}");
+        }
+    }
+
+    /// Each filled pixel's source (encoded in its value) is at the smallest distance any valid pixel is.
+    #[test]
+    fn extension_is_exactly_nearest() {
+        let mut rng = Noise(14);
+        for _ in 0..20 {
+            let (w, h) = (37, 23);
+            let v = random_outline(&mut rng, w, h);
+            if !v.bits.iter().any(|&b| b) {
+                continue;
+            }
+            let mut img = ImageBuf::new(w, h);
+            for y in 0..h {
+                for x in 0..w {
+                    if v.at(x, y) {
+                        img.set_pixel(x, y, [x as f32, y as f32, 1.0]);
+                    }
+                }
+            }
+            extend_edges(&mut img, &v);
+            for y in 0..h {
+                for x in 0..w {
+                    if v.at(x, y) {
+                        continue;
+                    }
+                    let p = img.pixel(x, y);
+                    assert_eq!(p[2], 1.0, "({x}, {y}) unfilled");
+                    let d2 = |sx: f32, sy: f32| (sx - x as f32).powi(2) + (sy - y as f32).powi(2);
+                    let best = (0..h)
+                        .flat_map(|sy| (0..w).map(move |sx| (sx, sy)))
+                        .filter(|&(sx, sy)| v.at(sx, sy))
+                        .map(|(sx, sy)| d2(sx as f32, sy as f32))
+                        .fold(f32::MAX, f32::min);
+                    assert_eq!(d2(p[0], p[1]), best, "({x}, {y}) took ({}, {})", p[0], p[1]);
+                }
+            }
         }
     }
 

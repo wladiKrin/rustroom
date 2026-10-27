@@ -59,6 +59,14 @@ pub enum MergeError {
     Sizes,
     #[error("the photos are from different cameras")]
     Cameras,
+    #[error("the photos were taken at different focal lengths")]
+    Focal,
+    #[error("some photos share nothing with the others")]
+    Unconnected(Vec<usize>),
+    #[error("the photos do not form one row")]
+    NotARow,
+    #[error("the panorama is too wide for this projection")]
+    TooWide,
     #[error("could not fill the edges: {0}")]
     Fill(String),
     #[error("could not write the merged photo: {0}")]
@@ -378,11 +386,14 @@ pub fn merge_aligned(
 /// The merge in linear ProPhoto, as Develop would decode its DNG: the reference's white balance,
 /// then its camera matrix.
 pub fn to_prophoto(m: &Merged, d: &Decoded) -> ImageBuf {
-    let c = &d.metas[m.reference];
-    let mat = color::camera::camera_to_prophoto(c.rgb_cam);
-    let k = c.pre_mul;
-    m.image
-        .map_pixels(|p| color::spaces::apply(&mat, [p[0] * k[0], p[1] * k[1], p[2] * k[2]]))
+    raw_to_prophoto(&m.image, &d.metas[m.reference])
+}
+
+/// Normalised raw camera RGB of `meta`'s camera in linear ProPhoto: its white balance, then its matrix.
+pub fn raw_to_prophoto(image: &ImageBuf, meta: &CameraFrame) -> ImageBuf {
+    let mat = color::camera::camera_to_prophoto(meta.rgb_cam);
+    let k = meta.pre_mul;
+    image.map_pixels(|p| color::spaces::apply(&mat, [p[0] * k[0], p[1] * k[1], p[2] * k[2]]))
 }
 
 /// Write the merge as the floating-point DNG at `path`, with `preview` as its picture.

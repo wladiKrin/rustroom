@@ -16,6 +16,7 @@ pub mod hdr;
 pub mod homography;
 pub mod lens;
 pub mod merge;
+pub mod pano;
 pub mod pano_warp;
 pub mod preview;
 pub mod projection;

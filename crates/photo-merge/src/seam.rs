@@ -14,6 +14,7 @@ use crate::pano_warp::Warped;
 use crate::projection::Canvas;
 use crate::pyramid::FLOOR;
 use crate::rig::Sweep;
+use rayon::prelude::*;
 
 /// The weight of a disagreement, per stop of log-luminance difference.
 pub const DISAGREE: f32 = 1.0;
@@ -77,6 +78,7 @@ pub fn cut(canvas: &Canvas, warped: &[Warped], order: &[usize]) -> Labels {
         // Per cell: inside the overlap, its disagreement and the rest of its cost; outside, `None`.
         let b_lum = |x: usize, y: usize| wb.at(x, y).map(lum);
         let cells: Vec<Option<(f32, f32)>> = (0..nt * ns)
+            .into_par_iter()
             .map(|k| {
                 let (x, y) = at(s0 + k % ns, t0 + k / ns);
                 let o = owner[y * w + x];
@@ -203,39 +205,45 @@ pub fn cut(canvas: &Canvas, warped: &[Warped], order: &[usize]) -> Labels {
 
 /// The maximum over a `(2r + 1)²` square around each cell of a `w × h` grid (separable).
 fn max_filter(src: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
-    let pass = |src: &[f32], horizontal: bool| -> Vec<f32> {
-        let mut out = vec![0f32; w * h];
-        let (n, m) = if horizontal { (h, w) } else { (w, h) };
-        let idx = |line: usize, k: usize| {
-            if horizontal {
-                line * w + k
-            } else {
-                k * w + line
-            }
-        };
+    // One line: the running maximum over ±r by a monotone deque.
+    let line = |get: &dyn Fn(usize) -> f32, m: usize, out: &mut dyn FnMut(usize, f32)| {
         let mut window: std::collections::VecDeque<(usize, f32)> =
             std::collections::VecDeque::new();
-        for line in 0..n {
-            window.clear();
-            let mut next = 0;
-            for k in 0..m {
-                while next < m && next <= k + r {
-                    let v = src[idx(line, next)];
-                    while window.back().is_some_and(|b| b.1 <= v) {
-                        window.pop_back();
-                    }
-                    window.push_back((next, v));
-                    next += 1;
+        let mut next = 0;
+        for k in 0..m {
+            while next < m && next <= k + r {
+                let v = get(next);
+                while window.back().is_some_and(|b| b.1 <= v) {
+                    window.pop_back();
                 }
-                while window.front().is_some_and(|f| f.0 + r < k) {
-                    window.pop_front();
-                }
-                out[idx(line, k)] = window.front().map_or(0.0, |f| f.1);
+                window.push_back((next, v));
+                next += 1;
             }
+            while window.front().is_some_and(|f| f.0 + r < k) {
+                window.pop_front();
+            }
+            out(k, window.front().map_or(0.0, |f| f.1));
         }
-        out
     };
-    pass(&pass(src, true), false)
+    let mut rows = vec![0f32; w * h];
+    rows.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        line(&|x| src[y * w + x], w, &mut |x, v| row[x] = v);
+    });
+    let cols: Vec<Vec<f32>> = (0..w)
+        .into_par_iter()
+        .map(|x| {
+            let mut col = vec![0f32; h];
+            line(&|y| rows[y * w + x], h, &mut |y, v| col[y] = v);
+            col
+        })
+        .collect();
+    let mut out = vec![0f32; w * h];
+    for (x, col) in cols.iter().enumerate() {
+        for (y, v) in col.iter().enumerate() {
+            out[y * w + x] = *v;
+        }
+    }
+    out
 }
 
 #[cfg(test)]

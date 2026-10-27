@@ -273,8 +273,8 @@ mod tests {
                 y > 15.0 + 15.0 * (x / 37.0).sin() && x > 12.0 + 13.0 * (y / 23.0).cos()
             })
             .collect();
-        for i in 0..w * h {
-            if bits[i] {
+        for (i, _) in bits.iter().enumerate().filter(|b| *b.1) {
+            {
                 let p = [0, 1, 2].map(|c| 0.2 + 0.05 * c as f32 + 0.01 * rng.gauss() as f32);
                 img.set_pixel(i % w, i / w, p);
             }
