@@ -18,8 +18,10 @@ pub const FEATURE_LONG_EDGE: usize = 1500;
 /// At most this many corners a frame.
 pub const MAX_FEATURES: usize = 2000;
 const GRID: usize = 16;
-/// Lowe's ratio: a match is kept only when its best squared distance is below this share of the second best.
-const RATIO: f32 = 0.4;
+/// Lowe's ratio on SQUARED distances (0.71 on distances, near SIFT's 0.7): measured on the synthetic row,
+/// 0.64 kept 207 matches of which 91 % were right and 38 between two unrelated places; 0.5 keeps 172, 98 %
+/// right, and under 20 between unrelated places; 0.4 gains little more (151 of 152).
+const RATIO: f32 = 0.5;
 /// The descriptor sample's spacing, detection pixels.
 const SPACING: f32 = 3.0;
 

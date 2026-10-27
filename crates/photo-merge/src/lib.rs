@@ -14,6 +14,7 @@ pub mod homography;
 pub mod lens;
 pub mod merge;
 pub mod preview;
+pub mod projection;
 pub mod pyramid;
 pub mod refine;
 pub mod rig;
