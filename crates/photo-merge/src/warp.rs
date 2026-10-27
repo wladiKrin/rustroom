@@ -3,6 +3,7 @@
 //! ⚠ The kernel's weights are `pipeline::resample`'s own table, never a second construction of it.
 
 use crate::frame::Frame;
+use crate::lens::FrameLens;
 use pipeline::resample::Weights;
 use pipeline::Resampler;
 
@@ -70,6 +71,62 @@ impl Sampler {
             }
         }
         Some(out)
+    }
+}
+
+impl Sampler {
+    /// The normalised raw signal at corrected pixel `(x, y)` of `f`, through `lens`: each channel read
+    /// where the lens puts it, times the vignetting gain — and whether any tap read a clipped sample.
+    /// `None` only outside the frame. [`FrameLens::NoProfile`] and [`FrameLens::NoLens`] read `(x, y)`.
+    pub fn raw_at_corrected(
+        &self,
+        f: &Frame,
+        lens: &FrameLens,
+        x: f32,
+        y: f32,
+    ) -> Option<([f32; 3], bool)> {
+        let Some((src, gain)) = lens.at(x, y) else {
+            return self.channels_at(f, [[x, y]; 3]);
+        };
+        let (mut v, clipped) = self.channels_at(f, src)?;
+        for c in v.iter_mut() {
+            *c *= gain;
+        }
+        Some((v, clipped))
+    }
+
+    /// Each channel `c` read at `at[c]`, and whether any tap of any channel was clipped.
+    fn channels_at(&self, f: &Frame, at: [[f32; 2]; 3]) -> Option<([f32; 3], bool)> {
+        let mut out = [0f32; 3];
+        let mut clipped = false;
+        for (c, [x, y]) in at.into_iter().enumerate() {
+            if !(x.is_finite() && y.is_finite()) {
+                return None;
+            }
+            let (bx, by) = (x.floor(), y.floor());
+            let (x0, y0) = (bx as i64 - 1, by as i64 - 1);
+            if x0 < 0 || y0 < 0 || x0 + 3 >= f.width as i64 || y0 + 3 >= f.height as i64 {
+                return None;
+            }
+            let (wx, wy) = (self.weights(x - bx), self.weights(y - by));
+            for (j, wyj) in wy.iter().enumerate() {
+                if *wyj == 0.0 {
+                    continue;
+                }
+                let sy = (y0 + j as i64) as usize;
+                let mut row = 0f32;
+                for (i, wxi) in wx.iter().enumerate() {
+                    if *wxi == 0.0 {
+                        continue;
+                    }
+                    let sx = (x0 + i as i64) as usize;
+                    clipped |= f.clipped(sx, sy);
+                    row += wxi * f.raw(sx, sy)[c];
+                }
+                out[c] += wyj * row;
+            }
+        }
+        Some((out, clipped))
     }
 }
 

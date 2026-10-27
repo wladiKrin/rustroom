@@ -390,23 +390,45 @@ pub fn write_dng(
     path: &Path,
     preview: &image::RgbImage,
 ) -> Result<(), MergeError> {
-    let c = &d.metas[m.reference];
-    let lens_make = c
+    write_raw_dng(&m.image, &d.metas[m.reference], path, preview, true)
+}
+
+/// `image` — normalised raw camera RGB of `meta`'s camera — as a floating-point DNG at `path`, its
+/// capture facts `meta`'s. `lens_tags` off leaves out the lens make and model (the focal length stays):
+/// a panorama's lens is already corrected, and a named lens would be corrected again (M10.17b).
+pub fn write_raw_dng(
+    image: &ImageBuf,
+    meta: &CameraFrame,
+    path: &Path,
+    preview: &image::RgbImage,
+    lens_tags: bool,
+) -> Result<(), MergeError> {
+    let lens_make = meta
         .metadata
         .lens
         .as_ref()
         .map(|l| l.make.as_str())
-        .filter(|s| !s.is_empty());
+        .filter(|s| lens_tags && !s.is_empty());
+    let unnamed;
+    let capture = if lens_tags {
+        &meta.capture
+    } else {
+        unnamed = core_image::Capture {
+            lens: None,
+            ..meta.capture.clone()
+        };
+        &unnamed
+    };
     export::dng_hdr::save(
         &export::dng_hdr::HdrDng {
-            width: m.image.width(),
-            height: m.image.height(),
-            data: m.image.data(),
-            make: &c.metadata.make,
-            model: &c.metadata.model,
-            cam_xyz: c.cam_xyz,
-            as_shot_neutral: c.pre_mul.map(|v| 1.0 / v),
-            capture: &c.capture,
+            width: image.width(),
+            height: image.height(),
+            data: image.data(),
+            make: &meta.metadata.make,
+            model: &meta.metadata.model,
+            cam_xyz: meta.cam_xyz,
+            as_shot_neutral: meta.pre_mul.map(|v| 1.0 / v),
+            capture,
             lens_make,
             preview,
         },
@@ -523,6 +545,41 @@ mod tests {
             "the scene must have highlights the reference clipped ({n})"
         );
         assert!(mean < 0.02, "{mean}");
+    }
+
+    /// A panorama's lens is corrected before it is stitched, so its DNG must not name the lens — or
+    /// Develop's automatic lens correction would correct it twice. The focal length stays.
+    #[test]
+    fn a_dng_without_lens_tags_reads_back_without_a_lens() {
+        let paths = dng_bracket("lens-tags", 300, 200, &[0.0]);
+        let cancel = AtomicBool::new(false);
+        let mut d = decode_all(&paths, false, &cancel, &mut |_| {}).expect("decodes");
+        let meta = &mut d.metas[0];
+        meta.capture.lens = Some("XF23mmF2 R WR".into());
+        meta.capture.focal_len = Some(23.0);
+        meta.metadata.lens = Some(raw_decode::LensMetadata {
+            make: "FUJIFILM".into(),
+            name: "XF23mmF2 R WR".into(),
+            focal: 23.0,
+            aperture: 2.0,
+        });
+        let img = ImageBuf::new(300, 200);
+        let preview = image::RgbImage::from_pixel(16, 12, image::Rgb([100, 100, 100]));
+        let (with, without) = (
+            paths[0].with_file_name("with.dng"),
+            paths[0].with_file_name("without.dng"),
+        );
+        write_raw_dng(&img, &d.metas[0], &with, &preview, true).expect("writes");
+        write_raw_dng(&img, &d.metas[0], &without, &preview, false).expect("writes");
+        let c = raw_decode::read_capture(&with).expect("reads");
+        assert_eq!(
+            c.lens.as_deref(),
+            Some("XF23mmF2 R WR"),
+            "the control: the tag is written when asked"
+        );
+        let c = raw_decode::read_capture(&without).expect("reads");
+        assert_eq!(c.lens, None);
+        assert_eq!(c.focal_len, Some(23.0));
     }
 
     #[test]

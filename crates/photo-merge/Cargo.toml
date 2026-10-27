@@ -13,6 +13,7 @@ edit-model = { path = "../edit-model" }
 export = { path = "../export" }
 image = { workspace = true }
 pipeline = { path = "../pipeline" }
+lens-profile = { path = "../lens-profile" }
 raw-decode = { path = "../raw-decode" }
 rayon = { workspace = true }
 serde = { workspace = true }

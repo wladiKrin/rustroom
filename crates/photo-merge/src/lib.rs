@@ -9,6 +9,7 @@ pub mod exposure;
 pub mod frame;
 pub mod hdr;
 pub mod homography;
+pub mod lens;
 pub mod merge;
 pub mod preview;
 pub mod pyramid;
