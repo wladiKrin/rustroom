@@ -191,9 +191,9 @@ impl LensGrid {
         let mut src = [[0f32; 2]; 3];
         let mut gain = 0f32;
         for (wt, n) in w {
-            for ch in 0..3 {
-                src[ch][0] += wt * self.src[n][ch][0];
-                src[ch][1] += wt * self.src[n][ch][1];
+            for (out, node) in src.iter_mut().zip(&self.src[n]) {
+                out[0] += wt * node[0];
+                out[1] += wt * node[1];
             }
             gain += wt * self.gain[n];
         }

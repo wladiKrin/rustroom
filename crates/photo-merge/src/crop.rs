@@ -70,7 +70,7 @@ pub fn extend_edges(img: &mut ImageBuf, v: &Valid) {
         let (sx, sy) = ((src as usize % w) as i64, (src as usize / w) as i64);
         ((x - sx).pow(2) + (y - sy).pow(2)) as u64
     };
-    let mut relax = |near: &mut Vec<u32>, x: usize, y: usize, nb: &[(i64, i64)]| {
+    let relax = |near: &mut Vec<u32>, x: usize, y: usize, nb: &[(i64, i64)]| {
         let i = y * w + x;
         let mut best = (dist(i, near[i]), near[i]);
         for &(dx, dy) in nb {
@@ -106,9 +106,9 @@ pub fn extend_edges(img: &mut ImageBuf, v: &Valid) {
             }
         }
     }
-    for i in 0..w * h {
-        if !v.bits[i] && near[i] != NONE {
-            let s = near[i] as usize;
+    for (i, &src) in near.iter().enumerate() {
+        if !v.bits[i] && src != NONE {
+            let s = src as usize;
             let p = img.pixel(s % w, s / w);
             img.set_pixel(i % w, i / w, p);
         }

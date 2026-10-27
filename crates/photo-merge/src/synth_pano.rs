@@ -53,7 +53,8 @@ pub struct Shot {
     pub gain: f32,
     /// Light lost at the frame's corner, as a share: `1 − vignette · r²`, `r` 1 at the corner.
     pub vignette: f32,
-    /// A bright square seen in this frame only: `[longitude, latitude, half side]`, radians.
+    /// A dark square (0.15 of the scene — someone in dark clothes, never clipped) seen in this frame only:
+    /// `[longitude, latitude, half side]`, radians.
     pub square: Option<[f64; 3]>,
 }
 
@@ -100,6 +101,14 @@ impl Scene {
         let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
         let d = d.map(|c| c / n);
         (d[0].atan2(d[2]), (-d[1]).atan2(d[0].hypot(d[2])))
+    }
+
+    /// Within `margin` radians of the horizon line or a pole — hard steps a sampled frame cannot hold, so a
+    /// truth comparison skips them.
+    pub fn near_a_line(d: [f64; 3], margin: f64) -> bool {
+        let (lon, lat) = Self::lon_lat(d);
+        let pole = (lon / 0.35).round() * 0.35;
+        lat.abs() < 0.004 + margin || (lat < margin && (lon - pole).abs() < 0.0035 + margin)
     }
 
     /// The scene's radiance (normalised raw, before the frame's gain) toward direction `d`.
@@ -175,7 +184,7 @@ pub fn render(scene: &Scene, shots: &[Shot], w: usize, h: usize, focal: f64) -> 
                         if let Some([lon0, lat0, half]) = s.square {
                             let (lon, lat) = Scene::lon_lat(d);
                             if (lon - lon0).abs() < half && (lat - lat0).abs() < half {
-                                r = r.map(|c| c * 6.0);
+                                r = r.map(|c| c * 0.15);
                             }
                         }
                         let rr = ((x as f64 - (w as f64 - 1.0) / 2.0).powi(2)

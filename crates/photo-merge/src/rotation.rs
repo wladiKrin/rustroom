@@ -153,6 +153,8 @@ pub(crate) fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
 }
 
 /// The eigenvalues and eigenvectors (as columns) of a symmetric `N × N` matrix, cyclic Jacobi.
+// Index loops read as the textbook's rotation of rows p and q and columns p and q.
+#[allow(clippy::needless_range_loop)]
 pub(crate) fn jacobi<const N: usize>(mut a: [[f64; N]; N]) -> ([f64; N], [[f64; N]; N]) {
     let mut v = [[0.0; N]; N];
     for (i, row) in v.iter_mut().enumerate() {
