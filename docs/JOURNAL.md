@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [M10.17b: Panorama merge — a row of frames into one floating-point raw (2026-10-27)](#2026-10-27--m1017b-panorama-merge--a-row-of-frames-into-one-floating-point-raw-branch-m1017b-panorama)
 - [The app builds on Linux again (2026-10-27)](#2026-10-27--the-app-builds-on-linux-again-branch-fix-linux-build)
 - [Three load-flaky tests hold their jobs until they have looked (2026-10-27)](#2026-10-27--three-load-flaky-tests-hold-their-jobs-until-they-have-looked-branch-fix-flaky-people-denoise-tests)
 - [M10.17a: HDR merge — a bracket into one floating-point raw (2026-10-26)](#2026-10-26--m1017a-hdr-merge--a-bracket-into-one-floating-point-raw-branch-m1017a-hdr-merge)
@@ -190,6 +191,56 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-27 — M10.17b: Panorama merge — a row of frames into one floating-point raw (branch `m10.17b-panorama`)
+
+Spec `docs/superpowers/specs/2026-10-27-m10.17b-panorama-merge-design.md`, plan
+`docs/superpowers/plans/2026-10-27-m10.17b-panorama-merge.md`, executed inline. The author's calls: one row, 3–6
+raws, Auto crop and Fill edges (no Boundary Warp), the result capped at a 16,000-px long edge, no real panoramas yet.
+**Built, not yet confirmed by use — ⏸ waiting for the author's own panoramas** (one with people moving across an
+overlap, one with sky).
+
+**What shipped.** `photo-merge` gained the stitch, zero GUI, one module each: `lens` (the frame's LensFun profile
+sampled every 8 px and read INSIDE the one resample; `lens::corrected` for registration), `features` (Harris corners
+on log luminance, an 8×8 oriented normalised patch — exposure-blind — ratio 0.5 on squared distances, mutual),
+`rotation` (the rotation model, Horn's closed form, RANSAC 2-point, the chain as a maximum spanning tree),
+`rig` (Levenberg–Marquardt over every rotation and the focal length, Cauchy; wave correction; the chain oriented by
+summed signed turns), `refine` (each neighbouring pair re-registered by `align::refine_from` — new, homography-only),
+`gain` (one measured factor per frame, medians of overlap log ratios), `projection` (Spherical · Cylindrical ·
+Perspective in a basis centred on the reference, Auto select, the capped canvas), `pano_warp`, `seam` (full-resolution
+DP; disagreement above 0.2 stops widened 48 px; a clipped-vs-unclipped override), `blend` (5-level Laplacian, each
+frame given the OWNER's pixel outside its coverage and where it is clipped), `crop` (largest rectangle; exact parallel
+EDT edge extension), `fill` (LaMa window walk, each window grown until its hole ≤ ⅓, noise matched), `pano` (end to
+end; ALIGN size = decoded ≤ 3200 px else half, so the preview's rig is the merge's start). `rustroom-cli merge-pano`,
+`examples/probe_pano.rs`. App: `pano_merge` (lib: plan, settings, worker, `lama::LamaFill`), `merge_queue` (bin: HDR and
+panorama queue together; `land_merged` shared), `pano_flow`, `modals/pano_merge`; Photo merge → Panorama… ⇧⌘M /
+⌥⇧⌘M, the right-click; `Settings.panorama`. The DNG omits the lens tags; the result opens with the crop seeded and
+lens corrections off.
+
+**Measured (synthetic, constructed and said so).** Rig 0.24 px from features → **0.006 px** refined, focal exact;
+gains within 0.5 %; the warp 0.022 stops against a 0.016 noise floor; worst 16-px window after blending **0.020 stops**
+(a straight join without gains: 1.0); a dark square in one frame's overlap whole, no ghost (a straight seam cuts it).
+Timing (release, six 2400×1600 frames): align 0.8 s, stitch 2.1 s → **≈ 13.8 s extrapolated at the cap** against ≈ 17 s
+of X-T4 decodes; preview re-stitch **62 ms**. A 16,000 × 5,800 float DNG in Develop: decode 0.7 s, half 0.8 s, fit
+render 0.03 s, 1:1 viewport 0.04 s, full-size export 1.6 s, peak RSS 3.0 GB — nothing needed fixing.
+
+**Findings worth keeping.**
+- ⚠⚠ `align::align`'s similarity stage PROJECTS its start onto a similarity — harmless for a bracket, fatal for two
+  frames 40° apart (wandered 14–42 px from the exact rotation). `refine_from` refines the full homography only.
+- ⚠⚠ Dense registration assumes one constant log offset: an uncorrected 25 % vignette left the refined rig at 0.56 px,
+  WORSE than the features; corrected, 0.006. `pano::align` keeps the refined rig only if it fits the features no worse.
+  Expect weaker refinement on a lens LensFun does not know.
+- ⚠⚠ Multi-band blending with partial coverage: a frame's coarse levels reach past its own edge, so its edge-extended
+  filler bled 0.05–0.13 stops into a neighbour's own area. Giving each frame the owner's pixel there fixed it (0.020).
+- ⚠ Wave correction cannot level a rolled REFERENCE exactly — one rolled frame of n pulls by part of its roll (2° → 0.83°
+  for six); a wandering pitch is levelled exactly. The spec's stronger claim is weakened here.
+- ⚠ Oriented BRIEF on this scene: unrelated places within 12–33 of 256 bits — inside the true matches' range; the
+  normalised patch replaced it (98 % right).
+- ⚠ libraw's `adjust_maximum` rescales a constructed DNG whose brightest sample falls short of white (+0.13 EV on one
+  frame) — the measured gain follows the pixels, the rule doing its job.
+- ⚠ Process: a scripted `str.replace` that matched nothing after `cargo fmt` reflowed its target no-op'd silently twice
+  (a ratio was committed at 0.4 from a measuring sweep); every later replace asserted its match.
+- Also fixed on the branch: the render engine's tests waited on a 1 s budget (0.8 s alone) — now a 120 s ceiling.
 
 ### 2026-10-27 — The app builds on Linux again (branch `fix-linux-build`)
 
