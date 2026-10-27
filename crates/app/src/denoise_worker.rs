@@ -238,10 +238,17 @@ mod tests {
     struct Held {
         go: Arc<std::sync::atomic::AtomicBool>,
         calls: usize,
+        /// Raised when it starts holding a tile: the job is parked INSIDE the network, everything its
+        /// previous tile's callback sends already sent.
+        holding: Arc<std::sync::atomic::AtomicBool>,
     }
     impl TileNet for Held {
         fn run(&mut self, rgb: &[f32], _: usize, _: usize, _: &[f32]) -> Result<Vec<f32>, String> {
             self.calls += 1;
+            if self.calls > 1 {
+                self.holding
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
             let start = std::time::Instant::now();
             while self.calls > 1
                 && !self.go.load(std::sync::atomic::Ordering::SeqCst)
@@ -251,14 +258,6 @@ mod tests {
             }
             Ok(rgb.to_vec())
         }
-    }
-
-    fn worker(cache: Option<std::path::PathBuf>) -> DenoiseWorker {
-        DenoiseWorker::spawn(
-            Box::new(|| Ok(Box::new(Slow) as Box<dyn TileNet + Send>)),
-            cache,
-            || {},
-        )
     }
 
     /// A photo of `w × h` that takes several tiles.
@@ -296,9 +295,12 @@ mod tests {
         assert_eq!(ended.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
+    /// At least `want` results, or what came by the [`LONG`] ceiling — a ceiling, not a budget: it returns
+    /// the moment they are there (it was 600 × 20 ms, the budget shape 2026-10-21 lost).
     fn wait(w: &DenoiseWorker, want: usize) -> Vec<DenoiseResult> {
         let mut got = Vec::new();
-        for _ in 0..600 {
+        let start = std::time::Instant::now();
+        while start.elapsed() < LONG {
             got.extend(w.poll());
             if got.len() >= want {
                 break;
@@ -329,8 +331,16 @@ mod tests {
         let d = test_dir::TempDir::new("denoise-worker-run");
         let go = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let g = go.clone();
+        let holding = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let h = holding.clone();
         let w = DenoiseWorker::spawn(
-            Box::new(move || Ok(Box::new(Held { go: g, calls: 0 }) as Box<dyn TileNet + Send>)),
+            Box::new(move || {
+                Ok(Box::new(Held {
+                    go: g,
+                    calls: 0,
+                    holding: h,
+                }) as Box<dyn TileNet + Send>)
+            }),
             Some(d.path().to_path_buf()),
             || {},
         );
@@ -364,19 +374,60 @@ mod tests {
     }
 
     /// Review Focus 2: a newer request overtakes a running job, which is never delivered.
+    ///
+    /// ⚠ The first job is HELD between its tiles until the second is asked for (fixed 2026-10-27): the
+    /// old version slept 60 ms hoping the first had started and polled a 12 s budget for the second, and
+    /// a loaded full gate read nothing at all. Now it is certain the first was running when overtaken,
+    /// and the wait is on the second's `Done` under the 120 s ceiling.
     #[test]
     fn a_job_for_another_photo_is_dropped() {
-        let w = worker(None);
+        let go = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let g = go.clone();
+        let holding = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let h = holding.clone();
+        let w = DenoiseWorker::spawn(
+            Box::new(move || {
+                Ok(Box::new(Held {
+                    go: g,
+                    calls: 0,
+                    holding: h,
+                }) as Box<dyn TileNet + Send>)
+            }),
+            None,
+            || {},
+        );
         w.request(DenoiseRequest {
             key: "first".into(),
             image: Some(photo(2000, 1200)),
         });
-        std::thread::sleep(std::time::Duration::from_millis(60));
+        let start = std::time::Instant::now();
+        while !holding.load(std::sync::atomic::Ordering::SeqCst) {
+            assert!(
+                start.elapsed() < LONG,
+                "the first job never reached its second tile"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // ⚠ What the first sent while it was still the photo wanted is legitimately delivered: its noise
+        // curve can take over the second the partials wait for, so its first tile publishes one (found
+        // when this was rewritten). The guarantee is about what comes AFTER it is overtaken — and, parked
+        // inside its second tile (`holding`, not `progress`: progress is set before the tile's partial
+        // is sent), it can send nothing between this read and the new request.
+        let before: Vec<DenoiseResult> = w.poll();
+        assert!(
+            !before
+                .iter()
+                .any(|r| matches!(r, DenoiseResult::Done { .. })),
+            "the first finished while held"
+        );
         w.request(DenoiseRequest {
             key: "second".into(),
             image: Some(photo(600, 300)),
         });
-        let got = wait(&w, 1);
+        go.store(true, std::sync::atomic::Ordering::SeqCst);
+        let got = wait_done(&w);
+        // Anything the first could still send would come before the second's `Done`; a moment more
+        // catches a stray all the same.
         std::thread::sleep(std::time::Duration::from_millis(200));
         let mut keys: Vec<String> = got
             .into_iter()
@@ -394,7 +445,7 @@ mod tests {
         assert_eq!(
             keys,
             vec!["second".to_string()],
-            "the first was not dropped"
+            "the first was not dropped — it sent something after it was overtaken"
         );
     }
 

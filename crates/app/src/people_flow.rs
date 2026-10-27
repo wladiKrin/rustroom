@@ -244,17 +244,20 @@ mod tests {
             1200,
             vec![0.2; 1600 * 1200 * 3],
         ));
+        app.session.as_mut().unwrap().people.finders.all = all_held;
         app.session.as_mut().unwrap().people.pressed = true;
         app.pump_people(&ctx);
         assert!(
             app.modal == crate::modals::Modal::None,
             "no dialog: the models are there"
         );
+        // ⚠ Held until here — see `Gate`.
         assert!(people(&app).search.is_some(), "the search started");
+        START_GATE.open();
         let start = std::time::Instant::now();
         while people(&app).search.is_some() {
             app.pump_people(&ctx);
-            assert!(start.elapsed().as_secs() < 60, "the search never landed");
+            assert!(start.elapsed() < LONG, "the search never landed");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let said = people(&app).said.clone().unwrap_or_default();
@@ -337,6 +340,65 @@ mod tests {
     }
 
     /// The finder a look there gets in these tests: one person, the drawing's own box.
+    /// How long a held finder waits for its gate — a ceiling against a hang, never a timing assumption.
+    const LONG: std::time::Duration = std::time::Duration::from_secs(120);
+
+    /// A gate a finder waits behind until the test opens it.
+    ///
+    /// ⚠⚠ **Why the finders are held** (fixed 2026-10-27): one `pump_people` SPAWNS a search and then POLLS
+    /// it, so a finder that answers at once — the stand-in below, or the real one failing on zero-filled
+    /// model files — can land inside the same pump, and "the search started" / "a look there runs" read
+    /// `None`. Both failed under the full gate's load and passed alone. Held, the search stands until the
+    /// test has looked, however loaded the machine.
+    struct Gate {
+        open: std::sync::Mutex<bool>,
+        cv: std::sync::Condvar,
+    }
+
+    impl Gate {
+        const fn new() -> Self {
+            Self {
+                open: std::sync::Mutex::new(false),
+                cv: std::sync::Condvar::new(),
+            }
+        }
+
+        fn wait(&self) {
+            let start = std::time::Instant::now();
+            let mut open = self.open.lock().unwrap();
+            while !*open && start.elapsed() < LONG {
+                open = self.cv.wait_timeout(open, LONG).unwrap().0;
+            }
+        }
+
+        fn open(&self) {
+            *self.open.lock().unwrap() = true;
+            self.cv.notify_all();
+        }
+    }
+
+    /// One gate per test, so tests running together cannot open each other's.
+    static START_GATE: Gate = Gate::new();
+    static THERE_GATE: Gate = Gate::new();
+
+    /// The real finder — over whatever model files the test laid down — held behind `START_GATE`.
+    fn all_held(models: PathBuf) -> people_tool::Finder {
+        let real = (people_tool::Finders::default().all)(models);
+        Box::new(move |img, progress| {
+            START_GATE.wait();
+            real(img, progress)
+        })
+    }
+
+    /// [`there_one`], held behind `THERE_GATE`.
+    fn there_held(models: PathBuf) -> people_tool::ThereFinder {
+        let one = there_one(models);
+        Box::new(move |img, drawn, progress| {
+            THERE_GATE.wait();
+            one(img, drawn, progress)
+        })
+    }
+
     fn there_one(_: PathBuf) -> people_tool::ThereFinder {
         Box::new(|_, drawn, _| {
             Ok(vec![people_tool::UprightPerson {
@@ -382,13 +444,16 @@ mod tests {
     #[test]
     fn a_drawing_looks_there_and_adds_who_it_finds() {
         let (mut app, ctx) = app_in_the_view("there");
+        app.session.as_mut().unwrap().people.finders.there = there_held;
         app.session.as_mut().unwrap().people.look = Some(vec![[0.7, 0.5], [0.75, 0.6]]);
         app.pump_people(&ctx);
         assert!(people(&app).look.is_none(), "taken");
+        // ⚠ Held until here — see `Gate`.
         assert!(
             people(&app).search.is_some() && people(&app).there,
             "a look there runs"
         );
+        THERE_GATE.open();
         land(&mut app, &ctx);
         let p = people(&app);
         assert!(p.active && !p.there);
