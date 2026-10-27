@@ -19,6 +19,7 @@ pipeline = { path = "../pipeline" }
 lens-profile = { path = "../lens-profile" }
 edit-model = { path = "../edit-model" }
 export = { path = "../export" }
+photo-merge = { path = "../photo-merge" }
 anyhow.workspace = true
 clap.workspace = true
 image.workspace = true

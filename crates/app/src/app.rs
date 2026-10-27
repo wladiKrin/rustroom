@@ -326,6 +326,8 @@ pub(crate) struct RustroomApp {
     pub(crate) export_progress: String,
     /// The Import dialog and any import it is running (M9.12); `None` when neither is open.
     pub(crate) import: Option<import_flow::ImportState>,
+    /// Photo merge → HDR: its dialog, its queue and the running merge (M10.17a).
+    pub(crate) hdr: crate::hdr_flow::HdrState,
     /// AI masks' worker, requests and model downloads (M9.13).
     pub(crate) ai: ai_flow::AiState,
     /// AI denoise's job and the open photo's result (M10.16b).

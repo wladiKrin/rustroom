@@ -13,8 +13,14 @@ thiserror.workspace = true
 serde = { workspace = true }
 image = { workspace = true }
 chrono = "0.4.45"
+# ⚠ M10.17a: reading floating-point DNGs ourselves — libraw here is built without zlib and clips
+# float data. Both already in the tree.
+flate2 = "1"
+half = "2"
+rayon = { workspace = true }
 
 [dev-dependencies]
+test-dir = { path = "../test-dir" }
 edit-model = { path = "../edit-model" }
 export = { path = "../export" }
 pipeline = { path = "../pipeline" }

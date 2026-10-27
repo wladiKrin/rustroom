@@ -104,7 +104,7 @@ rustroom/
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom-cli` — `decode` (dump) + `render [--edits]` (RAW)
 │   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs holds only the module list, the shared constants and `fn main` — the state is defined in `app`/`session` and built in `bootstrap` (M10.7d; the "78 lines of code" once quoted here was the first-`#[cfg(test)]` blind spot: it held 555); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. ⚠⚠ **THE MODULE LIST THAT USED TO SIT HERE IS GONE ON PURPOSE.** It enumerated ~50 of what are now **266 `.rs` files** under `crates/app/src` (2026-10-12) and had silently gone half-stale — it was missing `multi/{compare,survey,pane}`, `menu`, `menu_bar`, `native_menu`, `commands`, `tone_curve_tool`, `brush_tool`, `mask_tool`, `looks`, `marks` and ~40 more, which is worse than no list because this one is the *placement guide*. **`ls crates/app/src/` is the inventory; what belongs here is the RULE:** `lib.rs` declares **108** modules and **not one of them uses egui** (2026-10-12: every `egui::` in them is in a comment) while `main.rs` declares **53** bin modules (2026-10-12) and egui lives only there. ⚠ Re-measure, never requote — it said 73 and 33 for weeks: count with `grep -c '^pub mod [a-z_0-9]*;' crates/app/src/lib.rs` (BSD `grep -E` has no `\s`, and zsh does not word-split a `$files` list — pipe it through `xargs`). Logic goes in the lib, widgets in the bin.
 │   └── catalog/              # ✅ scan_folder → RAW+JPEG/PNG/TIFF entries (+ mtime); SortOrder/sort (name/modified/edited, case-insensitive, name tie-break); is_raw/is_supported (in-memory; SQLite DAM later) + Description per file (v7, M6.2)
-│   ⚠⚠ THE TREE ABOVE LISTS 12 OF 18 CRATES — it omits `gpu-pipeline`, `lens-profile`, `camera-profile`, `ai-mask`, `test-dir` (dev-only: every test's temp directory, M10.7c) and `lr-preset` (Lightroom presets read into edits, no GUI, M10.9c). **`ls crates/` is the answer; this tree is a sketch.**
+│   ⚠⚠ THE TREE ABOVE LISTS 12 OF 19 CRATES — it omits `gpu-pipeline`, `lens-profile`, `camera-profile`, `ai-mask`, `test-dir` (dev-only: every test's temp directory, M10.7c), `lr-preset` (Lightroom presets read into edits, no GUI, M10.9c) and `photo-merge` (Photo Merge: HDR — frames, align, deghost, merge — zero GUI, M10.17a). **`ls crates/` is the answer; this tree is a sketch.**
 ├── docs/
 └── tests/                    # integration + golden reference images
 ```
@@ -172,9 +172,8 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-10-22)
 
-**4190 tests** (24 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
-gate green on `main` (re-gated 2026-10-27 after merging the three load-flaky tests' fix, `grep -n 'hold their jobs' docs/JOURNAL.md`;
-branch `m10.17a-hdr-merge` open, unmerged). ⚠⚠ **Run the git command above rather than
+**@COUNT@ tests** (24 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
+gate green on `main` (re-gated 2026-10-27 after merging M10.17a HDR merge; no branch open). ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
@@ -231,7 +230,7 @@ that had grown to ~170 lines by appending.)
   2026-09-29 — start from `docs/BACKLOG.md`'s reasons table. ⚠ The server is a **Tailscale Funnel**: a stopped
   Tailscale on the Mac is never the cause of an Immich error.
 
-**Phase 10 so far — M10.6 to M10.15, M10.16a, b, c1–c3 and d, and M10.19c–d, merged 2026-09-29 – 10-22, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`; what stays open inside M10.12–14 is in the table below):
+**Phase 10 so far — M10.6 to M10.15, M10.16a, b, c1–c3 and d, M10.17a and M10.19c–d, merged 2026-09-29 – 10-27, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`; what stays open inside M10.12–14 is in the table below):
 
 | Id | What | The thing to remember |
 |---|---|---|
@@ -252,13 +251,15 @@ that had grown to ~170 lines by appending.)
 | M10.16c2 | Remove dust: one press looks for sensor dust in the background (no network — a disc against its ring over five radii, the ring brighter all round) and heals each spot as a Heal patch, one undo step; "Looking for dust" over the quiet line, then what it found stays under the button | the search is pumped by Develop's body (`dust_flow`), never the panel, so it lands with Retouch closed; finds are in decode space, patches post-lens through `lens_memo`; a press while the photo loads waits for it; proven on constructed dust — none confirmed in the author's library |
 | M10.16c3 | Find people: YOLOX-m (whole frame at 640 + 640² tiles at 1920) finds them, MobileSAM outlines each, the small ones pre-ticked (< 35 % of the frame's height); a light border along each outline, a click toggles, a drawing looks again closer (else takes what is under it); Remove N people, each a `Removal.person` filled by c1's job | the detector sees the fill's window UPRIGHT (`remove:v3`, *Warnings*); the search reads the decode, where removed people still stand (`people_tool::not_removed` / `fresh`); finders are handed in through `people_tool::Finders` |
 | M10.16b | AI denoise: **FFDNet** (default; a 26 Mpx frame 18 s on the GPU) or **DRUNet** (Settings), a background job per photo at the noise map × 2, the view's tiles first, "Full denoise" under Amount, cached on disk | the network is in EVERY key that holds its pixels and the worker carries its own (*Warnings*); `ai_mask::pth` is a CLOSED pickle subset; the result is ONE decode's, its step the prefix's first; a long GPU job submits bands |
+| M10.17a | HDR merge: Photo merge → HDR… ⇧⌘H (and with the last settings ⌥⇧⌘H, no dialog) — the preview (zoom and pan), Auto align, Auto settings, Deghost None–High with its overlay, Create stack; a background merge into `<first>-HDR.dng`, a floating-point raw of the same camera (crate `photo-merge`) | exposures MEASURED, never read from EXIF; Rustroom reads float DNGs itself (*Warnings*); a gesture over a dialog never reaches the Library behind it |
 | M10.19d | Retouch as two tasks: **Paint** (one brush, Remove · Heal · Clone · Eye, for NEW retouches only) · **Find** (People · Dust, found and reviewed alike: On the photo **Pick · Add more**, Everyone, Remove N, Cancel); one **Retouches** list of every kind, a picked row selecting it alone with its settings under the list | the photo's gestures follow `RetouchState.task` — in Find only `find_overlay`, never a Paint overlay; the list is `retouch_list::rows`; a patch Find dust made carries `Spot.dust`; the dust view's one writer is `pump_dust`; a look landing after Cancel or Remove N is dropped (people and dust) |
 
 ### ▶ Next action — Phase 10, top down
 
-✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1–c3, d, M10.19c–d** (table above); ⛔ M10.16c4 declined.
+✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1–c3, d, M10.17a, M10.19c–d** (table above); ⛔ M10.16c4 declined.
 
-**▶ NEXT: M10.17a HDR merge** (M10.16 complete: ⛔ c4 Reflections declined on its spike 2026-10-22 — no shippable
+**▶ NEXT: M10.17b panorama** — `photo-merge`'s alignment is the place to start. ✅ M10.17a HDR merge merged 2026-10-27,
+confirmed by the author ("works, merge and delete the branch"; `grep -n 'M10.17a' docs/JOURNAL.md`). (M10.16 complete: ⛔ c4 Reflections declined on its spike 2026-10-22 — no shippable
 network removes everyday reflections; `grep -n 'M10.16c4' docs/JOURNAL.md`). ✅ M10.19d the Retouch panel as Paint · Find
 merged 2026-10-22, confirmed by the author ("works, merge and delete"; `grep -n 'M10.19d' docs/JOURNAL.md`). ✅ c3 Find people merged
 2026-10-22 (`grep -n 'M10.16c3' docs/JOURNAL.md`). ✅ c2 Remove dust merged 2026-10-21. ✅ c1 the Remove brush merged 2026-10-19
@@ -277,7 +278,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | **M10.12** the mask model | c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · d camera-matching colour out of the box (P-22), **with b's `ProfileLookTable` and c's per-photo profile folded in** (re-scoped 2026-10-12: neither changes a photo until d brings such a profile; b's `CameraCalibration` ⛔ withdrawn — a DNG-file tag, never in a profile) |
 | **M10.14** performance & verification | f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h ⏸ the reference photo on the GPU (parked 2026-10-13 until a need shows — 1 of 74 photos; 111–125 ms at 3200, numbers in the backlog) |
-| **M10.17** merge | a HDR · b panorama |
+| **M10.17** merge | b panorama — `photo-merge`'s alignment is the place to start (a ✅ above) |
 | **M10.18** new modules | a tethering · b GPS and a map · c people tagging · d publish services · e print |
 | **M10.19** found in use (added 2026-10-01) | a HEIC/HEIF photos — libraw cannot read them, so they never appear; needs a decoder · b Move to folder: download Immich assets first, then move (today skipped and counted) (c, d ✅ above) |
 
@@ -414,6 +415,12 @@ record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes be
   through `negative_tool::view`, an image through `pipeline::negative::positive` (Auto tone, the AI
   input), and a cache of anything derived from it keyed on `edits.negative` (`ai_cache::key`, the AI
   input cache). A new eyedropper or analysis that skips it measures the negative.
+
+- ⚠⚠ **A floating-point DNG — the HDR merge's result — is read by `raw_decode::float_dng`, never libraw**
+  (M10.17a): the libraw `rsraw` bundles is built without zlib (a Deflate float DNG's pixels fail to unpack) and
+  clips float data to ~1 (3.0 read 1.07). `decode_raw` sniffs for it; libraw still reads its capture facts, size
+  and thumbnail. ⚠ libraw leaves `cam_xyz` **empty for a DNG** — `decode_camera` derives one from `rgb_cam`.
+  ⚠ A bracket's exposures are **measured, never read**: DSCF7755's EXIF says −0.42 EV, its pixels +0.002.
 
 ### Standing lessons (the expensive ones — full stories in `docs/JOURNAL.md`)
 

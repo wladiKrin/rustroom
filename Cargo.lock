@@ -316,6 +316,7 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
  "objc2-quartz-core 0.3.2",
+ "photo-merge",
  "pipeline",
  "pollster",
  "raw-decode",
@@ -1683,10 +1684,13 @@ dependencies = [
  "core-image",
  "crc32fast",
  "epaint_default_fonts",
+ "flate2",
+ "half",
  "image",
  "lcms2",
  "pipeline",
  "raw-decode",
+ "rayon",
  "serde",
  "serde_json",
  "test-dir",
@@ -3836,6 +3840,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "photo-merge"
+version = "0.1.0"
+dependencies = [
+ "color 0.1.0",
+ "core-image",
+ "edit-model",
+ "export",
+ "image",
+ "pipeline",
+ "raw-decode",
+ "rayon",
+ "serde",
+ "test-dir",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4154,11 +4175,15 @@ dependencies = [
  "core-image",
  "edit-model",
  "export",
+ "flate2",
+ "half",
  "image",
  "pipeline",
+ "rayon",
  "rsraw",
  "serde",
  "serde_json",
+ "test-dir",
  "thiserror 2.0.19",
 ]
 
@@ -4481,6 +4506,7 @@ dependencies = [
  "export",
  "image",
  "lens-profile",
+ "photo-merge",
  "pipeline",
  "raw-decode",
 ]

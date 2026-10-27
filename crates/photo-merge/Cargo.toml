@@ -1,0 +1,22 @@
+[package]
+name = "photo-merge"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+# Photo Merge (M10.17): a bracket into one HDR raw now, panoramas later. ⚠ Zero GUI — driven by
+# the CLI, the app's worker and the tests.
+[dependencies]
+color = { path = "../color" }
+core-image = { path = "../core-image" }
+edit-model = { path = "../edit-model" }
+export = { path = "../export" }
+image = { workspace = true }
+pipeline = { path = "../pipeline" }
+raw-decode = { path = "../raw-decode" }
+rayon = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+test-dir = { path = "../test-dir" }

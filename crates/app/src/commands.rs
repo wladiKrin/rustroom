@@ -181,6 +181,8 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
         }
         Command::ToggleFilmstrip => app.show_filmstrip = !app.show_filmstrip,
         Command::RenamePhotos => app.rename_selection(),
+        Command::MergeHdr => app.open_hdr_merge(false),
+        Command::MergeHdrLast => app.open_hdr_merge(true),
         Command::Stack => app.stack_selection(),
         Command::Unstack => app.unstack_selection(),
         Command::MakeTopOfStack => app.make_active_top_of_stack(),

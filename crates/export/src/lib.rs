@@ -2,11 +2,13 @@
 
 pub mod density;
 pub mod dng;
+pub mod dng_hdr;
 pub mod lj92;
 pub mod metadata;
 pub mod output_sharpen;
 pub mod size_limit;
 pub mod sizing;
+pub(crate) mod tiff_ifd;
 pub mod watermark;
 
 pub use metadata::{ExportMetadata, FileMetadata, MetadataScope};

@@ -24,6 +24,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 ## Contents
 
 - [Three load-flaky tests hold their jobs until they have looked (2026-10-27)](#2026-10-27--three-load-flaky-tests-hold-their-jobs-until-they-have-looked-branch-fix-flaky-people-denoise-tests)
+- [M10.17a: HDR merge — a bracket into one floating-point raw (2026-10-26)](#2026-10-26--m1017a-hdr-merge--a-bracket-into-one-floating-point-raw-branch-m1017a-hdr-merge)
 - [M10.16c3: Find people — YOLOX-m with tiles, MobileSAM's outline, removed with c1's fill (2026-10-21)](#2026-10-21--m1016c3-find-people--yolox-m-with-tiles-mobilesams-outline-removed-with-c1s-fill-branch-m1016c3-people)
 - [M10.16c2: Remove dust — sensor spots found and healed as patches (2026-10-20)](#2026-10-20--m1016c2-remove-dust--sensor-spots-found-and-healed-as-patches-branch-m1016c2-dust)
 - [M10.16c1: Remove — the content-aware brush, LaMa, Refresh, Detect objects, Opacity (2026-10-19)](#2026-10-19--m1016c1-remove--the-content-aware-brush-lama-refresh-detect-objects-opacity-branch-m1016c-remove)
@@ -211,6 +212,76 @@ branch deleted).
 - **Sabotaged:** the worker no longer dropping an overtaken job (its tile check and its `Done` guard removed) →
   `["first"]`; the press starting no search → "the search started"; a look not marked `there` → "a look there
   runs". Gate: fmt and clippy clean, and the full suite three times in a row — **4,190 passed, 0 failed** (24 ignored) each time.
+### 2026-10-26 — M10.17a: HDR merge — a bracket into one floating-point raw (branch `m10.17a-hdr-merge`)
+
+✅ **Merged 2026-10-27 on the author's "works, merge and delete the branch"** (`--no-ff`, the branch deleted), after
+his use asked for **zoom and pan in the preview** (Develop's gestures; the preview now the half-size merge at its
+own size, mipmapped, 0.68 s against 0.28 s) and found that **a pinch over the dialog resized the Library's icons
+behind it** — the grid and Survey now ignore the gesture while any dialog is open.
+
+**4,270 tests** (24 ignored), 94 goldens unmoved, fmt and clippy clean; the full gate's only failures are the pre-existing load flakes below. Spec `2026-10-26-m10.17a-hdr-merge-design.md`, plan of the same
+date. The author skipped the questions ("just start"); every call in the spec is marked as mine. (The *Awaiting use* of the first build is closed above.)
+
+**What shipped.** Photo → Photo merge → **HDR…** ⇧⌘H (and **HDR with last settings** ⌥⇧⌘H, no dialog), in the
+grid's right-click too: Lightroom's dialog — the merged photo previewed, **Auto align**, **Auto settings**,
+**Deghost** None · Low · Medium · High, **Show deghost overlay**, **Create stack** — and a background merge in
+the status row's job slot with Cancel. The result, `<first>-HDR.dng` beside the sources, is a **raw of the same
+camera**: libraw's demosaiced camera-space output with its multipliers divided back out, merged, written as a
+DNG 1.4 `LinearRaw` of **half floats**, Deflate + predictor 3, `ColorMatrix1` = `cam_xyz` (D65),
+`AsShotNeutral` = the reference's `1 / pre_mul`, the reference's EXIF — so Temp/Tint, camera profiles and lens
+corrections work on it. New crate **`photo-merge`** (frames, homography, warp, pyramid, align, exposure,
+deghost, merge, hdr, preview — zero GUI); `raw_decode::decode_camera` and **`raw_decode::float_dng`**;
+`export::dng_hdr` (M9.10's IFD helpers moved to `tiff_ifd`); `rustroom_app::hdr_merge` (plan, names,
+settings, worker) and the bin's `hdr_flow` + `modals/hdr_merge`; `rustroom-cli merge-hdr`;
+`examples/probe_hdr.rs` as the re-test.
+
+⚠⚠ **Two probes decided the design before any code.** (1) The libraw `rsraw` bundles is built **without
+zlib**: it opened a Deflate float DNG's capture facts, size and thumbnail correctly and failed to unpack the
+pixels; an uncompressed one it read but **clipped to ~1** (3.0 → 1.07). So Rustroom reads float DNG pixels
+itself and keeps libraw for the metadata. (2) After `dcraw_process`, `color.pre_mul` holds exactly the
+multipliers applied (`cam_mul` / min — 1.937, 1, 1.636 on DSCF7618), so the white balance divides out exactly.
+
+**Measured** (release, X-T4, three frames): a full merge **~22 s** (decode 13.7 s — three at once, from 34.9 s
+one after another — align+merge 5.6 s, preview+write 2.7 s), files **76–94 MB**; the dialog's preview **~4.5 s**
+(half-size decodes). Synthetic brackets: alignment **0.006–0.009 px** at the corners (a 13.4-px shift and 0.7°,
+a little perspective), a moving fifth of the frame **0.0056 px**; the merge **unbiased (−0.004 %)**, highlights
+the reference clipped back within **1 %**, **half the reference's noise**. A one-frame merge read back through
+Develop's decode is the RAF within **8.1e-4**, the same **4608 K**.
+
+⚠⚠ **What the tests and the probe found, each fixed with a test that failed first:**
+- **The coarse search** — the plan's single ZNCC peak on log luminance locked **79 px** off on a bracket with a
+  bright mover (the light field correlates at every shift; which pixels were valid decided it), and the
+  high-pass alone failed on periodic texture. Now candidates from both, each fitted two levels and judged by
+  residual.
+- **Huber → Tukey** — Huber held a moving fifth of the frame **0.58 px** off; Tukey 0.0056.
+- **Deghost on edges** — on the author's DSCF7753–55 (window bars, a railing, handheld) High marked **39 %** of
+  a still frame, every mark on an edge: a 4×4 cell's log mean swings 0.5–0.7 stops for a 0.4-px shift. Now
+  12-px means and the nearest within one cell: **10 %** at High, 2.9 % at Medium there; on Notre-Dame
+  (DSCF7618–20) Medium marks the walking tourists and nothing of the cathedral.
+- **libraw leaves `cam_xyz` empty for a DNG** — a merge of DNGs wrote an all-zero `ColorMatrix1`;
+  `decode_camera` now derives it from `rgb_cam` (`color::camera::cam_xyz_from_rgb_cam`).
+
+⚠⚠ **EXIF lies, the pixels do not.** DSCF7755 says 1/80 against DSCF7753's 1/60 (−0.42 EV); its pixels are
+the same exposure — **+0.002 EV unaligned, −0.001 fitted, +0.005 measured**. Each frame's scale is measured
+(`exposure::measure`), never read; the real-bracket test compares with the unaligned median, not EXIF.
+
+⚠ **Found, not fixed — M9.10's rendered DNG narrower than one 256-px tile reads back scrambled in libraw**
+(worst 0.99 at 160 and 255 px wide, exact from 256). An export sized below 256 px wide would hit it. The HDR
+reader handles narrow images (`an_image_narrower_than_a_tile_reads_back`). A follow-up.
+
+⚠ **Two load-flaky tests seen in full runs, both pre-existing, both pass alone:**
+`people_flow::a_drawing_looks_there_and_adds_who_it_finds` ("a look there runs") and
+`denoise_worker::a_job_for_another_photo_is_dropped` (its `wait` got nothing). A follow-up.
+
+**Seen in the GUI** (release, a scratch profile with copies of DSCF7618–20): the native Photo menu carries Photo
+merge ▸ HDR… ⇧⌘H and HDR with last settings ⌥⇧⌘H; with nothing selected the status row says "Select two or more raw
+photos to merge". ⚠ The walk-through stopped there — focus kept returning to the author's own windows, and the
+drive rule is not to fight for it; the dialog, the merge and its landing are covered headlessly (`hdr_flow`'s five
+tests) and wait for the author's use. The final review was a self-review (no reviewer agent unasked); it found that
+a merge landing in **Develop** moved the selection off the open photo — fixed, Develop now keeps it.
+
+**Test material:** the author's only brackets are ±⅓ EV (DSCF7618–20, 7621–23, 7753–55); a handheld ±2 EV
+bracket with something moving is the acceptance still to shoot.
 
 ### 2026-10-22 — The denoise worker's tests wait on events, not on time budgets (branch `fix-flaky-denoise-tests`)
 

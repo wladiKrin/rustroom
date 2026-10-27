@@ -233,7 +233,7 @@ pub(crate) fn develop_row(app: &mut RustroomApp, ui: &mut egui::Ui) {
     ui.allocate_rect(row, egui::Sense::hover());
 }
 
-/// A running job — an export, a preview build, an Immich download — with its Cancel, or else the
+/// A running job — an export, an HDR merge, a preview build, an Immich download — with its Cancel, or else the
 /// status line. One idiom for every long background job (the rule the top bar had).
 ///
 /// ⚠ The text truncates into the width it is given, so a long status cannot push anything.
@@ -245,6 +245,8 @@ fn job_or_status(app: &mut RustroomApp, ui: &mut egui::Ui) {
             app.export_progress.clone(),
             Some(RustroomApp::cancel_export),
         )
+    } else if !app.hdr.progress.is_empty() {
+        (app.hdr.progress.clone(), Some(RustroomApp::cancel_hdr))
     } else if !app.preview_progress.is_empty() {
         (
             app.preview_progress.clone(),

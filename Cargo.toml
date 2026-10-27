@@ -17,6 +17,7 @@ members = [
     "crates/immich",
     "crates/lens-profile",
     "crates/lr-preset",
+    "crates/photo-merge",
     "crates/test-dir",
     "crates/xmp",
 ]

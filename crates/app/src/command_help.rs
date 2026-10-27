@@ -42,6 +42,10 @@ pub fn describe(c: Command) -> String {
         C::ToggleBeforeAfter => "Shows the photo before and after its edits",
         C::ToggleFilmstrip => "Shows or hides the filmstrip",
         C::RenamePhotos => "Renames the selected photos' files from a template",
+        C::MergeHdr => "Merges the selected bracket of exposures into one HDR photo",
+        C::MergeHdrLast => {
+            "Merges the selected bracket with the last HDR options, without the dialog"
+        }
         C::Stack => "Groups the selected photos into one stack",
         C::Unstack => "Takes apart the stacks the selected photos are in",
         C::MakeTopOfStack => "Makes this photo the one a folded stack shows",

@@ -52,6 +52,7 @@ mod dust_flow;
 mod export_flow;
 mod filmstrip;
 mod folder_rows;
+mod hdr_flow;
 #[cfg(test)]
 mod hover_coverage;
 mod immich_flow;

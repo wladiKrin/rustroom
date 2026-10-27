@@ -71,7 +71,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // takes**, because a survey of three photos on a large monitor should be able to fill it.
     // `zoom_delta` folds trackpad pinch and ctrl+scroll into one **multiplicative factor that is
     // 1.0 when idle**, which is what leaves plain scrolling free to scroll.
-    let zoom = ui.ctx().input(|i| i.zoom_delta());
+    // ⚠ Not while a dialog is open — the grid's rule (reported 2026-10-27, the HDR preview's zoom).
+    let zoom = if matches!(app.modal, crate::modals::Modal::None) {
+        ui.ctx().input(|i| i.zoom_delta())
+    } else {
+        1.0
+    };
     if zoom != 1.0 {
         app.settings.survey_cell = app.settings.zoomed_survey_cell(zoom);
         app.cell_zoom_pending = true;
@@ -660,6 +665,18 @@ mod tests {
             app.settings.survey_cell > before,
             "a pinch left the tile size at {before}"
         );
+    }
+
+    /// A pinch meant for a dialog — the HDR merge preview zooms with it — leaves the tiles alone
+    /// (reported 2026-10-27: zooming the preview resized the Library behind it).
+    #[test]
+    fn a_pinch_with_a_dialog_open_leaves_the_tiles_alone() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = app_with(20, &[1, 4]);
+        app.modal = crate::modals::Modal::HdrMerge;
+        let before = app.settings.survey_cell;
+        frame(&mut app, &ctx, vec![egui::Event::Zoom(1.5)]);
+        assert_eq!(app.settings.survey_cell, before);
     }
 
     /// ⚠ And an idle frame must not move it: the guard against reading `zoom_delta` as a delta.
