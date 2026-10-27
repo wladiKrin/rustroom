@@ -201,6 +201,7 @@ pub fn for_test() -> RustroomApp {
         import: None,
         hdr: Default::default(),
         merges: Default::default(),
+        pano: Default::default(),
         ai: Default::default(),
         denoise: Default::default(),
         removals: Default::default(),

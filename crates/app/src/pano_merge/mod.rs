@@ -40,6 +40,12 @@ impl Default for PanoSettings {
 }
 
 impl PanoSettings {
+    /// Auto crop means something only without Fill edges: a filled panorama has nothing to crop away, so
+    /// the dialog greys it.
+    pub fn auto_crop_applies(&self) -> bool {
+        !self.fill_edges
+    }
+
     pub fn options(&self) -> PanoOptions {
         PanoOptions {
             projection: (!self.auto_projection).then_some(self.projection),
@@ -171,6 +177,17 @@ mod tests {
             ..s
         };
         assert_eq!(manual.options().projection, Some(Projection::Spherical));
+    }
+
+    #[test]
+    fn auto_crop_is_greyed_while_fill_edges_is_on() {
+        let s = PanoSettings::default();
+        assert!(s.auto_crop_applies());
+        assert!(!PanoSettings {
+            fill_edges: true,
+            ..s
+        }
+        .auto_crop_applies());
     }
 
     #[test]

@@ -259,40 +259,7 @@ impl RustroomApp {
 
     /// A merge landed: its edits, the catalog, the Library row, the stack, the selection.
     fn finish_hdr(&mut self, job: &HdrJob, path: &Path, edits: &Edits) {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if let Err(e) = rustroom_app::sidecar::persist(path, edits) {
-            eprintln!("hdr: the sidecar: {e}");
-        }
-        let Some(dir) = path.parent() else { return };
-        let scanned = self.scan_and_relink(dir);
-        let id = PhotoId::original(path.to_path_buf());
-        // ⚠ Only a Library showing the bracket gains the row — a catalog-backed view follows the
-        // catalog by itself (`source_refresh`).
-        let shows = self
-            .library
-            .as_ref()
-            .is_some_and(|l| l.scan.iter().any(|e| job.plan.frames.contains(&e.path)));
-        if shows {
-            let entry = scanned.and_then(|(scan, _)| scan.into_iter().find(|e| e.path == path));
-            if let (Some(lib), Some(entry)) = (self.library.as_mut(), entry) {
-                if !lib.scan.iter().any(|e| e.path == path) {
-                    lib.scan.push(entry);
-                }
-            }
-            // ⚠ The Library selects the result (Lightroom's way); Develop keeps the selection, or the
-            // filmstrip would highlight a photo the canvas is not showing.
-            let select = (self.view == crate::AppView::Library).then_some(&id);
-            self.rebuild_entries(select);
-            if job.settings.create_stack {
-                let mut ids = vec![id.clone()];
-                ids.extend(job.plan.frames.iter().cloned().map(PhotoId::original));
-                self.stack_ids(&ids);
-            }
-        }
-        self.status = format!("Merged {name}");
+        self.land_merged(&job.plan.frames, job.settings.create_stack, path, edits);
     }
 }
 
