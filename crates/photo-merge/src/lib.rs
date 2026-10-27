@@ -9,6 +9,7 @@ pub mod crop;
 pub mod deghost;
 pub mod exposure;
 pub mod features;
+pub mod fill;
 pub mod frame;
 pub mod gain;
 pub mod hdr;

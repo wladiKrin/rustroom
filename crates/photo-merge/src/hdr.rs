@@ -59,6 +59,8 @@ pub enum MergeError {
     Sizes,
     #[error("the photos are from different cameras")]
     Cameras,
+    #[error("could not fill the edges: {0}")]
+    Fill(String),
     #[error("could not write the merged photo: {0}")]
     Write(#[from] export::ExportError),
 }
