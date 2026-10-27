@@ -373,8 +373,13 @@ mod tests {
     };
     use crate::render_engine::render::render_once;
 
+    const LONG: std::time::Duration = std::time::Duration::from_secs(120);
+
+    /// ⚠ A 120-s ceiling against a hang, never a time budget (CLAUDE.md): the old 1 s lost the race
+    /// on a loaded full gate — `a_handed_off_frame_is_settled_by_a_download` takes 0.8 s alone.
     fn wait_for_frame(engine: &RenderEngine) -> RenderedFrame {
-        for _ in 0..200 {
+        let deadline = std::time::Instant::now() + LONG;
+        while std::time::Instant::now() < deadline {
             if let Some(f) = engine.poll_latest() {
                 return f;
             }
@@ -388,7 +393,8 @@ mod tests {
     /// ⚠ A deadline rather than an open wait: a regression must **fail** rather than hang CI for
     /// hours, which is the rule `the_folder_is_loaded_in_parallel` was rewritten for.
     fn wait_until(mut f: impl FnMut() -> bool, what: &str) {
-        for _ in 0..400 {
+        let deadline = std::time::Instant::now() + LONG;
+        while std::time::Instant::now() < deadline {
             if f() {
                 return;
             }
