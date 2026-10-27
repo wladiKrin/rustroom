@@ -12,6 +12,8 @@ pub mod batch_export;
 pub mod batch_rename;
 pub mod brush_tool;
 pub mod buffer_cache;
+#[cfg(test)]
+mod capped_dng_tests;
 pub mod cell_layout;
 pub mod clipping;
 pub mod collections;
