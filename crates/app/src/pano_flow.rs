@@ -70,6 +70,18 @@ pub(crate) struct PanoJob {
 }
 
 impl PanoJob {
+    /// A job for `plan` with the defaults, no rig, no LaMa — for the queue's tests.
+    #[cfg(test)]
+    pub(crate) fn for_test(plan: PanoPlan) -> Self {
+        Self {
+            plan,
+            settings: PanoSettings::default(),
+            base: Edits::default(),
+            rig: None,
+            models: None,
+        }
+    }
+
     /// Its worker, started.
     pub(crate) fn start(&self) -> PanoWorker {
         PanoWorker::merge(

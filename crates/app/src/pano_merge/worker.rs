@@ -159,6 +159,17 @@ impl PanoWorker {
         self.cancel.store(true, Ordering::Relaxed);
     }
 
+    /// A worker whose thread is gone without a last word — what a panic leaves. For the queue's tests.
+    #[doc(hidden)]
+    pub fn ended() -> Self {
+        let (_, events) = channel();
+        Self {
+            events,
+            cancel: Arc::new(AtomicBool::new(false)),
+            options: None,
+        }
+    }
+
     /// New options for a preview worker — the latest wins.
     pub fn set_options(&self, s: PanoSettings) {
         if let Some(o) = &self.options {

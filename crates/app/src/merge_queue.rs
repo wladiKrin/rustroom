@@ -13,6 +13,7 @@ use rustroom_app::pano_merge::worker::{PanoEvent, PanoWorker};
 use rustroom_app::photo_id::PhotoId;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
 /// A merge waiting its turn.
@@ -26,6 +27,9 @@ enum Running {
     Hdr(HdrWorker, HdrJob),
     Panorama(PanoWorker, PanoJob),
 }
+
+/// What a merge whose thread died says.
+const DIED: &str = "the merge stopped unexpectedly";
 
 /// How the running merge ended.
 enum Landed {
@@ -128,24 +132,39 @@ impl RustroomApp {
         let landed = match &self.merges.running {
             Some(Running::Hdr(w, _)) => {
                 let mut landed = None;
-                while let Ok(e) = w.events().try_recv() {
-                    match e {
-                        HdrEvent::Progress(line) => self.merges.progress = line,
-                        HdrEvent::Preview { .. } => {}
-                        other => landed = Some(Landed::Hdr(other)),
+                loop {
+                    match w.events().try_recv() {
+                        Ok(HdrEvent::Progress(line)) => self.merges.progress = line,
+                        Ok(HdrEvent::Preview { .. }) => {}
+                        Ok(other) => landed = Some(Landed::Hdr(other)),
+                        // ⚠ The thread is gone without a last word (a panic): a failure, or the queue
+                        // would wait behind it for the rest of the session.
+                        Err(TryRecvError::Disconnected) => {
+                            landed = landed.or(Some(Landed::Hdr(HdrEvent::Failed(DIED.into()))));
+                            break;
+                        }
+                        Err(TryRecvError::Empty) => break,
                     }
                 }
                 landed
             }
             Some(Running::Panorama(w, _)) => {
                 let mut landed = None;
-                while let Ok(e) = w.events().try_recv() {
-                    match e {
-                        PanoEvent::Progress(line) => self.merges.progress = line,
-                        PanoEvent::Done { .. } | PanoEvent::Failed(_) | PanoEvent::Cancelled => {
-                            landed = Some(Landed::Panorama(e))
+                loop {
+                    match w.events().try_recv() {
+                        Ok(PanoEvent::Progress(line)) => self.merges.progress = line,
+                        Ok(
+                            e @ (PanoEvent::Done { .. }
+                            | PanoEvent::Failed(_)
+                            | PanoEvent::Cancelled),
+                        ) => landed = Some(Landed::Panorama(e)),
+                        Ok(_) => {}
+                        Err(TryRecvError::Disconnected) => {
+                            landed =
+                                landed.or(Some(Landed::Panorama(PanoEvent::Failed(DIED.into()))));
+                            break;
                         }
-                        _ => {}
+                        Err(TryRecvError::Empty) => break,
                     }
                 }
                 landed
@@ -165,5 +184,38 @@ impl RustroomApp {
         if self.merges.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::pano_flow::PanoJob;
+    use eframe::egui;
+    use rustroom_app::pano_merge::worker::PanoWorker;
+    use rustroom_app::pano_merge::PanoPlan;
+
+    /// The review's #3: a merge thread that dies without a last word (a panic) must not hold the queue for
+    /// the rest of the session — it lands as a failure, and the next merge can start.
+    #[test]
+    fn a_merge_thread_that_died_frees_the_queue() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        let plan = PanoPlan {
+            frames: vec![],
+            output: std::path::PathBuf::from("/nowhere/x-Pano.dng"),
+        };
+        app.merges.running = Some(super::Running::Panorama(
+            PanoWorker::ended(),
+            PanoJob::for_test(plan),
+        ));
+        app.merges.progress = "Merging x-Pano.dng · stitching".into();
+        app.pump_merges(&ctx);
+        assert!(!app.merges.busy(), "the queue is still held");
+        assert!(app.merges.progress.is_empty());
+        assert!(
+            app.status.contains("stopped unexpectedly"),
+            "{}",
+            app.status
+        );
     }
 }
