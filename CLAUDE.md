@@ -164,18 +164,19 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ Conventions that are not negotiable:** commit messages carry **no `Co-Authored-By` trailer**; **branch per feature** without asking; **never push**.
 >
-> **Run the GUI:** `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:/opt/homebrew/opt/little-cms2/lib/pkgconfig:$PKG_CONFIG_PATH"` then `cargo run --release -p app` — always `--release`, in the background, and **launch it after every big update without being asked**, saying what to look at. Skip it for small tweaks in a tuning loop.
+> **Run the GUI:** on **Linux** (Arch, since 2026-10-27) plain `cargo run --release -p app`; on **macOS** first `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:/opt/homebrew/opt/little-cms2/lib/pkgconfig:$PKG_CONFIG_PATH"`, then the same — always `--release`, in the background, and **launch it after every big update without being asked**, saying what to look at. Skip it for small tweaks in a tuning loop.
 >
 > **⚠ Workflow:** every feature goes brainstorm → spec → plan → executing-plans, **inline** (the user has chosen inline every single time; offer the choice but expect that answer). Specs land in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`.
 >
-> **⚠ The history is in `docs/JOURNAL.md`** — 211 sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
+> **⚠ The history is in `docs/JOURNAL.md`** — 212 sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
 ### State (2026-10-27)
 
-**4274 tests** (24 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
-gate green on `main` (re-gated 2026-10-27 after merging M10.17a HDR merge; no branch open). ⚠⚠ **Run the git command above rather than
+**4274 tests on macOS, 4271 on Linux** (24 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
+gate green on `main` (re-gated on Linux 2026-10-27 after merging `fix-linux-build`; no branch open). ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
-✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
+⚠ CI on Linux was **almost certainly red from 2026-09-30 to 2026-10-27** — the `Rustroom` binary did not
+compile off macOS (`grep -n 'fix-linux-build' docs/JOURNAL.md`); unverified, `gh` is not installed here. Check the next run.
 
 ⚠⚠ **This block is the LIVE STATE, not a changelog — overwrite it, never append.** Finished work is
 one line with a `grep` pointer; its story is in `docs/JOURNAL.md`. (Compacted 2026-09-27 from a block
@@ -282,7 +283,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | **M10.18** new modules | a tethering · b GPS and a map · c people tagging · d publish services · e print |
 | **M10.19** found in use (added 2026-10-01) | a HEIC/HEIF photos — libraw cannot read them, so they never appear; needs a decoder · b Move to folder: download Immich assets first, then move (today skipped and counted) (c, d ✅ above) |
 
-**Phase 11, last:** M11.2 Windows + the Linux GUI (never run; the in-window menu bar never seen;
+**Phase 11, last:** M11.2 Windows + the Linux GUI (first run and confirmed 2026-10-27 on Arch/X11; still unchecked: Wayland,
 multi-monitor), M11.3 contributor docs, M11.4 `v0.1` (with the welcome screen and the empty Library's
 text, moved there from M10.6 by the author), M11.5 plugins. ⛔ **M11.1 (was M10.1) is
 WITHDRAWN — it was never real** (the licence has been committed since `e71330d`); do not re-open it.
@@ -316,6 +317,10 @@ by one (it did, 2026-09-26).
 ⚠⚠ **All open work is Phase 10 above.** A finished item is deleted from there, not struck through — its
 record is in `docs/JOURNAL.md`. Only what stays true after a milestone closes belongs here.
 
+- ⚠⚠ **A macOS-only module (`#[cfg(target_os = "macos")] mod …` in `main.rs` — `native_menu`,
+  `display_colorspace`) is gated at EVERY reference, its `use` lines included** — one ungated import in
+  `bootstrap.rs` kept the app from compiling off macOS for four weeks, invisible to a gate run only on macOS.
+  Development now happens on Linux too; a change to such a module is built on both before it merges.
 - ⚠⚠ **A test's directory comes from `test_dir::TempDir` (deleted on drop) or `test_dir::path` (kept,
   swept by the next run)** — unique per test and per run under `rustroom-tests/<pid>/`. A sweep in
   `test-dir` fails on `env::temp_dir()` anywhere else; the export staging directory is the one allowed

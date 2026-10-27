@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [The app builds on Linux again (2026-10-27)](#2026-10-27--the-app-builds-on-linux-again-branch-fix-linux-build)
 - [Three load-flaky tests hold their jobs until they have looked (2026-10-27)](#2026-10-27--three-load-flaky-tests-hold-their-jobs-until-they-have-looked-branch-fix-flaky-people-denoise-tests)
 - [M10.17a: HDR merge — a bracket into one floating-point raw (2026-10-26)](#2026-10-26--m1017a-hdr-merge--a-bracket-into-one-floating-point-raw-branch-m1017a-hdr-merge)
 - [M10.16c3: Find people — YOLOX-m with tiles, MobileSAM's outline, removed with c1's fill (2026-10-21)](#2026-10-21--m1016c3-find-people--yolox-m-with-tiles-mobilesams-outline-removed-with-c1s-fill-branch-m1016c3-people)
@@ -189,6 +190,20 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-27 — The app builds on Linux again (branch `fix-linux-build`)
+
+The first run on the author's Linux machine (Arch, X11) failed to compile: E0432, `crate::display_colorspace` and
+`crate::native_menu` unresolved in `bootstrap.rs`. Both modules are declared `#[cfg(target_os = "macos")]` in
+`main.rs`, and every *use* of them was gated — but M10.7d (`1bdc4151`, 2026-09-30) folded the two into
+`bootstrap.rs`'s ungated `use crate::{…}`. So the `Rustroom` binary had not compiled anywhere but macOS for four
+weeks; every gate in that time ran on macOS. CI builds `--all` on Ubuntu and must have been red since — not
+verified (no `gh` here).
+- **The fix:** the import gated like its uses (`88767c6b`). No other Linux-only defect: fmt, clippy
+  `-D warnings` and `cargo test --workspace` all clean on Linux — **4,271 passed** (macOS 4,274), 24 ignored.
+- **Confirmed by use** — the first time the Linux GUI and its in-window menu bar have ever been seen. A plain
+  `cargo run --release -p app` works; no `PKG_CONFIG_PATH` needed. ✅ **Merged 2026-10-27 at the author's request**
+  (`--no-ff`, the branch deleted).
 
 ### 2026-10-27 — Three load-flaky tests hold their jobs until they have looked (branch `fix-flaky-people-denoise-tests`)
 
