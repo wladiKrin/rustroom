@@ -138,7 +138,8 @@ pub fn multiband(
                 });
         }
     }
-    // Normalise each level by its weights, then collapse from the top.
+    // Normalise each level by its weights, then collapse from the top — each level freed once it is added,
+    // the sum built in place (at the cap a level-0 buffer is ~1.1 GB, and a copy of it is another).
     for l in 0..levels {
         acc[l]
             .par_chunks_mut(3)
@@ -149,30 +150,35 @@ pub fn multiband(
                 }
             });
     }
-    let mut out = acc[levels - 1].clone();
+    drop(wsum);
+    let mut out = acc.pop().expect("a level");
     for l in (0..levels - 1).rev() {
-        let up = expand(&out, dims[l + 1].0, dims[l + 1].1, dims[l].0, dims[l].1, 3);
-        out = up.par_iter().zip(&acc[l]).map(|(a, b)| a + b).collect();
+        let mut up = expand(&out, dims[l + 1].0, dims[l + 1].1, dims[l].0, dims[l].1, 3);
+        drop(out);
+        let band = acc.pop().expect("a level");
+        up.par_iter_mut().zip(&band).for_each(|(a, b)| *a += b);
+        out = up;
     }
+    // The padded canvas's rows moved down onto the canvas's, in place; then cut to size.
     let (w, h) = (canvas.width, canvas.height);
-    let rows: Vec<(Vec<f32>, Vec<bool>)> = (0..h)
-        .into_par_iter()
-        .map(|y| {
-            let (mut rgb, mut bits) = (vec![0f32; w * 3], vec![false; w]);
-            for x in 0..w {
-                if labels.owner[y * w + x] != crate::seam::NONE {
-                    let i = 3 * (y * pw + x);
-                    rgb[3 * x..3 * x + 3].copy_from_slice(&out[i..i + 3]);
-                    bits[x] = true;
-                }
-            }
-            (rgb, bits)
-        })
+    if pw != w {
+        for y in 1..h {
+            out.copy_within(3 * y * pw..3 * (y * pw + w), 3 * y * w);
+        }
+    }
+    out.truncate(3 * w * h);
+    let bits: Vec<bool> = labels
+        .owner
+        .iter()
+        .map(|&o| o != crate::seam::NONE)
         .collect();
-    let bits: Vec<bool> = rows.iter().flat_map(|r| r.1.iter().copied()).collect();
-    let img = ImageBuf::from_vec(w, h, rows.into_iter().flat_map(|r| r.0).collect());
+    out.par_chunks_mut(3).zip(&bits).for_each(|(p, &b)| {
+        if !b {
+            p.fill(0.0);
+        }
+    });
     (
-        img,
+        ImageBuf::from_vec(w, h, out),
         Valid {
             width: w,
             height: h,

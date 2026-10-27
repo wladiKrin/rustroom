@@ -476,6 +476,65 @@ mod tests {
         );
     }
 
+    /// The merge at the cap, its peak memory reported — six portrait X-T4-sized frames (4160 × 6240 at 23 mm,
+    /// constructed), stitched onto the 16,000-px canvas and written. Release only:
+    /// `cargo test --release --workspace a_merge_at_the_cap -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "~26 Mpx frames; release only"]
+    fn a_merge_at_the_cap_reports_its_peak_memory() {
+        let mut r = synth_pano::row(6, 0.3, true);
+        r.shots.iter_mut().for_each(|s| s.vignette = 0.0);
+        let r = Row {
+            w: 4160,
+            h: 6240,
+            focal: 6107.0,
+            ..r
+        };
+        let t = std::time::Instant::now();
+        let paths = dng_row("cap", &r, &[1; 6]);
+        eprintln!("fixture {:.1} s", t.elapsed().as_secs_f32());
+        let peak = || {
+            std::fs::read_to_string("/proc/self/status")
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find(|l| l.starts_with("VmHWM"))
+                        .map(|l| l.trim_start_matches("VmHWM:").trim().to_owned())
+                })
+                .unwrap_or_default()
+        };
+        eprintln!("peak after the fixture: {}", peak());
+        let cancel = AtomicBool::new(false);
+        let t = std::time::Instant::now();
+        let d = decode(&paths);
+        let a = align(&d, None, &cancel, &mut |_| {}).unwrap();
+        let aligned = t.elapsed();
+        let s = stitch(
+            &d,
+            &a,
+            &PanoOptions::default(),
+            projection::MAX_LONG_EDGE,
+            None,
+            &cancel,
+            &mut |_| {},
+        )
+        .unwrap();
+        let stitched = t.elapsed();
+        let out = paths[0].with_file_name("cap-Pano.dng");
+        let preview = image::RgbImage::from_pixel(16, 12, image::Rgb([100, 100, 100]));
+        write_dng(&s, &d, &out, &preview).unwrap();
+        eprintln!(
+            "{} × {}: decode+align {:.1} s, stitch {:.1} s, written {:.1} s; peak {}",
+            s.image.width(),
+            s.image.height(),
+            aligned.as_secs_f32(),
+            (stitched - aligned).as_secs_f32(),
+            t.elapsed().as_secs_f32(),
+            peak()
+        );
+        assert!(s.image.width().max(s.image.height()) <= projection::MAX_LONG_EDGE);
+    }
+
     #[test]
     fn two_focal_lengths_are_refused() {
         let r = flat_row(2);

@@ -98,6 +98,10 @@ fn develop(
     if let (true, Some(c)) = (crop, st.crop) {
         edits.geometry.crop = c;
     }
+    // ⚠ Downscaled BEFORE the colour conversion: a ProPhoto copy of a capped panorama is ~1.1 GB, for a
+    // picture of `long` pixels (the review's memory finding). `render` would downscale first anyway.
+    let small = st.image.downscale_to(long);
+    let pp = photo_merge::hdr::raw_to_prophoto(&small, &d.metas[st.reference]);
     // The pipeline's spatial radii scale by this picture's size against the full-size merge's.
     let full = if d.half {
         a.rig.rescaled(2.0)
@@ -106,10 +110,9 @@ fn develop(
     };
     let full_long =
         Canvas::plan(&full, st.projection, MAX_LONG_EDGE).map_or(1, |c| c.width.max(c.height));
-    let scale = st.image.width().max(st.image.height()) as f32 / full_long.max(1) as f32;
+    let scale = small.width().max(small.height()) as f32 / full_long.max(1) as f32;
     let as_shot = d.metas[st.reference].metadata.as_shot.unwrap_or_default();
-    let image =
-        photo_merge::preview::render(&pano::to_prophoto(st, d), &edits, long, scale, as_shot);
+    let image = photo_merge::preview::render(&pp, &edits, long, scale, as_shot);
     (image, edits)
 }
 

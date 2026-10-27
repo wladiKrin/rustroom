@@ -70,11 +70,35 @@ pub fn cut(canvas: &Canvas, warped: &[Warped], order: &[usize]) -> Labels {
             (wb.y0, wb.y0 + wb.height, wb.x0, wb.x0 + wb.width)
         };
         let at = |s: usize, t: usize| if horizontal { (s, t) } else { (t, s) };
-        let ns = s1 - s0;
-        if ns == 0 {
-            continue;
-        }
         let nt = t1 - t0;
+        let covers = |s: usize, t: usize| {
+            let (x, y) = at(s, t);
+            owner[y * w + x] != NONE && wb.at(x, y).is_some()
+        };
+        // ⚠ The path's work spans only the overlap, not the frame's whole box: at the 16,000-px cap a box is
+        // ~23 M cells and the overlap a third of it (the review's memory finding).
+        let span = (t0..t1)
+            .into_par_iter()
+            .filter_map(|t| {
+                let lo = (s0..s1).find(|&s| covers(s, t))?;
+                let hi = (s0..s1).rev().find(|&s| covers(s, t))?;
+                Some((lo, hi))
+            })
+            .reduce_with(|a, b| (a.0.min(b.0), a.1.max(b.1)));
+        let Some((lo, hi)) = span else {
+            // Nothing laid yet that this frame overlaps: it takes what nobody owns.
+            for t in t0..t1 {
+                for s in s0..s1 {
+                    let (x, y) = at(s, t);
+                    if wb.at(x, y).is_some() && owner[y * w + x] == NONE {
+                        owner[y * w + x] = b as u8;
+                    }
+                }
+            }
+            continue;
+        };
+        let (box0, box1) = (s0, s1);
+        let (s0, ns) = (lo, hi + 1 - lo);
         // Per cell: inside the overlap, its disagreement and the rest of its cost; outside, `None`.
         let b_lum = |x: usize, y: usize| wb.at(x, y).map(lum);
         let cells: Vec<Option<(f32, f32)>> = (0..nt * ns)
@@ -127,24 +151,20 @@ pub fn cut(canvas: &Canvas, warped: &[Warped], order: &[usize]) -> Labels {
         // Where exactly one of the two is clipped the other must be used. ⚠ No margin: one of 8 px pushed
         // ownership out to a frame's coverage edge and cost 0.066 stops on the synthetic row; the blend keeps
         // the clipped light from spreading instead (`blend::multiband`'s fill).
-        let clip_map = |want_b: bool| -> Vec<f32> {
-            let map: Vec<f32> = (0..nt * ns)
+        let clip_map = |want_b: bool| -> Vec<bool> {
+            (0..nt * ns)
+                .into_par_iter()
                 .map(|k| {
                     let (x, y) = at(s0 + k % ns, t0 + k / ns);
                     let o = owner[y * w + x];
                     let Some(wa) = warped.get(o as usize) else {
-                        return 0.0;
+                        return false;
                     };
                     let (ca, cb) = (clipped_at(wa, x, y), clipped_at(wb, x, y));
                     let only = if want_b { ca && !cb } else { cb && !ca };
-                    if only && wb.at(x, y).is_some() {
-                        1.0
-                    } else {
-                        0.0
-                    }
+                    only && wb.at(x, y).is_some()
                 })
-                .collect();
-            map
+                .collect()
         };
         let (to_b, to_a) = (clip_map(true), clip_map(false));
         // Dynamic programming: the cheapest path, three moves a step.
@@ -175,8 +195,8 @@ pub fn cut(canvas: &Canvas, warped: &[Warped], order: &[usize]) -> Labels {
             i = (i as i64 + back[j * ns + i] as i64) as usize;
         }
         for (j, &p) in path.iter().enumerate() {
-            for i in 0..ns {
-                let (x, y) = at(s0 + i, t0 + j);
+            for s in box0..box1 {
+                let (x, y) = at(s, t0 + j);
                 if wb.at(x, y).is_none() {
                     continue;
                 }
@@ -185,11 +205,16 @@ pub fn cut(canvas: &Canvas, warped: &[Warped], order: &[usize]) -> Labels {
                     *o = b as u8;
                     continue;
                 }
+                // Outside the overlap's span nothing is both frames'.
+                if !(s0..s0 + ns).contains(&s) {
+                    continue;
+                }
+                let i = s - s0;
                 // Past the path `b` takes it — unless only one of the two holds the light near here: then that
                 // one does, whichever side it is on. One path cannot go round a sky band that runs the whole
                 // width of the overlap.
                 let k = j * ns + i;
-                let (force_b, force_a) = (to_b[k] > 0.0, to_a[k] > 0.0);
+                let (force_b, force_a) = (to_b[k], to_a[k]);
                 if (force_b && !force_a) || (i >= p && !(force_a && !force_b)) {
                     *o = b as u8;
                 }
