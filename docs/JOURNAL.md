@@ -192,7 +192,8 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 ### 2026-10-27 — Three load-flaky tests hold their jobs until they have looked (branch `fix-flaky-people-denoise-tests`)
 
 Found during M10.17a's gates (2026-10-26): three tests failed only under the full `cargo test --workspace`, each
-passing alone and on the tree before that milestone. ⏳ **Awaiting the author's merge.**
+passing alone and on the tree before that milestone. ✅ **Merged 2026-10-27 at the author's request** (`--no-ff`, the
+branch deleted).
 - `people_flow::a_press_with_models_and_photo_starts_the_search` ("the search started") and
   `people_flow::a_drawing_looks_there_and_adds_who_it_finds` ("a look there runs"). **One `pump_people` spawns a
   search AND polls it**, so a finder that answers at once — the stand-in, or the real one failing on zero-filled

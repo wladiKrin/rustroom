@@ -173,7 +173,8 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 ### State (2026-10-22)
 
 **4190 tests** (24 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
-gate green on `main` (re-gated 2026-10-22 after merging M10.16c4's decline and the denoise-test fix; no branch open). ⚠⚠ **Run the git command above rather than
+gate green on `main` (re-gated 2026-10-27 after merging the three load-flaky tests' fix, `grep -n 'hold their jobs' docs/JOURNAL.md`;
+branch `m10.17a-hdr-merge` open, unmerged). ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ✅ CI on Linux is green (its one historical failure was shape **(e)** in *Standing lessons*).
 
