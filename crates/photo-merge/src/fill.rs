@@ -274,10 +274,8 @@ mod tests {
             })
             .collect();
         for (i, _) in bits.iter().enumerate().filter(|b| *b.1) {
-            {
-                let p = [0, 1, 2].map(|c| 0.2 + 0.05 * c as f32 + 0.01 * rng.gauss() as f32);
-                img.set_pixel(i % w, i / w, p);
-            }
+            let p = [0, 1, 2].map(|c| 0.2 + 0.05 * c as f32 + 0.01 * rng.gauss() as f32);
+            img.set_pixel(i % w, i / w, p);
         }
         (
             img,
