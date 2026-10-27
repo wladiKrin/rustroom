@@ -457,6 +457,41 @@ mod tests {
         );
     }
 
+    /// Review Focus 5's other half (the review's #4): an HDR merge queued while a panorama runs waits, then
+    /// runs — both land, the panorama first.
+    #[test]
+    fn an_hdr_queued_behind_a_running_panorama_runs_after_it() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        let (dir, _) = row("queue", &[1, 1, 1]);
+        open_all(&mut app, &ctx, dir.clone());
+        app.open_pano_merge(true);
+        app.pump_merges(&ctx);
+        app.open_hdr_merge(true);
+        let mut landed: Vec<String> = Vec::new();
+        let start = Instant::now();
+        while app.merges.busy() {
+            app.pump_merges(&ctx);
+            if app.status.starts_with("Merged") && landed.last() != Some(&app.status) {
+                landed.push(app.status.clone());
+            }
+            assert!(start.elapsed() < LONG, "the merges never landed");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            dir.join("frame0-Pano.dng").exists() && dir.join("frame0-HDR.dng").exists(),
+            "{}",
+            app.status
+        );
+        assert_eq!(
+            landed,
+            vec![
+                "Merged frame0-Pano.dng".to_string(),
+                "Merged frame0-HDR.dng".to_string()
+            ]
+        );
+    }
+
     /// Review Focus 2: Perspective on a sweep too wide for it — said, and Merge is not offered.
     #[test]
     fn a_too_wide_perspective_disables_merge() {
