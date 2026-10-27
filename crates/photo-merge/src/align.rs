@@ -120,6 +120,39 @@ pub fn align(
     }
 }
 
+/// Refine `init` — already close, its perspective part real — as a full homography only, from level
+/// `finest + 2` down to `finest`; no search and no similarity stage (M10.17b's panorama pairs).
+///
+/// ⚠⚠ [`align`]'s similarity stage PROJECTS its start onto a similarity, dropping the perspective; a bracket's
+/// frames barely differ in perspective, so HDR never sees it, but two panorama frames 40° apart differ by
+/// a strong one, and started from their exact rotation [`align`] wandered 14–42 px.
+pub fn refine_from(
+    reference: &LumPyramid,
+    frame: &LumPyramid,
+    init: &Alignment,
+    finest: usize,
+) -> Alignment {
+    let top = reference.levels().min(frame.levels()) - 1;
+    let finest = finest.min(top);
+    let mut fit = (init.h, init.log_gain);
+    for k in (finest..=(finest + 2).min(top)).rev() {
+        fit = refine(
+            reference.level(k),
+            frame.level(k),
+            fit,
+            Model::Homography,
+            k,
+        );
+    }
+    let (_, overlap, residual) = loss(reference.level(finest), frame.level(finest), fit, finest);
+    Alignment {
+        h: fit.0,
+        log_gain: fit.1,
+        overlap,
+        residual,
+    }
+}
+
 /// The radius of the box the coarse search subtracts, in the coarsest level's pixels.
 const HIGHPASS: usize = 4;
 

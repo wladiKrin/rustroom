@@ -8,12 +8,14 @@ pub mod deghost;
 pub mod exposure;
 pub mod features;
 pub mod frame;
+pub mod gain;
 pub mod hdr;
 pub mod homography;
 pub mod lens;
 pub mod merge;
 pub mod preview;
 pub mod pyramid;
+pub mod refine;
 pub mod rig;
 pub mod rotation;
 #[cfg(test)]

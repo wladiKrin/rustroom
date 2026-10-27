@@ -5,6 +5,7 @@
 //! LensFun call per pixel costs ~60 ns × 3, which over a 93-Mpx canvas is tens of seconds (the per-pixel
 //! cost the pipeline measured at 400 ms of a 6.8-Mpx prefix, `Corrector::fill_row`'s note).
 
+use crate::frame::Frame;
 use lens_profile::{Corrections, Corrector, LensProfile, Shot};
 
 /// The coarse grid's spacing, in frame pixels. Measured on the XF23 at f/2 (corner gain 4.8×): 16 px
@@ -87,6 +88,16 @@ impl FrameLens {
         }
     }
 
+    /// A lens given by `at(x, y) → (each channel's source, gain)`, sampled on the grid — tests and
+    /// constructed fixtures, where no LensFun profile describes the distortion.
+    pub fn from_fn(
+        width: usize,
+        height: usize,
+        at: impl Fn(f32, f32) -> ([[f32; 2]; 3], f32),
+    ) -> Self {
+        FrameLens::Corrected(LensGrid::from_fn(width, height, at))
+    }
+
     /// The lens LensFun did not know, for the dialog's line.
     pub fn missing(&self) -> Option<&str> {
         match self {
@@ -96,8 +107,41 @@ impl FrameLens {
     }
 }
 
+/// `f` read through `lens`: the same size, every pixel at its corrected position, vignetting lifted — what
+/// dense registration needs, since two frames are related by a homography only once their distortion is
+/// gone. A pixel whose read touched a clipped sample is written clipped (65535), and one the lens reads
+/// from outside the frame is written black.
+pub fn corrected(f: &Frame, lens: &FrameLens) -> Frame {
+    use rayon::prelude::*;
+    if !matches!(lens, FrameLens::Corrected(_)) {
+        return f.clone();
+    }
+    let s = crate::warp::Sampler::new();
+    let (w, h) = (f.width, f.height);
+    let px: Vec<u16> = (0..h)
+        .into_par_iter()
+        .flat_map_iter(|y| {
+            let s = &s;
+            (0..w).flat_map(
+                move |x| match s.raw_at_corrected(f, lens, x as f32, y as f32) {
+                    Some((_, true)) => [u16::MAX; 3],
+                    Some((v, false)) => [0, 1, 2].map(|c| {
+                        (v[c] * f.pre_mul[c] * 65535.0).round().clamp(0.0, 65535.0) as u16
+                    }),
+                    None => [0; 3],
+                },
+            )
+        })
+        .collect();
+    Frame::new(w, h, px, f.pre_mul, f.ev)
+}
+
 impl LensGrid {
     fn sample(c: &Corrector, width: usize, height: usize) -> Self {
+        Self::from_fn(width, height, |x, y| (c.source(x, y), c.gain(x, y)))
+    }
+
+    fn from_fn(width: usize, height: usize, at: impl Fn(f32, f32) -> ([[f32; 2]; 3], f32)) -> Self {
         let cols = width.div_ceil(GRID_STEP) + 1;
         let rows = height.div_ceil(GRID_STEP) + 1;
         let node =
@@ -106,9 +150,9 @@ impl LensGrid {
         let mut gain = Vec::with_capacity(cols * rows);
         for j in 0..rows {
             for i in 0..cols {
-                let (x, y) = (node(i, width), node(j, height));
-                src.push(c.source(x, y));
-                gain.push(c.gain(x, y));
+                let (s, g) = at(node(i, width), node(j, height));
+                src.push(s);
+                gain.push(g);
             }
         }
         Self {
@@ -298,6 +342,27 @@ pub(crate) mod tests {
             .raw_at_corrected(&f, &FrameLens::NoLens, 5.5, 4.0)
             .expect("inside");
         assert!(clipped);
+    }
+
+    #[test]
+    fn a_corrected_frame_holds_the_corrected_reads() {
+        let (w, h) = (1200, 800);
+        // A dim ramp: f/2's corner gain (4.8×) must not lift it past the u16 ceiling.
+        let px: Vec<u16> = (0..w * h).flat_map(|i| [((i % w) * 8) as u16; 3]).collect();
+        let f = Frame::new(w, h, px, [1.0; 3], None);
+        let lens = xf23(w, h);
+        let c = corrected(&f, &lens);
+        let s = Sampler::new();
+        for (x, y) in [(8usize, 8usize), (600, 400), (1100, 700)] {
+            let (want, _) = s.raw_at_corrected(&f, &lens, x as f32, y as f32).unwrap();
+            let got = c.raw(x, y);
+            assert!(
+                (got[1] - want[1]).abs() < 2.0 / 65535.0,
+                "({x}, {y}): {got:?} vs {want:?}"
+            );
+        }
+        let plain = corrected(&f, &FrameLens::NoLens);
+        assert_eq!(plain.samples, f.samples, "no lens is the frame itself");
     }
 
     #[test]
