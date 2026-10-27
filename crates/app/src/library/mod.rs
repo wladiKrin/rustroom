@@ -139,7 +139,13 @@ fn apply_pinch(app: &mut RustroomApp, ui: &egui::Ui) {
     // ⚠ `zoom_delta` folds trackpad pinch *and* ctrl+scroll into one **multiplicative factor
     // that is 1.0 when idle**, which is why plain scrolling still scrolls the grid rather than
     // resizing it.
-    let zoom = ui.ctx().input(|i| i.zoom_delta());
+    // ⚠ Not while a dialog is open: the HDR merge preview zooms with the same gesture, and the grid
+    // behind it resized too (reported 2026-10-27). The rule the keyboard shortcuts already follow.
+    let zoom = if matches!(app.modal, crate::modals::Modal::None) {
+        ui.ctx().input(|i| i.zoom_delta())
+    } else {
+        1.0
+    };
     if zoom != 1.0 {
         app.settings.library_cell = app.settings.zoomed_cell(zoom);
         app.cell_zoom_pending = true;
@@ -258,5 +264,42 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     }
     if let Some(i) = out.open_index {
         app.open_entry(ctx, i);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pinch(app: &mut RustroomApp) {
+        let ctx = crate::test_ui::ctx();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(crate::test_ui::screen()),
+                events: vec![egui::Event::Zoom(1.5)],
+                ..Default::default()
+            },
+            |ui| apply_pinch(app, ui),
+        );
+    }
+
+    /// The control: with nothing open, a pinch resizes the grid.
+    #[test]
+    fn a_pinch_resizes_the_grid() {
+        let mut app = crate::test_app::for_test();
+        let before = app.settings.library_cell;
+        pinch(&mut app);
+        assert!(app.settings.library_cell > before);
+    }
+
+    /// A pinch meant for a dialog — the HDR merge preview zooms with it — leaves the grid alone
+    /// (reported 2026-10-27: zooming the preview resized the icons behind it).
+    #[test]
+    fn a_pinch_with_a_dialog_open_leaves_the_grid_alone() {
+        let mut app = crate::test_app::for_test();
+        app.modal = crate::modals::Modal::HdrMerge;
+        let before = app.settings.library_cell;
+        pinch(&mut app);
+        assert_eq!(app.settings.library_cell, before);
     }
 }
