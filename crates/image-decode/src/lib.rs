@@ -363,7 +363,30 @@ pub(crate) fn capture_of(ex: &exif::Exif) -> Capture {
         shutter: rational_of(ex, exif::Tag::ExposureTime),
         aperture: rational_of(ex, exif::Tag::FNumber),
         focal_len: rational_of(ex, exif::Tag::FocalLength),
+        gps: gps_of(ex),
     }
+}
+
+/// The EXIF GPS position, signed by its `Ref` tags (S and W negative) — `None` without both halves.
+fn gps_of(ex: &exif::Exif) -> Option<(f64, f64)> {
+    let dms = |tag| -> Option<[f32; 3]> {
+        let f = ex.get_field(tag, exif::In::PRIMARY)?;
+        let exif::Value::Rational(r) = &f.value else {
+            return None;
+        };
+        let v = |i: usize| r.get(i).map_or(0.0, |x| x.to_f64() as f32);
+        (!r.is_empty()).then(|| [v(0), v(1), v(2)])
+    };
+    let negative = |tag, neg: u8| ascii_of(ex, tag).is_some_and(|v| v.first() == Some(&neg));
+    let mut lat = dms(exif::Tag::GPSLatitude)?;
+    let mut lon = dms(exif::Tag::GPSLongitude)?;
+    if negative(exif::Tag::GPSLatitudeRef, b'S') {
+        lat = lat.map(|x| -x);
+    }
+    if negative(exif::Tag::GPSLongitudeRef, b'W') {
+        lon = lon.map(|x| -x);
+    }
+    core_image::gps_from_dms(lat, lon)
 }
 
 /// ⚠⚠ Reads `Field::value`, **never `display_value()`**. EXIF string fields are arrays, and a real

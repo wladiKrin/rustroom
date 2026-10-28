@@ -543,6 +543,10 @@ fn capture_of(raw: &RawImage) -> Capture {
         shutter: non_zero_f32(raw.shutter()),
         aperture: non_zero_f32(raw.aperture()),
         focal_len: non_zero_f32(raw.focal_len()),
+        gps: {
+            let g = raw.gps();
+            core_image::gps_from_dms(g.latitude, g.longitude)
+        },
     }
 }
 

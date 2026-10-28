@@ -734,6 +734,7 @@ mod tests {
             shutter: Some(0.004),
             aperture: Some(5.6),
             focal_len: Some(23.0),
+            gps: None,
         };
         let x = xmp_packet(&FileMetadata::resolve(&defaults(), p)).unwrap();
         // ⚠ Asserted as `<property>…value…</property>`: the discriminating sabotage is swapping

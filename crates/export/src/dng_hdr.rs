@@ -317,6 +317,7 @@ mod tests {
             shutter: Some(1.0 / 250.0),
             aperture: Some(8.0),
             focal_len: Some(23.0),
+            gps: None,
         }
     }
 
