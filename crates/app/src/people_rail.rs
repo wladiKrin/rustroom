@@ -45,6 +45,10 @@ impl RustroomApp {
     /// Open `p`'s photos: an Immich person's from the server, merged with the local ones (M10.18c); a local
     /// person's from the catalog, following it as a keyword view does.
     pub(crate) fn open_person(&mut self, ctx: &egui::Context, p: &PersonRow) {
+        // ⚠ Their photos, in the grid: left in the People view, a click showed only their unnamed faces — usually
+        // none, so it looked as if nothing happened (found in use, 2026-10-28).
+        self.view = crate::AppView::Library;
+        self.library_mode = crate::LibraryMode::Grid;
         if let Some(id) = &p.immich_id {
             if rustroom_app::immich_source::connection(&self.settings).is_some() {
                 self.immich_opening = Some(id.clone());
@@ -140,9 +144,14 @@ mod tests {
         let (mut app, _d, anna) = app_with_named(&["A.JPG", "B.JPG"]);
         app.rail_data.refresh(app.catalog.as_ref(), None);
         let p = app.rail_data.people[0].clone();
+        app.library_mode = crate::LibraryMode::People;
         app.open_person(&ctx, &p);
         let lib = app.library.as_ref().expect("a person opened");
         assert_eq!(lib.entries.len(), 2);
+        // Found in use: the click left the People view showing only unnamed faces — nothing seemed to happen.
+        assert!(
+            app.library_mode == crate::LibraryMode::Grid && app.view == crate::AppView::Library
+        );
         assert!(matches!(&lib.source, crate::LibrarySource::Person { id, .. } if *id == anna));
     }
 }

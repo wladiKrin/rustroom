@@ -65,6 +65,8 @@ pub struct FacePass {
     done: Arc<AtomicUsize>,
     total: usize,
     cancel: Arc<AtomicBool>,
+    /// Photos that could not be searched, and the first reason — said to the user, never swallowed.
+    failed: Arc<std::sync::Mutex<(usize, Option<String>)>>,
 }
 
 impl FacePass {
@@ -82,7 +84,8 @@ impl FacePass {
         let done = Arc::new(AtomicUsize::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
         let total = files.len();
-        let (d, c) = (done.clone(), cancel.clone());
+        let failed = Arc::new(std::sync::Mutex::new((0usize, None::<String>)));
+        let (d, c, fl) = (done.clone(), cancel.clone(), failed.clone());
         std::thread::Builder::new()
             .name("face-pass".into())
             .spawn(move || {
@@ -91,7 +94,18 @@ impl FacePass {
                         return;
                     }
                     let answer = if f.is_file() {
-                        picture(&f).and_then(|img| finder(&img).ok())
+                        let r = picture(&f)
+                            .ok_or_else(|| "the photo could not be read".to_string())
+                            .and_then(|img| finder(&img));
+                        match r {
+                            Ok(faces) => Some(faces),
+                            Err(e) => {
+                                let mut g = fl.lock().unwrap_or_else(|p| p.into_inner());
+                                g.0 += 1;
+                                g.1.get_or_insert(e);
+                                None
+                            }
+                        }
                     } else {
                         None
                     };
@@ -107,7 +121,16 @@ impl FacePass {
             done,
             total,
             cancel,
+            failed,
         }
+    }
+
+    /// How many photos could not be searched, and the first reason.
+    pub fn failures(&self) -> (usize, Option<String>) {
+        self.failed
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 
     /// Everything found since the last call, and whether the pass is over.
@@ -193,6 +216,46 @@ mod tests {
             all(&p).is_empty(),
             "a photo that could not be read was marked read"
         );
+        assert_eq!(
+            p.failures(),
+            (1, Some("the photo could not be read".into()))
+        );
+    }
+
+    /// Found in use: a finder's error (a model that will not load) was swallowed and nothing appeared.
+    #[test]
+    fn a_finders_error_is_kept() {
+        let d = test_dir::TempDir::new("face-pass-error");
+        let here = d.join("a.JPG");
+        std::fs::write(&here, b"x").unwrap();
+        let broken: FaceFinder = Arc::new(|_| Err("model: bad file".into()));
+        let p = FacePass::with_picture(vec![here], broken, any_picture);
+        all(&p);
+        assert_eq!(p.failures(), (1, Some("model: bad file".into())));
+    }
+
+    /// The real path end to end — the picture reader and both networks — on the crew portrait (a real photo,
+    /// public domain). ⚠ Needs the models in the app's folder, so ignored:
+    /// `cargo test --workspace --release the_real_pass -- --ignored`.
+    #[test]
+    #[ignore]
+    fn the_real_pass_finds_the_crews_faces() {
+        let d = test_dir::TempDir::new("face-pass-real");
+        let photo = d.join("crew.jpg");
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../ai-mask/tests/fixtures/apollo11_crew.jpg"
+            ),
+            &photo,
+        )
+        .unwrap();
+        let models = crate::ai_cache::models_dir().expect("a models folder");
+        let p = FacePass::start(vec![photo.clone()], real_finder(models));
+        let found = all(&p);
+        println!("{found:?}");
+        assert_eq!(found.len(), 1, "the photo was not answered");
+        assert_eq!(found[0].1.as_ref().map(Vec::len), Some(3));
     }
 
     #[test]

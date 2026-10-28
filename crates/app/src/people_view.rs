@@ -169,7 +169,21 @@ impl RustroomApp {
             }
         }
         if done {
-            self.people.pass = None;
+            if let Some(p) = self.people.pass.take() {
+                let (n, why) = p.failures();
+                let (_, total) = p.progress();
+                self.status = match (n, why) {
+                    (0, _) => "Looked for faces".to_string(),
+                    (n, Some(why)) => format!(
+                        "Could not look for faces in {} of {total}: {why}",
+                        rustroom_app::status_text::photos(n)
+                    ),
+                    (n, None) => format!(
+                        "Could not look for faces in {}",
+                        rustroom_app::status_text::photos(n)
+                    ),
+                };
+            }
         } else {
             ctx.request_repaint_after(std::time::Duration::from_millis(150));
         }
@@ -282,6 +296,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let (groups, faces) = groups(app, ctx);
     let people = app.rail_data.people.clone();
     let index = app.people.index.clone();
+    let searching = app.people.pass.as_ref().map(|p| p.progress());
+    let (find_faces, waiting_models) = (app.settings.find_faces, app.people.waiting_models);
+    let mut download = false;
     let mut act: Option<Act> = None;
     egui::CentralPanel::default().show(ui, |ui| {
         if app.library.is_none() {
@@ -316,7 +333,25 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         let n = groups.len();
         theme::sub_label(ui, &format!("Who is this? · {n} groups"));
         if n == 0 {
-            theme::hint(ui, "Every face found in these photos has a name.");
+            // ⚠ Say what is going on — a blank view read as "nothing happens" (found in use, 2026-10-28).
+            let why = if let Some((done, total)) = searching {
+                format!("Looking for faces · {done} of {total} photos")
+            } else if !find_faces {
+                "Finding faces is off — Settings → Behaviour".to_string()
+            } else if waiting_models {
+                "The face models are not downloaded yet".to_string()
+            } else {
+                "No unnamed faces in these photos".to_string()
+            };
+            theme::hint(ui, &why);
+            if waiting_models
+                && ui
+                    .button("Download the face models…")
+                    .hover("Downloads the two networks that find and tell apart faces")
+                    .clicked()
+            {
+                download = true;
+            }
         }
         // ⚠ Virtual rows of cards: only the rows on screen lay out and ask for thumbnails (the review's #3).
         let per_row = ((ui.available_width() / (CARD + 12.0)).floor() as usize).max(1);
@@ -343,6 +378,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // ⚠⚠ Everything drawn, or `retain_window` leaves these thumbnails evictable (Survey's rule).
         lib.sync_thumb_window(&window);
     });
+    if download {
+        app.ai.proposed = vec![ai_mask::ModelId::YunetFace, ai_mask::ModelId::SfaceFace];
+        app.modal = crate::modals::Modal::AiDownload;
+    }
     match act {
         Some(Act::Name(f, n)) => app.name_faces(&f, &n),
         Some(Act::Yes(f, p)) => app.confirm_faces(&f, p),
@@ -602,6 +641,39 @@ mod tests {
             app.people.pass.is_some(),
             "the models arrived and nothing was searched"
         );
+    }
+
+    /// Found in use: a view with nothing to show said nothing. It says why.
+    #[test]
+    fn an_empty_view_says_why() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        let d = test_dir::TempDir::new("people-empty");
+        std::fs::write(d.join("A.JPG"), b"x").unwrap();
+        app.settings.find_faces = false;
+        app.open_folder_at(&ctx, d.path().to_path_buf());
+        let text = |app: &mut RustroomApp| {
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+            crate::test_ui::nodes_on(&ctx, screen, |ui| {
+                let c = ui.ctx().clone();
+                show(app, ui, &c);
+            })
+            .into_iter()
+            .map(|n| n.label)
+            .collect::<Vec<_>>()
+        };
+        assert!(
+            text(&mut app)
+                .iter()
+                .any(|l| l.starts_with("Finding faces is off")),
+            "{:?}",
+            text(&mut app)
+        );
+        app.settings.find_faces = true;
+        app.people.pass_for = app.library.as_ref().map(|l| l.visible_rev);
+        assert!(text(&mut app)
+            .iter()
+            .any(|l| l == "No unnamed faces in these photos"));
     }
 
     #[test]
