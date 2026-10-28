@@ -139,35 +139,7 @@ pub(super) fn draw_crop_marks(
     // ⚠ Muted is thinner *and* dimmer, the treatment the composition guides already use when
     // they are context rather than the tool in hand (0.8 over a 2.0 halo, 190 at alpha 150).
     let muted = how == Marks::Muted;
-    let halo = egui::Color32::from_black_alpha(if muted { 110 } else { 180 });
-    // ⚠ A light neutral over a dark halo, not red and not the theme accent (the author's call,
-    // 2026-09-28, closing P-07: red was the one loud colour on an otherwise neutral surround).
-    // The halo is what keeps a light line visible on a bright photograph — see above — and the
-    // accent is user-switchable, including a `Neutral` setting whose whole point is to have no
-    // colour. The **handles** carry the affordance instead: corner brackets and edge bars, bold
-    // enough to read as "grab me" at a glance.
-    let mark = if muted {
-        egui::Color32::from_rgba_unmultiplied(235, 235, 235, 150)
-    } else {
-        egui::Color32::from_rgb(235, 235, 235)
-    };
-    let (halo_w, mark_w) = if muted { (2.0, 0.8) } else { (4.0, 1.5) };
-    // ⚠⚠ The guides are **no longer drawn here.** They moved to `canvas::show` so every tool
-    // gets them, not only Crop — the View menu entry and the `O` key did nothing in the other
-    // three. Crop still passes the **crop rect**, because the preview strips the crop and that
-    // rect is the photograph-to-be.
-    marks.rect_stroke(
-        crop_rect,
-        egui::CornerRadius::ZERO,
-        egui::Stroke::new(halo_w, halo),
-        egui::StrokeKind::Middle,
-    );
-    marks.rect_stroke(
-        crop_rect,
-        egui::CornerRadius::ZERO,
-        egui::Stroke::new(mark_w, mark),
-        egui::StrokeKind::Middle,
-    );
+    let (halo, mark) = border(&marks, crop_rect, muted);
 
     // ⚠ Corner **brackets**, not dots. They are the conventional crop affordance, they read as
     // "grab me" where a dot reads as decoration, and they are far larger targets — the hit test
@@ -266,6 +238,46 @@ pub(super) fn draw_crop_overlay(
         }
     }
     false
+}
+
+/// The crop's border on `rect` — a light line over a dark halo — and the two colours, `(halo, mark)`, its
+/// brackets and bars take. Also
+/// what the panorama merge draws around Auto crop's rectangle, so the part kept reads the same in both.
+pub(crate) fn border(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    muted: bool,
+) -> (egui::Color32, egui::Color32) {
+    let halo = egui::Color32::from_black_alpha(if muted { 110 } else { 180 });
+    // ⚠ A light neutral over a dark halo, not red and not the theme accent (the author's call,
+    // 2026-09-28, closing P-07: red was the one loud colour on an otherwise neutral surround).
+    // The halo is what keeps a light line visible on a bright photograph — see above — and the
+    // accent is user-switchable, including a `Neutral` setting whose whole point is to have no
+    // colour. The **handles** carry the affordance instead: corner brackets and edge bars, bold
+    // enough to read as "grab me" at a glance.
+    let mark = if muted {
+        egui::Color32::from_rgba_unmultiplied(235, 235, 235, 150)
+    } else {
+        egui::Color32::from_rgb(235, 235, 235)
+    };
+    let (halo_w, mark_w) = if muted { (2.0, 0.8) } else { (4.0, 1.5) };
+    // ⚠⚠ The guides are **no longer drawn here.** They moved to `canvas::show` so every tool
+    // gets them, not only Crop — the View menu entry and the `O` key did nothing in the other
+    // three. Crop still passes the **crop rect**, because the preview strips the crop and that
+    // rect is the photograph-to-be.
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::ZERO,
+        egui::Stroke::new(halo_w, halo),
+        egui::StrokeKind::Middle,
+    );
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::ZERO,
+        egui::Stroke::new(mark_w, mark),
+        egui::StrokeKind::Middle,
+    );
+    (halo, mark)
 }
 
 #[cfg(test)]

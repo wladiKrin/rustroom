@@ -279,6 +279,9 @@ the hand-off (frame-count cap, clamping a fill at 0, a misplaced doc comment in 
   cache) and changeable in Settings → Immich → Merged photos; it is named after the photo's own name, not the
   asset id. Create stack is greyed there (`beside_frames`) — the author's call — and the status says
   "Merged X into <folder>". Placement and landing sabotaged. Gate **4,377 passed**. ⚠ `modals/settings.rs` grew by six.
+- **Asked for in use (2026-10-28): the preview draws the crop tool's border around Auto crop's rectangle** — the dim
+  alone did not say the greyed edges are left out. One function, `crop_overlay::border` (the crop's light line over
+  a dark halo), so the two cannot drift; it goes with Auto crop off or Fill edges on, as the dim does.
 
 ### 2026-10-27 — The app builds on Linux again (branch `fix-linux-build`)
 

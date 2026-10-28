@@ -92,7 +92,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         let mut well_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                         well_ui.set_clip_rect(rect);
                         egui::Image::new(tex).paint_at(&well_ui, at);
-                        // Auto crop's rectangle: outside it dimmed, as the crop tool draws a crop.
+                        // Auto crop's rectangle: outside it dimmed and a border around it, as the crop tool draws a crop.
                         if let (Some(c), true) = (crop, draft.auto_crop && draft.auto_crop_applies()) {
                             let inner = egui::Rect::from_min_max(
                                 at.lerp_inside(egui::vec2(c.left, c.top)),
@@ -107,6 +107,8 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             ] {
                                 p.rect_filled(band, egui::CornerRadius::ZERO, theme::stale_dim());
                             }
+                            // The crop tool's border: only what is inside it is the photo, until Fill edges.
+                            crate::develop::canvas::crop_overlay::border(p, inner, false);
                         }
                         if stale {
                             well_ui.painter().rect_filled(at, egui::CornerRadius::ZERO, theme::stale_dim());
