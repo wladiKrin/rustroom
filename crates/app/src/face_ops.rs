@@ -41,6 +41,7 @@ impl RustroomApp {
             ActionKind::FaceChange {
                 changes,
                 rejections,
+                apart: Vec::new(),
             },
             open.as_ref(),
         );
@@ -81,6 +82,34 @@ impl RustroomApp {
         self.change_faces(faces, |s| s, Some(person), "Will not ask again".into());
     }
 
+    /// "Not in this group": `face` kept apart from every other face of its group — it stands alone now, and no
+    /// later grouping puts it back with them. One undo step.
+    pub(crate) fn keep_apart(&mut self, face: i64, group: &[i64]) {
+        let Some(cat) = &self.catalog else { return };
+        let pairs: Vec<(i64, i64)> = group
+            .iter()
+            .filter(|f| **f != face)
+            .map(|f| (face, *f))
+            .collect();
+        if pairs.is_empty() {
+            return;
+        }
+        if let Err(e) = cat.set_apart(&pairs, true) {
+            self.status = format!("Could not change the faces: {e}");
+            return;
+        }
+        let open = self.open_photo();
+        self.actions.push(
+            ActionKind::FaceChange {
+                changes: Vec::new(),
+                rejections: Vec::new(),
+                apart: pairs,
+            },
+            open.as_ref(),
+        );
+        self.status = "Took the face out of its group".into();
+    }
+
     /// "Not a face": left out of every list, kept so the undo is a flip.
     pub(crate) fn dismiss_faces(&mut self, faces: &[i64]) {
         self.change_faces(faces, |(p, c, _)| (p, c, true), None, "Removed".into());
@@ -91,6 +120,7 @@ impl RustroomApp {
         let ActionKind::FaceChange {
             changes,
             rejections,
+            apart,
         } = kind
         else {
             return;
@@ -101,6 +131,7 @@ impl RustroomApp {
                 .map(|(id, b, a)| (*id, if forward { *a } else { *b }))
                 .collect();
             let _ = cat.set_face_states(&writes);
+            let _ = cat.set_apart(apart, forward);
             for (f, p) in rejections {
                 let _ = cat.set_rejected(std::slice::from_ref(f), *p, forward);
             }
@@ -185,6 +216,28 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+    }
+
+    /// Asked for in use: one face out of its group, one undo step.
+    #[test]
+    fn not_in_this_group_and_its_undo() {
+        let (mut app, _d, ids) = app_with_faces();
+        app.keep_apart(ids[0], &ids);
+        let apart = app.catalog.as_ref().unwrap().faces_apart().unwrap();
+        assert_eq!(apart.len(), 2, "{apart:?}");
+        app.undo_action(&ctx());
+        assert!(app
+            .catalog
+            .as_ref()
+            .unwrap()
+            .faces_apart()
+            .unwrap()
+            .is_empty());
+        app.redo_action(&ctx());
+        assert_eq!(
+            app.catalog.as_ref().unwrap().faces_apart().unwrap().len(),
+            2
         );
     }
 

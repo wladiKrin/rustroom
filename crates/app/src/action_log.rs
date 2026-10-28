@@ -175,6 +175,8 @@ pub enum ActionKind {
     FaceChange {
         changes: Vec<(i64, catalog::db::FaceState, catalog::db::FaceState)>,
         rejections: Vec<(i64, i64)>,
+        /// Pairs of faces kept apart ("Not in this group").
+        apart: Vec<(i64, i64)>,
     },
     /// Several actions performed by one gesture, undone and redone as a unit.
     ///

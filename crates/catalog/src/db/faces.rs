@@ -326,6 +326,32 @@ impl Catalog {
         Ok(())
     }
 
+    /// Every pair of faces the user said are not the same person ("Not in this group"), smaller id first.
+    pub fn faces_apart(&self) -> Result<HashSet<(i64, i64)>, CatalogError> {
+        let mut st = self.conn.prepare("SELECT a, b FROM face_apart")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.filter_map(Result::ok).collect())
+    }
+
+    /// Keep each pair apart (or let it be grouped again), in one transaction.
+    pub fn set_apart(&self, pairs: &[(i64, i64)], apart: bool) -> Result<(), CatalogError> {
+        let tx = self.conn.unchecked_transaction()?;
+        for &(x, y) in pairs {
+            let (a, b) = (x.min(y), x.max(y));
+            if apart {
+                tx.execute(
+                    "INSERT OR IGNORE INTO face_apart (a, b) VALUES (?1, ?2)",
+                    [a, b],
+                )?;
+            } else {
+                tx.execute("DELETE FROM face_apart WHERE a = ?1 AND b = ?2", [a, b])?;
+            }
+        }
+        tx.commit()?;
+        self.faces_changed();
+        Ok(())
+    }
+
     /// Immich's named, visible people, by their server id — a rename on the server follows. Returns how many.
     pub fn set_immich_people(&self, people: &[(String, String)]) -> Result<usize, CatalogError> {
         let tx = self.conn.unchecked_transaction()?;
@@ -618,6 +644,22 @@ mod tests {
         let names: Vec<String> = cat.people().unwrap().into_iter().map(|p| p.name).collect();
         assert_eq!(names, vec!["Anna".to_string()]);
         assert!(cat.faces_of(&p[0]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn faces_kept_apart_are_kept_and_let_go() {
+        let (cat, p) = cat_with(&["a.RAF"]);
+        cat.set_local_faces(&p[0], &[face(0.1), face(0.5)]).unwrap();
+        let f = cat.faces_of(&p[0]).unwrap();
+        let rev = cat.faces_revision();
+        cat.set_apart(&[(f[1].id, f[0].id)], true).unwrap();
+        assert!(cat.faces_revision() > rev);
+        assert_eq!(
+            cat.faces_apart().unwrap(),
+            HashSet::from([(f[0].id.min(f[1].id), f[0].id.max(f[1].id))])
+        );
+        cat.set_apart(&[(f[0].id, f[1].id)], false).unwrap();
+        assert!(cat.faces_apart().unwrap().is_empty());
     }
 
     #[test]

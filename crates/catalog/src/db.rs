@@ -14,7 +14,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// The schema this build expects. Bump it whenever [`Catalog::migrate`] gains a step.
-pub const SCHEMA_VERSION: i64 = 16;
+pub const SCHEMA_VERSION: i64 = 17;
 
 /// What can go wrong talking to the catalog.
 ///

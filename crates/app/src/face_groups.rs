@@ -32,20 +32,36 @@ fn unit(v: &mut [f32]) {
 }
 
 /// Group `unnamed` (`(face, embedding)`); `named` (`(person, embedding)`) are the confirmed faces suggestions come
-/// from; `rejected` holds every `(face, person)` "No". Largest groups first.
+/// from; `rejected` holds every `(face, person)` "No"; `apart` every pair of faces the user said are not one person
+/// ("Not in this group") — such a pair never shares a group. Largest groups first.
 pub fn group(
     unnamed: &[(i64, Vec<f32>)],
     named: &[(i64, Vec<f32>)],
     rejected: &HashSet<(i64, i64)>,
+    apart: &HashSet<(i64, i64)>,
     threshold: f32,
 ) -> Vec<Group> {
+    // Each face's partners it must not share a group with, and which group each face joined.
+    let mut partners: HashMap<i64, Vec<i64>> = HashMap::new();
+    for &(a, b) in apart {
+        partners.entry(a).or_default().push(b);
+        partners.entry(b).or_default().push(a);
+    }
+    let mut group_of: HashMap<i64, usize> = HashMap::new();
     // The groups: their faces, the running sum of their embeddings and that sum's length — so a comparison is one
     // dot product, never a copy (the M10.18c review's #1).
     let mut groups: Vec<(Vec<i64>, Vec<f32>, f32)> = Vec::new();
     for (id, e) in unnamed {
+        let barred: HashSet<usize> = partners
+            .get(id)
+            .into_iter()
+            .flatten()
+            .filter_map(|p| group_of.get(p).copied())
+            .collect();
         let best = groups
             .iter()
             .enumerate()
+            .filter(|(i, _)| !barred.contains(i))
             .map(|(i, (_, sum, len))| (i, dot(sum, e) / len.max(1e-12)))
             .max_by(|a, b| a.1.total_cmp(&b.1));
         match best {
@@ -54,12 +70,16 @@ pub fn group(
                 g.0.push(*id);
                 g.1.iter_mut().zip(e).for_each(|(a, b)| *a += b);
                 g.2 = g.1.iter().map(|x| x * x).sum::<f32>().sqrt();
+                group_of.insert(*id, i);
             }
-            _ => groups.push((
-                vec![*id],
-                e.clone(),
-                e.iter().map(|x| x * x).sum::<f32>().sqrt(),
-            )),
+            _ => {
+                groups.push((
+                    vec![*id],
+                    e.clone(),
+                    e.iter().map(|x| x * x).sum::<f32>().sqrt(),
+                ));
+                group_of.insert(*id, groups.len() - 1);
+            }
         }
     }
     // Each person's mean confirmed face.
@@ -115,12 +135,29 @@ mod tests {
             (5, near(0, 0.05)),
             (6, near(50, 0.0)),
         ];
-        let g = group(&faces, &[], &HashSet::new(), THRESHOLD);
+        let g = group(&faces, &[], &HashSet::new(), &HashSet::new(), THRESHOLD);
         assert_eq!(g.len(), 3, "{g:?}");
         assert_eq!(g[0].faces, vec![1, 3, 5], "the largest first");
         assert_eq!(g[1].faces, vec![2, 4]);
         assert_eq!(g[2].faces, vec![6]);
         assert!(g.iter().all(|g| g.suggest.is_none()));
+    }
+
+    /// Asked for in use: "Not in this group" splits a face out, and later groupings keep it out.
+    #[test]
+    fn a_face_kept_apart_never_shares_its_group() {
+        let faces = [(1, near(0, 0.1)), (2, near(0, 0.2)), (3, near(0, 0.15))];
+        let together = group(&faces, &[], &HashSet::new(), &HashSet::new(), THRESHOLD);
+        assert_eq!(
+            together.len(),
+            1,
+            "fixture check: one group without the pair"
+        );
+        let apart = HashSet::from([(1, 3), (2, 3)]);
+        let g = group(&faces, &[], &HashSet::new(), &apart, THRESHOLD);
+        assert_eq!(g.len(), 2, "{g:?}");
+        assert_eq!(g[0].faces, vec![1, 2]);
+        assert_eq!(g[1].faces, vec![3]);
     }
 
     #[test]
@@ -130,12 +167,14 @@ mod tests {
             &[(1, near(0, 0.1)), (2, near(0, 0.2))],
             &[(anna, near(0, 0.15))],
             &HashSet::new(),
+            &HashSet::new(),
             THRESHOLD,
         );
         assert_eq!(g[0].suggest, Some(anna));
         let g = group(
             &[(1, near(20, 0.0))],
             &[(anna, near(0, 0.15))],
+            &HashSet::new(),
             &HashSet::new(),
             THRESHOLD,
         );
@@ -148,7 +187,13 @@ mod tests {
         let anna = 7;
         let rejected = HashSet::from([(1, anna)]);
         let more = [(1, near(0, 0.1)), (2, near(0, 0.2)), (3, near(0, 0.0))];
-        let g = group(&more, &[(anna, near(0, 0.15))], &rejected, THRESHOLD);
+        let g = group(
+            &more,
+            &[(anna, near(0, 0.15))],
+            &rejected,
+            &HashSet::new(),
+            THRESHOLD,
+        );
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].suggest, None);
     }
@@ -159,7 +204,13 @@ mod tests {
     fn grouping_never_moves_a_named_face() {
         let unnamed = [(1, near(0, 0.1)), (2, near(0, 0.2))];
         let named = [(7, near(0, 0.15))];
-        let g = group(&unnamed, &named, &HashSet::new(), THRESHOLD);
+        let g = group(
+            &unnamed,
+            &named,
+            &HashSet::new(),
+            &HashSet::new(),
+            THRESHOLD,
+        );
         let out: Vec<i64> = g.iter().flat_map(|g| g.faces.clone()).collect();
         assert_eq!(out, vec![1, 2], "a named face appeared in a group");
     }
