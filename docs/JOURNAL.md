@@ -282,6 +282,9 @@ the hand-off (frame-count cap, clamping a fill at 0, a misplaced doc comment in 
 - **Asked for in use (2026-10-28): the preview draws the crop tool's border around Auto crop's rectangle** — the dim
   alone did not say the greyed edges are left out. One function, `crop_overlay::border` (the crop's light line over
   a dark halo), so the two cannot drift; it goes with Auto crop off or Fill edges on, as the dim does.
+- **Confirmed by use** on two of the author's own frames (downloaded from Immich). ✅ **Merged 2026-10-28 at the author's request**
+  (`--no-ff`, the branch deleted). ⚠ Still untuned on real rows: the seam constants, Auto select's angles and per-channel gain
+  (the probe, `examples/probe_pano.rs`, is ready for that); the twelve deferred minors stand.
 
 ### 2026-10-27 — The app builds on Linux again (branch `fix-linux-build`)
 
