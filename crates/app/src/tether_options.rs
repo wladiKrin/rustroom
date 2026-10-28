@@ -59,12 +59,22 @@ pub fn shots(n: usize) -> String {
     }
 }
 
-/// The status row's line while a session runs: the camera once it is open, the shots so far.
-pub fn status_line(camera: Option<&str>, shots_so_far: usize, stopping: bool) -> String {
-    match (stopping, camera) {
+/// The status row's line while a session runs: the camera once it is open, the shots so far, and
+/// the last thing that went wrong.
+pub fn status_line(
+    camera: Option<&str>,
+    shots_so_far: usize,
+    stopping: bool,
+    notice: Option<&str>,
+) -> String {
+    let line = match (stopping, camera) {
         (true, _) => "Stopping tethering".into(),
         (false, None) => "Tethered · connecting to the camera".into(),
         (false, Some(c)) => format!("Tethered · {c} · {}", shots(shots_so_far)),
+    };
+    match notice {
+        Some(n) => format!("{line} · {n}"),
+        None => line,
     }
 }
 
@@ -107,18 +117,25 @@ mod tests {
     #[test]
     fn the_status_line_names_the_camera_and_counts_the_shots() {
         assert_eq!(
-            status_line(None, 0, false),
+            status_line(None, 0, false, None),
             "Tethered · connecting to the camera"
         );
         assert_eq!(
-            status_line(Some("X-T4"), 1, false),
+            status_line(Some("X-T4"), 1, false, None),
             "Tethered · X-T4 · 1 shot"
         );
         assert_eq!(
-            status_line(Some("X-T4"), 12, false),
+            status_line(Some("X-T4"), 12, false, None),
             "Tethered · X-T4 · 12 shots"
         );
-        assert_eq!(status_line(Some("X-T4"), 12, true), "Stopping tethering");
+        assert_eq!(
+            status_line(Some("X-T4"), 12, true, None),
+            "Stopping tethering"
+        );
+        assert_eq!(
+            status_line(Some("X-T4"), 2, false, Some("Could not download A.RAF")),
+            "Tethered · X-T4 · 2 shots · Could not download A.RAF"
+        );
     }
 
     #[test]

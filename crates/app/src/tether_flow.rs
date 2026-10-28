@@ -38,6 +38,12 @@ pub(crate) struct TetherRun {
     pub(crate) shots: usize,
     /// Stop was pressed; the session ends after any download in flight.
     pub(crate) stopping: bool,
+    /// The last thing that went wrong, shown in the session's line until the next shot lands —
+    /// the status row shows only that line while a session runs.
+    pub(crate) notice: Option<String>,
+    /// A shot that landed while a dialog was open: selected (and opened in Develop) once it
+    /// closes, never under a dialog acting on the selection.
+    deferred: Option<PhotoId>,
     folder: PathBuf,
     preset: Option<Preset>,
 }
@@ -68,7 +74,9 @@ impl RustroomApp {
     /// File → Tethered capture…
     pub(crate) fn open_tether(&mut self) {
         if self.tether.run.is_some() {
-            self.status = "Stop tethering before starting another session".into();
+            if let Some(r) = self.tether.run.as_mut() {
+                r.notice = Some("Stop tethering before starting another session".into());
+            }
             return;
         }
         self.tether.dialog = Some(TetherDialog {
@@ -164,10 +172,12 @@ impl RustroomApp {
             camera: None,
             shots: 0,
             stopping: false,
+            notice: None,
+            deferred: None,
             folder,
             preset,
         });
-        self.status = tether_options::status_line(None, 0, false);
+        self.status = tether_options::status_line(None, 0, false, None);
     }
 
     /// Shoot (F12): fire the camera's shutter.
@@ -196,14 +206,14 @@ impl RustroomApp {
                 match r.session.events().try_recv() {
                     Ok(Event::Connected(name)) => r.camera = Some(name),
                     Ok(Event::Landed(p)) => landed.push(p),
-                    Ok(Event::Failed(s)) => self.status = s,
+                    Ok(Event::Failed(s)) => r.notice = Some(s),
                     Ok(Event::Ended(why)) => {
                         ended = Some(why);
                         break;
                     }
                     // ⚠ A thread gone without a last word ends the session, or the row would wait forever.
                     Err(TryRecvError::Disconnected) => {
-                        ended = Some(None);
+                        ended = Some((!r.stopping).then(|| "Tethering ended unexpectedly".into()));
                         break;
                     }
                     Err(TryRecvError::Empty) => break,
@@ -212,6 +222,11 @@ impl RustroomApp {
         }
         for p in landed {
             self.land_shot(ctx, &p);
+        }
+        if matches!(self.modal, crate::modals::Modal::None) {
+            if let Some(id) = self.tether.run.as_mut().and_then(|r| r.deferred.take()) {
+                self.show_shot(ctx, &id);
+            }
         }
         if let Some(why) = ended {
             let shots = self.tether.run.take().map_or(0, |r| r.shots);
@@ -232,6 +247,7 @@ impl RustroomApp {
             return;
         };
         run.shots += 1;
+        run.notice = None;
         let folder = run.folder.clone();
         let preset = run.preset.clone();
         // ⚠⚠ Scanned into the catalog BEFORE the preset — a catalog write is a no-op for a folder it
@@ -239,7 +255,12 @@ impl RustroomApp {
         // renders from a photo without its edits (the import's order).
         let scanned = self.scan_and_relink(&folder);
         if let Some(cat) = &self.catalog {
-            let capture = rustroom_app::metadata_scanner::read_capture(path);
+            // ⚠ The EXIF block only (~0.5 ms), never the whole raw (~113 ms and 31 MB a RAF) — this
+            // runs on the UI thread at every shot. The full read is the fallback.
+            let capture = match image_decode::quick_look(path) {
+                Ok(Some(q)) => q.capture,
+                _ => rustroom_app::metadata_scanner::read_capture(path),
+            };
             let opts = ImportOptions::default();
             rustroom_app::ingest::entry::apply(cat, path, &capture, &opts, preset.as_ref());
         }
@@ -256,19 +277,29 @@ impl RustroomApp {
                 }
             }
             let id = PhotoId::original(path.to_path_buf());
-            self.rebuild_entries(Some(&id));
-            if self.view == AppView::Develop {
-                let at = self
-                    .library
-                    .as_ref()
-                    .and_then(|l| l.entries.iter().position(|e| e.id == id));
-                if let Some(i) = at {
-                    self.open_entry(ctx, i);
+            if matches!(self.modal, crate::modals::Modal::None) {
+                self.show_shot(ctx, &id);
+            } else {
+                // ⚠ `None` keeps the selection by id: an Export or Sync dialog acts on it.
+                self.rebuild_entries(None);
+                if let Some(r) = self.tether.run.as_mut() {
+                    r.deferred = Some(id);
                 }
             }
         }
-        if let Some(r) = &self.tether.run {
-            self.status = tether_options::status_line(r.camera.as_deref(), r.shots, r.stopping);
+    }
+
+    /// Select the shot `id` — and in Develop open it, so the newest frame is what is on screen.
+    fn show_shot(&mut self, ctx: &egui::Context, id: &PhotoId) {
+        self.rebuild_entries(Some(id));
+        if self.view == AppView::Develop {
+            let at = self
+                .library
+                .as_ref()
+                .and_then(|l| l.entries.iter().position(|e| e.id == *id));
+            if let Some(i) = at {
+                self.open_entry(ctx, i);
+            }
         }
     }
 
@@ -279,6 +310,7 @@ impl RustroomApp {
             r.camera.as_deref(),
             r.shots,
             r.stopping,
+            r.notice.as_deref(),
         ))
     }
 }
@@ -392,6 +424,75 @@ mod tests {
         app.start_tether_with(&ctx, opts(d.path()), cam.opener());
         pump_until(&mut app, &ctx, |a| a.tether.run.is_none());
         assert_eq!(app.status, "The camera was disconnected");
+    }
+
+    /// The review's #1: a failure during a session reaches the status row, which shows only the
+    /// session's line while it runs — and the next shot clears it.
+    #[test]
+    fn a_failure_shows_in_the_session_line_until_the_next_shot() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        let d = test_dir::TempDir::new("tether-flow-failure");
+        let cam = Fake::new("X", vec![Step::Broken("A.RAF".into())]);
+        app.start_tether_with(&ctx, opts(d.path()), cam.opener());
+        pump_until(&mut app, &ctx, |a| {
+            a.tether_line()
+                .is_some_and(|l| l.contains("Could not download A.RAF"))
+        });
+        app.shoot_tether();
+        pump_until(&mut app, &ctx, |a| shots(a) == 1);
+        assert_eq!(app.tether_line().as_deref(), Some("Tethered · X · 1 shot"));
+    }
+
+    /// The review's #2: a shot landing behind an open dialog never changes the selection that
+    /// dialog acts on — it is selected once the dialog closes.
+    #[test]
+    fn a_shot_behind_an_open_dialog_waits_to_be_selected() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        let d = test_dir::TempDir::new("tether-flow-modal");
+        let cam = Fake::new("X", vec![jpg("A.JPG")]);
+        app.start_tether_with(&ctx, opts(d.path()), cam.opener());
+        pump_until(&mut app, &ctx, |a| shots(a) == 1);
+        let selected = |a: &RustroomApp| {
+            let lib = a.library.as_ref().unwrap();
+            lib.selection
+                .active()
+                .map(|i| lib.entries[i].id.path.clone())
+        };
+        let folder = d.join("Studio");
+        assert_eq!(selected(&app), Some(folder.join("A.JPG")), "fixture check");
+
+        app.modal = crate::modals::Modal::ExportSettings;
+        app.shoot_tether();
+        pump_until(&mut app, &ctx, |a| shots(a) == 2);
+        assert_eq!(
+            app.library.as_ref().unwrap().entries.len(),
+            2,
+            "the row is added"
+        );
+        assert_eq!(
+            selected(&app),
+            Some(folder.join("A.JPG")),
+            "the export's selection moved"
+        );
+
+        app.modal = crate::modals::Modal::None;
+        app.pump_tether(&ctx);
+        assert_eq!(selected(&app), Some(folder.join("SHOT1.JPG")));
+    }
+
+    /// The review's #5: a session thread that died is not reported as a Stop.
+    #[test]
+    fn a_session_that_died_says_so() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        let d = test_dir::TempDir::new("tether-flow-died");
+        app.start_tether_with(&ctx, opts(d.path()), Fake::new("X", vec![]).opener());
+        app.tether.run.as_mut().unwrap().session = Session::ended();
+        app.pump_tether(&ctx);
+        assert!(app.tether.run.is_none());
+        assert_eq!(app.status, "Tethering ended unexpectedly");
     }
 
     #[test]
