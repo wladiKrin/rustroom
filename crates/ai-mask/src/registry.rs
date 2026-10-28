@@ -35,10 +35,14 @@ pub enum ModelId {
     Lama,
     /// M10.16c3 — Find people's detector.
     YoloxM,
+    /// M10.18c — People's face detector.
+    YunetFace,
+    /// M10.18c — People's face recogniser.
+    SfaceFace,
 }
 
 impl ModelId {
-    pub const ALL: [ModelId; 9] = [
+    pub const ALL: [ModelId; 11] = [
         Self::IsNet,
         Self::BiRefNetLite,
         Self::SamEncoder,
@@ -48,6 +52,8 @@ impl ModelId {
         Self::FfdnetColor,
         Self::Lama,
         Self::YoloxM,
+        Self::YunetFace,
+        Self::SfaceFace,
     ];
 
     pub const fn spec(self) -> ModelSpec {
@@ -143,6 +149,24 @@ impl ModelId {
                 licence: "Apache-2.0 (YOLOX, code and weights)",
                 licence_url: "https://github.com/Megvii-BaseDetection/YOLOX",
             },
+            // ⚠ M10.18c: OpenCV Zoo's files at the commits that last changed them (2023-06-06, 2022-01-06), so the
+            // URL never moves under the pinned hash; size and hash measured from the downloads of 2026-10-28.
+            Self::YunetFace => ModelSpec {
+                file: "face_detection_yunet_2023mar.onnx",
+                url: "https://github.com/opencv/opencv_zoo/raw/f12e12798e8314f7c074a6656816c048dcc95b7a/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+                bytes: 232_589,
+                sha256: "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+                licence: "MIT (YuNet, OpenCV Zoo)",
+                licence_url: "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet",
+            },
+            Self::SfaceFace => ModelSpec {
+                file: "face_recognition_sface_2021dec.onnx",
+                url: "https://github.com/opencv/opencv_zoo/raw/ba91a3b91d00d76e86540d4013f944bd6b514e39/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
+                bytes: 38_696_353,
+                sha256: "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+                licence: "Apache-2.0 (SFace, OpenCV Zoo)",
+                licence_url: "https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface",
+            },
         }
     }
 }
@@ -198,6 +222,8 @@ mod tests {
             ModelId::FfdnetColor => 6,
             ModelId::Lama => 7,
             ModelId::YoloxM => 8,
+            ModelId::YunetFace => 9,
+            ModelId::SfaceFace => 10,
         };
         let every = [
             ModelId::IsNet,
@@ -209,6 +235,8 @@ mod tests {
             ModelId::FfdnetColor,
             ModelId::Lama,
             ModelId::YoloxM,
+            ModelId::YunetFace,
+            ModelId::SfaceFace,
         ];
         for id in every {
             assert_eq!(
@@ -248,6 +276,17 @@ mod tests {
         assert!(s.licence.contains("Apache-2.0"), "{}", s.licence);
     }
 
+    /// M10.18c: the two face networks, licence-clean (MIT and Apache-2.0 — no InsightFace weights).
+    #[test]
+    fn the_registry_pins_the_face_models() {
+        let y = ModelId::YunetFace.spec();
+        assert_eq!((y.bytes, &y.sha256[..8]), (232_589, "8f2383e4"));
+        assert!(y.licence.starts_with("MIT"));
+        let s = ModelId::SfaceFace.spec();
+        assert_eq!((s.bytes, &s.sha256[..8]), (38_696_353, "0ba9fbfa"));
+        assert!(s.licence.starts_with("Apache-2.0"));
+    }
+
     #[test]
     fn every_model_is_pinned_and_licensed() {
         for id in ModelId::ALL {
@@ -271,7 +310,13 @@ mod tests {
                 .sha256
                 .bytes()
                 .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
-            assert!(s.bytes > 1_000_000 && !s.licence.is_empty() && !s.licence_url.is_empty());
+            // ⚠ The floor catches a URL that served an error page; YuNet is a genuinely small network (232 KB).
+            let floor = if id == ModelId::YunetFace {
+                200_000
+            } else {
+                1_000_000
+            };
+            assert!(s.bytes > floor && !s.licence.is_empty() && !s.licence_url.is_empty());
         }
         let files: std::collections::HashSet<_> =
             ModelId::ALL.iter().map(|m| m.spec().file).collect();

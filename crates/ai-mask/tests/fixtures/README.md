@@ -1,0 +1,1 @@
+apollo11_crew.jpg — the Apollo 11 crew's official NASA portrait (1969), public domain (NASA, PD-USGov), from Wikimedia Commons File:Apollo_11_Crew.jpg, its 960 px rendition, fetched 2026-10-28. A real photo, not constructed.
