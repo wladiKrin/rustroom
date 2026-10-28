@@ -140,7 +140,9 @@ fn plan_library(app: &RustroomApp, ui: &egui::Ui, avail: f32) -> Shown {
 fn immich_source(app: &RustroomApp) -> bool {
     matches!(
         app.library.as_ref().map(|l| &l.source),
-        Some(LibrarySource::ImmichAlbum { .. }) | Some(LibrarySource::ImmichBucket { .. })
+        Some(LibrarySource::ImmichAlbum { .. })
+            | Some(LibrarySource::ImmichBucket { .. })
+            | Some(LibrarySource::ImmichPerson { .. })
     )
 }
 

@@ -8,8 +8,8 @@ pub mod error;
 pub mod multipart;
 
 pub use dto::{
-    About, AlbumSummary, Asset, AssetType, Bucket, ExifInfo, NextPage, SearchAssets,
-    SearchResponse, Stack, StackMember, Upload, UploadStatus,
+    About, AlbumSummary, Asset, AssetPerson, AssetType, Bucket, ExifInfo, FaceBox, NextPage,
+    PeoplePage, Person, SearchAssets, SearchResponse, Stack, StackMember, Upload, UploadStatus,
 };
 pub use error::Error;
 
@@ -60,6 +60,8 @@ pub enum Filter {
     Album(String),
     /// RFC 3339 bounds: `after` inclusive, `before` exclusive.
     TakenBetween { after: String, before: String },
+    /// Every asset a person is in (M10.18c).
+    Person(String),
 }
 
 impl Filter {
@@ -70,14 +72,19 @@ impl Filter {
         match self {
             // ⚠ `withExif` (M10.15c): Immich's rating lives in `exifInfo`, which a search returns
             // only when asked — 55% more bytes, ~180 ms per 1,000 assets, measured 2026-10-13.
-            Filter::Album(id) => {
-                serde_json::json!({ "albumIds": [id], "size": size, "withExif": true })
-            }
+            // ⚠ `withPeople` (M10.18c): an asset's people and face boxes, for the People list.
+            Filter::Album(id) => serde_json::json!({
+                "albumIds": [id], "size": size, "withExif": true, "withPeople": true,
+            }),
             Filter::TakenBetween { after, before } => serde_json::json!({
                 "takenAfter": after,
                 "takenBefore": before,
                 "size": size,
                 "withExif": true,
+                "withPeople": true,
+            }),
+            Filter::Person(id) => serde_json::json!({
+                "personIds": [id], "size": size, "withExif": true, "withPeople": true,
             }),
         }
     }
@@ -222,6 +229,30 @@ impl Client {
     /// thread — see `immich_stack_cache`.
     pub fn stacks(&self) -> Result<Vec<Stack>, Error> {
         self.get_json("/stacks")
+    }
+
+    /// `GET /people` — every named, visible person on the server (M10.18c), paged until the server says there are
+    /// no more. ⚠ Needs `person.read`; a key without it answers 403, which the caller reads as "no people".
+    pub fn people(&self) -> Result<Vec<Person>, Error> {
+        let mut out = Vec::new();
+        for page in 1..=200 {
+            let p: PeoplePage =
+                self.get_json(&format!("/people?withHidden=false&page={page}&size=500"))?;
+            out.extend(
+                p.people
+                    .into_iter()
+                    .filter(|p| !p.is_hidden && !p.name.trim().is_empty()),
+            );
+            if !p.has_next_page {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// The assets `person` is in — the search, paged.
+    pub fn person(&self, id: &str) -> Result<Vec<Asset>, Error> {
+        self.search(&Filter::Person(id.to_string()))
     }
 
     /// `GET /timeline/buckets` — the whole library's month list with counts, in one call.
@@ -449,6 +480,42 @@ fn map_ureq(e: ureq::Error) -> Error {
 
 #[cfg(test)]
 mod tests {
+
+    /// M10.18c: a person's search names them, and every search asks for the people.
+    #[test]
+    fn a_person_filter_asks_for_person_ids() {
+        let b = Filter::Person("p1".into()).body(100);
+        assert_eq!(b["personIds"][0], "p1");
+        assert_eq!(b["withPeople"], true);
+        assert_eq!(Filter::Album("a".into()).body(1)["withPeople"], true);
+    }
+
+    /// CONSTRUCTED from the published schema — the GUI check confirms it on the author's server.
+    #[test]
+    fn people_reply_parses() {
+        let p: PeoplePage = serde_json::from_str(
+            r#"{"total":3,"hidden":1,"hasNextPage":false,"people":[
+                {"id":"p1","name":"Anna","birthDate":null,"thumbnailPath":"/x","isHidden":false,"isFavorite":false},
+                {"id":"p2","name":"","isHidden":false},
+                {"id":"p3","name":"Ben","isHidden":true}]}"#,
+        )
+        .unwrap();
+        assert_eq!(p.people.len(), 3);
+        assert!(!p.has_next_page);
+        let a: Asset = serde_json::from_str(
+            r#"{"id":"a","type":"IMAGE","originalFileName":"x.jpg","originalMimeType":null,"width":null,
+                "height":null,"thumbhash":null,"fileModifiedAt":"t","updatedAt":"t",
+                "people":[{"id":"p1","name":"Anna","isHidden":false,"faces":[{"id":"f1","imageWidth":1000,
+                "imageHeight":500,"boundingBoxX1":100,"boundingBoxY1":50,"boundingBoxX2":200,"boundingBoxY2":150,
+                "sourceType":"machine-learning"}]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            a.people[0].faces[0].normalised(),
+            Some([0.1, 0.1, 0.2, 0.3])
+        );
+    }
+
     use super::*;
 
     #[test]

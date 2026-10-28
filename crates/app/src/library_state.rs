@@ -60,6 +60,17 @@ pub(crate) enum LibrarySource {
         id: i64,
         name: String,
     },
+    /// A person named only in Rustroom (M10.18c): the catalog's photos of them, following the catalog.
+    Person {
+        id: i64,
+        name: String,
+    },
+    /// A person Immich knows (M10.18c): every asset of theirs on the server, and the local photos named them.
+    ImmichPerson {
+        id: String,
+        person: i64,
+        name: String,
+    },
     /// One Immich album, its photos cached locally on demand.
     ///
     /// ⚠ The name is carried rather than looked up: the rail may not have fetched the album list

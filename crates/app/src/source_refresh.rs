@@ -51,13 +51,15 @@ impl RustroomApp {
             LibrarySource::Keyword { id, .. } => cat.keyword_members(*id),
             LibrarySource::Collection { id, .. } => cat.collection_members(*id),
             LibrarySource::Periods { periods, .. } => cat.photos_in_periods(periods),
+            LibrarySource::Person { id, .. } => cat.person_members(*id),
             LibrarySource::Smart { id, .. } => {
                 return Some(self.smart_members(*id).map(|found| found.members));
             }
             LibrarySource::Folder(_)
             | LibrarySource::AllPhotos
             | LibrarySource::ImmichAlbum { .. }
-            | LibrarySource::ImmichBucket { .. } => return None,
+            | LibrarySource::ImmichBucket { .. }
+            | LibrarySource::ImmichPerson { .. } => return None,
         };
         Some(read.map_err(|e| e.to_string()))
     }

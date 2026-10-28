@@ -81,6 +81,7 @@ mod tests {
             updated_at: "2026-01-01T00:00:00.000Z".into(),
             is_favorite: false,
             exif_info: None,
+            people: Vec::new(),
         }
     }
 

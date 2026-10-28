@@ -166,6 +166,73 @@ pub struct Asset {
     /// cannot break with a field it reshapes.
     #[serde(default)]
     pub exif_info: Option<ExifInfo>,
+    /// The people Immich found in the asset, with their face boxes — sent when a search asks
+    /// `withPeople: true` (M10.18c). ⚠ CONSTRUCTED from the published schema (`PersonWithFacesResponseDto`):
+    /// confirm against a captured reply. ⚠ `default`: lists cached before M10.18c lack it.
+    #[serde(default)]
+    pub people: Vec<AssetPerson>,
+}
+
+/// One person in an asset, and where their faces are (M10.18c).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetPerson {
+    pub id: String,
+    /// ⚠ Empty for a person nobody named on the server.
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub is_hidden: bool,
+    #[serde(default)]
+    pub faces: Vec<FaceBox>,
+}
+
+/// A face's box in the pixels of the image Immich measured it on (`imageWidth` × `imageHeight`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FaceBox {
+    pub image_width: f64,
+    pub image_height: f64,
+    pub bounding_box_x1: f64,
+    pub bounding_box_y1: f64,
+    pub bounding_box_x2: f64,
+    pub bounding_box_y2: f64,
+}
+
+impl FaceBox {
+    /// `[x0, y0, x1, y1]` normalised over the image, or `None` for a box with no image size.
+    pub fn normalised(&self) -> Option<[f32; 4]> {
+        (self.image_width > 0.0 && self.image_height > 0.0).then(|| {
+            [
+                self.bounding_box_x1 / self.image_width,
+                self.bounding_box_y1 / self.image_height,
+                self.bounding_box_x2 / self.image_width,
+                self.bounding_box_y2 / self.image_height,
+            ]
+            .map(|v| v.clamp(0.0, 1.0) as f32)
+        })
+    }
+}
+
+/// One page of `GET /people` (M10.18c). ⚠ CONSTRUCTED from the published schema (`PeopleResponseDto`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeoplePage {
+    #[serde(default)]
+    pub people: Vec<Person>,
+    #[serde(default)]
+    pub has_next_page: bool,
+}
+
+/// One person on the server.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Person {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub is_hidden: bool,
 }
 
 /// The part of an asset's `exifInfo` Rustroom reads.

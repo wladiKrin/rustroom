@@ -22,7 +22,9 @@ pub(crate) fn immich_buttons(app: &mut RustroomApp, ui: &mut egui::Ui) {
     }
     let immich = matches!(
         app.library.as_ref().map(|l| &l.source),
-        Some(LibrarySource::ImmichAlbum { .. }) | Some(LibrarySource::ImmichBucket { .. })
+        Some(LibrarySource::ImmichAlbum { .. })
+            | Some(LibrarySource::ImmichBucket { .. })
+            | Some(LibrarySource::ImmichPerson { .. })
     );
     if !immich {
         return;
