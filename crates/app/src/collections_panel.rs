@@ -123,7 +123,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let mut sections = app.settings.panel_sections;
     // ⚠⚠ Every catalog fact the rail shows, read once per catalog CHANGE rather than once per frame —
     // six queries a frame, several over every photo, were 27.5 ms a frame at 100,000 photos (M10.14e).
-    app.rail_data.refresh(app.catalog.as_ref());
+    let immich_root = app.immich_cache_root();
+    app.rail_data
+        .refresh(app.catalog.as_ref(), immich_root.as_deref());
     // ⚠ Its own variable rather than another `Action` variant: the Immich section's outcomes are
     // enqueued jobs, not catalog operations, and folding them into the catalog `Action` enum would
     // put two unrelated concerns behind one match.
@@ -168,7 +170,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         let top = ui.cursor().top();
                         let grip = match sec {
                             PanelSection::Folders => {
-                                let all = app.rail_data.all;
+                                let all = app.rail_data.all(&app.immich_present);
                                 let folders = std::sync::Arc::clone(&app.rail_data.folders);
                                 let n = folders.len().to_string();
                                 section(ui, &mut sections.folders, "sec_folders", "Folders", &n, |ui| {

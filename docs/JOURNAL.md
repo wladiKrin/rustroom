@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [All Photos counts what it shows; the merge's Immich refusal names Move to folder (2026-10-28)](#2026-10-28--all-photos-counts-what-it-shows-the-merges-immich-refusal-names-move-to-folder-branch-fix-rail-count-immich-merge-merged-2026-10-28)
 - [M10.17b: Panorama merge — a row of frames into one floating-point raw (2026-10-27)](#2026-10-27--m1017b-panorama-merge--a-row-of-frames-into-one-floating-point-raw-branch-m1017b-panorama)
 - [The app builds on Linux again (2026-10-27)](#2026-10-27--the-app-builds-on-linux-again-branch-fix-linux-build)
 - [Three load-flaky tests hold their jobs until they have looked (2026-10-27)](#2026-10-27--three-load-flaky-tests-hold-their-jobs-until-they-have-looked-branch-fix-flaky-people-denoise-tests)
@@ -191,6 +192,23 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+
+### 2026-10-28 — All Photos counts what it shows; the merge's Immich refusal names Move to folder (branch `fix-rail-count-immich-merge`, merged 2026-10-28)
+
+Two reports from the first use on Linux, both older than M10.17b.
+- **All Photos read 2,588 over a view of eight.** The catalog held 2,588 rows, every one Immich, browsed but
+  never downloaded except eight. The view hides an absent Immich row (`row_is_browsable`); the rail's count was
+  `Catalog::photo_count`, every row — wrong since the count was cached in M10.14e. Now `RailData` keeps the local
+  count and the Immich cache's rows by name (per catalog change), and `RailData::all` adds the ones in
+  `immich_present` (live, so a download shows at once), memoised on the number of downloads since the rail draws
+  every frame. ⚠ A re-read of the same size with other names keeps the old count until the next catalog change.
+  The startup `immich_present` now comes from the URL alone, as `immich_cache_root` does — with Immich switched
+  off the view still shows the downloads, so the count must too. Test sabotaged (the old count → 7 for 3).
+- **"Download Immich photos to a folder before merging them" over downloaded photos.** The refusal is deliberate —
+  a download lands in the Immich cache, the merge would write beside it, and Clear… would delete the result — but
+  the sentence named the wrong action. Now "Move Immich photos to a folder before merging them" (Move to folder).
+- Gate: **4,274 passed**, 24 ignored, fmt and clippy clean.
+- **Confirmed by use.** ✅ **Merged 2026-10-28 at the author's request** (`--no-ff`, the branch deleted).
 
 ### 2026-10-27 — M10.17b: Panorama merge — a row of frames into one floating-point raw (branch `m10.17b-panorama`)
 
