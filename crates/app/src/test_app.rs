@@ -112,6 +112,7 @@ pub fn for_test() -> RustroomApp {
         metadata: rustroom_app::metadata_scanner::MetadataScanner::new(|| {}),
         location_passes: Vec::new(),
         map: crate::map_view::MapView::offline(),
+        immich_people_asked: false,
         camera_profiles_cache: Vec::new(),
         compare_view: Default::default(),
         compare_focus: 1,

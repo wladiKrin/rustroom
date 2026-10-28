@@ -15,6 +15,8 @@ pub enum PanelSection {
     Keywords,
     Dates,
     Immich,
+    /// M10.18c — appended last, so a stored order keeps its sections where they were.
+    People,
 }
 
 impl PanelSection {
@@ -23,7 +25,7 @@ impl PanelSection {
     /// ⚠ Folders first because "where photos come from" is the outer concept, and All Photos —
     /// the whole catalog — is the natural top of it. That reasoning is `collections_panel`'s and
     /// is preserved here as the default rather than re-derived.
-    pub const ALL: [PanelSection; 6] = [
+    pub const ALL: [PanelSection; 7] = [
         Self::Folders,
         Self::Collections,
         Self::Smart,
@@ -33,6 +35,7 @@ impl PanelSection {
         // appending whatever `ALL` member it lacks — grows the new section at the bottom of the
         // rail rather than shuffling the five somebody already arranged.
         Self::Immich,
+        Self::People,
     ];
 }
 
@@ -62,6 +65,8 @@ pub struct PanelSections {
     pub dates: bool,
     /// ⚠ Defaults to closed like the rest, so the derived `Default` above stays correct.
     pub immich: bool,
+    /// M10.18c.
+    pub people: bool,
 }
 
 impl Settings {

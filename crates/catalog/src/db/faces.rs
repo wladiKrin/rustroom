@@ -174,12 +174,14 @@ impl Catalog {
         Ok(rows.filter_map(Result::ok).collect())
     }
 
-    /// Everyone with at least one photo, by name, with their photo counts.
+    /// Everyone, by name, with the photos the catalog has of them: every Immich person (who may have none here yet —
+    /// their own photos are the server's), and each local person with at least one.
     pub fn people(&self) -> Result<Vec<PersonRow>, CatalogError> {
         let mut st = self.conn.prepare(
-            "SELECT p.id, p.name, p.immich_person_id, COUNT(DISTINCT fa.folder_id || '/' || fa.file_name)
-             FROM people p JOIN faces fa ON fa.person_id = p.id AND fa.dismissed = 0
-             GROUP BY p.id ORDER BY p.name COLLATE NOCASE, p.id",
+            "SELECT p.id, p.name, p.immich_person_id, COUNT(DISTINCT fa.folder_id || '/' || fa.file_name) AS n
+             FROM people p LEFT JOIN faces fa ON fa.person_id = p.id AND fa.dismissed = 0
+             GROUP BY p.id HAVING n > 0 OR p.immich_person_id IS NOT NULL
+             ORDER BY p.name COLLATE NOCASE, p.id",
         )?;
         let rows = st.query_map([], |r| {
             Ok(PersonRow {
@@ -426,6 +428,18 @@ mod tests {
             .query_row("SELECT name FROM people WHERE id = ?1", [a], |r| r.get(0))
             .unwrap();
         assert_eq!(name, "Anna K");
+    }
+
+    /// An Immich person shows with no photos here yet; a local person with none does not.
+    #[test]
+    fn the_people_list_holds_immich_people_and_local_ones_with_photos() {
+        let (cat, _) = cat_with(&[]);
+        cat.set_immich_people(&[("i1".into(), "Anna".into())])
+            .unwrap();
+        cat.person_named("Nobody").unwrap();
+        let people = cat.people().unwrap();
+        assert_eq!(people.len(), 1, "{people:?}");
+        assert_eq!((people[0].name.as_str(), people[0].photos), ("Anna", 0));
     }
 
     #[test]

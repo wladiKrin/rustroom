@@ -78,6 +78,7 @@ mod name_edit;
 mod native_menu;
 mod pano_flow;
 mod people_flow;
+mod people_rail;
 mod people_view;
 mod preset_ops;
 mod preview_flow;

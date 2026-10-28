@@ -439,6 +439,8 @@ pub(crate) struct RustroomApp {
     pub(crate) location_passes: Vec<rustroom_app::location_pass::LocationPass>,
     /// Library → Map: its camera, tiles, pins and strip (M10.18b).
     pub(crate) map: crate::map_view::MapView,
+    /// Immich's people were asked for this session (M10.18c) — once, never per frame.
+    pub(crate) immich_people_asked: bool,
     /// Everything that narrows what the Library shows.
     ///
     /// ⚠⚠ On the **app**, not on `Library`, so it survives a source switch. Browsing *replaces*
