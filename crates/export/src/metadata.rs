@@ -261,6 +261,18 @@ fn bag(tag: &str, items: &[String]) -> String {
 ///
 /// ⚠ The scope has already been applied by [`FileMetadata::resolve`]: this writes what is
 /// present and knows nothing about `CopyrightOnly`.
+/// XMP's GPS coordinate, `"DDD,MM.mmmmmmK"` — `xmp::parse_gps_coordinate` reads it back.
+fn gps_text(v: f64, pos: char, neg: char) -> String {
+    let a = v.abs();
+    let d = a.trunc();
+    format!(
+        "{},{:.6}{}",
+        d as u32,
+        (a - d) * 60.0,
+        if v < 0.0 { neg } else { pos }
+    )
+}
+
 pub fn xmp_packet(meta: &FileMetadata) -> Option<String> {
     let mut body = String::new();
     let alt = |tag: &str, v: &str| {
@@ -335,6 +347,12 @@ pub fn xmp_packet(meta: &FileMetadata) -> Option<String> {
     }
     if let Some(f) = c.focal_len.filter(positive) {
         body.push_str(&text("exif:FocalLength", &tenths(f)));
+    }
+    // M10.18b: where it was taken. ⚠ `FileMetadata::resolve` empties the capture under Copyright only,
+    // so a photo posted with that scope carries no position.
+    if let Some((la, lo)) = c.gps {
+        body.push_str(&text("exif:GPSLatitude", &gps_text(la, 'N', 'S')));
+        body.push_str(&text("exif:GPSLongitude", &gps_text(lo, 'E', 'W')));
     }
 
     if body.is_empty() {
@@ -622,6 +640,38 @@ mod tests {
             },
             FileMetadata::default(),
         )
+    }
+
+    /// M10.18b: the position goes out with "All metadata" and never with "Copyright only".
+    #[test]
+    fn the_export_packet_carries_the_position_unless_copyright_only() {
+        let photo = FileMetadata {
+            copyright: "© W".into(),
+            capture: core_image::Capture {
+                gps: Some((38.7139, -9.1394)),
+                ..core_image::Capture::default()
+            },
+            ..FileMetadata::default()
+        };
+        let all = xmp_packet(&FileMetadata::resolve(
+            &ExportMetadata::default(),
+            photo.clone(),
+        ))
+        .unwrap();
+        assert!(
+            all.contains("<exif:GPSLatitude>38,42.834000N</exif:GPSLatitude>"),
+            "{all}"
+        );
+        assert!(
+            all.contains("<exif:GPSLongitude>9,8.364000W</exif:GPSLongitude>"),
+            "{all}"
+        );
+        let only = ExportMetadata {
+            scope: MetadataScope::CopyrightOnly,
+            ..ExportMetadata::default()
+        };
+        let out = xmp_packet(&FileMetadata::resolve(&only, photo)).unwrap();
+        assert!(!out.contains("GPS"), "{out}");
     }
 
     #[test]
