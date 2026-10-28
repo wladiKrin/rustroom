@@ -432,8 +432,9 @@ pub(crate) struct RustroomApp {
     /// filter by a date that was never read. Built once and kept for the life of the app, so a
     /// source switch never abandons a half-scanned folder.
     pub(crate) metadata: rustroom_app::metadata_scanner::MetadataScanner,
-    /// The one-time pass reading the GPS of photos catalogued before M10.18b; `None` once it is over.
-    pub(crate) location_pass: Option<rustroom_app::location_pass::LocationPass>,
+    /// Background passes reading files' GPS (M10.18b): the one-time pass over photos catalogued before,
+    /// and each Reindex's. Dropped as each ends.
+    pub(crate) location_passes: Vec<rustroom_app::location_pass::LocationPass>,
     /// Library → Map: its camera, tiles, pins and strip (M10.18b).
     pub(crate) map: crate::map_view::MapView,
     /// Everything that narrows what the Library shows.

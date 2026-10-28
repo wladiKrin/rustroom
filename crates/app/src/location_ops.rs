@@ -50,6 +50,16 @@ impl RustroomApp {
         };
     }
 
+    /// Read `paths`' own GPS again in the background, over whatever was recorded — Reindex's half of the
+    /// Map (asked for in use, 2026-10-28). Files not on disk are skipped by the pass; a hand-set location
+    /// still wins over what is read.
+    pub(crate) fn reread_locations(&mut self, paths: Vec<PathBuf>) {
+        if !paths.is_empty() {
+            self.location_passes
+                .push(rustroom_app::location_pass::LocationPass::start(paths));
+        }
+    }
+
     /// Undo (`forward: false`) or redo an [`ActionKind::LocationChange`].
     pub(crate) fn replay_location_change(&mut self, kind: &ActionKind, forward: bool) {
         let ActionKind::LocationChange { changes } = kind else {
@@ -141,6 +151,36 @@ mod tests {
         assert_eq!(
             app.catalog.as_ref().unwrap().hand_location(&p[0]).unwrap(),
             Hand::Unset
+        );
+    }
+
+    /// Asked for in use: Reindex reads every file's location again, replacing what was recorded.
+    #[test]
+    fn reindex_reads_the_folders_locations_again() {
+        let ctx = eframe::egui::Context::default();
+        let (mut app, d, p) = app_with("reindex-locations", &["A.JPG"]);
+        app.open_folder_at(&ctx, d.path().to_path_buf());
+        let cat = app.catalog.as_ref().unwrap();
+        cat.set_file_location(&p[0], Some((1.0, 2.0))).unwrap();
+        assert_eq!(
+            at(&app, &p[0]),
+            Some((1.0, 2.0)),
+            "fixture check: a stale reading"
+        );
+        app.reindex(&ctx);
+        let t = std::time::Instant::now();
+        while !app.location_passes.is_empty() {
+            assert!(
+                t.elapsed() < std::time::Duration::from_secs(120),
+                "the pass hung"
+            );
+            app.pump_location_pass(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(
+            at(&app, &p[0]),
+            None,
+            "the file, which has no GPS, was not read again"
         );
     }
 

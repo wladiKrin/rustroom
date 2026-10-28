@@ -28,9 +28,30 @@ pub struct LocationPass {
 
 /// The EXIF block when the file has one (~0.5 ms), the full reader otherwise.
 fn read_gps(path: &Path) -> Option<(f64, f64)> {
-    match image_decode::quick_look(path) {
-        Ok(Some(q)) => q.capture.gps,
-        _ => crate::metadata_scanner::read_capture(path).gps,
+    read_gps_with(
+        path,
+        |p| {
+            image_decode::quick_look(p)
+                .ok()
+                .flatten()
+                .map(|q| q.capture.gps)
+        },
+        |p| crate::metadata_scanner::read_capture(p).gps,
+    )
+}
+
+/// [`read_gps`] with its two readers handed in. ⚠⚠ A RAW whose quick read finds no position is read in
+/// full: a RAF's quick read is its EMBEDDED JPEG's EXIF, which need not carry the GPS libraw sees — and a
+/// "none" recorded from it would never be read again (found in use, 2026-10-28: no photo on the map).
+fn read_gps_with(
+    path: &Path,
+    quick: impl Fn(&Path) -> Option<Option<(f64, f64)>>,
+    full: impl Fn(&Path) -> Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    match quick(path) {
+        Some(Some(at)) => Some(at),
+        Some(None) if !catalog::is_raw(path) => None,
+        _ => full(path),
     }
 }
 
@@ -101,6 +122,30 @@ mod tests {
             Some((38.7, -9.1))
         });
         assert_eq!(all(&p), vec![(here, Some((38.7, -9.1)))]);
+    }
+
+    /// Found in use: a RAW's quick read (its embedded JPEG) said nothing, and libraw was never asked.
+    #[test]
+    fn a_raw_without_gps_in_its_quick_read_is_read_in_full() {
+        let full = |_: &Path| Some((38.7, -9.1));
+        let quick_none = |_: &Path| Some(None);
+        let raw = Path::new("/trip/DSCF0001.RAF");
+        let jpg = Path::new("/trip/DSCF0001.JPG");
+        assert_eq!(read_gps_with(raw, quick_none, full), Some((38.7, -9.1)));
+        assert_eq!(
+            read_gps_with(jpg, quick_none, full),
+            None,
+            "a JPEG's EXIF is its whole story"
+        );
+        assert_eq!(
+            read_gps_with(jpg, |_| None, full),
+            Some((38.7, -9.1)),
+            "no quick read at all"
+        );
+        assert_eq!(
+            read_gps_with(raw, |_| Some(Some((1.0, 2.0))), |_| panic!("read in full")),
+            Some((1.0, 2.0))
+        );
     }
 
     #[test]

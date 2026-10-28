@@ -417,6 +417,9 @@ impl RustroomApp {
             .map(|l| l.scan.clone())
             .unwrap_or_default();
         let renumbered = self.compact_copy_numbering(&scan);
+        // M10.18b: the downloaded originals' own locations, read again; the server's come with the
+        // refetch (`fill_locations`).
+        self.reread_locations(scan.iter().map(|e| e.path.clone()).collect());
 
         // ⚠ The open photo is **dropped rather than reopened**, unlike the folder branch: it may no
         // longer exist on the server, and re-downloading it is not what Reindex is for. You land in
@@ -460,6 +463,8 @@ impl RustroomApp {
         let Some((scan, moved)) = self.scan_and_relink(&dir) else {
             return;
         };
+        // M10.18b: and every file's location, read again (asked for in use).
+        self.reread_locations(scan.iter().map(|e| e.path.clone()).collect());
 
         let renumbered = self.compact_copy_numbering(&scan);
 

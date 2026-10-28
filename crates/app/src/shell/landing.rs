@@ -59,20 +59,23 @@ impl RustroomApp {
 
     /// The startup location pass's findings into the catalog (M10.18b). Every write moves
     /// `change_count`, which is what refreshes the Map's pins.
-    pub(super) fn pump_location_pass(&mut self, ctx: &egui::Context) {
-        let Some(pass) = &self.location_pass else {
+    pub(crate) fn pump_location_pass(&mut self, ctx: &egui::Context) {
+        if self.location_passes.is_empty() {
             return;
-        };
-        let (found, done) = pass.drain();
+        }
+        let mut found = Vec::new();
+        self.location_passes.retain(|pass| {
+            let (f, done) = pass.drain();
+            found.extend(f);
+            !done
+        });
         if let Some(cat) = self.catalog.as_ref().filter(|_| !found.is_empty()) {
             // ⚠ One transaction per frame, never one sync per photo (the review's #3).
             if let Err(e) = cat.set_file_locations(&found) {
                 eprintln!("catalog: {e}");
             }
         }
-        if done {
-            self.location_pass = None;
-        } else {
+        if !self.location_passes.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
