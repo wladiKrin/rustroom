@@ -318,7 +318,7 @@ mod tests {
                 rating,
                 ..Default::default()
             }),
-            people: Vec::new(),
+            people: None,
         }
     }
 

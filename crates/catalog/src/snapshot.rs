@@ -43,7 +43,6 @@ pub struct CaptureSnapshot {
     pub focal_len: Option<f64>,
 }
 
-/// One `photo_description` row.
 /// One face, as `forget_folder` took it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FaceSnapshot {
@@ -54,8 +53,11 @@ pub struct FaceSnapshot {
     pub confirmed: bool,
     pub dismissed: bool,
     pub source: String,
+    /// The people this face was answered "No" for — restored with the face's new id.
+    pub rejected: Vec<i64>,
 }
 
+/// One `photo_description` row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DescriptionSnapshot {
     pub file_name: String,

@@ -124,7 +124,7 @@ pub fn fill_faces(
     let named = |p: &&immich::AssetPerson| !p.is_hidden && !p.name.trim().is_empty();
     let mut people: Vec<(String, String)> = assets
         .iter()
-        .flat_map(|a| a.people.iter().filter(named))
+        .flat_map(|a| a.people.iter().flatten().filter(named))
         .map(|p| (p.id.clone(), p.name.trim().to_string()))
         .collect();
     people.sort();
@@ -132,19 +132,26 @@ pub fn fill_faces(
     if !people.is_empty() {
         cat.set_immich_people(&people)?;
     }
-    for a in assets.iter().filter(|a| !a.people.is_empty()) {
-        let faces: Vec<([f32; 4], String)> = a
-            .people
-            .iter()
-            .filter(named)
-            .flat_map(|p| {
-                p.faces
-                    .iter()
-                    .filter_map(|f| f.normalised())
-                    .map(|b| (b, p.id.clone()))
-            })
-            .collect();
-        cat.set_immich_faces(&crate::immich_source::cache_path(root, a), &faces)?;
+    // ⚠ Only assets the reply spoke for (`Some`, even empty); one transaction for them all (the review's #10).
+    let faces: Vec<catalog::db::ImmichFaces> = assets
+        .iter()
+        .filter_map(|a| {
+            let list = a.people.as_ref()?;
+            let boxes = list
+                .iter()
+                .filter(named)
+                .flat_map(|p| {
+                    p.faces
+                        .iter()
+                        .filter_map(|f| f.normalised())
+                        .map(|b| (b, p.id.clone()))
+                })
+                .collect();
+            Some((crate::immich_source::cache_path(root, a), boxes))
+        })
+        .collect();
+    if !faces.is_empty() {
+        cat.set_immich_faces(&faces)?;
     }
     Ok(people.len())
 }
@@ -240,7 +247,7 @@ mod tests {
             updated_at: "2025-01-02T00:00:00.000Z".into(),
             is_favorite: false,
             exif_info: None,
-            people: Vec::new(),
+            people: None,
         }
     }
 
@@ -354,11 +361,11 @@ mod tests {
             faces: vec![face],
         };
         let assets = [immich::Asset {
-            people: vec![
+            people: Some(vec![
                 person("p1", "Anna", false),
                 person("p2", "", false),
                 person("p3", "Ben", true),
-            ],
+            ]),
             ..asset("a")
         }];
         let scan = crate::immich_source::entries_from_assets(&assets, root);
@@ -370,6 +377,27 @@ mod tests {
         assert_eq!(f.len(), 1, "{f:?}");
         assert!(f[0].immich);
         assert_eq!(cat.people().unwrap()[0].name, "Anna");
+        // The server now says nobody is in it: its Immich faces go. A list without the field changes nothing.
+        let none = [immich::Asset {
+            people: None,
+            ..assets[0].clone()
+        }];
+        fill_faces(&cat, root, &none).unwrap();
+        assert_eq!(
+            cat.faces_of(&crate::immich_source::cache_path(root, &assets[0]))
+                .unwrap()
+                .len(),
+            1
+        );
+        let nobody = [immich::Asset {
+            people: Some(vec![]),
+            ..assets[0].clone()
+        }];
+        fill_faces(&cat, root, &nobody).unwrap();
+        assert!(cat
+            .faces_of(&crate::immich_source::cache_path(root, &assets[0]))
+            .unwrap()
+            .is_empty());
     }
 
     fn marks(rating: u8) -> catalog::db::Marks {

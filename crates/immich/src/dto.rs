@@ -168,9 +168,10 @@ pub struct Asset {
     pub exif_info: Option<ExifInfo>,
     /// The people Immich found in the asset, with their face boxes — sent when a search asks
     /// `withPeople: true` (M10.18c). ⚠ CONSTRUCTED from the published schema (`PersonWithFacesResponseDto`):
-    /// confirm against a captured reply. ⚠ `default`: lists cached before M10.18c lack it.
+    /// confirm against a captured reply. ⚠ `None` — no field at all, as in a list cached before M10.18c — is not
+    /// "nobody": only `Some` (even empty) replaces an asset's Immich faces.
     #[serde(default)]
-    pub people: Vec<AssetPerson>,
+    pub people: Option<Vec<AssetPerson>>,
 }
 
 /// One person in an asset, and where their faces are (M10.18c).

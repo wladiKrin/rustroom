@@ -5,8 +5,9 @@
 //! grouping can move a name; and a person any face of a group was answered "No" for is never offered for it.
 //!
 //! The method (the builder's call, recorded in the journal): each face joins the group whose running mean it is
-//! most like when that likeness clears [`THRESHOLD`], else starts a group — linear in the faces, deterministic in
-//! their order. SFace's own published threshold for "the same person" is the cosine 0.363.
+//! most like when that likeness clears [`THRESHOLD`], else starts a group — deterministic in their order, one dot
+//! product per face and group. ⚠ Still O(faces × groups): the People view runs it OFF the UI thread.
+//! SFace's own published threshold for "the same person" is the cosine 0.363.
 
 use std::collections::{HashMap, HashSet};
 
@@ -38,24 +39,27 @@ pub fn group(
     rejected: &HashSet<(i64, i64)>,
     threshold: f32,
 ) -> Vec<Group> {
-    // The groups: their faces and the running sum of their embeddings (normalised for each comparison).
-    let mut groups: Vec<(Vec<i64>, Vec<f32>)> = Vec::new();
+    // The groups: their faces, the running sum of their embeddings and that sum's length — so a comparison is one
+    // dot product, never a copy (the M10.18c review's #1).
+    let mut groups: Vec<(Vec<i64>, Vec<f32>, f32)> = Vec::new();
     for (id, e) in unnamed {
         let best = groups
             .iter()
             .enumerate()
-            .map(|(i, (_, sum))| {
-                let mut m = sum.clone();
-                unit(&mut m);
-                (i, dot(&m, e))
-            })
+            .map(|(i, (_, sum, len))| (i, dot(sum, e) / len.max(1e-12)))
             .max_by(|a, b| a.1.total_cmp(&b.1));
         match best {
             Some((i, s)) if s >= threshold => {
-                groups[i].0.push(*id);
-                groups[i].1.iter_mut().zip(e).for_each(|(a, b)| *a += b);
+                let g = &mut groups[i];
+                g.0.push(*id);
+                g.1.iter_mut().zip(e).for_each(|(a, b)| *a += b);
+                g.2 = g.1.iter().map(|x| x * x).sum::<f32>().sqrt();
             }
-            _ => groups.push((vec![*id], e.clone())),
+            _ => groups.push((
+                vec![*id],
+                e.clone(),
+                e.iter().map(|x| x * x).sum::<f32>().sqrt(),
+            )),
         }
     }
     // Each person's mean confirmed face.
@@ -67,7 +71,7 @@ pub fn group(
     people.values_mut().for_each(|m| unit(m));
     let mut out: Vec<Group> = groups
         .into_iter()
-        .map(|(faces, mut sum)| {
+        .map(|(faces, mut sum, _)| {
             unit(&mut sum);
             let suggest = people
                 .iter()
@@ -86,30 +90,6 @@ pub fn group(
             .then(a.faces[0].cmp(&b.faces[0]))
     });
     out
-}
-
-/// [`group`], remembered for one key — the view's `(instance, change count, view)` folded together.
-#[derive(Default)]
-pub struct GroupMemo {
-    key: Option<u64>,
-    groups: std::sync::Arc<Vec<Group>>,
-    /// How many times it actually grouped — for tests.
-    pub computed: usize,
-}
-
-impl GroupMemo {
-    pub fn get(
-        &mut self,
-        key: u64,
-        compute: impl FnOnce() -> Vec<Group>,
-    ) -> std::sync::Arc<Vec<Group>> {
-        if self.key != Some(key) {
-            self.groups = std::sync::Arc::new(compute());
-            self.key = Some(key);
-            self.computed += 1;
-        }
-        self.groups.clone()
-    }
 }
 
 #[cfg(test)]
@@ -182,14 +162,5 @@ mod tests {
         let g = group(&unnamed, &named, &HashSet::new(), THRESHOLD);
         let out: Vec<i64> = g.iter().flat_map(|g| g.faces.clone()).collect();
         assert_eq!(out, vec![1, 2], "a named face appeared in a group");
-    }
-
-    #[test]
-    fn the_memo_keeps_an_unchanged_answer() {
-        let mut m = GroupMemo::default();
-        m.get(1, Vec::new);
-        m.get(1, || panic!("an unchanged view grouped again"));
-        m.get(2, Vec::new);
-        assert_eq!(m.computed, 2);
     }
 }

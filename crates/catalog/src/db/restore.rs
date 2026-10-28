@@ -133,8 +133,9 @@ impl Catalog {
             .collect();
         drop(st);
 
+        let mut rej = tx.prepare("SELECT person_id FROM face_rejections WHERE face_id = ?1")?;
         let mut st = tx.prepare(
-            "SELECT file_name, x0, y0, x1, y1, embedding, person_id, confirmed, dismissed, source
+            "SELECT file_name, x0, y0, x1, y1, embedding, person_id, confirmed, dismissed, source, id
              FROM faces WHERE folder_id = ?1",
         )?;
         let faces: Vec<crate::snapshot::FaceSnapshot> = st
@@ -147,11 +148,16 @@ impl Catalog {
                     confirmed: r.get::<_, i64>(7)? != 0,
                     dismissed: r.get::<_, i64>(8)? != 0,
                     source: r.get(9)?,
+                    rejected: rej
+                        .query_map([r.get::<_, i64>(10)?], |q| q.get(0))?
+                        .filter_map(Result::ok)
+                        .collect(),
                 })
             })?
             .filter_map(Result::ok)
             .collect();
         drop(st);
+        drop(rej);
         let mut st = tx.prepare("SELECT file_name FROM faces_read WHERE folder_id = ?1")?;
         let faces_read: Vec<String> = st
             .query_map([id], |r| r.get(0))?
@@ -373,6 +379,14 @@ impl Catalog {
                             f.source
                         ],
                     )?;
+                    let id = tx.last_insert_rowid();
+                    for person in &f.rejected {
+                        tx.execute(
+                            "INSERT OR IGNORE INTO face_rejections (face_id, person_id)
+                             SELECT ?1, id FROM people WHERE id = ?2",
+                            rusqlite::params![id, person],
+                        )?;
+                    }
                 }
                 for name in faces_read {
                     tx.execute(
@@ -669,6 +683,18 @@ mod tests {
             .files_without_faces_read(std::slice::from_ref(&a))
             .unwrap()
             .is_empty());
+        // The review's #7: a "No" comes back too, on the face's new id.
+        let ben = cat.person_named("Ben").unwrap();
+        let id = back[0].id;
+        cat.set_rejected(&[id], ben, true).unwrap();
+        let fid = cat.folders().unwrap()[0].id;
+        let snap = cat.forget_folder(fid).unwrap();
+        cat.restore(&snap).unwrap();
+        let again = cat.faces_of(&a).unwrap()[0].id;
+        assert!(
+            cat.face_rejections().unwrap().contains(&(again, ben)),
+            "the No was lost"
+        );
     }
 
     #[test]

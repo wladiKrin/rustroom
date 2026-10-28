@@ -511,7 +511,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            a.people[0].faces[0].normalised(),
+            a.people.as_ref().unwrap()[0].faces[0].normalised(),
             Some([0.1, 0.1, 0.2, 0.3])
         );
     }

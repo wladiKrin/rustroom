@@ -150,7 +150,7 @@ mod tests {
             updated_at: "2025-01-02T00:00:00.000Z".into(),
             is_favorite: false,
             exif_info: None,
-            people: Vec::new(),
+            people: None,
         }
     }
 

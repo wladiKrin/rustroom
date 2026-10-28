@@ -40,6 +40,17 @@ pub struct PersonRow {
     pub photos: i64,
 }
 
+fn iou(a: &[f32; 4], b: &[f32; 4]) -> f32 {
+    let ix = (a[2].min(b[2]) - a[0].max(b[0])).max(0.0);
+    let iy = (a[3].min(b[3]) - a[1].max(b[1])).max(0.0);
+    let inter = ix * iy;
+    let area = |r: &[f32; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+    inter / (area(a) + area(b) - inter).max(1e-12)
+}
+
+/// One photo's faces as Immich has them: each box and the Immich id of its person.
+pub type ImmichFaces = (PathBuf, Vec<([f32; 4], String)>);
+
 /// What a face's naming is, for an undo: `(person, confirmed, dismissed)`.
 pub type FaceState = (Option<i64>, bool, bool);
 
@@ -78,6 +89,16 @@ fn face_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<FaceRow> {
 }
 
 impl Catalog {
+    /// The face tables' revision — moved by every write to them, and only by those.
+    pub fn faces_revision(&self) -> u64 {
+        self.faces_rev.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(super) fn faces_changed(&self) {
+        self.faces_rev
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// A search's answer for `photo`: its unnamed, unconfirmed local faces replaced by `faces`, and the photo
     /// marked read. ⚠ Named and confirmed faces stay — a new search never moves a name.
     pub fn set_local_faces(&self, photo: &Path, faces: &[NewFace]) -> Result<(), CatalogError> {
@@ -93,12 +114,32 @@ impl Catalog {
         let Some(fid) = fid else {
             return Ok(());
         };
+        // ⚠ A face answered "No" is kept too: deleting it would cascade its "No" away and offer it again.
         tx.execute(
             "DELETE FROM faces WHERE folder_id = ?1 AND file_name = ?2 AND source = 'local'
-             AND person_id IS NULL AND confirmed = 0 AND dismissed = 0",
+             AND person_id IS NULL AND confirmed = 0 AND dismissed = 0
+             AND id NOT IN (SELECT face_id FROM face_rejections)",
             rusqlite::params![fid, name],
         )?;
-        for f in faces {
+        // ⚠ And a new face where a kept one already is would be that face twice.
+        let kept: Vec<[f32; 4]> = {
+            let mut st = tx.prepare(
+                "SELECT x0, y0, x1, y1 FROM faces WHERE folder_id = ?1 AND file_name = ?2 AND source = 'local'",
+            )?;
+            let rows = st.query_map(rusqlite::params![fid, name], |r| {
+                Ok([
+                    r.get::<_, f64>(0)? as f32,
+                    r.get::<_, f64>(1)? as f32,
+                    r.get::<_, f64>(2)? as f32,
+                    r.get::<_, f64>(3)? as f32,
+                ])
+            })?;
+            rows.filter_map(Result::ok).collect()
+        };
+        for f in faces
+            .iter()
+            .filter(|f| kept.iter().all(|k| iou(k, &f.bbox) < 0.5))
+        {
             let b = f.bbox;
             tx.execute(
                 "INSERT INTO faces (folder_id, file_name, x0, y0, x1, y1, embedding, source)
@@ -111,6 +152,7 @@ impl Catalog {
             rusqlite::params![fid, name],
         )?;
         tx.commit()?;
+        self.faces_changed();
         Ok(())
     }
 
@@ -254,6 +296,7 @@ impl Catalog {
             )?;
         }
         tx.commit()?;
+        self.faces_changed();
         Ok(())
     }
 
@@ -279,6 +322,7 @@ impl Catalog {
             }
         }
         tx.commit()?;
+        self.faces_changed();
         Ok(())
     }
 
@@ -293,40 +337,73 @@ impl Catalog {
             )?;
         }
         tx.commit()?;
+        self.faces_changed();
         Ok(people.len())
     }
 
-    /// `photo`'s faces as Immich has them — every earlier Immich face of it replaced (the server's are not ours to
-    /// edit). A face of a person not in [`Catalog::set_immich_people`] (unnamed, hidden) is left out.
-    pub fn set_immich_faces(
-        &self,
-        photo: &Path,
-        faces: &[([f32; 4], String)],
-    ) -> Result<(), CatalogError> {
-        let Some((folder, name)) = split(photo) else {
-            return Ok(());
+    /// The server's WHOLE people list (`GET /people`): [`Catalog::set_immich_people`], and every Immich person not
+    /// in it — deleted, merged, hidden or un-named on the server — gone, with their Immich faces. ⚠ A local face
+    /// named after them keeps its name: the person row stays, losing only its Immich id.
+    pub fn replace_immich_people(&self, people: &[(String, String)]) -> Result<(), CatalogError> {
+        self.set_immich_people(people)?;
+        let keep: std::collections::HashSet<&str> =
+            people.iter().map(|(id, _)| id.as_str()).collect();
+        let gone: Vec<(i64, String)> = {
+            let mut st = self.conn.prepare(
+                "SELECT id, immich_person_id FROM people WHERE immich_person_id IS NOT NULL",
+            )?;
+            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.filter_map(Result::ok)
+                .filter(|(_, i): &(i64, String)| !keep.contains(i.as_str()))
+                .collect()
         };
         let tx = self.conn.unchecked_transaction()?;
-        let fid: Option<i64> = tx
-            .query_row("SELECT id FROM folders WHERE path = ?1", [&folder], |r| {
-                r.get(0)
-            })
-            .ok();
-        let Some(fid) = fid else {
-            return Ok(());
-        };
-        tx.execute(
-            "DELETE FROM faces WHERE folder_id = ?1 AND file_name = ?2 AND source = 'immich'",
-            rusqlite::params![fid, name],
-        )?;
-        for (b, pid) in faces {
+        for (id, _) in &gone {
             tx.execute(
-                "INSERT INTO faces (folder_id, file_name, x0, y0, x1, y1, person_id, confirmed, source)
-                 SELECT ?1, ?2, ?3, ?4, ?5, ?6, id, 1, 'immich' FROM people WHERE immich_person_id = ?7",
-                rusqlite::params![fid, name, b[0], b[1], b[2], b[3], pid],
+                "DELETE FROM faces WHERE person_id = ?1 AND source = 'immich'",
+                [id],
+            )?;
+            tx.execute(
+                "UPDATE people SET immich_person_id = NULL WHERE id = ?1",
+                [id],
             )?;
         }
         tx.commit()?;
+        self.faces_changed();
+        Ok(())
+    }
+
+    /// Photos' faces as Immich has them, in ONE transaction — each photo's earlier Immich faces replaced (the
+    /// server's are not ours to edit). A face of a person not in [`Catalog::set_immich_people`] (unnamed, hidden) is
+    /// left out.
+    pub fn set_immich_faces(&self, photos: &[ImmichFaces]) -> Result<(), CatalogError> {
+        let tx = self.conn.unchecked_transaction()?;
+        for (photo, faces) in photos {
+            let Some((folder, name)) = split(photo) else {
+                continue;
+            };
+            let fid: Option<i64> = tx
+                .query_row("SELECT id FROM folders WHERE path = ?1", [&folder], |r| {
+                    r.get(0)
+                })
+                .ok();
+            let Some(fid) = fid else {
+                continue;
+            };
+            tx.execute(
+                "DELETE FROM faces WHERE folder_id = ?1 AND file_name = ?2 AND source = 'immich'",
+                rusqlite::params![fid, name],
+            )?;
+            for (b, pid) in faces {
+                tx.execute(
+                    "INSERT INTO faces (folder_id, file_name, x0, y0, x1, y1, person_id, confirmed, source)
+                     SELECT ?1, ?2, ?3, ?4, ?5, ?6, id, 1, 'immich' FROM people WHERE immich_person_id = ?7",
+                    rusqlite::params![fid, name, b[0], b[1], b[2], b[3], pid],
+                )?;
+            }
+        }
+        tx.commit()?;
+        self.faces_changed();
         Ok(())
     }
 
@@ -472,9 +549,10 @@ mod tests {
         cat.set_immich_people(&[("i1".into(), "Ben".into())])
             .unwrap();
         let b = [0.1, 0.1, 0.2, 0.2];
-        cat.set_immich_faces(&p[0], &[(b, "i1".into()), (b, "unknown".into())])
+        cat.set_immich_faces(&[(p[0].clone(), vec![(b, "i1".into()), (b, "unknown".into())])])
             .unwrap();
-        cat.set_immich_faces(&p[0], &[(b, "i1".into())]).unwrap();
+        cat.set_immich_faces(&[(p[0].clone(), vec![(b, "i1".into())])])
+            .unwrap();
         let f = cat.faces_of(&p[0]).unwrap();
         assert_eq!(f.len(), 1, "{f:?}");
         assert!(f[0].immich && f[0].confirmed && f[0].embedding.is_none());
@@ -498,6 +576,48 @@ mod tests {
             1,
             "a re-search deleted the dismissed face"
         );
+    }
+
+    /// The review's #8: a re-search keeps a face answered "No" and does not add it twice; nor a named one.
+    #[test]
+    fn a_re_search_keeps_a_rejected_face_and_doubles_nothing() {
+        let (cat, p) = cat_with(&["a.RAF"]);
+        cat.set_local_faces(&p[0], &[face(0.1), face(0.5)]).unwrap();
+        let f = cat.faces_of(&p[0]).unwrap();
+        let ben = cat.person_named("Ben").unwrap();
+        let anna = cat.person_named("Anna").unwrap();
+        cat.set_rejected(&[f[0].id], ben, true).unwrap();
+        cat.set_face_states(&[(f[1].id, (Some(anna), true, false))])
+            .unwrap();
+        let rev = cat.faces_revision();
+        cat.set_local_faces(&p[0], &[face(0.1), face(0.5), face(0.8)])
+            .unwrap();
+        assert!(
+            cat.faces_revision() > rev,
+            "a face write did not move the revision"
+        );
+        let after = cat.faces_of(&p[0]).unwrap();
+        assert_eq!(after.len(), 3, "{after:?}");
+        assert!(
+            cat.face_rejections().unwrap().contains(&(f[0].id, ben)),
+            "the No was lost"
+        );
+    }
+
+    /// The review's #9: the server's whole list replaces Immich's people; a gone one loses their Immich faces.
+    #[test]
+    fn the_server_list_replaces_immich_people() {
+        let (cat, p) = cat_with(&["a.JPG"]);
+        cat.set_immich_people(&[("i1".into(), "Anna".into()), ("i2".into(), "Old".into())])
+            .unwrap();
+        let b = [0.1, 0.1, 0.2, 0.2];
+        cat.set_immich_faces(&[(p[0].clone(), vec![(b, "i2".into())])])
+            .unwrap();
+        cat.replace_immich_people(&[("i1".into(), "Anna".into())])
+            .unwrap();
+        let names: Vec<String> = cat.people().unwrap().into_iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["Anna".to_string()]);
+        assert!(cat.faces_of(&p[0]).unwrap().is_empty());
     }
 
     #[test]

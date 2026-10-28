@@ -79,7 +79,7 @@ mod test_support;
 pub use capture::Description;
 pub use collections::CollectionRow;
 pub use dates::DayRow;
-pub use faces::{FaceRow, FaceState, NewFace, PersonRow};
+pub use faces::{FaceRow, FaceState, ImmichFaces, NewFace, PersonRow};
 pub use imported::Fingerprint;
 pub use keywords::{Change as KeywordChange, DayCounts, KeywordMerge, KeywordRow};
 pub use location::Hand;
@@ -94,6 +94,9 @@ pub struct Catalog {
     /// Which opened catalog this is — distinct for every `open`, so a cache keyed on
     /// [`Self::change_count`] can tell two catalogs at the same count apart (M10.14e).
     instance: u64,
+    /// Moved by every write to the face tables (M10.18c) — what the People view regroups on, so a write
+    /// elsewhere (a mark, a location) never makes it regroup.
+    faces_rev: std::sync::atomic::AtomicU64,
 }
 
 impl Catalog {
@@ -128,7 +131,11 @@ impl Catalog {
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let instance = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let cat = Self { conn, instance };
+        let cat = Self {
+            conn,
+            instance,
+            faces_rev: std::sync::atomic::AtomicU64::new(0),
+        };
         cat.migrate()?;
         Ok(cat)
     }

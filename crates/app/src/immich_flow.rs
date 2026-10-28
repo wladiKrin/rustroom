@@ -580,7 +580,8 @@ impl RustroomApp {
                         .map(|p| (p.id, p.name.trim().to_string()))
                         .collect();
                     if let Some(cat) = &self.catalog {
-                        if let Err(e) = cat.set_immich_people(&named) {
+                        // The server's whole list: people gone from it leave ours (the review's #9).
+                        if let Err(e) = cat.replace_immich_people(&named) {
                             eprintln!("catalog: {e}");
                         }
                     }
@@ -677,7 +678,7 @@ mod tests {
             updated_at: "2026-01-01T00:00:00.000Z".into(),
             is_favorite: false,
             exif_info: None,
-            people: Vec::new(),
+            people: None,
         }
     }
 

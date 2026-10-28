@@ -130,38 +130,32 @@ impl Faces {
     /// The faces in `img` (upright): the whole frame at 640, then — for a picture larger than that — 640² tiles
     /// over it at [`TILED_LONG`], merged. Strongest first.
     pub fn find(&self, img: &RgbImage) -> Result<Vec<Face>, InferError> {
-        let mut all = self.detect(img)?;
+        let whole = nms(self.detect(img)?);
         let long = img.width().max(img.height());
-        if long > SIDE {
-            let k = TILED_LONG.min(long) as f32 / long as f32;
-            let (w, h) = (
-                ((img.width() as f32 * k).round() as u32).max(1),
-                ((img.height() as f32 * k).round() as u32).max(1),
-            );
-            let big = imageops::resize(img, w, h, FilterType::Triangle);
-            for &y in &crate::people::offsets(h) {
-                for &x in &crate::people::offsets(w) {
-                    let (tw, th) = (SIDE.min(w - x), SIDE.min(h - y));
-                    let tile = imageops::crop_imm(&big, x, y, tw, th).to_image();
-                    for f in self.detect(&tile)? {
-                        let map = |[u, v]: [f32; 2]| {
-                            [
-                                (x as f32 + u * tw as f32) / w as f32,
-                                (y as f32 + v * th as f32) / h as f32,
-                            ]
-                        };
-                        let [a, b] = map([f.bbox[0], f.bbox[1]]);
-                        let [c, d] = map([f.bbox[2], f.bbox[3]]);
-                        all.push(Face {
-                            bbox: [a, b, c, d],
-                            landmarks: f.landmarks.map(map),
-                            score: f.score,
-                        });
-                    }
+        if long <= SIDE {
+            return Ok(whole);
+        }
+        let k = TILED_LONG.min(long) as f32 / long as f32;
+        let (w, h) = (
+            ((img.width() as f32 * k).round() as u32).max(1),
+            ((img.height() as f32 * k).round() as u32).max(1),
+        );
+        let big = imageops::resize(img, w, h, FilterType::Triangle);
+        let mut tiles = Vec::new();
+        for &y in &crate::people::offsets(h) {
+            for &x in &crate::people::offsets(w) {
+                let (tw, th) = (SIDE.min(w - x), SIDE.min(h - y));
+                let tile = imageops::crop_imm(&big, x, y, tw, th).to_image();
+                for f in self.detect(&tile)? {
+                    tiles.push(Tile {
+                        face: f,
+                        at: [x, y],
+                        size: [tw, th],
+                    });
                 }
             }
         }
-        Ok(nms(all))
+        Ok(merge_tiles(whole, tiles, w, h))
     }
 
     /// `face`'s 128 numbers, of unit length — two of the same person score near 1 in [`similarity`].
@@ -234,6 +228,68 @@ pub fn decode(t: &[Vec<f32>], side: u32) -> Vec<Face> {
         }
     }
     out
+}
+
+/// One tile's find: the face normalised over the tile, and where the tile sits in the `w × h` picture.
+#[derive(Debug, Clone, Copy)]
+pub struct Tile {
+    pub face: Face,
+    pub at: [u32; 2],
+    pub size: [u32; 2],
+}
+
+/// A tile's find within this many pixels of an edge the picture goes on past is cut — the next tile holds it.
+const EDGE: f32 = 3.0;
+
+/// The whole frame's faces, then each tile's that is neither cut at an inner tile edge nor already found whole
+/// (the M10.18c review's #6 — a face straddling a seam became a second, partial face). `whole` normalised over the
+/// picture; the tiles' over themselves.
+pub fn merge_tiles(whole: Vec<Face>, tiles: Vec<Tile>, w: u32, h: u32) -> Vec<Face> {
+    let mut extra = Vec::new();
+    for t in tiles {
+        let px = [
+            t.face.bbox[0] * t.size[0] as f32,
+            t.face.bbox[1] * t.size[1] as f32,
+            t.face.bbox[2] * t.size[0] as f32,
+            t.face.bbox[3] * t.size[1] as f32,
+        ];
+        let cut = (px[0] < EDGE && t.at[0] > 0)
+            || (px[1] < EDGE && t.at[1] > 0)
+            || (px[2] > t.size[0] as f32 - EDGE && t.at[0] + t.size[0] < w)
+            || (px[3] > t.size[1] as f32 - EDGE && t.at[1] + t.size[1] < h);
+        if cut {
+            continue;
+        }
+        let map = |[u, v]: [f32; 2]| {
+            [
+                (t.at[0] as f32 + u * t.size[0] as f32) / w as f32,
+                (t.at[1] as f32 + v * t.size[1] as f32) / h as f32,
+            ]
+        };
+        let [a, b] = map([t.face.bbox[0], t.face.bbox[1]]);
+        let [c, d] = map([t.face.bbox[2], t.face.bbox[3]]);
+        let f = Face {
+            bbox: [a, b, c, d],
+            landmarks: t.face.landmarks.map(map),
+            score: t.face.score,
+        };
+        let seen = whole
+            .iter()
+            .any(|g| iou(&g.bbox, &f.bbox) > 0.3 || containment(&f.bbox, &g.bbox) > 0.6);
+        if !seen {
+            extra.push(f);
+        }
+    }
+    let mut out = whole;
+    out.extend(nms(extra));
+    out
+}
+
+/// How much of `a` lies inside `b`.
+fn containment(a: &[f32; 4], b: &[f32; 4]) -> f32 {
+    let ix = (a[2].min(b[2]) - a[0].max(b[0])).max(0.0);
+    let iy = (a[3].min(b[3]) - a[1].max(b[1])).max(0.0);
+    ix * iy / ((a[2] - a[0]) * (a[3] - a[1])).max(1e-12)
 }
 
 fn iou(a: &[f32; 4], b: &[f32; 4]) -> f32 {
@@ -419,6 +475,45 @@ mod tests {
         println!("same {same:.3}, other {other:.3}");
         assert!(same > 0.7, "one face read twice: {same}");
         assert!(other < 0.363, "two people: {other}");
+    }
+
+    /// The review's #6: a face cut at an inner tile edge, or already found whole, is not a second face.
+    #[test]
+    fn merge_tiles_drops_cut_and_already_found_faces() {
+        let face = |b: [f32; 4]| Face {
+            bbox: b,
+            landmarks: [[0.0; 2]; 5],
+            score: 0.9,
+        };
+        let (w, h) = (1920u32, 1080u32);
+        let whole = vec![face([0.10, 0.10, 0.15, 0.20])];
+        let tiles = vec![
+            // The whole find again, from the first tile (0,0, 640²): 192..288 px → 0.3..0.45 of the tile.
+            Tile {
+                face: face([0.30, 0.17, 0.45, 0.34]),
+                at: [0, 0],
+                size: [640, 640],
+            },
+            // Touching the tile's right edge where the picture goes on: cut.
+            Tile {
+                face: face([0.90, 0.5, 1.0, 0.6]),
+                at: [0, 0],
+                size: [640, 640],
+            },
+            // A small face the whole frame missed: kept.
+            Tile {
+                face: face([0.5, 0.5, 0.55, 0.56]),
+                at: [640, 0],
+                size: [640, 640],
+            },
+        ];
+        let out = merge_tiles(whole, tiles, w, h);
+        assert_eq!(out.len(), 2, "{out:?}");
+        let kept = out[1].bbox;
+        assert!(
+            (kept[0] - (640.0 + 320.0) / 1920.0).abs() < 1e-4,
+            "{kept:?}"
+        );
     }
 
     #[test]
