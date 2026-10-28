@@ -1122,7 +1122,6 @@ mod tests {
 
     // ─── malformed input ──────────────────────────────────────────────────────────────────
 
-    #[test]
     /// M10.18b: XMP's `DDD,MM.mmmmK`, in all four hemispheres, and the three-part form.
     #[test]
     fn xmp_reads_gps_in_all_four_hemispheres() {
