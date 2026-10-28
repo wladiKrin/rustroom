@@ -3848,6 +3848,7 @@ dependencies = [
  "edit-model",
  "export",
  "image",
+ "lens-profile",
  "pipeline",
  "raw-decode",
  "rayon",

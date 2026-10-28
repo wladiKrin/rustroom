@@ -413,6 +413,15 @@ fn settings_round_trip_carries_the_export_options() {
             overlay: true,
             create_stack: true,
         },
+        // Every field non-default, so a re-defaulted one cannot pass.
+        panorama: crate::pano_merge::PanoSettings {
+            auto_projection: false,
+            projection: photo_merge::projection::Projection::Perspective,
+            auto_crop: false,
+            fill_edges: true,
+            create_stack: true,
+        },
+        immich_merge_folder: Some(std::path::PathBuf::from("/merged")),
         // Non-default, with ⌥ and a removal, so a re-defaulted field cannot pass.
         shortcuts: vec![
             crate::shortcuts::Rebinding {
@@ -443,7 +452,26 @@ fn settings_round_trip_carries_the_export_options() {
     assert_eq!(store.load(), s);
 }
 
+/// 2026-10-28: a file from before merges took Immich photos has no folder for them — the first asks.
+#[test]
+fn a_settings_file_from_before_immich_merges_has_no_merge_folder() {
+    let s: Settings = serde_json::from_str("{}").unwrap();
+    assert_eq!(s.immich_merge_folder, None);
+}
+
 /// M10.17a: a settings file from before the HDR merge opens its dialog with Lightroom's defaults.
+#[test]
+fn a_settings_file_from_before_panorama_merge_gets_its_defaults() {
+    let s: Settings = serde_json::from_str("{}").unwrap();
+    assert_eq!(s.panorama, crate::pano_merge::PanoSettings::default());
+    let partial: Settings = serde_json::from_str(r#"{"panorama": {"fill_edges": true}}"#).unwrap();
+    assert!(partial.panorama.fill_edges);
+    assert!(
+        partial.panorama.auto_crop,
+        "a missing option is its default"
+    );
+}
+
 #[test]
 fn a_settings_file_from_before_hdr_merge_gets_lightrooms_defaults() {
     let s: Settings = serde_json::from_str("{}").unwrap();

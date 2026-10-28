@@ -293,7 +293,7 @@ fn resample(img: &ImageBuf, win: [usize; 4], side: usize) -> Vec<f32> {
 /// ⚠⚠ Not `Encoding::of`, which scales by LUMINANCE — right for denoise, wrong here: in a blue sky the blue
 /// channel sits far above the luminance, clipped at 1, and the fill came back with 42 % of its blue gone —
 /// the green tint the author saw (2026-10-19, `the_fill_keeps_a_bright_sky_s_colour`).
-fn peak_encoding(img: &ImageBuf) -> ai_denoise::Encoding {
+pub(crate) fn peak_encoding(img: &ImageBuf) -> ai_denoise::Encoding {
     let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 {
         return ai_denoise::Encoding { scale: 1.0 };

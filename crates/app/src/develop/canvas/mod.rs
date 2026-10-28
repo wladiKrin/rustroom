@@ -7,7 +7,7 @@
 //! comment at the call site.
 
 mod composition;
-mod crop_overlay;
+pub(crate) mod crop_overlay;
 mod depth_overlay;
 pub(crate) mod eye_overlay;
 mod eyedropper;

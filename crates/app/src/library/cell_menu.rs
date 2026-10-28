@@ -44,10 +44,14 @@ pub enum CellAction {
     StackByTime(Option<u32>),
     /// Photo merge → HDR on the targets (M10.17a).
     MergeHdr,
+    MergePanorama,
     /// Take every target out of the collection on screen.
     RemoveFromCollection(i64),
     /// Assign a keyword across the targets, or remove it from all of them.
-    SetKeyword { id: i64, on: bool },
+    SetKeyword {
+        id: i64,
+        on: bool,
+    },
 }
 
 /// The photos a right-click acts on.
@@ -263,6 +267,14 @@ pub fn cell_menu(
             action = Some(CellAction::MergeHdr);
             ui.close();
         }
+        if ui
+            .add_enabled(n >= 2, egui::Button::new("Panorama…"))
+            .on_disabled_hover_text("Select two or more photos")
+            .clicked()
+        {
+            action = Some(CellAction::MergePanorama);
+            ui.close();
+        }
     });
     let Some(cat) = catalog else {
         return action;
@@ -451,6 +463,14 @@ pub fn apply_cell_action(
                 .map(|l| menu_targets(l, index))
                 .unwrap_or_default();
             app.open_hdr_merge_for(&targets, false);
+        }
+        CellAction::MergePanorama => {
+            let targets = app
+                .library
+                .as_ref()
+                .map(|l| menu_targets(l, index))
+                .unwrap_or_default();
+            app.open_pano_merge_for(&targets, false);
         }
         CellAction::Reveal => {
             if let Err(e) = rustroom_app::reveal::in_file_manager(&id.path) {

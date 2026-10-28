@@ -53,14 +53,28 @@ pub enum Refusal {
     Missing,
 }
 
+/// Which merge refuses — the sentence names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeKind {
+    Hdr,
+    Panorama,
+}
+
 impl Refusal {
+    /// The HDR merge's sentence.
     pub fn sentence(&self) -> &'static str {
-        match self {
-            Refusal::TooFew => "Select two or more raw photos to merge",
-            Refusal::NotRaw => "HDR merge needs raw photos",
-            Refusal::Immich => "Move Immich photos to a folder before merging them",
-            Refusal::Merged => "A merged HDR cannot be merged again",
-            Refusal::Missing => "A photo's file is missing",
+        self.sentence_for(MergeKind::Hdr)
+    }
+
+    pub fn sentence_for(&self, kind: MergeKind) -> &'static str {
+        match (self, kind) {
+            (Refusal::TooFew, _) => "Select two or more raw photos to merge",
+            (Refusal::NotRaw, MergeKind::Hdr) => "HDR merge needs raw photos",
+            (Refusal::NotRaw, MergeKind::Panorama) => "Panorama merge needs raw photos",
+            (Refusal::Immich, _) => "Download Immich photos before merging them",
+            (Refusal::Merged, MergeKind::Hdr) => "A merged HDR cannot be merged again",
+            (Refusal::Merged, MergeKind::Panorama) => "A merged photo cannot be merged again",
+            (Refusal::Missing, _) => "A photo's file is missing",
         }
     }
 }
@@ -87,6 +101,24 @@ pub fn plan(
     taken: impl Fn(&Path) -> bool,
     exists: impl Fn(&Path) -> bool,
 ) -> Result<HdrPlan, Refusal> {
+    let (frames, active) = frames(photos, active, is_immich, is_float, exists)?;
+    let output = output_path(&frames[0], taken);
+    Ok(HdrPlan {
+        frames,
+        active,
+        output,
+    })
+}
+
+/// The selection's frames — every merge's rule (M10.17a; M10.17b shares it) — and the active photo's
+/// place among them.
+pub fn frames(
+    photos: &[Vec<PathBuf>],
+    active: Option<usize>,
+    is_immich: impl Fn(&Path) -> bool,
+    is_float: impl Fn(&Path) -> bool,
+    exists: impl Fn(&Path) -> bool,
+) -> Result<(Vec<PathBuf>, Option<usize>), Refusal> {
     let mut frames: Vec<PathBuf> = Vec::new();
     let mut active_frame = None;
     for (i, files) in photos.iter().enumerate() {
@@ -94,11 +126,13 @@ pub fn plan(
             .iter()
             .find(|f| catalog::is_raw(f))
             .ok_or(Refusal::NotRaw)?;
+        // ⚠ A downloaded Immich photo is a frame (2026-10-28); its result goes elsewhere (`out_folder`).
         if !exists(raw) {
-            return Err(Refusal::Missing);
-        }
-        if is_immich(raw) {
-            return Err(Refusal::Immich);
+            return Err(if is_immich(raw) {
+                Refusal::Immich
+            } else {
+                Refusal::Missing
+            });
         }
         if is_float(raw) {
             return Err(Refusal::Merged);
@@ -117,16 +151,58 @@ pub fn plan(
     if frames.len() < 2 {
         return Err(Refusal::TooFew);
     }
-    let output = output_path(&frames[0], taken);
-    Ok(HdrPlan {
-        frames,
-        active: active_frame,
-        output,
-    })
+    Ok((frames, active_frame))
+}
+
+impl HdrPlan {
+    /// Whether the result sits in its first frame's folder — the one place Create stack can show it.
+    pub fn beside_frames(&self) -> bool {
+        beside(&self.output, &self.frames)
+    }
+}
+
+pub(crate) fn beside(output: &Path, frames: &[PathBuf]) -> bool {
+    frames.first().and_then(|f| f.parent()) == output.parent()
+}
+
+/// Where a merge's result goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutFolder {
+    /// Beside the first frame, the name `output_path_with` gives.
+    Beside,
+    /// In this folder — the first frame is in the Immich cache, which Clear… empties.
+    In(PathBuf),
+    /// The first frame is from Immich and no usable folder is remembered: ask once.
+    Ask,
+}
+
+/// The rule (2026-10-28): a result never lands in the Immich cache; a merge from Immich goes to the
+/// folder remembered for it (`Settings::immich_merge_folder`), asked for when there is none or it is gone.
+pub fn out_folder(
+    first_is_immich: bool,
+    remembered: Option<&Path>,
+    is_dir: impl Fn(&Path) -> bool,
+) -> OutFolder {
+    match remembered {
+        _ if !first_is_immich => OutFolder::Beside,
+        Some(d) if is_dir(d) => OutFolder::In(d.to_path_buf()),
+        _ => OutFolder::Ask,
+    }
+}
+
+/// `<stem of shown>-<suffix>.dng` in `dir`, then `-<suffix>-2`… past any taken. `shown` is the photo's
+/// own name — an Immich download's file is named by its asset id.
+pub fn output_in(dir: &Path, shown: &str, suffix: &str, taken: impl Fn(&Path) -> bool) -> PathBuf {
+    output_path_with(&dir.join(shown), suffix, taken)
 }
 
 /// `<stem>-HDR.dng` beside `first` — Lightroom's name — then `-HDR-2`, `-HDR-3`… past any taken.
 pub fn output_path(first: &Path, taken: impl Fn(&Path) -> bool) -> PathBuf {
+    output_path_with(first, "HDR", taken)
+}
+
+/// `<stem>-<suffix>.dng` beside `first`, then `-<suffix>-2`… past any taken.
+pub fn output_path_with(first: &Path, suffix: &str, taken: impl Fn(&Path) -> bool) -> PathBuf {
     let stem = first
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -135,9 +211,9 @@ pub fn output_path(first: &Path, taken: impl Fn(&Path) -> bool) -> PathBuf {
     (1..)
         .map(|n| {
             let name = if n == 1 {
-                format!("{stem}-HDR.dng")
+                format!("{stem}-{suffix}.dng")
             } else {
-                format!("{stem}-HDR-{n}.dng")
+                format!("{stem}-{suffix}-{n}.dng")
             };
             dir.join(name)
         })
@@ -224,17 +300,68 @@ mod tests {
         assert_eq!(plan_of(&[]), Err(Refusal::TooFew));
     }
 
+    /// ⚠ Asked for in use (2026-10-28): a downloaded Immich photo is a frame like any other — only its
+    /// result goes elsewhere ([`out_folder`]).
     #[test]
-    fn an_immich_photo_is_refused() {
-        let r = plan(
+    fn a_downloaded_immich_photo_is_a_frame() {
+        let ok = plan(
             &[vec![p("A.RAF")], vec![p("B.RAF")]],
             None,
             |f| f.ends_with("B.RAF"),
             |_| false,
             |_| false,
             |_| true,
+        )
+        .unwrap();
+        assert_eq!(ok.frames, vec![p("A.RAF"), p("B.RAF")]);
+    }
+
+    /// Not downloaded, its file is absent — said as what to do, never "missing".
+    #[test]
+    fn an_immich_photo_not_downloaded_is_refused() {
+        let r = plan(
+            &[vec![p("A.RAF")], vec![p("B.RAF")]],
+            None,
+            |f| f.ends_with("B.RAF"),
+            |_| false,
+            |_| false,
+            |f: &Path| !f.ends_with("B.RAF"),
         );
         assert_eq!(r, Err(Refusal::Immich));
+        assert_eq!(
+            Refusal::Immich.sentence(),
+            "Download Immich photos before merging them"
+        );
+    }
+
+    #[test]
+    fn a_merge_of_immich_photos_goes_to_the_remembered_folder_or_asks() {
+        let is_dir = |d: &Path| d == Path::new("/merged");
+        assert_eq!(out_folder(false, None, is_dir), OutFolder::Beside);
+        assert_eq!(
+            out_folder(true, Some(Path::new("/merged")), is_dir),
+            OutFolder::In(PathBuf::from("/merged"))
+        );
+        assert_eq!(out_folder(true, None, is_dir), OutFolder::Ask);
+        // A folder since deleted or unplugged is asked for again.
+        assert_eq!(
+            out_folder(true, Some(Path::new("/gone")), is_dir),
+            OutFolder::Ask
+        );
+    }
+
+    /// An Immich file is named by its asset id; the result takes the photo's own name.
+    #[test]
+    fn a_result_in_another_folder_takes_the_shown_name_and_cannot_stack() {
+        let taken = [PathBuf::from("/merged/DSCF1234-HDR.dng")];
+        let out = output_in(Path::new("/merged"), "DSCF1234.RAF", "HDR", |f| {
+            taken.iter().any(|t| t == f)
+        });
+        assert_eq!(out, PathBuf::from("/merged/DSCF1234-HDR-2.dng"));
+        let mut ok = plan_of(&[vec![p("A.RAF")], vec![p("B.RAF")]]).unwrap();
+        assert!(ok.beside_frames());
+        ok.output = out;
+        assert!(!ok.beside_frames());
     }
 
     #[test]
@@ -261,16 +388,6 @@ mod tests {
         ];
         let ok = plan(&photos, Some(3), |_| false, |_| false, |_| false, |_| true).unwrap();
         assert_eq!(ok.active, Some(2));
-    }
-
-    /// ⚠ Reported in use (2026-10-28): "Download Immich photos…" over photos already downloaded — a
-    /// download lands in the Immich cache, still an Immich photo; Move to folder is what the merge needs.
-    #[test]
-    fn the_immich_refusal_names_move_to_folder() {
-        assert_eq!(
-            Refusal::Immich.sentence(),
-            "Move Immich photos to a folder before merging them"
-        );
     }
 
     #[test]

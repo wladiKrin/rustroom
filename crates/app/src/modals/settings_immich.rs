@@ -198,6 +198,32 @@ pub(super) fn show(ui: &mut egui::Ui, d: &mut SettingsDraft, t: Tab<'_>) {
             "Warn at startup when downloads exceed the limit",
         )
         .hover("Offers to clear the downloads at startup once they pass the limit");
+        ui.add_space(GAP);
+        theme::sub_label(ui, "Merged photos");
+        ui.horizontal(|ui| {
+            match &d.immich_merge_folder {
+                Some(f) => ui.label(f.display().to_string()),
+                None => ui.label("Asked at the first merge"),
+            }
+            .hover(
+                "Where HDR and panorama merges of Immich photos are saved, outside the downloads",
+            );
+            if ui
+                .button("Change…")
+                .hover("Picks the folder merges of Immich photos are saved in")
+                .clicked()
+            {
+                let picked = rfd::FileDialog::new()
+                    .set_title("Choose a folder for photos merged from Immich")
+                    .pick_folder();
+                // ⚠ Never inside the downloads, which Clear… empties.
+                if let Some(f) =
+                    picked.filter(|f| !t.root.as_deref().is_some_and(|r| f.starts_with(r)))
+                {
+                    d.immich_merge_folder = Some(f);
+                }
+            }
+        });
     }
 }
 

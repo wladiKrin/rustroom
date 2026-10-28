@@ -48,6 +48,10 @@ pub enum Command {
     MergeHdr,
     /// The same with the options last used, no dialog — Lightroom's headless merge, ⌥⇧⌘H.
     MergeHdrLast,
+    /// Stitch the selected row into one panorama, through the preview dialog (M10.17b) — ⇧⌘M.
+    MergePanorama,
+    /// The same with the options last used, no dialog — ⌥⇧⌘M.
+    MergePanoramaLast,
     /// Stack the selection by hand (M10.8c) — ⌘G.
     Stack,
     /// Take apart the hand stacks the selection touches — ⇧⌘G.
@@ -354,6 +358,17 @@ pub fn model_with(recent: &[PathBuf]) -> Vec<Section> {
                             "HDR with last settings",
                             Command::MergeHdrLast,
                             Some(Shortcut::cmd_shift('H').with_alt()),
+                        ),
+                        // M10.17b. ⇧⌘M rather than Lightroom's ⌃M: ⌘M is the system's Minimise.
+                        action(
+                            "Panorama…",
+                            Command::MergePanorama,
+                            Some(Shortcut::cmd_shift('M')),
+                        ),
+                        action(
+                            "Panorama with last settings",
+                            Command::MergePanoramaLast,
+                            Some(Shortcut::cmd_shift('M').with_alt()),
                         ),
                     ],
                 },
@@ -862,7 +877,7 @@ mod tests {
     /// M10.17a: Photo → Photo merge → HDR… ⇧⌘H, and with the last settings ⌥⇧⌘H — chords no system
     /// shortcut holds (⌘H is Hide, ⌥⌘H Hide others).
     #[test]
-    fn the_photo_menu_offers_hdr_merge_with_its_shortcuts() {
+    fn the_photo_menu_offers_hdr_and_panorama_with_their_shortcuts() {
         let photo = model()
             .into_iter()
             .find(|s| s.title == "Photo")
@@ -896,7 +911,23 @@ mod tests {
                 Some(Shortcut::cmd_shift('H').with_alt())
             ))
         );
-        for c in [Command::MergeHdr, Command::MergeHdrLast] {
+        assert_eq!(
+            find(Command::MergePanorama),
+            Some(("Panorama…".to_string(), Some(Shortcut::cmd_shift('M'))))
+        );
+        assert_eq!(
+            find(Command::MergePanoramaLast),
+            Some((
+                "Panorama with last settings".to_string(),
+                Some(Shortcut::cmd_shift('M').with_alt())
+            ))
+        );
+        for c in [
+            Command::MergeHdr,
+            Command::MergeHdrLast,
+            Command::MergePanorama,
+            Command::MergePanoramaLast,
+        ] {
             let sc = crate::shortcuts::default_of(c).expect("bound");
             assert_eq!(
                 crate::shortcuts::refusal(sc),

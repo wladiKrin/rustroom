@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 mod format_arg;
 mod merge_hdr;
+mod merge_pano;
 mod resampler_arg;
 mod space_arg;
 
@@ -75,6 +76,24 @@ enum Command {
         #[arg(long)]
         half: bool,
     },
+    /// Stitch a row of RAWs into one floating-point panorama DNG (M10.17b).
+    MergePano {
+        /// The row's RAW files, two or more, in any order.
+        #[arg(required = true, num_args = 2..)]
+        inputs: Vec<PathBuf>,
+        /// The DNG to write.
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Projection: auto, spherical, cylindrical, perspective.
+        #[arg(long, default_value = "auto")]
+        projection: String,
+        /// Leave the panorama uncropped.
+        #[arg(long)]
+        no_crop: bool,
+        /// Stitch half-size decodes — the dialog's preview — instead of full ones.
+        #[arg(long)]
+        half: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -107,6 +126,13 @@ fn main() -> Result<()> {
             no_align,
             half,
         } => merge_hdr::run(&inputs, &output, &deghost, !no_align, half),
+        Command::MergePano {
+            inputs,
+            output,
+            projection,
+            no_crop,
+            half,
+        } => merge_pano::run(&inputs, &output, &projection, !no_crop, half),
     }
 }
 

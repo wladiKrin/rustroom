@@ -12,6 +12,8 @@ pub mod batch_export;
 pub mod batch_rename;
 pub mod brush_tool;
 pub mod buffer_cache;
+#[cfg(test)]
+mod capped_dng_tests;
 pub mod cell_layout;
 pub mod clipping;
 pub mod collections;
@@ -83,6 +85,7 @@ pub mod move_tracking;
 pub mod negative_tool;
 pub mod noise_curve;
 pub mod panel_order;
+pub mod pano_merge;
 pub mod people_tool;
 pub mod perspective_detect;
 pub mod photo_id;

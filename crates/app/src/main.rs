@@ -66,12 +66,14 @@ mod library;
 mod library_state;
 mod list_row;
 mod menu_bar;
+mod merge_queue;
 mod modals;
 mod move_flow;
 mod multi;
 mod name_edit;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod pano_flow;
 mod people_flow;
 mod preset_ops;
 mod preview_flow;

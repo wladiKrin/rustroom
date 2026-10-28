@@ -38,6 +38,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         .unwrap_or_default();
     let preview = d.preview.clone();
     let (stale, failed) = (d.stale, d.failed.clone());
+    let stacks = d.plan.beside_frames();
     let (mut zoom, mut pan) = (d.zoom, d.pan);
     let pan_drag = app.settings.pan_drag;
 
@@ -149,8 +150,10 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                     )
                     .hover("Shows in red what was taken from one photo alone");
                     ui.add_space(8.0);
-                    ui.checkbox(&mut draft.create_stack, "Create stack")
-                        .hover("Stacks the merged photo on top of the photos it was made from");
+                    // A merge from Immich is saved in another folder, where no stack can hold it.
+                    ui.add_enabled(stacks, egui::Checkbox::new(&mut draft.create_stack, "Create stack"))
+                        .hover("Stacks the merged photo on top of the photos it was made from")
+                        .on_disabled_hover_text("The merged photo is saved in another folder than its photos");
                 });
             });
         },

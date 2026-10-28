@@ -39,6 +39,7 @@ pub mod hdr_merge;
 mod immich_cache;
 pub mod import;
 pub mod info;
+pub mod pano_merge;
 pub mod presets;
 pub mod rename;
 pub mod rule_edit;
@@ -89,6 +90,8 @@ pub enum Modal {
     Import,
     /// Photo merge → HDR's preview (M10.17a). Its state lives in `RustroomApp::hdr`.
     HdrMerge,
+    /// Photo merge → Panorama's preview (M10.17b). Its state lives in `RustroomApp::pano`.
+    PanoMerge,
     /// Offering to download the AI models a mask needs (M9.13). State in `RustroomApp::ai`.
     AiDownload,
     /// An upload did not confirm, and the file is at `at`. Raised for the **first** one in a run.
@@ -237,6 +240,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Export,
         Import,
         HdrMerge,
+        PanoMerge,
         AiDownload,
         SaveExport,
         ConfirmDeleteExport,
@@ -265,6 +269,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::ExportSettings => Which::Export,
         Modal::Import => Which::Import,
         Modal::HdrMerge => Which::HdrMerge,
+        Modal::PanoMerge => Which::PanoMerge,
         Modal::AiDownload => Which::AiDownload,
         Modal::UploadUnconfirmed { .. } => Which::UploadUnconfirmed,
         Modal::SaveExportPreset { .. } => Which::SaveExport,
@@ -297,6 +302,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::Export => export::settings(app, ctx),
         Which::Import => import::show(app, ctx),
         Which::HdrMerge => hdr_merge::show(app, ctx),
+        Which::PanoMerge => pano_merge::show(app, ctx),
         Which::AiDownload => ai_download::show(app, ctx),
         Which::SaveExport => export::save_preset(app, ctx),
         Which::ConfirmDeleteExport => export::confirm_delete(app, ctx),

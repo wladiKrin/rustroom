@@ -46,6 +46,10 @@ pub fn describe(c: Command) -> String {
         C::MergeHdrLast => {
             "Merges the selected bracket with the last HDR options, without the dialog"
         }
+        C::MergePanorama => "Stitches the selected photos into one panorama",
+        C::MergePanoramaLast => {
+            "Stitches the selected photos with the last panorama options, without the dialog"
+        }
         C::Stack => "Groups the selected photos into one stack",
         C::Unstack => "Takes apart the stacks the selected photos are in",
         C::MakeTopOfStack => "Makes this photo the one a folded stack shows",
