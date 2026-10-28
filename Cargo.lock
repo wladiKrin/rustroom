@@ -328,6 +328,7 @@ dependencies = [
  "serde_json",
  "test-dir",
  "thiserror 2.0.19",
+ "ureq",
  "xmp",
 ]
 
