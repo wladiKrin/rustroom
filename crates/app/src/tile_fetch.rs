@@ -112,6 +112,15 @@ impl TileFetcher {
         got
     }
 
+    /// `t` arrived but is no picture (a captive portal's page, an empty body): drop it from the disk cache
+    /// and treat it as failed, or it would be read again every frame (the M10.18b review's #7).
+    pub fn fail(&mut self, t: TileId, now: Instant) {
+        if let Some(r) = &self.root {
+            let _ = std::fs::remove_file(cache_path(r, t));
+        }
+        self.failed.insert(t, now);
+    }
+
     /// Tiles queued or downloading.
     pub fn busy(&self) -> usize {
         self.queue.len() + self.in_flight.len()
@@ -291,6 +300,26 @@ mod tests {
         std::thread::sleep(Duration::from_millis(20));
         assert!(f.poll(Instant::now()).is_empty());
         assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    /// The review's #7: bytes that are no picture leave the cache and wait like any failure.
+    #[test]
+    fn a_tile_that_does_not_decode_is_dropped_and_waits() {
+        let d = test_dir::TempDir::new("tiles-bad");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut f = TileFetcher::new(
+            Some(d.path().into()),
+            T.into(),
+            counting(calls.clone()),
+            Arc::new(|| {}),
+        );
+        f.request(tile(2), Instant::now());
+        landed(&mut f, 1);
+        assert!(d.join("3/2/1.png").is_file(), "fixture check: cached");
+        f.fail(tile(2), Instant::now());
+        assert!(!d.join("3/2/1.png").exists(), "the bad tile stayed cached");
+        f.request(tile(2), Instant::now());
+        assert_eq!(f.busy(), 0, "asked again at once");
     }
 
     #[test]

@@ -20,6 +20,12 @@ pub enum Hand {
     At(f64, f64),
 }
 
+/// Every located photo, and every photo whose location was removed by hand.
+pub type LocationsAndRemovals = (
+    HashMap<PathBuf, (f64, f64)>,
+    std::collections::HashSet<PathBuf>,
+);
+
 /// The winning row's lat/lon for one `(folder_id, file_name)` — NULL for "removed" or none.
 const WINNER: &str = "SELECT lat, lon FROM photo_location
      WHERE folder_id = (SELECT id FROM folders WHERE path = ?1) AND file_name = ?2
@@ -77,6 +83,12 @@ impl Catalog {
     /// Every located photo in the catalog, by the winning source — ONE query, for a view of thousands
     /// (the Map's pins), where [`Catalog::locations_of`] would be a lookup per photo.
     pub fn all_locations(&self) -> Result<HashMap<PathBuf, (f64, f64)>, CatalogError> {
+        Ok(self.all_locations_and_removals()?.0)
+    }
+
+    /// [`Catalog::all_locations`], and every photo whose location was REMOVED by hand — a caller that
+    /// falls back to a pair's other half (the Map) must not place a removed one by its sibling.
+    pub fn all_locations_and_removals(&self) -> Result<LocationsAndRemovals, CatalogError> {
         let mut st = self.conn.prepare(
             "SELECT f.path, l.file_name, l.lat, l.lon FROM photo_location l
              JOIN folders f ON f.id = l.folder_id
@@ -93,15 +105,21 @@ impl Catalog {
         })?;
         let mut seen = std::collections::HashSet::new();
         let mut out = HashMap::new();
+        let mut removed = std::collections::HashSet::new();
         for (path, la, lo) in rows.filter_map(Result::ok) {
             // ⚠ The first row per photo is the winner; a removed one wins by showing nothing.
             if seen.insert(path.clone()) {
-                if let (Some(la), Some(lo)) = (la, lo) {
-                    out.insert(path, (la, lo));
+                match (la, lo) {
+                    (Some(la), Some(lo)) => {
+                        out.insert(path, (la, lo));
+                    }
+                    _ => {
+                        removed.insert(path);
+                    }
                 }
             }
         }
-        Ok(out)
+        Ok((out, removed))
     }
 
     /// What was set for `photo` by hand.
@@ -168,6 +186,27 @@ impl Catalog {
         let (la, lo) = at.unzip();
         self.conn
             .execute(UPSERT, rusqlite::params![folder, name, "file", la, lo])?;
+        Ok(())
+    }
+
+    /// [`Catalog::set_file_location`] for many photos in ONE transaction — the startup pass and the scan
+    /// land hundreds a frame, and one sync each would stall the UI.
+    pub fn set_file_locations(
+        &self,
+        rows: &[(PathBuf, Option<(f64, f64)>)],
+    ) -> Result<(), CatalogError> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut st = tx.prepare_cached(UPSERT)?;
+            for (p, at) in rows {
+                let Some((folder, name)) = split(p) else {
+                    continue;
+                };
+                let (la, lo) = at.unzip();
+                st.execute(rusqlite::params![folder, name, "file", la, lo])?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -272,6 +311,17 @@ mod tests {
         let all = cat.all_locations().unwrap();
         assert_eq!(all, cat.locations_of(&p).unwrap());
         assert_eq!(all.len(), 2, "{all:?}");
+        let (_, removed) = cat.all_locations_and_removals().unwrap();
+        assert_eq!(removed, std::collections::HashSet::from([p[3].clone()]));
+    }
+
+    #[test]
+    fn set_file_locations_writes_many_in_one_go() {
+        let (cat, p) = cat_with(&["a.RAF", "b.RAF"]);
+        cat.set_file_locations(&[(p[0].clone(), Some(LISBON)), (p[1].clone(), None)])
+            .unwrap();
+        assert_eq!(cat.location_of(&p[0]).unwrap(), Some(LISBON));
+        assert_eq!(cat.location_of(&p[1]).unwrap(), None);
     }
 
     #[test]

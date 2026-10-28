@@ -3,7 +3,7 @@
 //! the map, or the location field, places them by hand.
 //!
 //! ⚠⚠ Everything here runs every frame. The pins are derived once per catalog change and view
-//! (`pins_key`, throttled while a background pass writes), the clusters once per pins and zoom
+//! (`refresh_pins`, the catalog's half throttled while a background pass writes), the clusters once per pins and zoom
 //! (`ClusterMemo`), and tiles come from the fetcher's disk cache or the network on its own threads.
 
 use crate::theme::Hover as _;
@@ -42,12 +42,19 @@ pub(crate) struct MapView {
     camera: Option<MapCamera>,
     fetcher: Option<TileFetcher>,
     textures: HashMap<TileId, egui::TextureHandle>,
-    pins_key: Option<(u64, u64, u64)>,
-    pins_at: Option<Instant>,
+    /// The catalog's locations, re-read at most every [`PINS_EVERY`] while the catalog keeps changing.
+    located: Arc<map_points::Located>,
+    located_key: Option<(u64, u64)>,
+    located_at: Option<Instant>,
+    /// The view the pins were made for (`Library::visible_rev`).
+    view_rev: Option<u64>,
     pins: Arc<Pins>,
+    /// Bumped whenever `pins` is rebuilt — the clusters' memo key.
+    pins_gen: u64,
     clusters: ClusterMemo,
-    /// The clicked cluster's entries; `None` lists the photos with no location.
-    strip: Option<Vec<usize>>,
+    /// The clicked cluster's entries; `None` lists the photos with no location. ⚠ Entry indices —
+    /// cleared whenever the view changes, or they would name other photos (the review's #6).
+    strip: Option<Arc<Vec<usize>>>,
     /// The location field's text.
     pub(crate) field: String,
     search: Option<Receiver<Result<Vec<Place>, String>>>,
@@ -69,35 +76,45 @@ impl MapView {
 }
 
 impl MapView {
-    /// The pins, re-derived when the catalog or the view changed — at most once a second while the
-    /// catalog keeps changing, at once when the view did.
+    /// Re-derive the pins when the catalog or the view changed: the catalog's locations at most once
+    /// every [`PINS_EVERY`] while it keeps changing (a background pass writes every frame), the pins at
+    /// once when the view did. Returns `(changed, deferred)` — `deferred` when a catalog change waits.
     fn refresh_pins(
         &mut self,
-        app_cat: Option<&catalog::db::Catalog>,
+        cat: Option<&catalog::db::Catalog>,
         lib: &crate::library_state::Library,
-    ) {
+    ) -> (bool, bool) {
         let key = (
-            app_cat.map_or(0, |c| c.instance()),
-            app_cat.map_or(0, |c| c.change_count()),
-            lib.visible_rev,
+            cat.map_or(0, |c| c.instance()),
+            cat.map_or(0, |c| c.change_count()),
         );
-        if self.pins_key == Some(key) {
-            return;
+        let mut changed = false;
+        let stale = self.located_key != Some(key);
+        let may = self.located_key.map(|k| k.0) != Some(key.0)
+            || self.located_at.is_none_or(|t| t.elapsed() >= PINS_EVERY);
+        if stale && may {
+            let (at, removed) = cat
+                .and_then(|c| c.all_locations_and_removals().ok())
+                .unwrap_or_default();
+            self.located = Arc::new(map_points::Located::new(at, removed));
+            self.located_key = Some(key);
+            self.located_at = Some(Instant::now());
+            changed = true;
         }
-        let view_changed = self.pins_key.is_none_or(|k| (k.0, k.2) != (key.0, key.2));
-        if !view_changed && self.pins_at.is_some_and(|t| t.elapsed() < PINS_EVERY) {
-            return;
+        if self.view_rev != Some(lib.visible_rev) {
+            self.view_rev = Some(lib.visible_rev);
+            self.strip = None;
+            changed = true;
         }
-        let located = app_cat
-            .and_then(|c| c.all_locations().ok())
-            .unwrap_or_default();
-        let visible = lib
-            .visible
-            .iter()
-            .filter_map(|&i| lib.entries.get(i).map(|e| (i, e.id.path.as_path())));
-        self.pins = Arc::new(map_points::pins(visible, &located));
-        self.pins_key = Some(key);
-        self.pins_at = Some(Instant::now());
+        if changed {
+            let visible = lib
+                .visible
+                .iter()
+                .filter_map(|&i| lib.entries.get(i).map(|e| (i, e.id.path.as_path())));
+            self.pins = Arc::new(map_points::pins(visible, &self.located));
+            self.pins_gen += 1;
+        }
+        (changed, stale && !may)
     }
 }
 
@@ -111,11 +128,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         });
         return;
     };
-    let before = app.map.pins_key;
-    app.map.refresh_pins(app.catalog.as_ref(), lib);
+    let (changed, deferred) = app.map.refresh_pins(app.catalog.as_ref(), lib);
     let pins = app.map.pins.clone();
-    if app.map.pins_key != before {
+    if changed {
         app.status = map_points::status(&pins);
+    }
+    if deferred {
+        ctx.request_repaint_after(PINS_EVERY);
     }
     pump_search(app);
 
@@ -209,8 +228,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             let now = Instant::now();
             let fetcher = app.map.fetcher.as_mut().expect("made above");
             for (t, bytes) in fetcher.poll(now) {
-                if let Ok(b) = bytes {
-                    if let Ok(img) = image::load_from_memory(&b) {
+                if let Ok(b) = &bytes {
+                    if let Ok(img) = image::load_from_memory(b) {
                         let rgba = img.to_rgba8();
                         let ci = egui::ColorImage::from_rgba_unmultiplied(
                             [rgba.width() as usize, rgba.height() as usize],
@@ -222,8 +241,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             egui::TextureOptions::LINEAR,
                         );
                         app.map.textures.insert(t, tex);
+                        continue;
                     }
                 }
+                // ⚠ Not a picture, or not fetched: the fetcher waits before asking again (#7).
+                fetcher.fail(t, now);
             }
             let wanted: Vec<TileId> = tiles.iter().map(|(t, _)| *t).collect();
             for (t, at) in &tiles {
@@ -245,16 +267,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             }
 
             // ── the pins ──────────────────────────────────────────────────────────────────────
-            let key = app
-                .map
-                .pins_key
-                .map_or(0, |k| k.0 ^ k.1.rotate_left(21) ^ k.2.rotate_left(42));
-            let clusters = app
-                .map
-                .clusters
-                .get(key, z, CELL_PX / f64::from(scale), || {
-                    pins.points.iter().map(|(_, at)| *at).collect()
-                });
+            // ⚠ In the tile zoom's pixels, so the memo key needs no fractional scale (the review's #11).
+            let gen = app.map.pins_gen;
+            let clusters = app.map.clusters.get(gen, z, CELL_PX, || {
+                pins.points.iter().map(|(_, at)| *at).collect()
+            });
             let accent = ui.visuals().selection.bg_fill;
             let on_accent = theme::tokens::on_accent(ui.visuals().dark_mode);
             let ring = theme::tokens::of(ui).text;
@@ -291,7 +308,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 }
             }
             if resp.clicked() {
-                app.map.strip = hit.as_ref().map(|(e, _)| e.clone());
+                app.map.strip = hit.as_ref().map(|(e, _)| Arc::new(e.clone()));
             }
             if resp.double_clicked() {
                 if let Some((_, p)) = &hit {
@@ -498,9 +515,11 @@ fn strip(
     ui.painter().rect_filled(rect, 0.0, t.panel);
     ui.painter()
         .hline(rect.x_range(), rect.min.y, egui::Stroke::new(1.0, t.line));
-    let rows: Vec<usize> = match &app.map.strip {
-        Some(e) => e.clone(),
-        None => pins.unplaced.clone(),
+    // ⚠ Borrowed through the Arcs, never cloned per frame — a "No location" strip may be 100k long.
+    let clicked = app.map.strip.clone();
+    let rows: &[usize] = match &clicked {
+        Some(e) => e,
+        None => &pins.unplaced,
     };
     let title = match &app.map.strip {
         Some(e) => rustroom_app::status_text::photos(e.len()),
@@ -521,9 +540,17 @@ fn strip(
             .hover("Drag photos from here onto the map to place them there");
         });
         let mut window = Vec::new();
-        egui::ScrollArea::horizontal().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                for &i in &rows {
+        // ⚠⚠ Virtual: only the cells in view are laid out and ask for a thumbnail (the review's #1) —
+        // every thumbnail asked for is pinned in the cache by `sync_thumb_window`.
+        let cell = THUMB + ui.spacing().item_spacing.x;
+        egui::ScrollArea::horizontal().show_viewport(ui, |ui, viewport| {
+            let origin = ui.max_rect().min;
+            ui.allocate_space(egui::vec2(cell * rows.len() as f32, THUMB));
+            {
+                for k in
+                    map_points::visible_cells(rows.len(), cell, viewport.min.x, viewport.width())
+                {
+                    let i = rows[k];
                     let Some(e) = lib.entries.get(i) else {
                         continue;
                     };
@@ -534,8 +561,13 @@ fn strip(
                         .get(&req.key())
                         .or_else(|| lib.cache.get_stale(&id));
                     window.push(req);
-                    let (r, resp) = ui.allocate_exact_size(
+                    let r = egui::Rect::from_min_size(
+                        origin + egui::vec2(cell * k as f32, 0.0),
                         egui::Vec2::splat(THUMB),
+                    );
+                    let resp = ui.interact(
+                        r,
+                        ui.id().with(("strip", &id)),
                         egui::Sense::click_and_drag(),
                     );
                     match tex {
@@ -589,9 +621,31 @@ fn strip(
                         }
                     }
                 }
-            });
+            }
         });
         // ⚠⚠ Everything drawn, or `retain_window` leaves these thumbnails evictable (Survey's rule).
         lib.sync_thumb_window(&window);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The review's #6: the strip holds entry indices, so a new view drops it — or it would list, and
+    /// a drag would place, whatever photos now sit at those indices.
+    #[test]
+    fn a_new_view_clears_the_strip() {
+        let mut app = crate::test_app::for_test();
+        app.library = Some(crate::test_app::library_of(4));
+        let mut map = MapView::offline();
+        let lib = app.library.as_ref().unwrap();
+        map.refresh_pins(app.catalog.as_ref(), lib);
+        map.strip = Some(Arc::new(vec![1, 2]));
+        map.refresh_pins(app.catalog.as_ref(), lib);
+        assert!(map.strip.is_some(), "an unchanged view dropped the strip");
+        app.rebuild_entries(None);
+        map.refresh_pins(app.catalog.as_ref(), app.library.as_ref().unwrap());
+        assert!(map.strip.is_none(), "the strip outlived its view");
+    }
 }

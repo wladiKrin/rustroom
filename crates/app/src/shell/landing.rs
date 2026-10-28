@@ -64,11 +64,10 @@ impl RustroomApp {
             return;
         };
         let (found, done) = pass.drain();
-        if let Some(cat) = &self.catalog {
-            for (path, at) in &found {
-                if let Err(e) = cat.set_file_location(path, *at) {
-                    eprintln!("catalog: {e}");
-                }
+        if let Some(cat) = self.catalog.as_ref().filter(|_| !found.is_empty()) {
+            // ⚠ One transaction per frame, never one sync per photo (the review's #3).
+            if let Err(e) = cat.set_file_locations(&found) {
+                eprintln!("catalog: {e}");
             }
         }
         if done {
@@ -86,8 +85,14 @@ impl RustroomApp {
                 if let Err(e) = cat.set_capture(&r.path, &r.capture) {
                     eprintln!("catalog: {e}");
                 }
-                // M10.18b: the file's own position — or "read, none", so the startup pass skips it.
-                if let Err(e) = cat.set_file_location(&r.path, r.capture.gps) {
+            }
+            // M10.18b: the files' own positions — or "read, none", so the startup pass skips them — in
+            // one transaction, and only for files on disk (`location_pass::file_rows`).
+            let rows = rustroom_app::location_pass::file_rows(
+                done.iter().map(|r| (r.path.as_path(), r.capture.gps)),
+            );
+            if !rows.is_empty() {
+                if let Err(e) = cat.set_file_locations(&rows) {
                     eprintln!("catalog: {e}");
                 }
             }

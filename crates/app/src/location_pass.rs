@@ -11,6 +11,16 @@ use std::sync::mpsc::{channel, Receiver};
 /// What one file says: its path and its position, `None` for a file with no GPS.
 pub type Found = (PathBuf, Option<(f64, f64)>);
 
+/// The file rows to write for what a reader found: ⚠⚠ only for files ON DISK. The metadata scan reads a
+/// not-yet-downloaded Immich row as an empty capture, and a "read, none" row for it would keep its file's
+/// own GPS from ever being read once it arrives (the M10.18b review's #4).
+pub fn file_rows<'a>(found: impl Iterator<Item = (&'a Path, Option<(f64, f64)>)>) -> Vec<Found> {
+    found
+        .filter(|(p, _)| p.is_file())
+        .map(|(p, at)| (p.to_path_buf(), at))
+        .collect()
+}
+
 /// The pass's thread and what it has found so far.
 pub struct LocationPass {
     rx: Receiver<Found>,
@@ -91,6 +101,16 @@ mod tests {
             Some((38.7, -9.1))
         });
         assert_eq!(all(&p), vec![(here, Some((38.7, -9.1)))]);
+    }
+
+    #[test]
+    fn a_file_not_on_disk_gets_no_row() {
+        let d = test_dir::TempDir::new("location-rows");
+        let here = d.join("a.JPG");
+        std::fs::write(&here, b"x").unwrap();
+        let gone = d.join("not-downloaded.RAF");
+        let rows = file_rows([(here.as_path(), None), (gone.as_path(), None)].into_iter());
+        assert_eq!(rows, vec![(here, None)]);
     }
 
     #[test]
