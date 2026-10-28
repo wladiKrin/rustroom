@@ -51,6 +51,7 @@ impl eframe::App for RustroomApp {
         // ⚠ Written as results arrive rather than batched at the end, so a folder closed half way
         // keeps what was read.
         self.pump_captures();
+        self.pump_location_pass(&ctx);
 
         self.top_panel(ui, &ctx);
         self.view_body(ui, &ctx);
@@ -226,6 +227,7 @@ impl RustroomApp {
                     LibraryMode::Grid => library::show(self, ui, ctx),
                     LibraryMode::Compare => multi::compare::show(self, ui, ctx),
                     LibraryMode::Survey => multi::survey::show(self, ui, ctx),
+                    LibraryMode::Map => crate::map_view::show(self, ui, ctx),
                 }
             }
         }

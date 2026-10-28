@@ -10,7 +10,7 @@
 //! skeletons is the honest cost, and both carry this note.
 
 /// What a sidecar says about a photo, in the fields this crate owns.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Sidecar {
     /// `xmp:Rating`. `None` when the sidecar carries no rating.
     pub rating: Option<u8>,
@@ -29,6 +29,11 @@ pub struct Sidecar {
     /// `dc:creator`. ⚠ A multi-entry sequence reads as its **first** and is written back as one:
     /// the catalog holds one creator string, and a co-credit is not a field Rustroom has.
     pub creator: Option<String>,
+    /// `exif:GPSLatitude` / `exif:GPSLongitude` as decimal degrees, south and west negative (M10.18b).
+    ///
+    /// ⚠⚠ **Read only — [`write`] never emits it**, and a merge keeps another program's untouched:
+    /// Rustroom keeps the locations it sets in its catalog (the author's call, 2026-10-28).
+    pub gps: Option<(f64, f64)>,
 }
 
 /// Why a sidecar could not be read or rewritten.
@@ -74,6 +79,38 @@ const NS_XMP: &[u8] = b"http://ns.adobe.com/xap/1.0/";
 const NS_DC: &[u8] = b"http://purl.org/dc/elements/1.1/";
 const NS_LR: &[u8] = b"http://ns.adobe.com/lightroom/1.0/";
 const NS_RDF: &[u8] = b"http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+const NS_EXIF: &[u8] = b"http://ns.adobe.com/exif/1.0/";
+
+/// `exif:GPSLatitude` (true) or `exif:GPSLongitude` (false) — read, never owned, so a merge-write keeps it.
+fn gps_half(ns: &ResolveResult<'_>, local: &[u8]) -> Option<bool> {
+    match (ns, local) {
+        (ResolveResult::Bound(n), b"GPSLatitude") if n.as_ref() == NS_EXIF => Some(true),
+        (ResolveResult::Bound(n), b"GPSLongitude") if n.as_ref() == NS_EXIF => Some(false),
+        _ => None,
+    }
+}
+
+/// XMP's GPS coordinate, `"DDD,MM.mmmmK"` or `"DDD,MM,SSK"` with K one of N S E W, as signed degrees.
+pub fn parse_gps_coordinate(t: &str) -> Option<f64> {
+    let t = t.trim();
+    let (body, k) = t.split_at(t.len().checked_sub(1)?);
+    let sign = match k {
+        "N" | "E" | "n" | "e" => 1.0,
+        "S" | "W" | "s" | "w" => -1.0,
+        _ => return None,
+    };
+    let parts: Vec<f64> = body
+        .split(',')
+        .map(|p| p.trim().parse::<f64>())
+        .collect::<Result<_, _>>()
+        .ok()?;
+    let v = match parts.as_slice() {
+        [d, m] => d + m / 60.0,
+        [d, m, s] => d + m / 60.0 + s / 3600.0,
+        _ => return None,
+    };
+    v.is_finite().then_some(sign * v)
+}
 
 /// The eight fields this crate owns, wherever and however they appear.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +159,8 @@ fn is_rdf(ns: &ResolveResult<'_>, local: &[u8], want: &[u8]) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Owned(Owned),
+    /// A GPS half — `true` for the latitude.
+    Gps(bool),
     Description,
     Li,
     Other,
@@ -131,6 +170,8 @@ fn classify(ns: &ResolveResult<'_>, e: &BytesStart<'_>) -> Kind {
     let local = e.local_name();
     if let Some(o) = owned(ns, local.as_ref()) {
         Kind::Owned(o)
+    } else if let Some(lat) = gps_half(ns, local.as_ref()) {
+        Kind::Gps(lat)
     } else if is_rdf(ns, local.as_ref(), b"Description") {
         Kind::Description
     } else if is_rdf(ns, local.as_ref(), b"li") {
@@ -187,6 +228,7 @@ fn description_attributes(
     reader: &NsReader<&[u8]>,
     e: &BytesStart<'_>,
     out: &mut Sidecar,
+    gps: &mut (Option<f64>, Option<f64>),
 ) -> Result<(), XmpError> {
     for a in e.attributes() {
         let a = a?;
@@ -197,6 +239,11 @@ fn description_attributes(
         // the specification says 1.0 is then assumed. Caught by clippy's `deprecated` lint, which
         // a green test run says nothing about.
         let value = || a.normalized_value(quick_xml::XmlVersion::Implicit1_0);
+        match gps_half(&ns, local.as_ref()) {
+            Some(true) => gps.0 = parse_gps_coordinate(&value()?),
+            Some(false) => gps.1 = parse_gps_coordinate(&value()?),
+            None => {}
+        }
         match owned(&ns, local.as_ref()) {
             Some(Owned::Rating) => out.rating = parse_rating(&value()?),
             Some(Owned::Label) => out.label = Some(value()?.into_owned()),
@@ -226,6 +273,7 @@ pub fn read(text: &str) -> Result<Sidecar, XmpError> {
     // Which keyword bag the reader is inside, if any.
     let mut bag: Option<Owned> = None;
     let mut depth: usize = 0;
+    let mut gps: (Option<f64>, Option<f64>) = (None, None);
     loop {
         let (ns, ev) = reader.read_resolved_event()?;
         match ev {
@@ -255,8 +303,16 @@ pub fn read(text: &str) -> Result<Sidecar, XmpError> {
                             Some(Owned::Rating) | Some(Owned::Label) | None => {}
                         }
                     }
+                    Kind::Gps(lat) => {
+                        let v = parse_gps_coordinate(&text_of(&mut reader, &e)?);
+                        if lat {
+                            gps.0 = v;
+                        } else {
+                            gps.1 = v;
+                        }
+                    }
                     Kind::Description => {
-                        description_attributes(&reader, &e, &mut out)?;
+                        description_attributes(&reader, &e, &mut out, &mut gps)?;
                         depth += 1;
                     }
                     Kind::Li | Kind::Other => depth += 1,
@@ -264,7 +320,7 @@ pub fn read(text: &str) -> Result<Sidecar, XmpError> {
             }
             Event::Empty(e) => {
                 if classify(&ns, &e) == Kind::Description {
-                    description_attributes(&reader, &e, &mut out)?;
+                    description_attributes(&reader, &e, &mut out, &mut gps)?;
                 }
             }
             Event::End(e) => {
@@ -283,6 +339,10 @@ pub fn read(text: &str) -> Result<Sidecar, XmpError> {
         return Err(XmpError::Unclosed);
     }
     out.keywords = if hier.is_empty() { flat } else { hier };
+    out.gps = match gps {
+        (Some(la), Some(lo)) if la.abs() <= 90.0 && lo.abs() <= 180.0 => Some((la, lo)),
+        _ => None,
+    };
     Ok(out)
 }
 
@@ -1061,6 +1121,65 @@ mod tests {
     }
 
     // ─── malformed input ──────────────────────────────────────────────────────────────────
+
+    /// M10.18b: XMP's `DDD,MM.mmmmK`, in all four hemispheres, and the three-part form.
+    #[test]
+    fn xmp_reads_gps_in_all_four_hemispheres() {
+        let near = |a: Option<f64>, b: f64| assert!((a.unwrap() - b).abs() < 1e-6, "{a:?} vs {b}");
+        near(parse_gps_coordinate("38,42.834N"), 38.7139);
+        near(parse_gps_coordinate("9,8.364W"), -9.1394);
+        near(parse_gps_coordinate("33,52.1S"), -(33.0 + 52.1 / 60.0));
+        near(parse_gps_coordinate("151,12.5E"), 151.0 + 12.5 / 60.0);
+        near(parse_gps_coordinate("38,42,50.04N"), 38.7139);
+        assert_eq!(parse_gps_coordinate("38.7"), None);
+    }
+
+    fn with_gps(lat: &str, lon: &str) -> String {
+        format!(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+             <rdf:Description rdf:about=\"\" xmlns:exif=\"http://ns.adobe.com/exif/1.0/\" \
+              xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmp:Rating=\"3\" exif:GPSLatitude=\"{lat}\">\
+             <exif:GPSLongitude>{lon}</exif:GPSLongitude></rdf:Description></rdf:RDF></x:xmpmeta>"
+        )
+    }
+
+    /// Both forms — the latitude an attribute, the longitude an element — as darktable and Lightroom
+    /// write them.
+    #[test]
+    fn a_sidecars_gps_is_read_in_attribute_and_element_form() {
+        let s = read(&with_gps("38,42.834N", "9,8.364W")).unwrap();
+        let (la, lo) = s.gps.expect("a position");
+        assert!((la - 38.7139).abs() < 1e-6 && (lo + 9.1394).abs() < 1e-6);
+        assert_eq!(s.rating, Some(3));
+    }
+
+    /// ⚠⚠ The author's call: Rustroom never writes a position — but a merge keeps another program's.
+    #[test]
+    fn xmp_write_keeps_another_programs_gps_and_adds_none() {
+        let theirs = with_gps("38,42.834N", "9,8.364W");
+        let out = write(
+            &Sidecar {
+                rating: Some(5),
+                gps: Some((1.0, 2.0)),
+                ..Sidecar::default()
+            },
+            Some(&theirs),
+        )
+        .unwrap();
+        let back = read(&out).unwrap();
+        assert_eq!(back.rating, Some(5));
+        let (la, _) = back.gps.expect("their position was kept");
+        assert!((la - 38.7139).abs() < 1e-6, "ours was written: {la}");
+        let fresh = write(
+            &Sidecar {
+                gps: Some((1.0, 2.0)),
+                ..Sidecar::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert!(!fresh.contains("GPS"), "a position was written: {fresh}");
+    }
 
     #[test]
     fn malformed_xml_is_an_error_not_a_panic() {

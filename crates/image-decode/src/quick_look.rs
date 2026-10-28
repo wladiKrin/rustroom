@@ -192,6 +192,41 @@ mod tests {
         out
     }
 
+    /// M10.18b: the position, signed by its Ref tags — a constructed EXIF block, south and east.
+    #[test]
+    fn a_jpeg_with_exif_gps_reads_its_position() {
+        let r = |n: u32, d: u32| exif::Rational { num: n, denom: d };
+        let fields = [
+            (Tag::GPSLatitudeRef, Value::Ascii(vec![b"S".to_vec()])),
+            (
+                Tag::GPSLatitude,
+                Value::Rational(vec![r(33, 1), r(52, 1), r(6, 1)]),
+            ),
+            (Tag::GPSLongitudeRef, Value::Ascii(vec![b"E".to_vec()])),
+            (
+                Tag::GPSLongitude,
+                Value::Rational(vec![r(151, 1), r(12, 1), r(30, 1)]),
+            ),
+        ]
+        .map(|(tag, value)| Field {
+            tag,
+            ifd_num: In::PRIMARY,
+            value,
+        });
+        let mut w = Writer::new();
+        for f in &fields {
+            w.push_field(f);
+        }
+        let mut tiff = std::io::Cursor::new(Vec::new());
+        w.write(&mut tiff, false).unwrap();
+        let ex = exif::Reader::new().read_raw(tiff.into_inner()).unwrap();
+        let (la, lo) = crate::capture_of(&ex).gps.expect("a position");
+        assert!(
+            (la + 33.868_333).abs() < 1e-5 && (lo - 151.208_333).abs() < 1e-5,
+            "{la} {lo}"
+        );
+    }
+
     #[test]
     fn a_camera_jpeg_gives_its_date_camera_and_thumbnail() {
         let p = temp_file("jpeg");

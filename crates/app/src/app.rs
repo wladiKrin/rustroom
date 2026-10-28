@@ -44,6 +44,8 @@ pub(crate) enum LibraryMode {
     Compare,
     /// The whole selection at once, tiled to fill the view.
     Survey,
+    /// Where the photos in view were taken (M10.18b).
+    Map,
 }
 
 pub(crate) struct RustroomApp {
@@ -430,6 +432,11 @@ pub(crate) struct RustroomApp {
     /// filter by a date that was never read. Built once and kept for the life of the app, so a
     /// source switch never abandons a half-scanned folder.
     pub(crate) metadata: rustroom_app::metadata_scanner::MetadataScanner,
+    /// Background passes reading files' GPS (M10.18b): the one-time pass over photos catalogued before,
+    /// and each Reindex's. Dropped as each ends.
+    pub(crate) location_passes: Vec<rustroom_app::location_pass::LocationPass>,
+    /// Library → Map: its camera, tiles, pins and strip (M10.18b).
+    pub(crate) map: crate::map_view::MapView,
     /// Everything that narrows what the Library shows.
     ///
     /// ⚠⚠ On the **app**, not on `Library`, so it survives a source switch. Browsing *replaces*

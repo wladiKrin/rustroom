@@ -162,14 +162,14 @@ pub struct Asset {
     pub is_favorite: bool,
     /// The asset's EXIF block — sent only when a search asks `withExif: true` (M10.15c).
     ///
-    /// ⚠ Only the rating is modelled: the rest — GPS among it — has no use here, and a narrow DTO
-    /// is one the next server version cannot break with a field it reshapes.
+    /// ⚠ Only the rating and the position are modelled: a narrow DTO is one the next server version
+    /// cannot break with a field it reshapes.
     #[serde(default)]
     pub exif_info: Option<ExifInfo>,
 }
 
 /// The part of an asset's `exifInfo` Rustroom reads.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExifInfo {
     /// Stars 1–5, or `null` when unrated.
@@ -179,6 +179,12 @@ pub struct ExifInfo {
     /// (`app`'s `immich_catalog::server_marks`) handles −1 rather than trusting it away.
     #[serde(default)]
     pub rating: Option<i32>,
+    /// Where it was taken, decimal degrees (M10.18b). ⚠ Nullable, and `null` on every photo without
+    /// GPS. ⚠ Constructed from the schema — confirm against a captured reply from the author's server.
+    #[serde(default)]
+    pub latitude: Option<f64>,
+    #[serde(default)]
+    pub longitude: Option<f64>,
 }
 
 /// The reply to `POST /assets`.

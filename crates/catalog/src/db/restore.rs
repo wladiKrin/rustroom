@@ -124,6 +124,15 @@ impl Catalog {
             .collect();
         drop(st);
 
+        let mut st = tx.prepare(
+            "SELECT file_name, source, lat, lon FROM photo_location WHERE folder_id = ?1",
+        )?;
+        let locations: Vec<(String, String, Option<f64>, Option<f64>)> = st
+            .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .filter_map(Result::ok)
+            .collect();
+        drop(st);
+
         tx.execute("DELETE FROM folders WHERE id = ?1", [id])?;
         tx.commit()?;
         Ok(CatalogSnapshot::Folder {
@@ -134,6 +143,7 @@ impl Catalog {
             memberships,
             keywords,
             stacks,
+            locations,
         })
     }
 
@@ -214,6 +224,7 @@ impl Catalog {
                 memberships,
                 keywords,
                 stacks,
+                locations,
             } => {
                 let path = path.to_string_lossy().to_string();
                 let last_seen = photos.iter().map(|p| p.last_seen).max().unwrap_or(0);
@@ -309,6 +320,14 @@ impl Catalog {
                          SELECT ?1, ?2, ?3
                          WHERE EXISTS (SELECT 1 FROM keywords WHERE id = ?3)",
                         rusqlite::params![fid, file_name, keyword_id],
+                    )?;
+                }
+
+                for (file_name, source, lat, lon) in locations {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO photo_location (folder_id, file_name, source, lat, lon)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![fid, file_name, source, lat, lon],
                     )?;
                 }
 
@@ -540,6 +559,30 @@ mod tests {
             .expect("the rating must come back");
         assert_eq!(m.flag, Flag::Pick);
         assert_eq!(m.label, 2);
+    }
+
+    /// M10.18b: a forgotten folder's locations come back with it — every source, a removal too.
+    #[test]
+    fn forgetting_a_folder_and_undoing_brings_back_its_locations() {
+        let (cat, dir) = with_two_photos();
+        let (a, b) = (dir.join("a.RAF"), dir.join("b.RAF"));
+        cat.set_file_location(&a, Some((38.7, -9.1))).unwrap();
+        cat.set_hand(std::slice::from_ref(&a), crate::db::Hand::At(38.8, -9.4))
+            .unwrap();
+        cat.set_hand(std::slice::from_ref(&b), crate::db::Hand::Removed)
+            .unwrap();
+        let fid = cat.folders().unwrap()[0].id;
+        let snap = cat.forget_folder(fid).unwrap();
+        cat.restore(&snap).unwrap();
+        assert_eq!(cat.location_of(&a).unwrap(), Some((38.8, -9.4)));
+        assert_eq!(cat.hand_location(&b).unwrap(), crate::db::Hand::Removed);
+        cat.set_hand(std::slice::from_ref(&a), crate::db::Hand::Unset)
+            .unwrap();
+        assert_eq!(
+            cat.location_of(&a).unwrap(),
+            Some((38.7, -9.1)),
+            "the file row came back too"
+        );
     }
 
     #[test]

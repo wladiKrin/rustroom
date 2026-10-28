@@ -110,6 +110,8 @@ pub fn for_test() -> RustroomApp {
         immich_download_pending: Default::default(),
         immich_download_total: 0,
         metadata: rustroom_app::metadata_scanner::MetadataScanner::new(|| {}),
+        location_passes: Vec::new(),
+        map: crate::map_view::MapView::offline(),
         camera_profiles_cache: Vec::new(),
         compare_view: Default::default(),
         compare_focus: 1,
@@ -379,6 +381,7 @@ pub fn library_of_names(names: &[&str]) -> Library {
         stack_expanded: Default::default(),
         cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
         last_want: Vec::new(),
+        visible_rev: 0,
         selection: Selection::default(),
         // ⚠ No limit: a test must never evict, or its own fixtures could vanish mid-run.
         loader: ThumbLoader::new(color::OutputSpace::Srgb, u64::MAX, u64::MAX, || {}),

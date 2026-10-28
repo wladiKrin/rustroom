@@ -127,6 +127,7 @@ fn described() -> export::FileMetadata {
             shutter: Some(0.004),
             aperture: Some(5.6),
             focal_len: Some(23.0),
+            gps: None,
         },
         ..export::FileMetadata::default()
     }

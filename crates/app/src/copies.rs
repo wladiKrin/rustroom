@@ -417,6 +417,9 @@ impl RustroomApp {
             .map(|l| l.scan.clone())
             .unwrap_or_default();
         let renumbered = self.compact_copy_numbering(&scan);
+        // M10.18b: the downloaded originals' own locations, read again; the server's come with the
+        // refetch (`fill_locations`).
+        self.reread_locations(scan.iter().map(|e| e.path.clone()).collect());
 
         // ⚠ The open photo is **dropped rather than reopened**, unlike the folder branch: it may no
         // longer exist on the server, and re-downloading it is not what Reindex is for. You land in
@@ -460,6 +463,8 @@ impl RustroomApp {
         let Some((scan, moved)) = self.scan_and_relink(&dir) else {
             return;
         };
+        // M10.18b: and every file's location, read again (asked for in use).
+        self.reread_locations(scan.iter().map(|e| e.path.clone()).collect());
 
         let renumbered = self.compact_copy_numbering(&scan);
 
@@ -685,7 +690,10 @@ mod tests {
         with_server(&mut app);
         let fav = immich::Asset {
             is_favorite: true,
-            exif_info: Some(immich::ExifInfo { rating: Some(4) }),
+            exif_info: Some(immich::ExifInfo {
+                rating: Some(4),
+                ..Default::default()
+            }),
             ..one_asset("f")
         };
         app.open_immich_album(&ctx, "al".into(), "Al".into(), std::slice::from_ref(&fav));
@@ -702,7 +710,10 @@ mod tests {
         let mut app = crate::test_app::for_test();
         with_server(&mut app);
         let rejected = immich::Asset {
-            exif_info: Some(immich::ExifInfo { rating: Some(-1) }),
+            exif_info: Some(immich::ExifInfo {
+                rating: Some(-1),
+                ..Default::default()
+            }),
             ..one_asset("r")
         };
         app.open_immich_bucket(

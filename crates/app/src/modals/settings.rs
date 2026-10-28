@@ -57,6 +57,7 @@ pub struct SettingsDraft {
     pub(super) immich_cache_limit_gb: u32,
     pub(super) immich_cache_warn: bool,
     pub(super) immich_merge_folder: Option<std::path::PathBuf>,
+    pub(super) map_tile_url: String,
     pub(super) denoise_cache_limit_gb: u32,
     pub(super) denoise_cache_warn: bool,
     pub(super) denoise_network: rustroom_app::settings::DenoiseNetwork,
@@ -133,6 +134,7 @@ impl SettingsDraft {
             immich_cache_limit_gb: s.immich_cache_limit_gb,
             immich_cache_warn: s.immich_cache_warn,
             immich_merge_folder: s.immich_merge_folder.clone(),
+            map_tile_url: s.map_tile_url.clone(),
             denoise_cache_limit_gb: s.denoise_cache_limit_gb,
             denoise_cache_warn: s.denoise_cache_warn,
             denoise_network: s.denoise_network,
@@ -277,6 +279,15 @@ impl SettingsDraft {
             app.settings.immich_merge_folder = self.immich_merge_folder.clone();
             plain = true;
         }
+        // ⚠ Blank means OpenStreetMap's again, never a map with no tiles.
+        let tiles = match self.map_tile_url.trim() {
+            "" => rustroom_app::settings::DEFAULT_TILE_URL.to_string(),
+            t => t.to_string(),
+        };
+        if tiles != app.settings.map_tile_url {
+            app.settings.map_tile_url = tiles;
+            plain = true;
+        }
         if self.denoise_cache_limit_gb != app.settings.denoise_cache_limit_gb {
             app.settings.denoise_cache_limit_gb = self.denoise_cache_limit_gb;
             plain = true;
@@ -406,6 +417,15 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         );
                     ui.checkbox(&mut d.auto_advance, "Move to the next photo after rating")
                         .hover("Moves to the next photo after you rate, flag or label one");
+                    ui.horizontal(|ui| {
+                        ui.label("Map tiles");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut d.map_tile_url)
+                                .hint_text(rustroom_app::settings::DEFAULT_TILE_URL)
+                                .desired_width(320.0),
+                        )
+                        .hover("The tile server the Map view draws from, with {z}, {x} and {y} in its address");
+                    });
                 }
                 1 => {
                     egui::Grid::new("settings_appearance")

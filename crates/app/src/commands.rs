@@ -102,6 +102,10 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
             app.view = AppView::Library;
             app.library_mode = LibraryMode::Survey;
         }
+        Command::ShowMap => {
+            app.view = AppView::Library;
+            app.library_mode = LibraryMode::Map;
+        }
         Command::ZoomIn => zoom_by(app, ZOOM_STEP),
         Command::ZoomOut => zoom_by(app, 1.0 / ZOOM_STEP),
         Command::FitView => {

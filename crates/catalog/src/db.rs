@@ -14,7 +14,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// The schema this build expects. Bump it whenever [`Catalog::migrate`] gains a step.
-pub const SCHEMA_VERSION: i64 = 14;
+pub const SCHEMA_VERSION: i64 = 15;
 
 /// What can go wrong talking to the catalog.
 ///
@@ -57,6 +57,7 @@ mod imported;
 /// Renaming, re-parenting and merging keywords (M9.8) — its own file for `history`'s reason.
 mod keywords;
 mod last_send;
+mod location;
 /// Flags, ratings, colour labels, and the XMP stamp.
 mod marks;
 /// Recognising a photo moved on disk between known folders (M9.9).
@@ -79,6 +80,7 @@ pub use collections::CollectionRow;
 pub use dates::DayRow;
 pub use imported::Fingerprint;
 pub use keywords::{Change as KeywordChange, DayCounts, KeywordMerge, KeywordRow};
+pub use location::Hand;
 pub use marks::{Flag, Marks};
 pub use photos::{FolderRow, PhotoRow};
 pub use server_fill::ServerFill;

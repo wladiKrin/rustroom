@@ -23,6 +23,9 @@ pub use panel::*;
 pub use sizes::*;
 pub use store::*;
 
+/// OpenStreetMap's standard tiles — the Map view's default server (M10.18b).
+pub const DEFAULT_TILE_URL: &str = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+
 /// User preferences that survive a restart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -62,6 +65,8 @@ pub struct Settings {
     /// Where a merge of downloaded Immich photos goes (2026-10-28) — never the Immich cache, which
     /// Clear… empties. Asked for by the first such merge; changed in Settings → Immich.
     pub immich_merge_folder: Option<std::path::PathBuf>,
+    /// The Map view's tile server, a `{z}/{x}/{y}` template (M10.18b) — OpenStreetMap's by default.
+    pub map_tile_url: String,
     /// The keyboard shortcuts the user changed, over the menu's defaults (M10.9b) — only the changes.
     pub shortcuts: Vec<crate::shortcuts::Rebinding>,
     /// Which network *Select Subject* uses (M9.13) — IS-Net (fast, the default) or BiRefNet_lite
@@ -495,6 +500,7 @@ impl Default for Settings {
             hdr: crate::hdr_merge::HdrSettings::default(),
             panorama: crate::pano_merge::PanoSettings::default(),
             immich_merge_folder: None,
+            map_tile_url: DEFAULT_TILE_URL.to_string(),
             shortcuts: Vec::new(),
             ai_subject_model: Default::default(),
             confirm_export_preset_delete: true,

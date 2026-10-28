@@ -330,6 +330,30 @@ pub struct Capture {
     pub aperture: Option<f32>,
     /// Focal length in millimetres.
     pub focal_len: Option<f32>,
+    /// Where it was taken: decimal degrees `(latitude, longitude)`, south and west negative (M10.18b).
+    ///
+    /// ⚠ The catalog's `photo_capture` does not store it — a photo's location lives in
+    /// `photo_location`, beside a hand-set one and Immich's, so this is `None` on every `Capture`
+    /// read back from the catalog.
+    pub gps: Option<(f64, f64)>,
+}
+
+/// Degrees, minutes and seconds, already signed (south and west negative), as decimal degrees.
+///
+/// ⚠ `None` for a zero fix: libraw reports "no GPS" — and a body with GPS tags but no fix — as all
+/// zeros, and no photo was ever taken at exactly (0, 0). Out-of-range values are `None` too.
+pub fn gps_from_dms(lat: [f32; 3], lon: [f32; 3]) -> Option<(f64, f64)> {
+    fn deg(d: [f32; 3]) -> f64 {
+        let s = if d.iter().any(|v| *v < 0.0) {
+            -1.0
+        } else {
+            1.0
+        };
+        s * (f64::from(d[0].abs()) + f64::from(d[1].abs()) / 60.0 + f64::from(d[2].abs()) / 3600.0)
+    }
+    let (la, lo) = (deg(lat), deg(lon));
+    let ok = la.is_finite() && lo.is_finite() && la.abs() <= 90.0 && lo.abs() <= 180.0;
+    (ok && (la, lo) != (0.0, 0.0)).then_some((la, lo))
 }
 
 impl Capture {
@@ -370,6 +394,22 @@ pub struct Thumbnail {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn gps_from_dms_converts_and_signs() {
+        let (la, lo) = gps_from_dms([38.0, 42.0, 50.04], [-9.0, 8.0, 21.84]).unwrap();
+        assert!(
+            (la - 38.7139).abs() < 1e-5 && (lo + 9.1394).abs() < 1e-5,
+            "{la} {lo}"
+        );
+    }
+
+    #[test]
+    fn gps_from_dms_reads_a_zero_fix_as_none() {
+        assert_eq!(gps_from_dms([0.0; 3], [0.0; 3]), None);
+        assert_eq!(gps_from_dms([91.0, 0.0, 0.0], [1.0, 0.0, 0.0]), None);
+    }
+
     use super::*;
 
     /// An image with awkward samples: below 0, above 1, and the exact rounding boundaries.
@@ -705,6 +745,7 @@ mod tests {
 
 #[cfg(test)]
 mod downscaled_dims_tests {
+
     use super::*;
 
     /// M10.10b: the export predicts a downscale's size with this, so it must be exactly the size

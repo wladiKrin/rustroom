@@ -422,6 +422,8 @@ fn settings_round_trip_carries_the_export_options() {
             create_stack: true,
         },
         immich_merge_folder: Some(std::path::PathBuf::from("/merged")),
+        // Non-default, so a re-defaulted field cannot pass.
+        map_tile_url: "https://tiles.example/{z}/{x}/{y}.png".into(),
         // Non-default, with ⌥ and a removal, so a re-defaulted field cannot pass.
         shortcuts: vec![
             crate::shortcuts::Rebinding {
@@ -450,6 +452,13 @@ fn settings_round_trip_carries_the_export_options() {
     };
     store.save(&s).unwrap();
     assert_eq!(store.load(), s);
+}
+
+/// M10.18b: a file from before the Map uses OpenStreetMap's tiles.
+#[test]
+fn a_settings_file_from_before_the_map_uses_openstreetmap() {
+    let s: Settings = serde_json::from_str("{}").unwrap();
+    assert_eq!(s.map_tile_url, crate::settings::DEFAULT_TILE_URL);
 }
 
 /// 2026-10-28: a file from before merges took Immich photos has no folder for them — the first asks.
