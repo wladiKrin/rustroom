@@ -19,6 +19,7 @@ members = [
     "crates/lr-preset",
     "crates/photo-merge",
     "crates/test-dir",
+    "crates/tether",
     "crates/xmp",
 ]
 
