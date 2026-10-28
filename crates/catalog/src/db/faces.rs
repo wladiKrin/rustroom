@@ -433,6 +433,29 @@ impl Catalog {
         Ok(())
     }
 
+    /// Every photo with a named face, and who is in it — the Library's people filter, read once per change.
+    pub fn people_by_photo(
+        &self,
+    ) -> Result<std::collections::HashMap<PathBuf, std::collections::BTreeSet<i64>>, CatalogError>
+    {
+        let mut st = self.conn.prepare(
+            "SELECT f.path, fa.file_name, fa.person_id FROM faces fa JOIN folders f ON f.id = fa.folder_id
+             WHERE fa.person_id IS NOT NULL AND fa.dismissed = 0",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok((
+                PathBuf::from(r.get::<_, String>(0)?).join(r.get::<_, String>(1)?),
+                r.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut out: std::collections::HashMap<PathBuf, std::collections::BTreeSet<i64>> =
+            Default::default();
+        for (p, person) in rows.filter_map(Result::ok) {
+            out.entry(p).or_default().insert(person);
+        }
+        Ok(out)
+    }
+
     /// The photos `person` is in, as `(path, copy 0)` — a catalog-backed source's members.
     pub fn person_members(&self, person: i64) -> Result<Vec<(PathBuf, u32)>, CatalogError> {
         let mut st = self.conn.prepare(

@@ -159,6 +159,7 @@ impl RustroomApp {
         self.pump_pano(ctx);
         self.pump_merges(ctx);
         self.pump_face_pass(ctx);
+        self.pump_people_filter();
         self.pump_ai(ctx);
         self.pump_denoise(ctx);
         self.pump_removals(ctx);

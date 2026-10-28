@@ -102,6 +102,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         RemoveSelection(i64),
         OpenKeyword(i64, String),
         OpenPerson(catalog::db::PersonRow),
+        FilterPerson(catalog::db::PersonRow),
         DeleteKeyword(i64, String),
         TagSelection(i64),
         UntagSelection(i64),
@@ -515,8 +516,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 app.ask_immich_people();
                                 let n = app.rail_data.people.len().to_string();
                                 section(ui, &mut sections.people, "sec_people", "People", &n, |ui| {
-                                    if let Some(p) = crate::people_rail::body(app, ui) {
-                                        action = Action::OpenPerson(p);
+                                    match crate::people_rail::body(app, ui) {
+                                        Some((p, true)) => action = Action::FilterPerson(p),
+                                        Some((p, false)) => action = Action::OpenPerson(p),
+                                        None => {}
                                     }
                                 })
                             }
@@ -775,6 +778,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         Action::ForgetFolders(paths) => app.ask_forget_folders(paths),
         Action::OpenKeyword(id, name) => app.open_keyword(ctx, id, &name),
         Action::OpenPerson(p) => app.open_person(ctx, &p),
+        Action::FilterPerson(p) => app.toggle_person_filter(&p),
         Action::DeleteKeyword(id, name) => {
             let scope = app
                 .catalog

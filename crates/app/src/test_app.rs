@@ -384,6 +384,8 @@ pub fn library_of_names(names: &[&str]) -> Library {
         cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
         last_want: Vec::new(),
         visible_rev: crate::library_state::fresh_rev(),
+        people_of: Default::default(),
+        people_rev: None,
         selection: Selection::default(),
         // ⚠ No limit: a test must never evict, or its own fixtures could vanish mid-run.
         loader: ThumbLoader::new(color::OutputSpace::Srgb, u64::MAX, u64::MAX, || {}),

@@ -154,6 +154,10 @@ pub(crate) struct Library {
     /// so a view deriving from the visible photos (the Map's pins, M10.18b) can key on it instead of
     /// hashing them every frame.
     pub(crate) visible_rev: u64,
+    /// Who is in each photo, for the people filter (M10.18c) — read when the faces change
+    /// (`Catalog::faces_revision`, `people_rev`), only while the filter asks for someone.
+    pub(crate) people_of: std::collections::HashMap<PathBuf, std::collections::BTreeSet<i64>>,
+    pub(crate) people_rev: Option<u64>,
     /// Marks for every marked photo on show, keyed by identity.
     ///
     /// ⚠⚠ Read **once per rebuild**, not per frame and never per cell. The grid draws sixty
@@ -244,7 +248,7 @@ impl Library {
             .filter(|(_, e)| {
                 let m = self.marks.get(&e.id).copied().unwrap_or_default();
                 let c = self.captures.get(&e.id.path).cloned().unwrap_or_default();
-                filter.matches(e, m, &c)
+                filter.matches(e, m, &c) && filter.people_match(self.people_of.get(&e.id.path))
             })
             .map(|(i, _)| i)
             .collect();
