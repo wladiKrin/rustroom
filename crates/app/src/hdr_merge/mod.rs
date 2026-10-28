@@ -58,7 +58,7 @@ impl Refusal {
         match self {
             Refusal::TooFew => "Select two or more raw photos to merge",
             Refusal::NotRaw => "HDR merge needs raw photos",
-            Refusal::Immich => "Download Immich photos to a folder before merging them",
+            Refusal::Immich => "Move Immich photos to a folder before merging them",
             Refusal::Merged => "A merged HDR cannot be merged again",
             Refusal::Missing => "A photo's file is missing",
         }
@@ -261,6 +261,16 @@ mod tests {
         ];
         let ok = plan(&photos, Some(3), |_| false, |_| false, |_| false, |_| true).unwrap();
         assert_eq!(ok.active, Some(2));
+    }
+
+    /// ⚠ Reported in use (2026-10-28): "Download Immich photos…" over photos already downloaded — a
+    /// download lands in the Immich cache, still an Immich photo; Move to folder is what the merge needs.
+    #[test]
+    fn the_immich_refusal_names_move_to_folder() {
+        assert_eq!(
+            Refusal::Immich.sentence(),
+            "Move Immich photos to a folder before merging them"
+        );
     }
 
     #[test]

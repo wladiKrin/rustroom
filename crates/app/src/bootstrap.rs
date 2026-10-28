@@ -235,10 +235,13 @@ impl RustroomApp {
             immich_assets: Default::default(),
             immich_album_names: Default::default(),
             // ⚠ Read at startup so the Folders rail's count is right before any album is opened.
-            immich_present: rustroom_app::immich_source::connection(&settings)
-                .map(|c| {
+            // ⚠ From the URL alone, as `immich_cache_root` is: with Immich switched off the downloads
+            // still show in All Photos (`row_is_browsable`), so its count must still see them.
+            immich_present: Some(settings.immich_url.trim())
+                .filter(|u| !u.is_empty())
+                .map(|u| {
                     rustroom_app::immich_source::present_names(
-                        &rustroom_app::immich_source::cache_root(&c.url),
+                        &rustroom_app::immich_source::cache_root(u),
                     )
                 })
                 .unwrap_or_default(),
