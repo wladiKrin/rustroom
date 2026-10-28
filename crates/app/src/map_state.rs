@@ -91,6 +91,44 @@ impl MapCamera {
     }
 }
 
+/// When the Map fits its camera to the photos (asked for in use, 2026-10-28: "when moving to a different
+/// folder … the map also moved"): on a new SOURCE, and when that source's first located photos arrive
+/// (the startup pass may land them after the view opened). ⚠ Never on a filter or a rating — the map
+/// would jump while you cull.
+#[derive(Debug)]
+pub struct Refit<K> {
+    source: Option<K>,
+    had_points: bool,
+}
+
+/// ⚠ By hand: a derive would ask `K: Default`, which a source has no need of.
+impl<K> Default for Refit<K> {
+    fn default() -> Self {
+        Self {
+            source: None,
+            had_points: false,
+        }
+    }
+}
+
+impl<K: PartialEq + Clone> Refit<K> {
+    /// Whether to fit now, for `source` with or without located photos; remembers the answer.
+    pub fn check(&mut self, source: &K, has_points: bool) -> bool {
+        let new_source = self.source.as_ref() != Some(source);
+        let first_points = has_points && !self.had_points;
+        if new_source {
+            self.source = Some(source.clone());
+        }
+        self.had_points = has_points;
+        new_source || first_points
+    }
+
+    /// Forget the source, so the next check fits — "Show all photos".
+    pub fn reset(&mut self) {
+        self.source = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,6 +173,18 @@ mod tests {
         c.pan((30.0, -20.0), SIZE);
         let now = c.to_view((38.71, -9.12), SIZE);
         assert!((now.0 - at.0 - 30.0).abs() < 0.01 && (now.1 - at.1 + 20.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_map_refits_on_a_new_source_and_on_its_first_pins_only() {
+        let mut r = Refit::default();
+        assert!(r.check(&"trip", true), "the first view");
+        assert!(!r.check(&"trip", true), "the same view");
+        assert!(r.check(&"home", false), "a new folder");
+        assert!(r.check(&"home", true), "its first pins landed");
+        assert!(!r.check(&"home", true));
+        r.reset();
+        assert!(r.check(&"home", true), "Show all photos");
     }
 
     #[test]

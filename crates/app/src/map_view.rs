@@ -32,6 +32,9 @@ const PINS_EVERY: Duration = Duration::from_secs(1);
 /// Tile textures kept beyond those in view.
 const TEXTURES_MAX: usize = 400;
 
+/// The pin under the pointer: its entries, their positions, and where it is drawn.
+type Hit = (Vec<usize>, Vec<(f64, f64)>, egui::Pos2);
+
 /// Photos dragged from the strip onto the map.
 #[derive(Clone)]
 pub(crate) struct PhotoDrag(pub(crate) Vec<PhotoId>);
@@ -62,6 +65,25 @@ pub(crate) struct MapView {
     throttle: Throttle,
     /// Tests' fetch — never the network, never the user's cache. `None`: the real one.
     offline: Option<rustroom_app::tile_fetch::FetchTile>,
+    /// When to fit the camera: a new source, or its first pins (asked for in use, 2026-10-28).
+    refit: rustroom_app::map_state::Refit<crate::library_state::LibrarySource>,
+    /// What the open right-click menu is about.
+    menu: Option<crate::map_menu::MenuTarget>,
+}
+
+impl MapView {
+    pub(crate) fn camera(&self) -> Option<MapCamera> {
+        self.camera
+    }
+
+    pub(crate) fn set_camera(&mut self, c: MapCamera) {
+        self.camera = Some(c);
+    }
+
+    /// Fit the camera to the photos on the next frame — "Show all photos".
+    pub(crate) fn refit_next(&mut self) {
+        self.refit.reset();
+    }
 }
 
 impl MapView {
@@ -161,6 +183,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     }
 
     let mut drop_at: Option<(Vec<PhotoId>, (f64, f64))> = None;
+    let mut action: Option<crate::map_menu::MenuAction> = None;
+    let mut map_size = (0.0, 0.0);
     let mut open_entry: Option<usize> = None;
     let mut place: Option<(f64, f64)> = None;
     let mut remove = false;
@@ -173,10 +197,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             let strip_rect =
                 egui::Rect::from_min_max(egui::pos2(full.min.x, map_rect.max.y), full.max);
             let size = (map_rect.width(), map_rect.height());
+            map_size = size;
 
-            // First show: fit the located photos, or centre the one selected.
-            if app.map.camera.is_none() && size.0 > 0.0 {
-                let lib = app.library.as_ref().expect("checked above");
+            // A new source, or its first pins: fit the located photos, or centre the one selected.
+            let lib = app.library.as_ref().expect("checked above");
+            if size.0 > 0.0 && app.map.refit.check(&lib.source, !pins.points.is_empty()) {
                 let selected: Vec<(f64, f64)> = pins
                     .points
                     .iter()
@@ -276,7 +301,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             let on_accent = theme::tokens::on_accent(ui.visuals().dark_mode);
             let ring = theme::tokens::of(ui).text;
             let lib = app.library.as_ref().expect("checked above");
-            let mut hit: Option<(Vec<usize>, egui::Pos2)> = None;
+            let mut hit: Option<Hit> = None;
             let pointer = resp.interact_pointer_pos().or(resp.hover_pos());
             for c in clusters.iter() {
                 let p = map_rect.center()
@@ -304,14 +329,34 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     );
                 }
                 if pointer.is_some_and(|q| q.distance(p) <= r + 2.0) {
-                    hit = Some((entries, p));
+                    let at = c.members.iter().map(|&m| pins.points[m].1).collect();
+                    hit = Some((entries, at, p));
                 }
             }
             if resp.clicked() {
-                app.map.strip = hit.as_ref().map(|(e, _)| Arc::new(e.clone()));
+                app.map.strip = hit.as_ref().map(|(e, _, _)| Arc::new(e.clone()));
+            }
+            // ⚠ The target is taken on the right-click itself; the menu then stays about it.
+            if resp.secondary_clicked() {
+                app.map.menu = Some(match &hit {
+                    Some((e, at, _)) => crate::map_menu::MenuTarget::Pins {
+                        entries: Arc::new(e.clone()),
+                        at: Arc::new(at.clone()),
+                    },
+                    None => {
+                        let q = pointer.unwrap_or(map_rect.center()) - map_rect.min;
+                        crate::map_menu::MenuTarget::Place(cam.from_view((q.x, q.y), size))
+                    }
+                });
+            }
+            if let Some(target) = app.map.menu.clone() {
+                let selected = lib.selection.len();
+                resp.context_menu(|ui| {
+                    action = crate::map_menu::show(ui, &target, selected);
+                });
             }
             if resp.double_clicked() {
-                if let Some((_, p)) = &hit {
+                if let Some((_, _, p)) = &hit {
                     let rel = *p - map_rect.min;
                     cam.zoom_about(2.0, (rel.x, rel.y), size);
                 }
@@ -335,6 +380,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             strip(app, ui, strip_rect, &pins, &mut open_entry);
         });
 
+    if let Some(a) = action {
+        app.apply_map_action(ctx, a, map_size);
+    }
     if let Some((ids, at)) = drop_at {
         app.place_at(&ids, at);
     }

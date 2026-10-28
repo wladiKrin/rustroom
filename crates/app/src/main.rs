@@ -66,6 +66,7 @@ mod library;
 mod library_state;
 mod list_row;
 mod location_ops;
+mod map_menu;
 mod map_view;
 mod menu_bar;
 mod merge_queue;
