@@ -58,6 +58,8 @@ pub struct SettingsDraft {
     pub(super) immich_cache_warn: bool,
     pub(super) immich_merge_folder: Option<std::path::PathBuf>,
     pub(super) map_tile_url: String,
+    pub(super) library_views: rustroom_app::settings::LibraryViews,
+    pub(super) find_faces: bool,
     pub(super) denoise_cache_limit_gb: u32,
     pub(super) denoise_cache_warn: bool,
     pub(super) denoise_network: rustroom_app::settings::DenoiseNetwork,
@@ -135,6 +137,8 @@ impl SettingsDraft {
             immich_cache_warn: s.immich_cache_warn,
             immich_merge_folder: s.immich_merge_folder.clone(),
             map_tile_url: s.map_tile_url.clone(),
+            library_views: s.library_views,
+            find_faces: s.find_faces,
             denoise_cache_limit_gb: s.denoise_cache_limit_gb,
             denoise_cache_warn: s.denoise_cache_warn,
             denoise_network: s.denoise_network,
@@ -148,6 +152,14 @@ impl SettingsDraft {
     /// each change entails (a re-decode, a re-render, a restyle), and save once.
     fn apply(self, app: &mut RustroomApp, ctx: &egui::Context) {
         let mut plain = false;
+        if self.library_views != app.settings.library_views {
+            app.set_library_views(self.library_views);
+            plain = true;
+        }
+        if self.find_faces != app.settings.find_faces {
+            app.settings.find_faces = self.find_faces;
+            plain = true;
+        }
         if self.confirm != app.settings.confirm_preset_delete {
             app.settings.confirm_preset_delete = self.confirm;
             plain = true;
@@ -426,12 +438,29 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         )
                         .hover("The tile server the Map view draws from, with {z}, {x} and {y} in its address");
                     });
+                    ui.checkbox(&mut d.find_faces, "Find faces in local photos")
+                        .hover("Looks for faces in local photos while the People view is open");
                 }
                 1 => {
                     egui::Grid::new("settings_appearance")
                         .num_columns(2)
                         .spacing([12.0, GAP])
                         .show(ui, |ui| {
+                            ui.label("Library views").hover(
+                                "Chooses which views the Library's top row shows beside Grid",
+                            );
+                            ui.horizontal(|ui| {
+                                let v = &mut d.library_views;
+                                ui.checkbox(&mut v.compare, "Compare")
+                                    .hover("Shows Compare in the Library's top row");
+                                ui.checkbox(&mut v.survey, "Survey")
+                                    .hover("Shows Survey in the Library's top row");
+                                ui.checkbox(&mut v.map, "Map")
+                                    .hover("Shows Map in the Library's top row");
+                                ui.checkbox(&mut v.people, "People")
+                                    .hover("Shows People in the Library's top row");
+                            });
+                            ui.end_row();
                             ui.label("Theme");
                             egui::ComboBox::from_id_salt("theme_pick")
                                 .selected_text(d.theme_choice.label())

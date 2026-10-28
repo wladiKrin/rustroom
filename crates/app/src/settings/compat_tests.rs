@@ -424,6 +424,14 @@ fn settings_round_trip_carries_the_export_options() {
         immich_merge_folder: Some(std::path::PathBuf::from("/merged")),
         // Non-default, so a re-defaulted field cannot pass.
         map_tile_url: "https://tiles.example/{z}/{x}/{y}.png".into(),
+        // Every field non-default, so a re-defaulted one cannot pass.
+        library_views: crate::settings::LibraryViews {
+            compare: false,
+            survey: false,
+            map: false,
+            people: false,
+        },
+        find_faces: false,
         // Non-default, with ⌥ and a removal, so a re-defaulted field cannot pass.
         shortcuts: vec![
             crate::shortcuts::Rebinding {
@@ -452,6 +460,14 @@ fn settings_round_trip_carries_the_export_options() {
     };
     store.save(&s).unwrap();
     assert_eq!(store.load(), s);
+}
+
+/// M10.18c: a file from before People shows every view and looks for faces.
+#[test]
+fn a_settings_file_from_before_people_shows_every_view() {
+    let s: Settings = serde_json::from_str("{}").unwrap();
+    assert_eq!(s.library_views, crate::settings::LibraryViews::default());
+    assert!(s.library_views.compare && s.library_views.people && s.find_faces);
 }
 
 /// M10.18b: a file from before the Map uses OpenStreetMap's tiles.

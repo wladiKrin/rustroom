@@ -46,6 +46,8 @@ pub(crate) enum LibraryMode {
     Survey,
     /// Where the photos in view were taken (M10.18b).
     Map,
+    /// Who is in the photos (M10.18c).
+    People,
 }
 
 pub(crate) struct RustroomApp {
