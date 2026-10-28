@@ -18,6 +18,9 @@ pub enum Command {
     /// Open the n-th remembered folder, most recent first (`Settings::recent_folders`).
     OpenRecent(usize),
     Import,
+    Tether,
+    Shoot,
+    StopTether,
     Export,
     /// Build rendered previews for the selection, or the open photo (M9.14).
     BuildPreviews,
@@ -551,6 +554,14 @@ fn file_items(recent: &[PathBuf]) -> Vec<Item> {
     items.extend([
         Item::Separator,
         action("Import…", Command::Import, Some(Shortcut::cmd_shift('I'))),
+        action(
+            "Tethered capture…",
+            Command::Tether,
+            Some(Shortcut::cmd_shift('T')),
+        ),
+        // ⚠ F12 is a bare key: egui handles it, gated on no text field having focus.
+        action("Shoot", Command::Shoot, fn_key(12).map(Shortcut::bare)),
+        action("Stop tethering", Command::StopTether, None),
         action("Export…", Command::Export, Some(Shortcut::cmd('E'))),
         Item::Separator,
         action("Settings…", Command::Settings, Some(Shortcut::cmd(','))),

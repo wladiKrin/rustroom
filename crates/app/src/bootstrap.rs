@@ -202,6 +202,7 @@ impl RustroomApp {
             import: None,
             hdr: Default::default(),
             merges: Default::default(),
+            tether: Default::default(),
             pano: Default::default(),
             ai: Default::default(),
             denoise: Default::default(),

@@ -157,6 +157,7 @@ impl RustroomApp {
         self.pump_hdr(ctx);
         self.pump_pano(ctx);
         self.pump_merges(ctx);
+        self.pump_tether(ctx);
         self.pump_ai(ctx);
         self.pump_denoise(ctx);
         self.pump_removals(ctx);

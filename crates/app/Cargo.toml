@@ -15,6 +15,12 @@ path = "src/lib.rs"
 name = "Rustroom"
 path = "src/main.rs"
 
+# ⚠ M10.18a: real cameras need the system's libgphoto2 (`pacman -S libgphoto2`, `apt install
+# libgphoto2-dev`, `brew install libgphoto2`). Without the feature, Tethered capture says so.
+[features]
+default = ["camera"]
+camera = ["tether/gphoto2"]
+
 [dependencies]
 camera-profile = { path = "../camera-profile" }
 color = { path = "../color" }
@@ -33,6 +39,7 @@ image-decode = { path = "../image-decode" }
 immich = { path = "../immich" }
 ai-mask = { path = "../ai-mask" }
 photo-merge = { path = "../photo-merge" }
+tether = { path = "../tether" }
 eframe = { workspace = true }
 egui = { workspace = true }
 rfd = { workspace = true }
@@ -97,6 +104,8 @@ objc2-core-graphics = { version = "0.3", default-features = false, features = [
 [dev-dependencies]
 # The constructed panoramas for the panorama merge's tests.
 photo-merge = { path = "../photo-merge", features = ["testing"] }
+# The scripted camera for the tethering flow's tests.
+tether = { path = "../tether", features = ["testing"] }
 # M10.7c: every test directory comes from here — unique per test and per run, and cleaned up.
 test-dir = { path = "../test-dir" }
 # For examples that stand up their own wgpu device (probe_gpu_contention).

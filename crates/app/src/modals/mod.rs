@@ -49,6 +49,7 @@ mod settings_denoise;
 mod settings_immich;
 mod settings_keyboard;
 mod settings_layout;
+mod tether;
 
 use crate::develop::panel::section::{header, Header};
 use crate::{theme, RustroomApp};
@@ -88,6 +89,8 @@ pub enum Modal {
     ExportSettings,
     /// Importing from a card or a folder (M9.12). Its state lives in `RustroomApp::import`.
     Import,
+    /// File → Tethered capture… (M10.18a). Its state lives in `RustroomApp::tether`.
+    Tether,
     /// Photo merge → HDR's preview (M10.17a). Its state lives in `RustroomApp::hdr`.
     HdrMerge,
     /// Photo merge → Panorama's preview (M10.17b). Its state lives in `RustroomApp::pano`.
@@ -239,6 +242,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Sync,
         Export,
         Import,
+        Tether,
         HdrMerge,
         PanoMerge,
         AiDownload,
@@ -268,6 +272,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::SyncSettings => Which::Sync,
         Modal::ExportSettings => Which::Export,
         Modal::Import => Which::Import,
+        Modal::Tether => Which::Tether,
         Modal::HdrMerge => Which::HdrMerge,
         Modal::PanoMerge => Which::PanoMerge,
         Modal::AiDownload => Which::AiDownload,
@@ -301,6 +306,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::Sync => edits::sync(app, ctx),
         Which::Export => export::settings(app, ctx),
         Which::Import => import::show(app, ctx),
+        Which::Tether => tether::show(app, ctx),
         Which::HdrMerge => hdr_merge::show(app, ctx),
         Which::PanoMerge => pano_merge::show(app, ctx),
         Which::AiDownload => ai_download::show(app, ctx),

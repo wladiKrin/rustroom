@@ -27,8 +27,11 @@ use eframe::egui;
 ///
 /// ⚠ Deliberately separate from `develop::canvas::test_support::screen`, which stays 400×300:
 /// the canvas tests derive real image placement from it, so its size is part of what they test.
+///
+/// ⚠ 2000 since M10.18a: three File commands pushed the Keyboard tab's Stack row past 1400, and
+/// [`click`] now refuses a target outside the screen instead of pressing a point egui ignores.
 pub fn screen() -> egui::Rect {
-    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 1400.0))
+    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 2000.0))
 }
 
 /// A context with AccessKit on, which is what makes [`find`] work.
@@ -365,6 +368,10 @@ pub fn find(
 pub fn click(ctx: &egui::Context, label: &str, mut body: impl FnMut(&mut egui::Ui)) {
     let at = find(ctx, label, &mut body)
         .unwrap_or_else(|| panic!("no widget labelled {label:?} was drawn"));
+    assert!(
+        screen().contains(at),
+        "{label:?} is drawn at {at:?}, outside the harness screen — the click would do nothing"
+    );
     for pass in 0..2 {
         let events = vec![
             egui::Event::PointerMoved(at),

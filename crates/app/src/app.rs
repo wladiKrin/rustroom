@@ -331,6 +331,8 @@ pub(crate) struct RustroomApp {
     pub(crate) pano: crate::pano_flow::PanoState,
     /// The background merges, HDR and panorama, one at a time.
     pub(crate) merges: crate::merge_queue::MergeQueue,
+    /// Tethered capture: its dialog and the running session (M10.18a).
+    pub(crate) tether: crate::tether_flow::TetherState,
     /// AI masks' worker, requests and model downloads (M9.13).
     pub(crate) ai: ai_flow::AiState,
     /// AI denoise's job and the open photo's result (M10.16b).
