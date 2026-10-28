@@ -125,6 +125,7 @@ pub mod stand_in;
 pub mod status_text;
 pub mod straighten_line;
 pub mod sync;
+pub mod tether_options;
 pub mod thumb_cache;
 pub mod thumb_key;
 pub mod thumb_loader;
