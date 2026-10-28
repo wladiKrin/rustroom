@@ -67,6 +67,7 @@ pub struct FacePass {
     cancel: Arc<AtomicBool>,
     /// Photos that could not be searched, and the first reason — said to the user, never swallowed.
     failed: Arc<std::sync::Mutex<(usize, Option<String>)>>,
+    failed_paths: Arc<std::sync::Mutex<Vec<PathBuf>>>,
 }
 
 impl FacePass {
@@ -85,7 +86,13 @@ impl FacePass {
         let cancel = Arc::new(AtomicBool::new(false));
         let total = files.len();
         let failed = Arc::new(std::sync::Mutex::new((0usize, None::<String>)));
-        let (d, c, fl) = (done.clone(), cancel.clone(), failed.clone());
+        let failed_paths = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (d, c, fl, fp) = (
+            done.clone(),
+            cancel.clone(),
+            failed.clone(),
+            failed_paths.clone(),
+        );
         std::thread::Builder::new()
             .name("face-pass".into())
             .spawn(move || {
@@ -103,6 +110,7 @@ impl FacePass {
                                 let mut g = fl.lock().unwrap_or_else(|p| p.into_inner());
                                 g.0 += 1;
                                 g.1.get_or_insert(e);
+                                fp.lock().unwrap_or_else(|p| p.into_inner()).push(f.clone());
                                 None
                             }
                         }
@@ -122,7 +130,16 @@ impl FacePass {
             total,
             cancel,
             failed,
+            failed_paths,
         }
+    }
+
+    /// The photos that could not be searched.
+    pub fn failed_paths(&self) -> Vec<PathBuf> {
+        self.failed_paths
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 
     /// How many photos could not be searched, and the first reason.

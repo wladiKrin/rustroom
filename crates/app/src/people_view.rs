@@ -52,8 +52,12 @@ pub(crate) struct PeopleView {
     /// Each group's name field, by its first face. Cleared with the view.
     names: HashMap<i64, String>,
     pass: Option<FacePass>,
-    /// The view the running or last pass was started for (`Library::visible_rev`).
-    pass_for: Option<u64>,
+    /// What the last look for unsearched photos was for: the view and the faces' revision. ⚠⚠ A look, never a
+    /// verdict — it is repeated whenever either moves, so no early exit can leave a view unsearched for good
+    /// (found in use, 2026-10-28: only Reindex made a folder's faces appear).
+    pub(crate) looked: Option<(u64, u64)>,
+    /// Photos the search could not read this session — never retried in a loop.
+    failed: std::collections::HashSet<PathBuf>,
     /// Waiting for the models: the offer was made, and the view looks again only when they arrive.
     waiting_models: bool,
     /// Tests' finder — never the networks. `None`: the real one.
@@ -98,18 +102,10 @@ impl RustroomApp {
                 })
                 .collect()
         };
-        if self.people.waiting_models && missing.is_empty() {
-            // They arrived: look at this view again.
-            self.people.waiting_models = false;
-            self.people.pass_for = None;
-        }
-        if !self.settings.find_faces
-            || self.people.pass.is_some()
-            || self.people.pass_for == Some(rev)
-        {
+        self.people.waiting_models = !missing.is_empty();
+        if !self.settings.find_faces || self.people.pass.is_some() {
             return;
         }
-        self.people.pass_for = Some(rev);
         if !missing.is_empty() {
             self.people.waiting_models = true;
             // ⚠ Offered once a session.
@@ -120,6 +116,11 @@ impl RustroomApp {
             }
             return;
         }
+        let faces_rev = self.catalog.as_ref().map_or(0, |c| c.faces_revision());
+        if self.people.looked == Some((rev, faces_rev)) {
+            return;
+        }
+        self.people.looked = Some((rev, faces_rev));
         let Some(lib) = &self.library else { return };
         let root = self.immich_cache_root();
         let mut local: Vec<PathBuf> = lib
@@ -132,6 +133,7 @@ impl RustroomApp {
                     .as_deref()
                     .is_some_and(|r| rustroom_app::immich_source::is_immich_path(r, p))
             })
+            .filter(|p| !self.people.failed.contains(p))
             .collect();
         local.sort();
         local.dedup();
@@ -170,6 +172,7 @@ impl RustroomApp {
         }
         if done {
             if let Some(p) = self.people.pass.take() {
+                self.people.failed.extend(p.failed_paths());
                 let (n, why) = p.failures();
                 let (_, total) = p.progress();
                 self.status = match (n, why) {
@@ -643,6 +646,105 @@ mod tests {
         );
     }
 
+    /// Found in use (2026-10-28, "there are faces, but when I click on People, nothing shows up"): the whole path
+    /// with the REAL networks — a folder with the crew portrait (a real photo), the People view, its search, its
+    /// groups. ⚠ Needs the models in the app's folder: `cargo test --workspace --release a_real_folder -- --ignored`.
+    #[test]
+    #[ignore]
+    fn a_real_folder_shows_its_faces_as_groups() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        let d = test_dir::TempDir::new("people-real");
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../ai-mask/tests/fixtures/apollo11_crew.jpg"
+            ),
+            d.join("crew.jpg"),
+        )
+        .unwrap();
+        app.ai.dirs = rustroom_app::ai_cache::models_dir().map(|m| (m.clone(), m));
+        app.open_folder_at(&ctx, d.path().to_path_buf());
+        app.library_mode = crate::LibraryMode::People;
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+        let t = Instant::now();
+        loop {
+            let labels: Vec<String> = crate::test_ui::nodes_on(&ctx, screen, |ui| {
+                let c = ui.ctx().clone();
+                show(&mut app, ui, &c);
+            })
+            .into_iter()
+            .map(|n| n.label)
+            .collect();
+            app.pump_face_pass(&ctx);
+            if app.people.groups.len() == 3 {
+                break;
+            }
+            assert!(
+                t.elapsed() < Duration::from_secs(120),
+                "no groups — status {:?}, labels {labels:?}",
+                app.status
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Found in use (2026-10-28: "it didn't search immediately"): a folder opened while another folder's search
+    /// runs is searched as soon as that one ends — nothing marks a view done without searching it.
+    #[test]
+    fn a_folder_opened_during_another_search_is_searched_after_it() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        let (a, b) = (
+            test_dir::TempDir::new("people-first"),
+            test_dir::TempDir::new("people-second"),
+        );
+        for d in [&a, &b] {
+            image::RgbImage::from_pixel(64, 48, image::Rgb([120, 90, 70]))
+                .save(d.join("P.JPG"))
+                .unwrap();
+        }
+        let gate = Arc::new(std::sync::Mutex::new(()));
+        let held = gate.lock().unwrap();
+        let g = gate.clone();
+        app.people.finder = Some(Arc::new(move |_| {
+            drop(g.lock().unwrap());
+            Ok(vec![NewFace {
+                bbox: [0.1, 0.1, 0.3, 0.3],
+                embedding: vec![0.1; 128],
+            }])
+        }));
+        app.open_folder_at(&ctx, a.path().to_path_buf());
+        app.start_face_pass();
+        assert!(
+            app.people.pass.is_some(),
+            "the first folder was not searched"
+        );
+        // The second folder, while the first's search is held.
+        app.open_folder_at(&ctx, b.path().to_path_buf());
+        app.start_face_pass();
+        drop(held);
+        let t = Instant::now();
+        loop {
+            app.pump_face_pass(&ctx);
+            app.start_face_pass();
+            let unread = app
+                .catalog
+                .as_ref()
+                .unwrap()
+                .files_without_faces_read(&[b.join("P.JPG")])
+                .unwrap();
+            if unread.is_empty() && app.people.pass.is_none() {
+                break;
+            }
+            assert!(
+                t.elapsed() < Duration::from_secs(120),
+                "the second folder was never searched"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
     /// Found in use: a view with nothing to show said nothing. It says why.
     #[test]
     fn an_empty_view_says_why() {
@@ -670,7 +772,8 @@ mod tests {
             text(&mut app)
         );
         app.settings.find_faces = true;
-        app.people.pass_for = app.library.as_ref().map(|l| l.visible_rev);
+        let rev = app.library.as_ref().map(|l| l.visible_rev).unwrap();
+        app.people.looked = Some((rev, app.catalog.as_ref().unwrap().faces_revision()));
         assert!(text(&mut app)
             .iter()
             .any(|l| l == "No unnamed faces in these photos"));
