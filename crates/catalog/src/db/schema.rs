@@ -309,6 +309,24 @@ impl Catalog {
                  COMMIT;",
             )?;
         }
+        if from < 15 {
+            // M10.18b: where each photo was taken, one row per source. `hand` beats `file` beats
+            // `server` (`location.rs`); a row with NULL lat/lon is "read, none" for `file` and
+            // "removed" for `hand`. A per-file table — `PER_FILE_TABLES` carries it on a move.
+            self.conn.execute_batch(
+                "BEGIN;
+                 CREATE TABLE photo_location (
+                     folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                     file_name TEXT NOT NULL,
+                     source    TEXT NOT NULL CHECK (source IN ('hand', 'file', 'server')),
+                     lat       REAL,
+                     lon       REAL,
+                     PRIMARY KEY (folder_id, file_name, source)
+                 );
+                 PRAGMA user_version = 15;
+                 COMMIT;",
+            )?;
+        }
         Ok(())
     }
 }
@@ -340,7 +358,7 @@ mod tests {
             // was exactly that — the failure is loud, but only if this test exists.
             cat.conn
                 .execute_batch(
-                    "DROP TABLE photo_history;
+                    "DROP TABLE photo_location; DROP TABLE photo_history;
                      DROP TABLE immich_names;
                      DROP TABLE photo_stacks;
                      DROP TABLE photo_description;
@@ -394,7 +412,7 @@ mod tests {
             .unwrap();
             cat.conn
                 .execute_batch(
-                    "DROP TABLE photo_history;
+                    "DROP TABLE photo_location; DROP TABLE photo_history;
                      DROP TABLE immich_names;
                      DROP TABLE photo_stacks;
                      DROP TABLE photo_description;
@@ -445,7 +463,7 @@ mod tests {
             .unwrap();
             cat.conn
                 .execute_batch(
-                    "DROP TABLE photo_history;
+                    "DROP TABLE photo_location; DROP TABLE photo_history;
                      DROP TABLE immich_names;
                      DROP TABLE photo_stacks;
                      DROP TABLE photo_description;
@@ -492,7 +510,7 @@ mod tests {
             cat.set_xmp_mtime(Path::new("/x/a.RAF"), 42).unwrap();
             cat.conn
                 .execute_batch(
-                    "DROP TABLE photo_history;
+                    "DROP TABLE photo_location; DROP TABLE photo_history;
                      DROP TABLE immich_names;
                      DROP TABLE photo_stacks;
                      DROP TABLE photo_description;
@@ -562,7 +580,7 @@ mod tests {
         // there (M9.7, Move to folder).
         cat.conn
             .execute_batch(
-                "DROP TABLE photo_history; DROP TABLE immich_names; DROP TABLE photo_stacks; ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; DROP TABLE immich_last_send; PRAGMA user_version = 7;",
+                "DROP TABLE photo_location; DROP TABLE photo_history; DROP TABLE immich_names; DROP TABLE photo_stacks; ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; DROP TABLE immich_last_send; PRAGMA user_version = 7;",
             )
             .unwrap();
         cat.migrate().unwrap();
@@ -593,7 +611,7 @@ mod tests {
                 .unwrap();
             cat.conn
                 .execute_batch(
-                    "DROP TABLE photo_stacks;
+                    "DROP TABLE photo_location; DROP TABLE photo_stacks;
                      CREATE TABLE photo_stacks (
                          folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
                          file_name TEXT NOT NULL,
@@ -650,7 +668,7 @@ mod tests {
             .unwrap();
             cat.conn
                 .execute_batch(
-                    "ALTER TABLE photos DROP COLUMN filled_rating;
+                    "DROP TABLE photo_location; ALTER TABLE photos DROP COLUMN filled_rating;
                      ALTER TABLE photos DROP COLUMN filled_flag;
                      DROP TABLE immich_last_send; PRAGMA user_version = 12;",
                 )
@@ -680,12 +698,30 @@ mod tests {
             let cat = Catalog::open(&db.0).unwrap();
             cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
             cat.conn
-                .execute_batch("DROP TABLE immich_last_send; PRAGMA user_version = 13;")
+                .execute_batch("DROP TABLE photo_location; DROP TABLE immich_last_send; PRAGMA user_version = 13;")
                 .unwrap();
         }
         let cat = Catalog::open(&db.0).expect("a v13 catalog must upgrade");
         assert_eq!(cat.version().unwrap(), SCHEMA_VERSION);
         assert_eq!(cat.photo_count().unwrap(), 1, "the photo survived");
         assert!(cat.last_send().unwrap().is_empty());
+    }
+
+    /// M10.18b: v15 adds the location table — empty, every row kept, and its photos queued for the
+    /// startup pass once their capture is read.
+    #[test]
+    fn a_version_fourteen_catalog_gains_the_location_table() {
+        let db = TempDb::new("v14v15");
+        {
+            let cat = Catalog::open(&db.0).unwrap();
+            cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+            cat.conn
+                .execute_batch("DROP TABLE photo_location; PRAGMA user_version = 14;")
+                .unwrap();
+        }
+        let cat = Catalog::open(&db.0).expect("a v14 catalog must upgrade");
+        assert_eq!(cat.version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(cat.photo_count().unwrap(), 1, "the photo survived");
+        assert_eq!(cat.location_of(Path::new("/x/a.RAF")).unwrap(), None);
     }
 }
