@@ -165,6 +165,11 @@ pub enum ActionKind {
             crate::stack_by_hand::Membership,
         )>,
     },
+    /// Locations set by hand on the Map (M10.18b): each file's `(path, before, after)`. Undo writes
+    /// the befores, redo the afters — catalog only, as the locations are.
+    LocationChange {
+        changes: Vec<(PathBuf, catalog::db::Hand, catalog::db::Hand)>,
+    },
     /// Several actions performed by one gesture, undone and redone as a unit.
     ///
     /// Pasting into a multi-selection is the motivating case: it changes the open photo
@@ -236,6 +241,7 @@ fn reachable(kind: &ActionKind, open: Option<&PhotoId>) -> bool {
         | ActionKind::CollectionChange { .. }
         | ActionKind::PhotoMove { .. }
         | ActionKind::StackChange { .. }
+        | ActionKind::LocationChange { .. }
         | ActionKind::Rename { .. } => true,
         ActionKind::Batch(parts) => parts.iter().all(|p| reachable(p, open)),
     }

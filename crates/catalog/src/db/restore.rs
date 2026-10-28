@@ -567,16 +567,17 @@ mod tests {
         let (cat, dir) = with_two_photos();
         let (a, b) = (dir.join("a.RAF"), dir.join("b.RAF"));
         cat.set_file_location(&a, Some((38.7, -9.1))).unwrap();
-        cat.set_hand(&[a.clone()], crate::db::Hand::At(38.8, -9.4))
+        cat.set_hand(std::slice::from_ref(&a), crate::db::Hand::At(38.8, -9.4))
             .unwrap();
-        cat.set_hand(&[b.clone()], crate::db::Hand::Removed)
+        cat.set_hand(std::slice::from_ref(&b), crate::db::Hand::Removed)
             .unwrap();
         let fid = cat.folders().unwrap()[0].id;
         let snap = cat.forget_folder(fid).unwrap();
         cat.restore(&snap).unwrap();
         assert_eq!(cat.location_of(&a).unwrap(), Some((38.8, -9.4)));
         assert_eq!(cat.hand_location(&b).unwrap(), crate::db::Hand::Removed);
-        cat.set_hand(&[a.clone()], crate::db::Hand::Unset).unwrap();
+        cat.set_hand(std::slice::from_ref(&a), crate::db::Hand::Unset)
+            .unwrap();
         assert_eq!(
             cat.location_of(&a).unwrap(),
             Some((38.7, -9.1)),

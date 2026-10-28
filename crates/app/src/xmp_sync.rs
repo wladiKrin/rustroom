@@ -419,7 +419,8 @@ mod tests {
             Hand::At(38.7, -9.1),
             "a sidecar overwrote a hand row"
         );
-        cat.set_hand(&[photo.clone()], Hand::Removed).unwrap();
+        cat.set_hand(std::slice::from_ref(&photo), Hand::Removed)
+            .unwrap();
         apply(&cat, &photo, &with(None));
         assert_eq!(cat.hand_location(&photo).unwrap(), Hand::Removed);
     }

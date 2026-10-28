@@ -96,6 +96,7 @@ impl RustroomApp {
             .map(rustroom_app::location_pass::LocationPass::start);
         let mut app = Self {
             location_pass,
+            map: Default::default(),
             // ⚠ From the settings, not `default()`: the format filter is persisted and this is
             // where it is read back — see `Settings::initial_filter`.
             filter: settings.initial_filter(),

@@ -36,6 +36,7 @@ pub enum Command {
     ShowDevelop,
     ShowCompare,
     ShowSurvey,
+    ShowMap,
     ZoomIn,
     ZoomOut,
     FitView,
@@ -450,6 +451,8 @@ fn view_items() -> Vec<Item> {
         // the search field or the new-collection field.
         action("Compare", Command::ShowCompare, Some(Shortcut::bare('C'))),
         action("Survey", Command::ShowSurvey, Some(Shortcut::bare('N'))),
+        // ⚠ No default key (M10.18b): the bare letters are the tools and the views'. Bindable.
+        action("Map", Command::ShowMap, None),
         Item::Separator,
         action("Zoom in", Command::ZoomIn, Some(Shortcut::cmd('+'))),
         action("Zoom out", Command::ZoomOut, Some(Shortcut::cmd('-'))),

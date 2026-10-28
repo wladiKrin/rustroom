@@ -166,7 +166,7 @@ fn mode_switch(ui: &mut egui::Ui, mode: &mut LibraryMode, icons_only: bool) {
     segmented::pill(ui, mode, &MODE_ITEMS, mode_style(icons_only));
 }
 
-const MODE_ITEMS: [PillItem<'static, LibraryMode>; 3] = [
+const MODE_ITEMS: [PillItem<'static, LibraryMode>; 4] = [
     PillItem {
         value: LibraryMode::Grid,
         icon: icons::GRID,
@@ -184,6 +184,12 @@ const MODE_ITEMS: [PillItem<'static, LibraryMode>; 3] = [
         icon: icons::SURVEY,
         label: "Survey",
         hover: "Shows the whole selection at once, to narrow it down (N)",
+    },
+    PillItem {
+        value: LibraryMode::Map,
+        icon: icons::MAP,
+        label: "Map",
+        hover: "Shows on a map where the photos in view were taken",
     },
 ];
 

@@ -65,6 +65,8 @@ mod keyword_rows;
 mod library;
 mod library_state;
 mod list_row;
+mod location_ops;
+mod map_view;
 mod menu_bar;
 mod merge_queue;
 mod modals;

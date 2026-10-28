@@ -227,6 +227,7 @@ impl RustroomApp {
                     LibraryMode::Grid => library::show(self, ui, ctx),
                     LibraryMode::Compare => multi::compare::show(self, ui, ctx),
                     LibraryMode::Survey => multi::survey::show(self, ui, ctx),
+                    LibraryMode::Map => crate::map_view::show(self, ui, ctx),
                 }
             }
         }

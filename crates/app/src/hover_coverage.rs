@@ -190,6 +190,17 @@ fn photos(w: &mut Walk) {
         crate::filmstrip::show(&mut app, ui, &c);
     });
     w.check("Filmstrip", &nodes);
+    // M10.18b: the Map view — the location field, Remove, the zoom buttons, the strip.
+    app.library.as_mut().unwrap().selection.click(0);
+    let nodes = test_ui::nodes_on(&ctx, screen, |ui| {
+        let c = ui.ctx().clone();
+        crate::map_view::show(&mut app, ui, &c);
+    });
+    assert!(
+        nodes.iter().any(|n| n.label == "Remove") && nodes.iter().any(|n| n.label == "+"),
+        "fixture check: the map's controls were drawn"
+    );
+    w.check("Library map", &nodes);
 }
 
 fn status_row(w: &mut Walk) {
