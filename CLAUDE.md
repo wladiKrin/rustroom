@@ -172,8 +172,10 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-10-28)
 
-**4377 tests on Linux** (macOS last counted 4274 before M10.17b; 27 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
-gate green on **`main`** (2026-10-28, M10.17b merged). ⚠⚠ **Run the git command above rather than
+**4433 tests on Linux** (macOS last counted 4274 before M10.17b; 28 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
+gate green on **`main`** (2026-10-28, M10.18b merged). ⚠ On this Linux machine `gpu_pipeline`'s suite can stall
+inside a full run (alone it passes in 4 s) and `sources::reindex_tests` can fail to exit — both pre-existing
+(`grep -n 'Pre-existing, not chased' docs/JOURNAL.md`); run the remaining test binaries directly when it happens. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
 ⚠ CI on Linux was **almost certainly red from 2026-09-30 to 2026-10-27** — the `Rustroom` binary did not
 compile off macOS (`grep -n 'fix-linux-build' docs/JOURNAL.md`); unverified, `gh` is not installed here. Check the next run.
@@ -231,7 +233,7 @@ that had grown to ~170 lines by appending.)
   2026-09-29 — start from `docs/BACKLOG.md`'s reasons table. ⚠ The server is a **Tailscale Funnel**: a stopped
   Tailscale on the Mac is never the cause of an Immich error.
 
-**Phase 10 so far — M10.6 to M10.15, M10.16a, b, c1–c3 and d, M10.17a–b and M10.19c–d, merged 2026-09-29 – 10-28, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`; what stays open inside M10.12–14 is in the table below):
+**Phase 10 so far — M10.6 to M10.15, M10.16a, b, c1–c3 and d, M10.17a–b, M10.18b and M10.19c–d, merged 2026-09-29 – 10-28, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`; what stays open inside M10.12–14 is in the table below):
 
 | Id | What | The thing to remember |
 |---|---|---|
@@ -254,13 +256,17 @@ that had grown to ~170 lines by appending.)
 | M10.16b | AI denoise: **FFDNet** (default; a 26 Mpx frame 18 s on the GPU) or **DRUNet** (Settings), a background job per photo at the noise map × 2, the view's tiles first, "Full denoise" under Amount, cached on disk | the network is in EVERY key that holds its pixels and the worker carries its own (*Warnings*); `ai_mask::pth` is a CLOSED pickle subset; the result is ONE decode's, its step the prefix's first; a long GPU job submits bands |
 | M10.17a | HDR merge: Photo merge → HDR… ⇧⌘H (and with the last settings ⌥⇧⌘H, no dialog) — the preview (zoom and pan), Auto align, Auto settings, Deghost None–High with its overlay, Create stack; a background merge into `<first>-HDR.dng`, a floating-point raw of the same camera (crate `photo-merge`) | exposures MEASURED, never read from EXIF; Rustroom reads float DNGs itself (*Warnings*); a gesture over a dialog never reaches the Library behind it |
 | M10.17b | Panorama merge: Photo merge → Panorama… ⇧⌘M (⌥⇧⌘M with the last settings) — the preview with Auto crop's rectangle bordered as the crop tool draws it, Spherical · Cylindrical · Perspective with Auto select, Auto crop, Fill edges (LaMa), Create stack; a background merge into `<first>-Pano.dng`, a floating-point raw of the camera, capped at 16,000 px. Merges take **downloaded Immich photos**, the result going to a folder asked for once (Settings → Immich → Merged photos) | the lens is corrected inside the one resample and the DNG names no lens (*Warnings*); a result never lands in the Immich cache (`hdr_merge::out_folder`); HDR and panorama share one queue (`merge_queue`); tuned on constructed rows only — seam constants and Auto select's angles untuned on real ones |
+| M10.18b | GPS and a map: Library → **Map** — clusters over OpenStreetMap tiles (our own layer; Settings → Behaviour's tile server), a strip of a cluster's photos or of those with no location, a drop or the location field (coordinates, or Nominatim on Enter) places the selection, Remove location, right-click menus, the map fits a new source | ⚠⚠ locations live in the CATALOG only (`photo_location`, v15: `hand` > `file` > `server`), never a file or a sidecar; a startup pass and Reindex read files' GPS; the X-T4 has no GPS of its own (the phone app tags it); nothing per frame grows with the catalog — `visible_rev`, the throttled `refresh_pins`, a virtual strip |
 | M10.19d | Retouch as two tasks: **Paint** (one brush, Remove · Heal · Clone · Eye, for NEW retouches only) · **Find** (People · Dust, found and reviewed alike: On the photo **Pick · Add more**, Everyone, Remove N, Cancel); one **Retouches** list of every kind, a picked row selecting it alone with its settings under the list | the photo's gestures follow `RetouchState.task` — in Find only `find_overlay`, never a Paint overlay; the list is `retouch_list::rows`; a patch Find dust made carries `Spot.dust`; the dust view's one writer is `pump_dust`; a look landing after Cancel or Remove N is dropped (people and dust) |
 
 ### ▶ Next action — Phase 10, top down
 
-✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1–c3, d, M10.17a–b, M10.19c–d** (table above); ⛔ M10.16c4 declined.
+✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1–c3, d, M10.17a–b, M10.18b, M10.19c–d** (table above); ⛔ M10.16c4 declined.
 
-**▶ NOW: M10.18a tethering**, the next open item top-down. ✅ M10.17b panorama merge merged 2026-10-28, confirmed by the author
+**▶ NOW: M10.18a tethering — BUILT, ⏸ waiting for the author to try it with the X-T4** (branch `m10.18a-tethering`, local
+only, its review fixed; `grep -n 'M10.18a' docs/JOURNAL.md`); the next open item meanwhile is **M10.18c people tagging**.
+✅ M10.18b GPS and a map merged 2026-10-28, confirmed by the author ("works, merge and delete that branch";
+`grep -n 'M10.18b' docs/JOURNAL.md`). ✅ M10.17b panorama merge merged 2026-10-28, confirmed by the author
 ("works, merge and delete the branch"; `grep -n 'M10.17b' docs/JOURNAL.md`). ✅ M10.17a HDR merge merged 2026-10-27,
 confirmed by the author ("works, merge and delete the branch"; `grep -n 'M10.17a' docs/JOURNAL.md`). (M10.16 complete: ⛔ c4 Reflections declined on its spike 2026-10-22 — no shippable
 network removes everyday reflections; `grep -n 'M10.16c4' docs/JOURNAL.md`). ✅ M10.19d the Retouch panel as Paint · Find
@@ -281,7 +287,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | **M10.12** the mask model | c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · d camera-matching colour out of the box (P-22), **with b's `ProfileLookTable` and c's per-photo profile folded in** (re-scoped 2026-10-12: neither changes a photo until d brings such a profile; b's `CameraCalibration` ⛔ withdrawn — a DNG-file tag, never in a profile) |
 | **M10.14** performance & verification | f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h ⏸ the reference photo on the GPU (parked 2026-10-13 until a need shows — 1 of 74 photos; 111–125 ms at 3200, numbers in the backlog) |
-| **M10.18** new modules | a tethering · b GPS and a map · c people tagging · d publish services · e print |
+| **M10.18** new modules | a tethering (built, ⏸ the author's camera check) · c people tagging · d publish services · e print |
 | **M10.19** found in use (added 2026-10-01) | a HEIC/HEIF photos — libraw cannot read them, so they never appear; needs a decoder · b Move to folder: download Immich assets first, then move (today skipped and counted) (c, d ✅ above) |
 
 **Phase 11, last:** M11.2 Windows + the Linux GUI (first run and confirmed 2026-10-27 on Arch/X11; still unchecked: Wayland,
