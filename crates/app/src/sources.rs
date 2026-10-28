@@ -358,6 +358,7 @@ impl RustroomApp {
             stack_expanded: Default::default(),
             cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
             last_want: Vec::new(),
+            visible_rev: 0,
             selection: Selection::default(),
             loader,
             visible: (0..n).collect(),

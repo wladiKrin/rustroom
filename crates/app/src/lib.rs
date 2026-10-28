@@ -76,6 +76,8 @@ pub mod library_filter;
 pub mod location_pass;
 pub mod looks;
 pub mod map_cluster;
+pub mod map_points;
+pub mod map_state;
 pub mod marks;
 pub mod mask_actions;
 pub mod mask_kind;

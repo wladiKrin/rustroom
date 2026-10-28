@@ -130,6 +130,9 @@ pub(crate) struct Library {
     /// Indices into `entries` that pass `filter`, ascending. Derived — recomputed by
     /// `refilter`, never edited directly.
     pub(crate) visible: Vec<usize>,
+    /// Bumped by every `refilter` — the one place `visible` changes — so a view deriving from the
+    /// visible photos (the Map's pins, M10.18b) can key on it instead of hashing them every frame.
+    pub(crate) visible_rev: u64,
     /// Marks for every marked photo on show, keyed by identity.
     ///
     /// ⚠⚠ Read **once per rebuild**, not per frame and never per cell. The grid draws sixty
@@ -224,6 +227,9 @@ impl Library {
             })
             .map(|(i, _)| i)
             .collect();
+        // ⚠ From one counter for the whole process, so two Libraries never share a value.
+        static REV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        self.visible_rev = REV.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.selection.retain_visible(&self.visible);
     }
 

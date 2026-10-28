@@ -74,6 +74,36 @@ impl Catalog {
         Ok(out)
     }
 
+    /// Every located photo in the catalog, by the winning source — ONE query, for a view of thousands
+    /// (the Map's pins), where [`Catalog::locations_of`] would be a lookup per photo.
+    pub fn all_locations(&self) -> Result<HashMap<PathBuf, (f64, f64)>, CatalogError> {
+        let mut st = self.conn.prepare(
+            "SELECT f.path, l.file_name, l.lat, l.lon FROM photo_location l
+             JOIN folders f ON f.id = l.folder_id
+             WHERE l.source = 'hand' OR l.lat IS NOT NULL
+             ORDER BY l.folder_id, l.file_name,
+                      CASE l.source WHEN 'hand' THEN 0 WHEN 'file' THEN 1 ELSE 2 END",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok((
+                PathBuf::from(r.get::<_, String>(0)?).join(r.get::<_, String>(1)?),
+                r.get::<_, Option<f64>>(2)?,
+                r.get::<_, Option<f64>>(3)?,
+            ))
+        })?;
+        let mut seen = std::collections::HashSet::new();
+        let mut out = HashMap::new();
+        for (path, la, lo) in rows.filter_map(Result::ok) {
+            // ⚠ The first row per photo is the winner; a removed one wins by showing nothing.
+            if seen.insert(path.clone()) {
+                if let (Some(la), Some(lo)) = (la, lo) {
+                    out.insert(path, (la, lo));
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// What was set for `photo` by hand.
     pub fn hand_location(&self, photo: &Path) -> Result<Hand, CatalogError> {
         let Some((folder, name)) = split(photo) else {
@@ -227,6 +257,21 @@ mod tests {
         cat.set_hand(&p, Hand::Unset).unwrap();
         assert_eq!(cat.location_of(&p[0]).unwrap(), Some(LISBON));
         assert_eq!(cat.hand_location(&p[0]).unwrap(), Hand::Unset);
+    }
+
+    /// The one-query form agrees with the per-photo one, a removal included.
+    #[test]
+    fn all_locations_agrees_with_locations_of() {
+        let (cat, p) = cat_with(&["a.RAF", "b.RAF", "c.RAF", "d.RAF"]);
+        cat.set_server_locations(&[(p[0].clone(), PORTO), (p[3].clone(), PORTO)])
+            .unwrap();
+        cat.set_file_location(&p[1], Some(LISBON)).unwrap();
+        cat.set_hand(&[p[1].clone()], Hand::At(SINTRA.0, SINTRA.1))
+            .unwrap();
+        cat.set_hand(&[p[3].clone()], Hand::Removed).unwrap();
+        let all = cat.all_locations().unwrap();
+        assert_eq!(all, cat.locations_of(&p).unwrap());
+        assert_eq!(all.len(), 2, "{all:?}");
     }
 
     #[test]
