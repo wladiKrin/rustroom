@@ -14,7 +14,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// The schema this build expects. Bump it whenever [`Catalog::migrate`] gains a step.
-pub const SCHEMA_VERSION: i64 = 15;
+pub const SCHEMA_VERSION: i64 = 16;
 
 /// What can go wrong talking to the catalog.
 ///
@@ -47,6 +47,7 @@ mod capture;
 mod collections;
 /// The capture-date tree and the distinct cameras and lenses.
 mod dates;
+mod faces;
 /// A photo's undo history (M9.7) — its own file, because this one is already the largest in the
 /// crate. A child module, so it reaches the private connection.
 mod history;
@@ -78,6 +79,7 @@ mod test_support;
 pub use capture::Description;
 pub use collections::CollectionRow;
 pub use dates::DayRow;
+pub use faces::{FaceRow, FaceState, NewFace, PersonRow};
 pub use imported::Fingerprint;
 pub use keywords::{Change as KeywordChange, DayCounts, KeywordMerge, KeywordRow};
 pub use location::Hand;
