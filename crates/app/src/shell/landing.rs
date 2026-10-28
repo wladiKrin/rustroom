@@ -31,7 +31,7 @@ impl RustroomApp {
     }
 
     /// Turn finished thumbnails into textures in the grid cache.
-    pub(super) fn pump_thumbnails(&mut self, ctx: &egui::Context) {
+    pub(crate) fn pump_thumbnails(&mut self, ctx: &egui::Context) {
         if let Some(lib) = &mut self.library {
             for res in lib.loader.drain() {
                 if let Some(t) = res.thumb {

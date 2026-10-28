@@ -26,8 +26,9 @@ use std::time::{Duration, Instant};
 const FACE: f32 = 56.0;
 /// How many faces a group shows.
 const SHOWN: usize = 5;
-/// A group card's width and its row's height.
-const CARD: f32 = 220.0;
+/// A group card's inner width and its row's height. ⚠ Wide enough for [`SHOWN`] crops and their gaps
+/// (5 × 56 + 4 × 8 = 312): narrower, the crops pushed every card wider and the rows past the window (found in use).
+const CARD: f32 = 320.0;
 const ROW: f32 = 150.0;
 /// How often the groups may be made again while a search keeps landing faces.
 const REGROUP_EVERY: Duration = Duration::from_secs(2);
@@ -56,6 +57,8 @@ pub(crate) struct PeopleView {
     /// verdict — it is repeated whenever either moves, so no early exit can leave a view unsearched for good
     /// (found in use, 2026-10-28: only Reindex made a folder's faces appear).
     pub(crate) looked: Option<(u64, u64)>,
+    /// The view the running search is for.
+    pass_rev: Option<u64>,
     /// Photos the search could not read this session — never retried in a loop.
     failed: std::collections::HashSet<PathBuf>,
     /// Waiting for the models: the offer was made, and the view looks again only when they arrive.
@@ -64,6 +67,8 @@ pub(crate) struct PeopleView {
     pub(crate) finder: Option<FaceFinder>,
     /// The models were offered this session.
     offered: bool,
+    /// The last frame's crops: `(with their picture, still blank)` — what a test reads.
+    pub(crate) crops: (usize, usize),
 }
 
 enum Act {
@@ -103,6 +108,11 @@ impl RustroomApp {
                 .collect()
         };
         self.people.waiting_models = !missing.is_empty();
+        // ⚠ Another view's search stops at once — what it found is kept, the rest stays unsearched for its next
+        // visit — and this view's starts (asked for in use, 2026-10-28).
+        if self.people.pass.is_some() && self.people.pass_rev != Some(rev) {
+            self.stop_face_pass();
+        }
         if !self.settings.find_faces || self.people.pass.is_some() {
             return;
         }
@@ -152,6 +162,26 @@ impl RustroomApp {
             None => rustroom_app::face_pass::real_finder(models.expect("checked above")),
         };
         self.people.pass = Some(FacePass::start(todo, finder));
+        self.people.pass_rev = Some(rev);
+    }
+
+    /// Stop the running search, keeping what it has found.
+    fn stop_face_pass(&mut self) {
+        let Some(p) = self.people.pass.take() else {
+            return;
+        };
+        p.cancel();
+        let (found, _) = p.drain();
+        if let Some(cat) = &self.catalog {
+            for (path, faces) in &found {
+                if let Some(faces) = faces {
+                    if let Err(e) = cat.set_local_faces(path, faces) {
+                        eprintln!("catalog: {e}");
+                    }
+                }
+            }
+        }
+        self.people.pass_rev = None;
     }
 
     /// Once a frame: the search's findings into the catalog. Every write moves `change_count`, which is what
@@ -198,10 +228,10 @@ impl RustroomApp {
         Some(format!("Looking for faces · {done} of {total} photos"))
     }
 
+    /// The status row's Cancel — what was found is kept.
     pub(crate) fn cancel_face_pass(&mut self) {
-        if let Some(p) = self.people.pass.take() {
-            p.cancel();
-        }
+        self.stop_face_pass();
+        self.status = "Stopped looking for faces".into();
     }
 }
 
@@ -315,6 +345,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             return;
         };
         let mut window = Vec::new();
+        let mut crops = (0, 0);
         theme::sub_label(ui, &format!("People · {}", people.len()));
         ui.horizontal_wrapped(|ui| {
             for p in people.iter() {
@@ -357,7 +388,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             }
         }
         // ⚠ Virtual rows of cards: only the rows on screen lay out and ask for thumbnails (the review's #3).
-        let per_row = ((ui.available_width() / (CARD + 12.0)).floor() as usize).max(1);
+        // ⚠ From the card's OUTER width — the group frame's margins and stroke — and the gap between cards.
+        let gap = ui.spacing().item_spacing.x;
+        let frame = egui::Frame::group(ui.style());
+        let outer = CARD + frame.inner_margin.sum().x + 2.0 * frame.stroke.width;
+        let per_row = (((ui.available_width() + gap) / (outer + gap)).floor() as usize).max(1);
         let rows = n.div_ceil(per_row);
         egui::ScrollArea::vertical().show_rows(ui, ROW, rows, |ui, range| {
             for row in range {
@@ -373,6 +408,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             names,
                             &mut window,
                             &mut act,
+                            &mut crops,
                         );
                     }
                 });
@@ -380,6 +416,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         });
         // ⚠⚠ Everything drawn, or `retain_window` leaves these thumbnails evictable (Survey's rule).
         lib.sync_thumb_window(&window);
+        app.people.crops = crops;
     });
     if download {
         app.ai.proposed = vec![ai_mask::ModelId::YunetFace, ai_mask::ModelId::SfaceFace];
@@ -416,6 +453,7 @@ fn card(
     names: &mut HashMap<i64, String>,
     window: &mut Vec<rustroom_app::thumb_loader::ThumbRequest>,
     act: &mut Option<Act>,
+    crops: &mut (usize, usize),
 ) {
     let first = g.faces[0];
     egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -437,6 +475,7 @@ fn card(
                         window.push(req);
                         match tex {
                             Some(t) => {
+                                crops.0 += 1;
                                 let uv = egui::Rect::from_min_max(
                                     egui::pos2(f.bbox[0], f.bbox[1]),
                                     egui::pos2(f.bbox[2], f.bbox[3]),
@@ -444,6 +483,7 @@ fn card(
                                 ui.painter().image(t.id(), r, uv, egui::Color32::WHITE);
                             }
                             None => {
+                                crops.1 += 1;
                                 ui.painter()
                                     .rect_filled(r, FACE / 2.0, theme::tokens::of(ui).card);
                             }
@@ -689,10 +729,11 @@ mod tests {
         }
     }
 
-    /// Found in use (2026-10-28: "it didn't search immediately"): a folder opened while another folder's search
-    /// runs is searched as soon as that one ends — nothing marks a view done without searching it.
+    /// Found in use (2026-10-28: "it searches it till the end, even when clicking on a different one … it should
+    /// stop, save the progress, and start searching within the new folder"): a new folder stops the old search at
+    /// once and starts its own; what the old one found is kept, the rest stays unsearched for its next visit.
     #[test]
-    fn a_folder_opened_during_another_search_is_searched_after_it() {
+    fn a_new_folder_stops_the_old_search_and_starts_its_own() {
         let ctx = egui::Context::default();
         let mut app = crate::test_app::for_test();
         let (a, b) = (
@@ -700,15 +741,24 @@ mod tests {
             test_dir::TempDir::new("people-second"),
         );
         for d in [&a, &b] {
-            image::RgbImage::from_pixel(64, 48, image::Rgb([120, 90, 70]))
-                .save(d.join("P.JPG"))
-                .unwrap();
+            for n in ["P1.JPG", "P2.JPG", "P3.JPG"] {
+                image::RgbImage::from_pixel(64, 48, image::Rgb([120, 90, 70]))
+                    .save(d.join(n))
+                    .unwrap();
+            }
         }
+        // The first photo answers at once; every later one waits behind a gate the test holds.
         let gate = Arc::new(std::sync::Mutex::new(()));
         let held = gate.lock().unwrap();
-        let g = gate.clone();
+        let (g, seen) = (
+            gate.clone(),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        );
+        let s2 = seen.clone();
         app.people.finder = Some(Arc::new(move |_| {
-            drop(g.lock().unwrap());
+            if s2.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
+                drop(g.lock().unwrap());
+            }
             Ok(vec![NewFace {
                 bbox: [0.1, 0.1, 0.3, 0.3],
                 embedding: vec![0.1; 128],
@@ -716,32 +766,171 @@ mod tests {
         }));
         app.open_folder_at(&ctx, a.path().to_path_buf());
         app.start_face_pass();
-        assert!(
-            app.people.pass.is_some(),
-            "the first folder was not searched"
-        );
-        // The second folder, while the first's search is held.
-        app.open_folder_at(&ctx, b.path().to_path_buf());
-        app.start_face_pass();
-        drop(held);
         let t = Instant::now();
-        loop {
-            app.pump_face_pass(&ctx);
-            app.start_face_pass();
-            let unread = app
-                .catalog
+        let unread = |app: &RustroomApp, d: &test_dir::TempDir| {
+            let files: Vec<PathBuf> = ["P1.JPG", "P2.JPG", "P3.JPG"]
+                .iter()
+                .map(|n| d.join(n))
+                .collect();
+            app.catalog
                 .as_ref()
                 .unwrap()
-                .files_without_faces_read(&[b.join("P.JPG")])
-                .unwrap();
-            if unread.is_empty() && app.people.pass.is_none() {
-                break;
-            }
+                .files_without_faces_read(&files)
+                .unwrap()
+                .len()
+        };
+        while unread(&app, &a) > 2 {
+            app.pump_face_pass(&ctx);
             assert!(
                 t.elapsed() < Duration::from_secs(120),
-                "the second folder was never searched"
+                "the first photo never landed"
             );
             std::thread::sleep(Duration::from_millis(2));
+        }
+        // The second folder, while the first's search waits on its second photo.
+        app.open_folder_at(&ctx, b.path().to_path_buf());
+        app.start_face_pass();
+        let line = app.face_pass_line().unwrap_or_default();
+        assert!(
+            line.ends_with("of 3 photos"),
+            "the new folder's search did not start at once: {line:?}"
+        );
+        drop(held);
+        while app.people.pass.is_some() {
+            app.pump_face_pass(&ctx);
+            assert!(
+                t.elapsed() < Duration::from_secs(120),
+                "the second search hung"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(unread(&app, &b), 0, "the new folder was not searched");
+        assert_eq!(
+            unread(&app, &a),
+            2,
+            "the old search's found photo was lost, or it ran on"
+        );
+    }
+
+    /// Found in use (2026-10-28: "after clicking back and forth a couple of times, no images appear in the face
+    /// card"): after each switch between two folders, every crop gets its picture.
+    #[test]
+    fn crops_get_their_pictures_after_switching_folders() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        app.settings.find_faces = false;
+        let (a, b) = (
+            test_dir::TempDir::new("people-switch-a"),
+            test_dir::TempDir::new("people-switch-b"),
+        );
+        let crew = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../ai-mask/tests/fixtures/apollo11_crew.jpg"
+        );
+        for d in [&a, &b] {
+            for n in ["one.jpg", "two.jpg"] {
+                std::fs::copy(crew, d.join(n)).unwrap();
+            }
+        }
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+        let draw = |app: &mut RustroomApp| {
+            app.pump_thumbnails(&ctx);
+            let _ = crate::test_ui::nodes_on(&ctx, screen, |ui| {
+                let c = ui.ctx().clone();
+                show(app, ui, &c);
+            });
+        };
+        for (round, d) in [&a, &b, &a, &b, &a].into_iter().enumerate() {
+            app.open_folder_at(&ctx, d.path().to_path_buf());
+            if round < 2 {
+                let cat = app.catalog.as_ref().unwrap();
+                for n in ["one.jpg", "two.jpg"] {
+                    let f = NewFace {
+                        bbox: [0.2, 0.2, 0.4, 0.5],
+                        embedding: vec![0.088; 128],
+                    };
+                    cat.set_local_faces(&d.join(n), &[f]).unwrap();
+                }
+            }
+            let t = Instant::now();
+            loop {
+                draw(&mut app);
+                let (drawn, blank) = app.people.crops;
+                if drawn > 0 && blank == 0 {
+                    break;
+                }
+                assert!(
+                    t.elapsed() < Duration::from_secs(30),
+                    "round {round}: {drawn} crops drawn, {blank} blank, {} groups, grouped {:?}, grouping {:?}, \
+                     rev {:?}, faces {:?}, in index {:?}",
+                    app.people.groups.len(),
+                    app.people.grouped,
+                    app.people.grouping.as_ref().map(|g| g.0),
+                    app.library.as_ref().map(|l| l.visible_rev),
+                    app.people.faces.values().map(|f| f.photo.clone()).collect::<Vec<_>>(),
+                    app.people.index.keys().collect::<Vec<_>>(),
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    /// Found in use (2026-10-28: "these cards go beyond the border and are partly cut off"): nothing the view draws
+    /// reaches past its right edge, at a narrow and a wide width.
+    #[test]
+    fn the_cards_stay_inside_the_view() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        app.settings.find_faces = false;
+        let d = test_dir::TempDir::new("people-fit");
+        for i in 0..12 {
+            std::fs::write(d.join(format!("P{i:02}.JPG")), b"x").unwrap();
+        }
+        app.open_folder_at(&ctx, d.path().to_path_buf());
+        let cat = app.catalog.as_ref().unwrap();
+        for i in 0..12 {
+            // Twelve people, six faces each photo — every card full.
+            let mut e = vec![0.0f32; 128];
+            e[i] = 1.0;
+            let faces: Vec<NewFace> = (0..6)
+                .map(|k| NewFace {
+                    bbox: [0.1 * k as f32, 0.1, 0.1 * k as f32 + 0.08, 0.2],
+                    embedding: e.clone(),
+                })
+                .collect();
+            cat.set_local_faces(&d.join(format!("P{i:02}.JPG")), &faces)
+                .unwrap();
+        }
+        for width in [700.0, 1300.0] {
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 800.0));
+            let t = Instant::now();
+            let nodes = loop {
+                let nodes = crate::test_ui::nodes_on(&ctx, screen, |ui| {
+                    let c = ui.ctx().clone();
+                    show(&mut app, ui, &c);
+                });
+                if app.people.groups.len() >= 12 {
+                    break nodes;
+                }
+                assert!(
+                    t.elapsed() < Duration::from_secs(30),
+                    "the groups never landed"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            let fields = nodes
+                .iter()
+                .filter(|n| n.role == egui::accesskit::Role::TextInput)
+                .count();
+            assert!(fields >= 2, "fixture check: {fields} cards drawn");
+            for n in &nodes {
+                assert!(
+                    n.rect.right() <= width + 0.5,
+                    "{:?} reaches {} past {width}",
+                    n.label,
+                    n.rect.right()
+                );
+            }
         }
     }
 

@@ -30,6 +30,15 @@ pub(crate) fn fs_modified(path: &std::path::Path) -> std::time::SystemTime {
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
 }
 
+/// A [`Library::visible_rev`] no Library has had — from one counter for the whole process. ⚠⚠ A NEW Library takes
+/// one too: starting at 0, two folders with the same number of photos shared a revision, and a view keyed on it
+/// kept the first folder's index — the People view's crops went blank, the Map's pins stale (found in use,
+/// 2026-10-28).
+pub(crate) fn fresh_rev() -> u64 {
+    static REV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    REV.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// What the Library is currently showing.
 ///
 /// ⚠ A collection is a *source*, not a filter, so the format filter and the six sort orders
@@ -252,8 +261,7 @@ impl Library {
     /// share a value. Called when `visible` changed, and when `entries` were rebuilt (the same indices
     /// may now name other photos).
     pub(crate) fn bump_visible_rev(&mut self) {
-        static REV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        self.visible_rev = REV.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.visible_rev = fresh_rev();
     }
 
     /// Every selected row's [`PhotoId`].
