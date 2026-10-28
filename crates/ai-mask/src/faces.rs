@@ -13,6 +13,9 @@ use tract_onnx::prelude::*;
 
 /// YuNet's square.
 pub const SIDE: u32 = 640;
+/// The tiled pass: the picture at this long side, in 640² squares overlapping by [`crate::people::OVERLAP`] — a
+/// group shot's faces, 15–25 px when the whole frame is shrunk to 640, are 45–75 px here.
+pub const TILED_LONG: u32 = 1920;
 /// A face below this score is not kept — OpenCV's default.
 pub const SCORE: f32 = 0.6;
 const NMS: f32 = 0.3;
@@ -122,6 +125,43 @@ impl Faces {
             })
             .filter(|f| f.bbox[2] > f.bbox[0] && f.bbox[3] > f.bbox[1])
             .collect()))
+    }
+
+    /// The faces in `img` (upright): the whole frame at 640, then — for a picture larger than that — 640² tiles
+    /// over it at [`TILED_LONG`], merged. Strongest first.
+    pub fn find(&self, img: &RgbImage) -> Result<Vec<Face>, InferError> {
+        let mut all = self.detect(img)?;
+        let long = img.width().max(img.height());
+        if long > SIDE {
+            let k = TILED_LONG.min(long) as f32 / long as f32;
+            let (w, h) = (
+                ((img.width() as f32 * k).round() as u32).max(1),
+                ((img.height() as f32 * k).round() as u32).max(1),
+            );
+            let big = imageops::resize(img, w, h, FilterType::Triangle);
+            for &y in &crate::people::offsets(h) {
+                for &x in &crate::people::offsets(w) {
+                    let (tw, th) = (SIDE.min(w - x), SIDE.min(h - y));
+                    let tile = imageops::crop_imm(&big, x, y, tw, th).to_image();
+                    for f in self.detect(&tile)? {
+                        let map = |[u, v]: [f32; 2]| {
+                            [
+                                (x as f32 + u * tw as f32) / w as f32,
+                                (y as f32 + v * th as f32) / h as f32,
+                            ]
+                        };
+                        let [a, b] = map([f.bbox[0], f.bbox[1]]);
+                        let [c, d] = map([f.bbox[2], f.bbox[3]]);
+                        all.push(Face {
+                            bbox: [a, b, c, d],
+                            landmarks: f.landmarks.map(map),
+                            score: f.score,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(nms(all))
     }
 
     /// `face`'s 128 numbers, of unit length — two of the same person score near 1 in [`similarity`].
@@ -350,6 +390,9 @@ mod tests {
         let found = faces.detect(&img).unwrap();
         println!("{found:#?}");
         assert_eq!(found.len(), 3, "{found:?}");
+        // The tiled pass finds the same three, not more, not doubled.
+        let tiled = faces.find(&img).unwrap();
+        assert_eq!(tiled.len(), 3, "{tiled:?}");
         let big = image::imageops::resize(
             &img,
             img.width() * 3 / 2,
