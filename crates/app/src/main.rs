@@ -50,6 +50,7 @@ mod develop;
 mod display_colorspace;
 mod dust_flow;
 mod export_flow;
+mod face_ops;
 mod filmstrip;
 mod folder_rows;
 mod hdr_flow;

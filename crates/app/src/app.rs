@@ -441,6 +441,8 @@ pub(crate) struct RustroomApp {
     pub(crate) map: crate::map_view::MapView,
     /// Immich's people were asked for this session (M10.18c) — once, never per frame.
     pub(crate) immich_people_asked: bool,
+    /// Library → People: its groups, names being typed and the background search (M10.18c).
+    pub(crate) people: crate::people_view::PeopleView,
     /// Everything that narrows what the Library shows.
     ///
     /// ⚠⚠ On the **app**, not on `Library`, so it survives a source switch. Browsing *replaces*

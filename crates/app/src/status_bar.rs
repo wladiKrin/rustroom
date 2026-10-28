@@ -259,6 +259,8 @@ fn job_or_status(app: &mut RustroomApp, ui: &mut egui::Ui) {
         )
     } else if !immich_progress.is_empty() {
         (immich_progress, Some(RustroomApp::cancel_immich_downloads))
+    } else if let Some(line) = app.face_pass_line() {
+        (line, Some(RustroomApp::cancel_face_pass))
     } else {
         (app.status.clone(), None)
     };
