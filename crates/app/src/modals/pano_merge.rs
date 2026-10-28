@@ -40,6 +40,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let (no_profile, unconnected, too_wide) =
         (d.no_profile.clone(), d.unconnected.clone(), d.too_wide);
     let can_merge = d.can_merge();
+    let stacks = d.plan.beside_frames();
     let models = d.models.clone();
     let (mut zoom, mut pan) = (d.zoom, d.pan);
     let pan_drag = app.settings.pan_drag;
@@ -166,8 +167,10 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         }
                     }
                     ui.add_space(8.0);
-                    ui.checkbox(&mut draft.create_stack, "Create stack")
-                        .hover("Stacks the panorama on top of the photos it was made from");
+                    // A merge from Immich is saved in another folder, where no stack can hold it.
+                    ui.add_enabled(stacks, egui::Checkbox::new(&mut draft.create_stack, "Create stack"))
+                        .hover("Stacks the panorama on top of the photos it was made from")
+                        .on_disabled_hover_text("The panorama is saved in another folder than its photos");
                     if let Some(lens) = &no_profile {
                         theme::hint(ui, &format!("No lens profile for {lens}: distortion and vignetting are not corrected"));
                     }

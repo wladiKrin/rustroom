@@ -2,7 +2,8 @@
 //! files, the result's name, the remembered options — and the worker that runs it. No egui.
 //!
 //! The selection's rule is the HDR merge's (`hdr_merge::frames`): one raw per photo, a virtual copy is its
-//! original, an Immich photo must be downloaded, a merged DNG is refused.
+//! original, an Immich photo must be downloaded (its result then goes to `hdr_merge::out_folder`), a merged
+//! DNG is refused.
 
 pub mod lama;
 pub mod worker;
@@ -62,6 +63,13 @@ pub struct PanoPlan {
     pub frames: Vec<PathBuf>,
     /// Where the panorama's DNG goes.
     pub output: PathBuf,
+}
+
+impl PanoPlan {
+    /// Whether the panorama sits in its first frame's folder — the one place Create stack can show it.
+    pub fn beside_frames(&self) -> bool {
+        hdr_merge::beside(&self.output, &self.frames)
+    }
 }
 
 /// The selection — each photo's files, in grid order — as a panorama, or why not.

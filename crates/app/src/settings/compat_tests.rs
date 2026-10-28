@@ -421,6 +421,7 @@ fn settings_round_trip_carries_the_export_options() {
             fill_edges: true,
             create_stack: true,
         },
+        immich_merge_folder: Some(std::path::PathBuf::from("/merged")),
         // Non-default, with ⌥ and a removal, so a re-defaulted field cannot pass.
         shortcuts: vec![
             crate::shortcuts::Rebinding {
@@ -449,6 +450,13 @@ fn settings_round_trip_carries_the_export_options() {
     };
     store.save(&s).unwrap();
     assert_eq!(store.load(), s);
+}
+
+/// 2026-10-28: a file from before merges took Immich photos has no folder for them — the first asks.
+#[test]
+fn a_settings_file_from_before_immich_merges_has_no_merge_folder() {
+    let s: Settings = serde_json::from_str("{}").unwrap();
+    assert_eq!(s.immich_merge_folder, None);
 }
 
 /// M10.17a: a settings file from before the HDR merge opens its dialog with Lightroom's defaults.

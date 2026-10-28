@@ -272,6 +272,14 @@ collapsed in place and the worker's pictures rendered from a downscaled stitch. 
 the hand-off (frame-count cap, clamping a fill at 0, a misplaced doc comment in `compat_tests.rs`, logic in
 `pano_flow.rs` that belongs in the lib, the status line's wording when Fill had no LaMa, …).
 
+- **After the hand-off, asked for in use (2026-10-28): merges take downloaded Immich photos** — HDR and panorama
+  both, through `hdr_merge::frames`. An Immich photo not downloaded says "Download Immich photos before merging
+  them". The result never lands in the Immich cache (Clear… empties it): `hdr_merge::out_folder` sends it to
+  `Settings::immich_merge_folder`, asked for once by a folder picker (`place_immich_merge`, refused inside the
+  cache) and changeable in Settings → Immich → Merged photos; it is named after the photo's own name, not the
+  asset id. Create stack is greyed there (`beside_frames`) — the author's call — and the status says
+  "Merged X into <folder>". Placement and landing sabotaged. Gate **4,377 passed**. ⚠ `modals/settings.rs` grew by six.
+
 ### 2026-10-27 — The app builds on Linux again (branch `fix-linux-build`)
 
 The first run on the author's Linux machine (Arch, X11) failed to compile: E0432, `crate::display_colorspace` and

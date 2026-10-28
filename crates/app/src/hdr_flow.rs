@@ -130,13 +130,17 @@ impl RustroomApp {
             |p| crate::move_flow::path_taken(cat, p),
             Path::exists,
         );
-        let plan = match plan {
+        let mut plan = match plan {
             Ok(p) => p,
             Err(r) => {
                 self.status = r.sentence().to_string();
                 return;
             }
         };
+        let first = plan.frames[0].clone();
+        if !self.place_immich_merge(&mut plan.output, &first, "HDR") {
+            return;
+        }
         let base = self.settings.initial_edits(None);
         let settings = self.settings.hdr;
         if last {

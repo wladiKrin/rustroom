@@ -59,6 +59,9 @@ pub struct Settings {
     pub hdr: crate::hdr_merge::HdrSettings,
     /// The panorama merge dialog's options (M10.17b) — written only when a merge starts.
     pub panorama: crate::pano_merge::PanoSettings,
+    /// Where a merge of downloaded Immich photos goes (2026-10-28) — never the Immich cache, which
+    /// Clear… empties. Asked for by the first such merge; changed in Settings → Immich.
+    pub immich_merge_folder: Option<std::path::PathBuf>,
     /// The keyboard shortcuts the user changed, over the menu's defaults (M10.9b) — only the changes.
     pub shortcuts: Vec<crate::shortcuts::Rebinding>,
     /// Which network *Select Subject* uses (M9.13) — IS-Net (fast, the default) or BiRefNet_lite
@@ -491,6 +494,7 @@ impl Default for Settings {
             rename_template: DEFAULT_RENAME_TEMPLATE.to_string(),
             hdr: crate::hdr_merge::HdrSettings::default(),
             panorama: crate::pano_merge::PanoSettings::default(),
+            immich_merge_folder: None,
             shortcuts: Vec::new(),
             ai_subject_model: Default::default(),
             confirm_export_preset_delete: true,

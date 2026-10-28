@@ -169,13 +169,17 @@ impl RustroomApp {
             |p| crate::move_flow::path_taken(cat, p),
             Path::exists,
         );
-        let plan = match plan {
+        let mut plan = match plan {
             Ok(p) => p,
             Err(r) => {
                 self.status = r.sentence_for(MergeKind::Panorama).to_string();
                 return;
             }
         };
+        let first = plan.frames[0].clone();
+        if !self.place_immich_merge(&mut plan.output, &first, "Pano") {
+            return;
+        }
         let base = self.settings.initial_edits(None);
         let settings = self.settings.panorama;
         let models = rustroom_app::ai_cache::models_dir();

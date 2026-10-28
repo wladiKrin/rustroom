@@ -56,6 +56,7 @@ pub struct SettingsDraft {
     pub(super) immich_thumb_budget_mb: u32,
     pub(super) immich_cache_limit_gb: u32,
     pub(super) immich_cache_warn: bool,
+    pub(super) immich_merge_folder: Option<std::path::PathBuf>,
     pub(super) denoise_cache_limit_gb: u32,
     pub(super) denoise_cache_warn: bool,
     pub(super) denoise_network: rustroom_app::settings::DenoiseNetwork,
@@ -131,6 +132,7 @@ impl SettingsDraft {
             immich_thumb_budget_mb: s.immich_thumb_budget_mb,
             immich_cache_limit_gb: s.immich_cache_limit_gb,
             immich_cache_warn: s.immich_cache_warn,
+            immich_merge_folder: s.immich_merge_folder.clone(),
             denoise_cache_limit_gb: s.denoise_cache_limit_gb,
             denoise_cache_warn: s.denoise_cache_warn,
             denoise_network: s.denoise_network,
@@ -269,6 +271,10 @@ impl SettingsDraft {
         }
         if self.immich_cache_warn != app.settings.immich_cache_warn {
             app.settings.immich_cache_warn = self.immich_cache_warn;
+            plain = true;
+        }
+        if self.immich_merge_folder != app.settings.immich_merge_folder {
+            app.settings.immich_merge_folder = self.immich_merge_folder.clone();
             plain = true;
         }
         if self.denoise_cache_limit_gb != app.settings.denoise_cache_limit_gb {

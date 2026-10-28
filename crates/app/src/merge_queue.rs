@@ -54,6 +54,58 @@ impl MergeQueue {
 }
 
 impl RustroomApp {
+    /// A merge whose first frame is a downloaded Immich photo: `output` moved to the folder remembered
+    /// for such merges, asked for once (`hdr_merge::out_folder`). `false` when the picker was cancelled
+    /// or pointed back into the Immich cache — nothing merges then.
+    pub(crate) fn place_immich_merge(
+        &mut self,
+        output: &mut PathBuf,
+        first: &Path,
+        suffix: &str,
+    ) -> bool {
+        use rustroom_app::hdr_merge::{out_folder, output_in, OutFolder};
+        use rustroom_app::immich_source::is_immich_path;
+        let root = self.immich_cache_root();
+        let in_cache = |p: &Path| root.as_deref().is_some_and(|r| is_immich_path(r, p));
+        let folder = match out_folder(
+            in_cache(first),
+            self.settings.immich_merge_folder.as_deref(),
+            Path::is_dir,
+        ) {
+            OutFolder::Beside => return true,
+            OutFolder::In(f) => f,
+            OutFolder::Ask => {
+                let Some(f) = rfd::FileDialog::new()
+                    .set_title("Choose a folder for photos merged from Immich")
+                    .pick_folder()
+                else {
+                    self.status = "Merge cancelled".to_string();
+                    return false;
+                };
+                if in_cache(&f) {
+                    self.status = "Choose a folder outside the Immich downloads".to_string();
+                    return false;
+                }
+                self.settings.immich_merge_folder = Some(f.clone());
+                self.save_settings();
+                f
+            }
+        };
+        // The photo's own name — the cache's file is named by its asset id.
+        let shown = self
+            .library
+            .as_ref()
+            .and_then(|l| l.scan.iter().find(|e| e.path == first))
+            .map(|e| e.file_name.clone())
+            .or_else(|| first.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_default();
+        let cat = self.catalog.as_ref();
+        *output = output_in(&folder, &shown, suffix, |p| {
+            crate::move_flow::path_taken(cat, p)
+        });
+        true
+    }
+
     /// A merged photo landed at `path`, made from `sources`: its sidecar written BEFORE the folder is
     /// scanned (no thumbnail renders from a photo without its edits — the import's order), then the
     /// catalog, the Library row, the stack when asked, the selection, the status line.
@@ -76,10 +128,13 @@ impl RustroomApp {
         let id = PhotoId::original(path.to_path_buf());
         // ⚠ Only a Library showing the sources gains the row — a catalog-backed view follows the
         // catalog by itself (`source_refresh`).
-        let shows = self
-            .library
-            .as_ref()
-            .is_some_and(|l| l.scan.iter().any(|e| sources.contains(&e.path)));
+        // ⚠ A merge from Immich lands in another folder (`place_immich_merge`) — not a row of this view.
+        let beside = sources.first().and_then(|s| s.parent()) == Some(dir);
+        let shows = beside
+            && self
+                .library
+                .as_ref()
+                .is_some_and(|l| l.scan.iter().any(|e| sources.contains(&e.path)));
         if shows {
             let entry = scanned.and_then(|(scan, _)| scan.into_iter().find(|e| e.path == path));
             if let (Some(lib), Some(entry)) = (self.library.as_mut(), entry) {
@@ -97,7 +152,11 @@ impl RustroomApp {
                 self.stack_ids(&ids);
             }
         }
-        self.status = format!("Merged {name}");
+        self.status = if beside {
+            format!("Merged {name}")
+        } else {
+            format!("Merged {name} into {}", dir.display())
+        };
     }
 
     /// `job` to the back of the queue; `line` is the status row's until it starts.
@@ -216,6 +275,57 @@ mod tests {
             app.status.contains("stopped unexpectedly"),
             "{}",
             app.status
+        );
+    }
+}
+
+#[cfg(test)]
+mod immich_tests {
+    use std::path::PathBuf;
+
+    /// Asked for in use (2026-10-28): a merge of downloaded Immich photos lands in the remembered folder,
+    /// named after the photo, never in the cache Clear… empties; a local merge stays beside its frames.
+    #[test]
+    fn a_merge_from_immich_goes_to_the_remembered_folder_under_the_photos_name() {
+        let mut app = crate::test_app::for_test();
+        app.settings.immich_url = "https://example.invalid".to_string();
+        let root = app.immich_cache_root().unwrap();
+        let dir = test_dir::TempDir::new("immich-merge-folder");
+        app.settings.immich_merge_folder = Some(dir.path().to_path_buf());
+        let first = root.join("a846b6b0-33cb-45e9-b85a-2dab3bc23483.RAF");
+        let mut lib = crate::test_app::library_of_names(&["DSCF1234.RAF"]);
+        lib.scan[0].path = first.clone();
+        app.library = Some(lib);
+
+        let mut out = root.join("a846b6b0-33cb-45e9-b85a-2dab3bc23483-Pano.dng");
+        assert!(app.place_immich_merge(&mut out, &first, "Pano"));
+        assert_eq!(out, dir.join("DSCF1234-Pano.dng"));
+
+        let local = PathBuf::from("/photos/DSCF1.RAF");
+        let mut out = PathBuf::from("/photos/DSCF1-Pano.dng");
+        assert!(app.place_immich_merge(&mut out, &local, "Pano"));
+        assert_eq!(
+            out,
+            PathBuf::from("/photos/DSCF1-Pano.dng"),
+            "beside its frames"
+        );
+    }
+
+    #[test]
+    fn a_merge_landing_in_another_folder_says_where() {
+        let mut app = crate::test_app::for_test();
+        let dir = test_dir::TempDir::new("immich-merge-land");
+        let out = dir.join("DSCF1234-Pano.dng");
+        std::fs::write(&out, b"").unwrap();
+        app.land_merged(
+            &[PathBuf::from("/cache/a.RAF"), PathBuf::from("/cache/b.RAF")],
+            true,
+            &out,
+            &edit_model::Edits::default(),
+        );
+        assert_eq!(
+            app.status,
+            format!("Merged DSCF1234-Pano.dng into {}", dir.path().display())
         );
     }
 }
