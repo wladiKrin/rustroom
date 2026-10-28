@@ -430,6 +430,8 @@ pub(crate) struct RustroomApp {
     /// filter by a date that was never read. Built once and kept for the life of the app, so a
     /// source switch never abandons a half-scanned folder.
     pub(crate) metadata: rustroom_app::metadata_scanner::MetadataScanner,
+    /// The one-time pass reading the GPS of photos catalogued before M10.18b; `None` once it is over.
+    pub(crate) location_pass: Option<rustroom_app::location_pass::LocationPass>,
     /// Everything that narrows what the Library shows.
     ///
     /// ⚠⚠ On the **app**, not on `Library`, so it survives a source switch. Browsing *replaces*

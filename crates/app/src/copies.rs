@@ -685,7 +685,10 @@ mod tests {
         with_server(&mut app);
         let fav = immich::Asset {
             is_favorite: true,
-            exif_info: Some(immich::ExifInfo { rating: Some(4) }),
+            exif_info: Some(immich::ExifInfo {
+                rating: Some(4),
+                ..Default::default()
+            }),
             ..one_asset("f")
         };
         app.open_immich_album(&ctx, "al".into(), "Al".into(), std::slice::from_ref(&fav));
@@ -702,7 +705,10 @@ mod tests {
         let mut app = crate::test_app::for_test();
         with_server(&mut app);
         let rejected = immich::Asset {
-            exif_info: Some(immich::ExifInfo { rating: Some(-1) }),
+            exif_info: Some(immich::ExifInfo {
+                rating: Some(-1),
+                ..Default::default()
+            }),
             ..one_asset("r")
         };
         app.open_immich_bucket(

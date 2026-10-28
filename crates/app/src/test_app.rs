@@ -110,6 +110,7 @@ pub fn for_test() -> RustroomApp {
         immich_download_pending: Default::default(),
         immich_download_total: 0,
         metadata: rustroom_app::metadata_scanner::MetadataScanner::new(|| {}),
+        location_pass: None,
         camera_profiles_cache: Vec::new(),
         compare_view: Default::default(),
         compare_focus: 1,

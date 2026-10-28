@@ -390,6 +390,10 @@ impl RustroomApp {
             if let Err(e) = rustroom_app::immich_catalog::fill_marks(cat, &root, assets) {
                 eprintln!("catalog: {e}");
             }
+            // M10.18b: Immich's positions, the Map's pins for phone photos.
+            if let Err(e) = rustroom_app::immich_catalog::fill_locations(cat, &root, assets) {
+                eprintln!("catalog: {e}");
+            }
         }
         self.refresh_immich_present();
         let n = self.open_scan(
@@ -440,6 +444,10 @@ impl RustroomApp {
             }
             // M10.15c: as for an album.
             if let Err(e) = rustroom_app::immich_catalog::fill_marks(cat, &root, assets) {
+                eprintln!("catalog: {e}");
+            }
+            // M10.18b: Immich's positions, the Map's pins for phone photos.
+            if let Err(e) = rustroom_app::immich_catalog::fill_locations(cat, &root, assets) {
                 eprintln!("catalog: {e}");
             }
         }

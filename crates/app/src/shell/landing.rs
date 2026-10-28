@@ -57,12 +57,37 @@ impl RustroomApp {
         }
     }
 
+    /// The startup location pass's findings into the catalog (M10.18b). Every write moves
+    /// `change_count`, which is what refreshes the Map's pins.
+    pub(super) fn pump_location_pass(&mut self, ctx: &egui::Context) {
+        let Some(pass) = &self.location_pass else {
+            return;
+        };
+        let (found, done) = pass.drain();
+        if let Some(cat) = &self.catalog {
+            for (path, at) in &found {
+                if let Err(e) = cat.set_file_location(path, *at) {
+                    eprintln!("catalog: {e}");
+                }
+            }
+        }
+        if done {
+            self.location_pass = None;
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
+    }
+
     /// Write finished capture metadata into the catalog, and refresh the Library that filters on it.
     pub(super) fn pump_captures(&mut self) {
         let done = self.metadata.drain();
         if let Some(cat) = &self.catalog {
             for r in &done {
                 if let Err(e) = cat.set_capture(&r.path, &r.capture) {
+                    eprintln!("catalog: {e}");
+                }
+                // M10.18b: the file's own position — or "read, none", so the startup pass skips it.
+                if let Err(e) = cat.set_file_location(&r.path, r.capture.gps) {
                     eprintln!("catalog: {e}");
                 }
             }

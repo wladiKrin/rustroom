@@ -51,6 +51,7 @@ impl eframe::App for RustroomApp {
         // ⚠ Written as results arrive rather than batched at the end, so a folder closed half way
         // keeps what was read.
         self.pump_captures();
+        self.pump_location_pass(&ctx);
 
         self.top_panel(ui, &ctx);
         self.view_body(ui, &ctx);

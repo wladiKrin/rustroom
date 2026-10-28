@@ -25,6 +25,8 @@ pub fn apply(
     // ⚠ At once, so the NEXT import's already-imported check sees this photo without waiting for
     // the background metadata scan to reach it.
     let _ = cat.set_capture(photo, capture);
+    // M10.18b: and where it was taken — an import and a tethered shot both land here.
+    let _ = cat.set_file_location(photo, capture.gps);
 
     // ⚠⚠ Only the fields the dialog fills: an empty Creator must never erase one already there.
     let (copyright, creator) = (opts.copyright.trim(), opts.creator.trim());
@@ -87,6 +89,19 @@ mod tests {
             keywords: "Paris, family".into(),
             ..ImportOptions::default()
         }
+    }
+
+    /// M10.18b: an imported (or tethered) photo records where it was taken at once.
+    #[test]
+    fn a_scanned_photo_records_its_file_location() {
+        let (cat, photo) = catalogued("location");
+        let capture = Capture {
+            gps: Some((38.7, -9.1)),
+            ..Capture::default()
+        };
+        apply(&cat, &photo, &capture, &ImportOptions::default(), None);
+        assert_eq!(cat.location_of(&photo).unwrap(), Some((38.7, -9.1)));
+        assert!(cat.files_without_location_read().unwrap().is_empty());
     }
 
     #[test]
