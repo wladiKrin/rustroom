@@ -64,6 +64,12 @@ pub const GRID: char = '\u{e296}';
 pub const COMPARE: char = '\u{e546}';
 /// `grid-nine` — Survey, the whole selection at once.
 pub const SURVEY: char = '\u{ec8c}';
+/// `map-trifold` — the Library's Map view (M10.18b). ⚠ Taken from the 2.1.2 `style.css` (whose
+/// `grid-four` agrees with [`GRID`]) and found in the bundled TTF's cmap by `fc-query`.
+pub const MAP: char = '\u{e31a}';
+/// `users` — the Library's People view (M10.18c). ⚠ From the 2.1.2 `style.css`, found in the bundled TTF's cmap
+/// by `fc-query`.
+pub const PEOPLE: char = '\u{e4d6}';
 /// `funnel` — the Library's Filter menu.
 pub const FILTER: char = '\u{e266}';
 /// `sort-ascending` — the sort order combo.
@@ -113,7 +119,7 @@ pub const ADD_MORE: char = '\u{e69c}';
 /// Every icon the app draws.
 ///
 /// ⚠ The coverage tests sweep this, so an icon missing from it is one nothing checks.
-pub const ALL: [char; 32] = [
+pub const ALL: [char; 34] = [
     EDIT,
     CROP,
     MASKS,
@@ -131,6 +137,8 @@ pub const ALL: [char; 32] = [
     GRID,
     COMPARE,
     SURVEY,
+    MAP,
+    PEOPLE,
     FILTER,
     SORT,
     EXPORT,

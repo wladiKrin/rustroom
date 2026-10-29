@@ -53,7 +53,12 @@ impl RustroomApp {
                 // ⚠ Keyed by **path**, because capture metadata describes the exposure and every
                 // copy of a file shares it — the split `Library.captures` already documents. An
                 // uncatalogued or EXIF-less file gets the default, which the template collapses.
-                let capture = lib.captures.get(&id.path).cloned().unwrap_or_default();
+                let mut capture = lib.captures.get(&id.path).cloned().unwrap_or_default();
+                // M10.18b: the location is the catalog's winner — the capture map holds none.
+                capture.gps = self
+                    .catalog
+                    .as_ref()
+                    .and_then(|c| c.location_of(&id.path).ok().flatten());
                 // ⚠ Per **file**, like `capture`, and read here rather than held on `Library`:
                 // nothing reads descriptions per frame, so a per-folder map would be machinery
                 // for a consumer that does not exist (spec §1). One query per selected photo.

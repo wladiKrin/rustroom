@@ -88,7 +88,19 @@ impl RustroomApp {
                 None
             }
         };
+        // M10.18b: the photos read before locations existed — a background pass, once per photo.
+        let location_passes: Vec<_> = catalog
+            .as_ref()
+            .and_then(|c| c.files_without_location_read().ok())
+            .filter(|f| !f.is_empty())
+            .map(rustroom_app::location_pass::LocationPass::start)
+            .into_iter()
+            .collect();
         let mut app = Self {
+            location_passes,
+            map: Default::default(),
+            immich_people_asked: false,
+            people: Default::default(),
             // ⚠ From the settings, not `default()`: the format filter is persisted and this is
             // where it is read back — see `Settings::initial_filter`.
             filter: settings.initial_filter(),

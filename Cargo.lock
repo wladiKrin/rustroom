@@ -329,6 +329,7 @@ dependencies = [
  "test-dir",
  "tether",
  "thiserror 2.0.19",
+ "ureq",
  "xmp",
 ]
 

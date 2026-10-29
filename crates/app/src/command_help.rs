@@ -38,6 +38,8 @@ pub fn describe(c: Command) -> String {
         C::ShowDevelop => "Shows the photo in Develop to edit it",
         C::ShowCompare => "Shows two photos side by side to choose between",
         C::ShowSurvey => "Shows the selected photos together to pick from",
+        C::ShowMap => "Shows on a map where the photos in view were taken",
+        C::ShowPeople => "Shows who is in the photos, and the faces still to name",
         C::ZoomIn => "Zooms in",
         C::ZoomOut => "Zooms out",
         C::FitView => "Fits the whole photo in the view",

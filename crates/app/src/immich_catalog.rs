@@ -91,6 +91,71 @@ pub fn fill_marks(
     cat.fill_from_server(&fills)
 }
 
+/// Record Immich's positions for `assets` (cached under `root`) as their `server` location rows
+/// (M10.18b). Only assets with both halves are passed on; the rule that a hand-set or the file's own
+/// position wins is `Catalog::location_of`'s.
+pub fn fill_locations(
+    cat: &catalog::db::Catalog,
+    root: &Path,
+    assets: &[immich::Asset],
+) -> Result<usize, catalog::db::CatalogError> {
+    let rows: Vec<(std::path::PathBuf, (f64, f64))> = assets
+        .iter()
+        .filter_map(|a| {
+            let e = a.exif_info.as_ref()?;
+            let at = (e.latitude?, e.longitude?);
+            let ok = at.0.abs() <= 90.0 && at.1.abs() <= 180.0 && at != (0.0, 0.0);
+            ok.then(|| (crate::immich_source::cache_path(root, a), at))
+        })
+        .collect();
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    cat.set_server_locations(&rows)
+}
+
+/// Immich's people in `assets` (cached under `root`) and their face boxes (M10.18c) — the named, visible ones;
+/// each asset's earlier Immich faces replaced. Returns how many people were seen.
+pub fn fill_faces(
+    cat: &catalog::db::Catalog,
+    root: &Path,
+    assets: &[immich::Asset],
+) -> Result<usize, catalog::db::CatalogError> {
+    let named = |p: &&immich::AssetPerson| !p.is_hidden && !p.name.trim().is_empty();
+    let mut people: Vec<(String, String)> = assets
+        .iter()
+        .flat_map(|a| a.people.iter().flatten().filter(named))
+        .map(|p| (p.id.clone(), p.name.trim().to_string()))
+        .collect();
+    people.sort();
+    people.dedup();
+    if !people.is_empty() {
+        cat.set_immich_people(&people)?;
+    }
+    // ⚠ Only assets the reply spoke for (`Some`, even empty); one transaction for them all (the review's #10).
+    let faces: Vec<catalog::db::ImmichFaces> = assets
+        .iter()
+        .filter_map(|a| {
+            let list = a.people.as_ref()?;
+            let boxes = list
+                .iter()
+                .filter(named)
+                .flat_map(|p| {
+                    p.faces
+                        .iter()
+                        .filter_map(|f| f.normalised())
+                        .map(|b| (b, p.id.clone()))
+                })
+                .collect();
+            Some((crate::immich_source::cache_path(root, a), boxes))
+        })
+        .collect();
+    if !faces.is_empty() {
+        cat.set_immich_faces(&faces)?;
+    }
+    Ok(people.len())
+}
+
 /// Whether this grid cell should carry the downloaded indicator.
 ///
 /// ⚠ **Immich sources only** — asked for under the Immich header and nowhere else. A local photo is
@@ -182,13 +247,17 @@ mod tests {
             updated_at: "2025-01-02T00:00:00.000Z".into(),
             is_favorite: false,
             exif_info: None,
+            people: None,
         }
     }
 
     fn marked(id: &str, favourite: bool, rating: Option<i32>) -> immich::Asset {
         immich::Asset {
             is_favorite: favourite,
-            exif_info: Some(immich::ExifInfo { rating }),
+            exif_info: Some(immich::ExifInfo {
+                rating,
+                ..Default::default()
+            }),
             ..asset(id)
         }
     }
@@ -239,6 +308,96 @@ mod tests {
             0,
             "a second open fills nothing"
         );
+    }
+
+    /// M10.18b, constructed: an asset's `exifInfo` position becomes its server row; a `null` one fills
+    /// nothing. ⚠ The JSON shape is the schema's — the GUI check confirms it on the author's server.
+    #[test]
+    fn an_immich_asset_with_a_position_fills_a_server_row() {
+        let cat = catalog::db::Catalog::open_in_memory().unwrap();
+        let root = std::path::Path::new("/cache/server");
+        let ex: immich::ExifInfo =
+            serde_json::from_str(r#"{"rating":null,"latitude":38.7,"longitude":-9.1}"#).unwrap();
+        let none: immich::ExifInfo =
+            serde_json::from_str(r#"{"rating":null,"latitude":null,"longitude":null}"#).unwrap();
+        let assets = [
+            immich::Asset {
+                exif_info: Some(ex),
+                ..asset("a")
+            },
+            immich::Asset {
+                exif_info: Some(none),
+                ..asset("b")
+            },
+        ];
+        let scan = crate::immich_source::entries_from_assets(&assets, root);
+        record_assets(&cat, root, &scan).unwrap();
+        assert_eq!(fill_locations(&cat, root, &assets).unwrap(), 1);
+        let at = |a| {
+            cat.location_of(&crate::immich_source::cache_path(root, a))
+                .unwrap()
+        };
+        assert_eq!(at(&assets[0]), Some((38.7, -9.1)));
+        assert_eq!(at(&assets[1]), None, "a null position fills nothing");
+    }
+
+    /// M10.18c, constructed: an asset's named people become Immich faces; a hidden or unnamed one does not.
+    #[test]
+    fn an_assets_people_fill_immich_faces() {
+        let cat = catalog::db::Catalog::open_in_memory().unwrap();
+        let root = std::path::Path::new("/cache/server");
+        let face = immich::FaceBox {
+            image_width: 100.0,
+            image_height: 100.0,
+            bounding_box_x1: 10.0,
+            bounding_box_y1: 10.0,
+            bounding_box_x2: 30.0,
+            bounding_box_y2: 30.0,
+        };
+        let person = |id: &str, name: &str, hidden: bool| immich::AssetPerson {
+            id: id.into(),
+            name: name.into(),
+            is_hidden: hidden,
+            faces: vec![face],
+        };
+        let assets = [immich::Asset {
+            people: Some(vec![
+                person("p1", "Anna", false),
+                person("p2", "", false),
+                person("p3", "Ben", true),
+            ]),
+            ..asset("a")
+        }];
+        let scan = crate::immich_source::entries_from_assets(&assets, root);
+        record_assets(&cat, root, &scan).unwrap();
+        assert_eq!(fill_faces(&cat, root, &assets).unwrap(), 1);
+        let f = cat
+            .faces_of(&crate::immich_source::cache_path(root, &assets[0]))
+            .unwrap();
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0].immich);
+        assert_eq!(cat.people().unwrap()[0].name, "Anna");
+        // The server now says nobody is in it: its Immich faces go. A list without the field changes nothing.
+        let none = [immich::Asset {
+            people: None,
+            ..assets[0].clone()
+        }];
+        fill_faces(&cat, root, &none).unwrap();
+        assert_eq!(
+            cat.faces_of(&crate::immich_source::cache_path(root, &assets[0]))
+                .unwrap()
+                .len(),
+            1
+        );
+        let nobody = [immich::Asset {
+            people: Some(vec![]),
+            ..assets[0].clone()
+        }];
+        fill_faces(&cat, root, &nobody).unwrap();
+        assert!(cat
+            .faces_of(&crate::immich_source::cache_path(root, &assets[0]))
+            .unwrap()
+            .is_empty());
     }
 
     fn marks(rating: u8) -> catalog::db::Marks {

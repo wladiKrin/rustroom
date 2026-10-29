@@ -124,6 +124,47 @@ impl Catalog {
             .collect();
         drop(st);
 
+        let mut st = tx.prepare(
+            "SELECT file_name, source, lat, lon FROM photo_location WHERE folder_id = ?1",
+        )?;
+        let locations: Vec<(String, String, Option<f64>, Option<f64>)> = st
+            .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .filter_map(Result::ok)
+            .collect();
+        drop(st);
+
+        let mut rej = tx.prepare("SELECT person_id FROM face_rejections WHERE face_id = ?1")?;
+        let mut st = tx.prepare(
+            "SELECT file_name, x0, y0, x1, y1, embedding, person_id, confirmed, dismissed, source, id
+             FROM faces WHERE folder_id = ?1",
+        )?;
+        let faces: Vec<crate::snapshot::FaceSnapshot> = st
+            .query_map([id], |r| {
+                Ok(crate::snapshot::FaceSnapshot {
+                    file_name: r.get(0)?,
+                    bbox: [r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?],
+                    embedding: r.get(5)?,
+                    person: r.get(6)?,
+                    confirmed: r.get::<_, i64>(7)? != 0,
+                    dismissed: r.get::<_, i64>(8)? != 0,
+                    source: r.get(9)?,
+                    rejected: rej
+                        .query_map([r.get::<_, i64>(10)?], |q| q.get(0))?
+                        .filter_map(Result::ok)
+                        .collect(),
+                })
+            })?
+            .filter_map(Result::ok)
+            .collect();
+        drop(st);
+        drop(rej);
+        let mut st = tx.prepare("SELECT file_name FROM faces_read WHERE folder_id = ?1")?;
+        let faces_read: Vec<String> = st
+            .query_map([id], |r| r.get(0))?
+            .filter_map(Result::ok)
+            .collect();
+        drop(st);
+
         tx.execute("DELETE FROM folders WHERE id = ?1", [id])?;
         tx.commit()?;
         Ok(CatalogSnapshot::Folder {
@@ -134,6 +175,9 @@ impl Catalog {
             memberships,
             keywords,
             stacks,
+            locations,
+            faces,
+            faces_read,
         })
     }
 
@@ -214,6 +258,9 @@ impl Catalog {
                 memberships,
                 keywords,
                 stacks,
+                locations,
+                faces,
+                faces_read,
             } => {
                 let path = path.to_string_lossy().to_string();
                 let last_seen = photos.iter().map(|p| p.last_seen).max().unwrap_or(0);
@@ -309,6 +356,50 @@ impl Catalog {
                          SELECT ?1, ?2, ?3
                          WHERE EXISTS (SELECT 1 FROM keywords WHERE id = ?3)",
                         rusqlite::params![fid, file_name, keyword_id],
+                    )?;
+                }
+
+                for f in faces {
+                    // ⚠ A person deleted meanwhile leaves the face unnamed rather than failing the restore.
+                    tx.execute(
+                        "INSERT INTO faces (folder_id, file_name, x0, y0, x1, y1, embedding, person_id, confirmed,
+                                            dismissed, source)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, (SELECT id FROM people WHERE id = ?8), ?9, ?10, ?11)",
+                        rusqlite::params![
+                            fid,
+                            f.file_name,
+                            f.bbox[0],
+                            f.bbox[1],
+                            f.bbox[2],
+                            f.bbox[3],
+                            f.embedding,
+                            f.person,
+                            f.confirmed as i64,
+                            f.dismissed as i64,
+                            f.source
+                        ],
+                    )?;
+                    let id = tx.last_insert_rowid();
+                    for person in &f.rejected {
+                        tx.execute(
+                            "INSERT OR IGNORE INTO face_rejections (face_id, person_id)
+                             SELECT ?1, id FROM people WHERE id = ?2",
+                            rusqlite::params![id, person],
+                        )?;
+                    }
+                }
+                for name in faces_read {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO faces_read (folder_id, file_name) VALUES (?1, ?2)",
+                        rusqlite::params![fid, name],
+                    )?;
+                }
+
+                for (file_name, source, lat, lon) in locations {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO photo_location (folder_id, file_name, source, lat, lon)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![fid, file_name, source, lat, lon],
                     )?;
                 }
 
@@ -540,6 +631,70 @@ mod tests {
             .expect("the rating must come back");
         assert_eq!(m.flag, Flag::Pick);
         assert_eq!(m.label, 2);
+    }
+
+    /// M10.18b: a forgotten folder's locations come back with it — every source, a removal too.
+    #[test]
+    fn forgetting_a_folder_and_undoing_brings_back_its_locations() {
+        let (cat, dir) = with_two_photos();
+        let (a, b) = (dir.join("a.RAF"), dir.join("b.RAF"));
+        cat.set_file_location(&a, Some((38.7, -9.1))).unwrap();
+        cat.set_hand(std::slice::from_ref(&a), crate::db::Hand::At(38.8, -9.4))
+            .unwrap();
+        cat.set_hand(std::slice::from_ref(&b), crate::db::Hand::Removed)
+            .unwrap();
+        let fid = cat.folders().unwrap()[0].id;
+        let snap = cat.forget_folder(fid).unwrap();
+        cat.restore(&snap).unwrap();
+        assert_eq!(cat.location_of(&a).unwrap(), Some((38.8, -9.4)));
+        assert_eq!(cat.hand_location(&b).unwrap(), crate::db::Hand::Removed);
+        cat.set_hand(std::slice::from_ref(&a), crate::db::Hand::Unset)
+            .unwrap();
+        assert_eq!(
+            cat.location_of(&a).unwrap(),
+            Some((38.7, -9.1)),
+            "the file row came back too"
+        );
+    }
+
+    /// M10.18c, review focus 4: a forgotten folder's faces come back named.
+    #[test]
+    fn forgetting_a_folder_and_undoing_brings_back_its_faces() {
+        let (cat, dir) = with_two_photos();
+        let a = dir.join("a.RAF");
+        let f = crate::db::NewFace {
+            bbox: [0.1, 0.1, 0.2, 0.2],
+            embedding: vec![0.5; 128],
+        };
+        cat.set_local_faces(&a, &[f]).unwrap();
+        let id = cat.faces_of(&a).unwrap()[0].id;
+        let anna = cat.person_named("Anna").unwrap();
+        cat.set_face_states(&[(id, (Some(anna), true, false))])
+            .unwrap();
+        let fid = cat.folders().unwrap()[0].id;
+        let snap = cat.forget_folder(fid).unwrap();
+        assert!(cat.faces_of(&a).unwrap().is_empty());
+        cat.restore(&snap).unwrap();
+        let back = cat.faces_of(&a).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!((back[0].person, back[0].confirmed), (Some(anna), true));
+        assert_eq!(back[0].embedding.as_ref().map(Vec::len), Some(128));
+        assert!(cat
+            .files_without_faces_read(std::slice::from_ref(&a))
+            .unwrap()
+            .is_empty());
+        // The review's #7: a "No" comes back too, on the face's new id.
+        let ben = cat.person_named("Ben").unwrap();
+        let id = back[0].id;
+        cat.set_rejected(&[id], ben, true).unwrap();
+        let fid = cat.folders().unwrap()[0].id;
+        let snap = cat.forget_folder(fid).unwrap();
+        cat.restore(&snap).unwrap();
+        let again = cat.faces_of(&a).unwrap()[0].id;
+        assert!(
+            cat.face_rejections().unwrap().contains(&(again, ben)),
+            "the No was lost"
+        );
     }
 
     #[test]

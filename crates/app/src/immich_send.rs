@@ -400,7 +400,10 @@ mod tests {
         .unwrap();
         assert_eq!(server_marks_of(&a), server(None, false));
         a.is_favorite = true;
-        a.exif_info = Some(immich::ExifInfo { rating: Some(4) });
+        a.exif_info = Some(immich::ExifInfo {
+            rating: Some(4),
+            ..Default::default()
+        });
         assert_eq!(server_marks_of(&a), server(Some(4), true));
     }
 }

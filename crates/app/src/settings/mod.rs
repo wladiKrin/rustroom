@@ -23,6 +23,32 @@ pub use panel::*;
 pub use sizes::*;
 pub use store::*;
 
+/// The Library views the top row shows beside Grid, which is always there (M10.18c).
+///
+/// ⚠ Container-level `#[serde(default)]` only — the rule of this file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LibraryViews {
+    pub compare: bool,
+    pub survey: bool,
+    pub map: bool,
+    pub people: bool,
+}
+
+impl Default for LibraryViews {
+    fn default() -> Self {
+        Self {
+            compare: true,
+            survey: true,
+            map: true,
+            people: true,
+        }
+    }
+}
+
+/// OpenStreetMap's standard tiles — the Map view's default server (M10.18b).
+pub const DEFAULT_TILE_URL: &str = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+
 /// User preferences that survive a restart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -64,6 +90,13 @@ pub struct Settings {
     pub immich_merge_folder: Option<std::path::PathBuf>,
     /// Tethered capture's options (M10.18a) — written only when a session starts.
     pub tether: crate::tether_options::TetherOptions,
+    /// The Map view's tile server, a `{z}/{x}/{y}` template (M10.18b) — OpenStreetMap's by default.
+    pub map_tile_url: String,
+    /// Which views the Library's top row shows beside Grid (M10.18c, the author's request). A hidden view keeps
+    /// its menu entry and shortcut.
+    pub library_views: LibraryViews,
+    /// Look for faces in local photos while the People view is open (M10.18c).
+    pub find_faces: bool,
     /// The keyboard shortcuts the user changed, over the menu's defaults (M10.9b) — only the changes.
     pub shortcuts: Vec<crate::shortcuts::Rebinding>,
     /// Which network *Select Subject* uses (M9.13) — IS-Net (fast, the default) or BiRefNet_lite
@@ -498,6 +531,9 @@ impl Default for Settings {
             panorama: crate::pano_merge::PanoSettings::default(),
             immich_merge_folder: None,
             tether: Default::default(),
+            map_tile_url: DEFAULT_TILE_URL.to_string(),
+            library_views: LibraryViews::default(),
+            find_faces: true,
             shortcuts: Vec::new(),
             ai_subject_model: Default::default(),
             confirm_export_preset_delete: true,

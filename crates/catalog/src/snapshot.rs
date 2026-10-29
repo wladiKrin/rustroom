@@ -43,6 +43,20 @@ pub struct CaptureSnapshot {
     pub focal_len: Option<f64>,
 }
 
+/// One face, as `forget_folder` took it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FaceSnapshot {
+    pub file_name: String,
+    pub bbox: [f64; 4],
+    pub embedding: Option<Vec<u8>>,
+    pub person: Option<i64>,
+    pub confirmed: bool,
+    pub dismissed: bool,
+    pub source: String,
+    /// The people this face was answered "No" for — restored with the face's new id.
+    pub rejected: Vec<i64>,
+}
+
 /// One `photo_description` row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DescriptionSnapshot {
@@ -97,6 +111,12 @@ pub enum CatalogSnapshot {
         keywords: Vec<(String, i64)>,
         /// `(file_name, member)` — the hand stacks (M10.8c); the folder id is remapped.
         stacks: Vec<(String, crate::db::HandMember)>,
+        /// `(file_name, source, lat, lon)` — every location row (M10.18b); the folder id is remapped.
+        locations: Vec<(String, String, Option<f64>, Option<f64>)>,
+        /// Every face (M10.18c), its person kept by id — people outlive a folder; the folder id is remapped.
+        faces: Vec<FaceSnapshot>,
+        /// The photos already searched for faces.
+        faces_read: Vec<String>,
     },
 }
 

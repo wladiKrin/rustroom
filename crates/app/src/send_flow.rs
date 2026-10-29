@@ -314,7 +314,11 @@ mod tests {
             file_modified_at: "2025-01-01T00:00:00.000Z".into(),
             updated_at: "2025-01-02T00:00:00.000Z".into(),
             is_favorite: favourite,
-            exif_info: Some(immich::ExifInfo { rating }),
+            exif_info: Some(immich::ExifInfo {
+                rating,
+                ..Default::default()
+            }),
+            people: None,
         }
     }
 

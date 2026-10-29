@@ -193,6 +193,81 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-10-29 — M10.18c: people tagging (branch `m10.18c-people`, merged 2026-10-29)
+
+✅ **Confirmed by the author ("works, merge and delete")**, after trying it on the Mac.
+Spec `docs/superpowers/specs/2026-10-28-m10.18c-people-design.md`, plan `docs/superpowers/plans/2026-10-28-m10.18c-people.md`;
+mockups `https://claude.ai/artifact/8veXQc9qb5x7ivD4GnM5UW` (layout A, the author's pick).
+
+- **What:** Library → **People**, a view beside Grid and Map: "Who is this?" groups of unnamed faces (Lightroom's
+  model), a name or a suggested person per group, the rail's People section. Immich's people shown from the server
+  (a click opens all their server photos — `LibrarySource::ImmichPerson`); local faces found by **YuNet 2023mar** (MIT)
+  and told apart by **SFace 2021dec** (Apache-2.0), commit-pinned OpenCV Zoo models (`ai_mask::faces`), searched at the
+  RAW's embedded JPEG size (tiled at 1920) in the background (`face_pass`). ⚠⚠ **Names live in Rustroom only** — never
+  written to Immich or a file (the author).
+- **Catalog:** v16 `people`, `faces` (bbox, embedding, confirmed / dismissed, local | immich), `face_rejections`,
+  `faces_read`; v17 `face_apart`. `faces` and `faces_read` joined `PER_FILE_TABLES`; forget/restore carries faces,
+  rejections and `faces_read`.
+- **Grouping:** `face_groups::group`, a running mean at SFace's own 0.363, honouring every "No" and every apart pair;
+  off the UI thread, keyed on `(instance, faces_revision, visible_rev)`, throttled to 2 s during a search.
+- **Asked for in use:** move a face (drag onto a person, Name as…, Not in this group — each one undo step,
+  `ActionKind::FaceChange`); filter the open view by people (Filter → People, ⌘-click in the rail; ALL ticked people
+  required); hide Compare / Survey / Map / People (Settings → Appearance → Library views).
+- **Found in use, fixed:** ⚠⚠ **every new `Library` takes `library_state::fresh_rev()`** — all started at revision 0,
+  so the People crops went blank and the Map's pins would have stayed stale; crops from the UNEDITED thumbnail; the
+  view says what it is doing and a search's failures are said; a new folder stops the old search and keeps its finds.
+- ⚠ **Constructed, not captured:** the Immich people DTOs (`Person`, `AssetPerson`, `FaceBox`) — reading the API key
+  from the keychain was denied on this machine, so they follow the schema; the author's use showed his people.
+- **Deferred minors:** Send marks does nothing in an Immich person view; the Reindex hover says "folder" there; a
+  local "Anna" made before Immich's Anna stays separate; the Immich people are asked once a session (no retry after an
+  offline launch); no test that the face search skips Immich-path photos; `face_apart` is not restored by a
+  forget-folder undo; the threshold is untuned on real shoots; `ImmichPerson` views do not follow catalog changes;
+  `people_view.rs` is 603 lines.
+
+### 2026-10-28 — M10.18a: tethered capture, built and parked (branch `m10.18a-tethering`, not merged)
+
+⏸ **Waiting for the author to try it with the X-T4** ("can we do that later" — he was away from the camera). The
+author skipped the questions ("start"); every choice is in `docs/superpowers/specs/2026-10-28-m10.18a-tethering-design.md`
+on that branch. Crate `tether` (no GUI): a `Camera` trait, a scripted `Fake` (`testing`), the libgphoto2 backend
+behind `gphoto2` (the app's default feature `camera` — **libgphoto2 is now a build dependency**: `pacman -S libgphoto2`,
+`brew install libgphoto2`, CI's `libgphoto2-dev`), a `Session` thread that downloads to `.part` and renames. The app:
+File → Tethered capture… ⇧⌘T, Shoot (F12), Stop; shots catalogued with a preset, selected, opened in Develop. Its
+review's fixes are committed there (a failure shown in the session's line, a shot behind a dialog waits to be
+selected, a died session says so, the capture read from the EXIF block). ⚠ The X-T4 sends shots only in **USB TETHER
+SHOOTING AUTO**. ⚠ It branched from `main` before M10.18b: merge `main` into it before the camera check.
+
+### 2026-10-28 — M10.18b: GPS and a map (branch `m10.18b-map`, merged 2026-10-28)
+
+✅ **Confirmed by the author ("works, merge and delete that branch")**, after trying it on the Mac.
+Spec `docs/superpowers/specs/2026-10-28-m10.18b-map-design.md`, plan `docs/superpowers/plans/2026-10-28-m10.18b-map.md`.
+
+- **What:** Library → **Map**, a fourth view (mockup A of `https://claude.ai/artifact/VSLcsvSFuZnebRxHXzgLzj`, the
+  author's pick; C — a small map in Develop — "later if needed"). Clustered pins over OpenStreetMap tiles of our own
+  drawing (⚠ `walkers` needs egui 0.37, Rustroom is on 0.35), a strip of the clicked cluster's photos or of those with
+  no location, a drop of photos or the location field (coordinates, or Nominatim on Enter) places the selection,
+  Remove location, one undo step each (`ActionKind::LocationChange`). After use: the map **fits a new source**
+  (`map_state::Refit` — never on a filter), and a **right-click** on a pin or the map (`map_menu.rs`).
+- **Where locations live:** catalog v15 `photo_location`, one row per source, `hand` > `file` > `server` chosen in SQL
+  (`WINNER`); a NULL hand row is "removed", a NULL file row "read, none". ⚠⚠ **Catalog only — never a file or a
+  sidecar** (the author, for consistency with non-RAWs). Another program's XMP GPS is read as a hand row where none is;
+  an export carries the position unless *Copyright only*. `PER_FILE_TABLES` and forget/restore carry the rows.
+- **Readers:** `Capture.gps` from libraw (`rsraw::GpsInfo`, a (0,0) fix is none) and EXIF (Ref-signed); Immich's
+  `exifInfo.latitude/longitude` (constructed from the schema — the author's phone photos showed, so the shape holds).
+  A one-time **startup pass** reads photos catalogued before v15; **Reindex** reads a folder's again.
+- **The review's findings, fixed:** a virtual strip (it laid out and pinned every "No location" thumbnail every frame);
+  `visible_rev` moves only on a real change, so a scan no longer re-reads all locations per frame; batched writes; ⚠ no
+  file row for a file not on disk (an undownloaded Immich row would have been "read, none" for good); a removed pair
+  stays removed; the strip resets with its view; an undecodable tile waits.
+- ⚠ **Found in use:** the author's X-T4 photos showed no pins — **they carry no GPS**: the body has no receiver and
+  tags only through the Fujifilm app's Location Synchronization. Immich's phone photos showed. Offered, not built:
+  borrow each shot's position from the phone photo nearest in time.
+- ⚠ **Pre-existing, not chased:** `reindex_recognises_a_move_and_reopens_the_moved_photo_where_it_is` passes but its
+  process sometimes cannot exit (4/8, one segfault, with the map's change taken out too); `gpu_pipeline`'s suite
+  stalled twice inside a full run and passes alone in 4 s. Both on this Linux machine.
+- **Deferred minors:** the cluster loop is O(members) per frame zoomed far out; pins do not wrap the antimeridian;
+  "Placed 3 photos" is overwritten by the pins' line; Enter with no selection says nothing; no drag from the filmstrip;
+  an exported pair carries only its RAW's location; `map_view.rs` is 699 lines.
+
 ### 2026-10-28 — All Photos counts what it shows; the merge's Immich refusal names Move to folder (branch `fix-rail-count-immich-merge`, merged 2026-10-28)
 
 Two reports from the first use on Linux, both older than M10.17b.

@@ -137,6 +137,10 @@ pub struct LibraryFilter {
     pub cameras: BTreeSet<String>,
     /// Which lenses to show. Empty matches everything.
     pub lenses: BTreeSet<String>,
+    /// The people every shown photo must have in it — ALL of them, so Anna and Ben means the photos of the two
+    /// together (the author's call, 2026-10-28). By person id, with the name the label shows (two people may
+    /// share one). Empty matches everything. ⚠ Checked by [`LibraryFilter::people_match`], beside `matches`.
+    pub people: std::collections::BTreeMap<i64, String>,
 }
 
 impl LibraryFilter {
@@ -204,6 +208,16 @@ impl LibraryFilter {
             || !self.labels.is_empty()
             || !self.cameras.is_empty()
             || !self.lenses.is_empty()
+            || !self.people.is_empty()
+    }
+
+    /// Whether a photo with `in_photo` (its people's ids) has everyone the filter asks for.
+    pub fn people_match(&self, in_photo: Option<&std::collections::BTreeSet<i64>>) -> bool {
+        self.people.is_empty()
+            || self
+                .people
+                .keys()
+                .all(|p| in_photo.is_some_and(|s| s.contains(p)))
     }
 
     /// This filter as it actually applies to `entries`.
@@ -259,7 +273,8 @@ impl LibraryFilter {
             || !self.flags.is_empty()
             || !self.labels.is_empty()
             || !self.cameras.is_empty()
-            || !self.lenses.is_empty();
+            || !self.lenses.is_empty()
+            || !self.people.is_empty();
         match (self.text.is_empty(), filtered) {
             (false, false) => EmptyGrid::NoNameMatches,
             (false, true) => EmptyGrid::NothingMatchesTheSearchAndFilter,
@@ -278,6 +293,7 @@ impl LibraryFilter {
         self.labels = LabelSet::default();
         self.cameras.clear();
         self.lenses.clear();
+        self.people.clear();
     }
 }
 
@@ -331,6 +347,30 @@ impl EmptyGrid {
 
 #[cfg(test)]
 mod tests {
+
+    /// M10.18c: the people filter asks for everyone ticked — Anna and Ben means the two together.
+    #[test]
+    fn the_people_filter_wants_everyone_ticked() {
+        let mut f = LibraryFilter::default();
+        let set = |v: &[i64]| {
+            v.iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<i64>>()
+        };
+        assert!(f.people_match(None), "an empty filter passes everything");
+        f.people.insert(1, "Anna".into());
+        f.people.insert(2, "Ben".into());
+        assert!(f.is_active());
+        assert!(f.people_match(Some(&set(&[1, 2, 3]))));
+        assert!(
+            !f.people_match(Some(&set(&[1]))),
+            "Anna alone passed a filter for Anna and Ben"
+        );
+        assert!(!f.people_match(None));
+        f.clear_marks_and_text();
+        assert!(f.people.is_empty());
+    }
+
     use super::*;
     use crate::photo_id::PhotoId;
     use std::path::PathBuf;

@@ -32,6 +32,8 @@ pub struct RailData {
     pub smarts: Arc<Vec<SmartRow>>,
     pub keywords: Arc<Vec<KeywordRow>>,
     pub days: Arc<Vec<DayRow>>,
+    /// Everyone in the People list (M10.18c).
+    pub people: Arc<Vec<catalog::db::PersonRow>>,
     /// How many times the catalog was read — what the tests count.
     computed: usize,
 }
@@ -73,6 +75,7 @@ impl RailData {
         self.smarts = Arc::new(cat.smart_collections().unwrap_or_default());
         self.keywords = Arc::new(cat.keywords().unwrap_or_default());
         self.days = Arc::new(cat.capture_days().unwrap_or_default());
+        self.people = Arc::new(cat.people().unwrap_or_default());
         self.computed += 1;
     }
 

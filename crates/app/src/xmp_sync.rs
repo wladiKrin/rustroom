@@ -137,6 +137,8 @@ pub fn sidecar_of(cat: &Catalog, photo: &Path) -> xmp::Sidecar {
         caption: field(&d.caption),
         rights: field(&d.copyright),
         creator: field(&d.creator),
+        // ⚠ Never written: a location lives in the catalog only (M10.18b, the author's call).
+        gps: None,
     }
 }
 
@@ -201,6 +203,13 @@ pub fn write_for_all(cat: &Catalog, photos: &[PathBuf]) {
 /// Lightroom keeps them catalog-only itself and there is no field to write them to. Importing
 /// must therefore not disturb one somebody set here.
 pub fn apply(cat: &Catalog, photo: &Path, s: &xmp::Sidecar) {
+    // M10.18b: another program's position is a hand-set one — only where the user set nothing, and a
+    // sidecar without one leaves the hand row alone (a sidecar cannot say "removed").
+    if let Some((la, lo)) = s.gps {
+        if cat.hand_location(photo).ok() == Some(catalog::db::Hand::Unset) {
+            let _ = cat.set_hand(&[photo.to_path_buf()], catalog::db::Hand::At(la, lo));
+        }
+    }
     let now = cat.marks(photo, 0).unwrap_or_default();
     let label = match &s.label {
         // ⚠ Unrecognised text keeps the catalog's own label — see `label_from_xmp`.
@@ -391,6 +400,30 @@ mod tests {
     }
 
     // ─── importing ────────────────────────────────────────────────────────────────────────
+
+    /// M10.18b: another program's position counts as set by hand — but only where nothing was, and a
+    /// sidecar without one never removes a hand-set location.
+    #[test]
+    fn a_sidecars_gps_fills_only_an_unset_hand_row() {
+        use catalog::db::Hand;
+        let (_d, cat, photo) = one_raw("import-gps");
+        let with = |gps| xmp::Sidecar {
+            gps,
+            ..xmp::Sidecar::default()
+        };
+        apply(&cat, &photo, &with(Some((38.7, -9.1))));
+        assert_eq!(cat.hand_location(&photo).unwrap(), Hand::At(38.7, -9.1));
+        apply(&cat, &photo, &with(Some((41.1, -8.6))));
+        assert_eq!(
+            cat.hand_location(&photo).unwrap(),
+            Hand::At(38.7, -9.1),
+            "a sidecar overwrote a hand row"
+        );
+        cat.set_hand(std::slice::from_ref(&photo), Hand::Removed)
+            .unwrap();
+        apply(&cat, &photo, &with(None));
+        assert_eq!(cat.hand_location(&photo).unwrap(), Hand::Removed);
+    }
 
     #[test]
     fn importing_sets_the_rating_and_the_label() {

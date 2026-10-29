@@ -31,7 +31,7 @@ impl RustroomApp {
     }
 
     /// Turn finished thumbnails into textures in the grid cache.
-    pub(super) fn pump_thumbnails(&mut self, ctx: &egui::Context) {
+    pub(crate) fn pump_thumbnails(&mut self, ctx: &egui::Context) {
         if let Some(lib) = &mut self.library {
             for res in lib.loader.drain() {
                 if let Some(t) = res.thumb {
@@ -57,12 +57,45 @@ impl RustroomApp {
         }
     }
 
+    /// The startup location pass's findings into the catalog (M10.18b). Every write moves
+    /// `change_count`, which is what refreshes the Map's pins.
+    pub(crate) fn pump_location_pass(&mut self, ctx: &egui::Context) {
+        if self.location_passes.is_empty() {
+            return;
+        }
+        let mut found = Vec::new();
+        self.location_passes.retain(|pass| {
+            let (f, done) = pass.drain();
+            found.extend(f);
+            !done
+        });
+        if let Some(cat) = self.catalog.as_ref().filter(|_| !found.is_empty()) {
+            // ⚠ One transaction per frame, never one sync per photo (the review's #3).
+            if let Err(e) = cat.set_file_locations(&found) {
+                eprintln!("catalog: {e}");
+            }
+        }
+        if !self.location_passes.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
+    }
+
     /// Write finished capture metadata into the catalog, and refresh the Library that filters on it.
     pub(super) fn pump_captures(&mut self) {
         let done = self.metadata.drain();
         if let Some(cat) = &self.catalog {
             for r in &done {
                 if let Err(e) = cat.set_capture(&r.path, &r.capture) {
+                    eprintln!("catalog: {e}");
+                }
+            }
+            // M10.18b: the files' own positions — or "read, none", so the startup pass skips them — in
+            // one transaction, and only for files on disk (`location_pass::file_rows`).
+            let rows = rustroom_app::location_pass::file_rows(
+                done.iter().map(|r| (r.path.as_path(), r.capture.gps)),
+            );
+            if !rows.is_empty() {
+                if let Err(e) = cat.set_file_locations(&rows) {
                     eprintln!("catalog: {e}");
                 }
             }

@@ -9,6 +9,7 @@
 pub mod denoise;
 pub mod depth;
 pub mod download;
+pub mod faces;
 pub mod infer;
 pub mod inpaint;
 pub mod map;

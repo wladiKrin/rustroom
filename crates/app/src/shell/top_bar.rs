@@ -61,7 +61,8 @@ impl RustroomApp {
                     // are what a photographer culling a shoot will use — but a feature reachable
                     // only by a key nothing on screen mentions is a feature nobody finds, and
                     // the Filter button's `Filter: ` prefix exists for the same reason.
-                    mode_switch(ui, &mut self.library_mode, plan.mode_icons_only);
+                    let items = shown_items(&self.settings.library_views);
+                    mode_switch(ui, &mut self.library_mode, &items, plan.mode_icons_only);
                 }
                 let row = ui.max_rect();
                 let gap_left = ui.cursor().left();
@@ -162,11 +163,35 @@ pub(super) fn view_style() -> PillStyle {
 ///
 /// ⚠ `icons_only`: the narrow form the bar plan picks — the names stay in the hovers and the
 /// accessible labels.
-fn mode_switch(ui: &mut egui::Ui, mode: &mut LibraryMode, icons_only: bool) {
-    segmented::pill(ui, mode, &MODE_ITEMS, mode_style(icons_only));
+fn mode_switch(
+    ui: &mut egui::Ui,
+    mode: &mut LibraryMode,
+    items: &[PillItem<'_, LibraryMode>],
+    icons_only: bool,
+) {
+    segmented::pill(ui, mode, items, mode_style(icons_only));
 }
 
-const MODE_ITEMS: [PillItem<'static, LibraryMode>; 3] = [
+/// Whether the top row shows `mode` (M10.18c — the author's setting; Grid always).
+pub(crate) fn mode_shown(v: &rustroom_app::settings::LibraryViews, mode: LibraryMode) -> bool {
+    match mode {
+        LibraryMode::Grid => true,
+        LibraryMode::Compare => v.compare,
+        LibraryMode::Survey => v.survey,
+        LibraryMode::Map => v.map,
+        LibraryMode::People => v.people,
+    }
+}
+
+/// The views the top row shows, in order.
+fn shown_items(v: &rustroom_app::settings::LibraryViews) -> Vec<PillItem<'static, LibraryMode>> {
+    MODE_ITEMS
+        .into_iter()
+        .filter(|i| mode_shown(v, i.value))
+        .collect()
+}
+
+const MODE_ITEMS: [PillItem<'static, LibraryMode>; 5] = [
     PillItem {
         value: LibraryMode::Grid,
         icon: icons::GRID,
@@ -184,6 +209,18 @@ const MODE_ITEMS: [PillItem<'static, LibraryMode>; 3] = [
         icon: icons::SURVEY,
         label: "Survey",
         hover: "Shows the whole selection at once, to narrow it down (N)",
+    },
+    PillItem {
+        value: LibraryMode::Map,
+        icon: icons::MAP,
+        label: "Map",
+        hover: "Shows on a map where the photos in view were taken",
+    },
+    PillItem {
+        value: LibraryMode::People,
+        icon: icons::PEOPLE,
+        label: "People",
+        hover: "Shows who is in the photos, and the faces still to name",
     },
 ];
 
@@ -231,12 +268,14 @@ fn plan_library_bar(app: &RustroomApp, ui: &egui::Ui) -> LibraryBarPlan {
         mark_filter_label(&app.filter)
     )) + pad;
     let filter_compact = text_w(&format!("{} •", icons::FILTER)) + pad;
+    // ⚠ The row it will actually draw — the views the author chose to show.
+    let modes = shown_items(&app.settings.library_views);
     let items = [
         Item::fixed(99, segmented::pill_width(ui, &VIEW_ITEMS, &view_style())),
         Item {
             priority: 60,
-            full: segmented::pill_width(ui, &MODE_ITEMS, &mode_style(false)),
-            compact: Some(segmented::pill_width(ui, &MODE_ITEMS, &mode_style(true))),
+            full: segmented::pill_width(ui, &modes, &mode_style(false)),
+            compact: Some(segmented::pill_width(ui, &modes, &mode_style(true))),
             hideable: false,
         },
         Item {

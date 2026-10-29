@@ -1,0 +1,169 @@
+//! The one-time pass over photos catalogued before M10.18b: each file's GPS position, read in the
+//! background so the Map has their pins. No egui.
+//!
+//! ⚠⚠ A file not on disk is SKIPPED, never answered: an Immich row not yet downloaded has no file, and a
+//! "read, none" row for it would claim a reading that never happened — its server position still shows,
+//! but the file's would never be read once it arrives.
+
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Receiver};
+
+/// What one file says: its path and its position, `None` for a file with no GPS.
+pub type Found = (PathBuf, Option<(f64, f64)>);
+
+/// The file rows to write for what a reader found: ⚠⚠ only for files ON DISK. The metadata scan reads a
+/// not-yet-downloaded Immich row as an empty capture, and a "read, none" row for it would keep its file's
+/// own GPS from ever being read once it arrives (the M10.18b review's #4).
+pub fn file_rows<'a>(found: impl Iterator<Item = (&'a Path, Option<(f64, f64)>)>) -> Vec<Found> {
+    found
+        .filter(|(p, _)| p.is_file())
+        .map(|(p, at)| (p.to_path_buf(), at))
+        .collect()
+}
+
+/// The pass's thread and what it has found so far.
+pub struct LocationPass {
+    rx: Receiver<Found>,
+}
+
+/// The EXIF block when the file has one (~0.5 ms), the full reader otherwise.
+fn read_gps(path: &Path) -> Option<(f64, f64)> {
+    read_gps_with(
+        path,
+        |p| {
+            image_decode::quick_look(p)
+                .ok()
+                .flatten()
+                .map(|q| q.capture.gps)
+        },
+        |p| crate::metadata_scanner::read_capture(p).gps,
+    )
+}
+
+/// [`read_gps`] with its two readers handed in. ⚠⚠ A RAW whose quick read finds no position is read in
+/// full: a RAF's quick read is its EMBEDDED JPEG's EXIF, which need not carry the GPS libraw sees — and a
+/// "none" recorded from it would never be read again (found in use, 2026-10-28: no photo on the map).
+fn read_gps_with(
+    path: &Path,
+    quick: impl Fn(&Path) -> Option<Option<(f64, f64)>>,
+    full: impl Fn(&Path) -> Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    match quick(path) {
+        Some(Some(at)) => Some(at),
+        Some(None) if !catalog::is_raw(path) => None,
+        _ => full(path),
+    }
+}
+
+impl LocationPass {
+    pub fn start(files: Vec<PathBuf>) -> Self {
+        Self::with_reader(files, read_gps)
+    }
+
+    /// [`LocationPass::start`] with its reader handed in, for tests.
+    pub fn with_reader(files: Vec<PathBuf>, read: fn(&Path) -> Option<(f64, f64)>) -> Self {
+        let (tx, rx) = channel();
+        std::thread::Builder::new()
+            .name("location-pass".into())
+            .spawn(move || {
+                for f in files {
+                    if !f.is_file() {
+                        continue;
+                    }
+                    if tx.send((f.clone(), read(&f))).is_err() {
+                        return;
+                    }
+                }
+            })
+            .expect("spawn the location pass");
+        Self { rx }
+    }
+
+    /// Everything found since the last call, and whether the pass is over (its thread gone and every
+    /// answer read). ⚠ One call: a separate "finished?" check would swallow an answer arriving between.
+    pub fn drain(&self) -> (Vec<Found>, bool) {
+        let mut found = Vec::new();
+        loop {
+            match self.rx.try_recv() {
+                Ok(f) => found.push(f),
+                Err(std::sync::mpsc::TryRecvError::Empty) => return (found, false),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return (found, true),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn all(p: &LocationPass) -> Vec<Found> {
+        let t = Instant::now();
+        let mut out = Vec::new();
+        loop {
+            let (found, done) = p.drain();
+            out.extend(found);
+            if done {
+                return out;
+            }
+            assert!(t.elapsed() < Duration::from_secs(120), "the pass hung");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    /// Review focus 1: an Immich row not yet downloaded gets no answer at all.
+    #[test]
+    fn the_startup_pass_skips_a_file_not_on_disk() {
+        let d = test_dir::TempDir::new("location-pass");
+        let here = d.join("a.JPG");
+        std::fs::write(&here, b"x").unwrap();
+        let p = LocationPass::with_reader(vec![d.join("not-downloaded.RAF"), here.clone()], |_| {
+            Some((38.7, -9.1))
+        });
+        assert_eq!(all(&p), vec![(here, Some((38.7, -9.1)))]);
+    }
+
+    /// Found in use: a RAW's quick read (its embedded JPEG) said nothing, and libraw was never asked.
+    #[test]
+    fn a_raw_without_gps_in_its_quick_read_is_read_in_full() {
+        let full = |_: &Path| Some((38.7, -9.1));
+        let quick_none = |_: &Path| Some(None);
+        let raw = Path::new("/trip/DSCF0001.RAF");
+        let jpg = Path::new("/trip/DSCF0001.JPG");
+        assert_eq!(read_gps_with(raw, quick_none, full), Some((38.7, -9.1)));
+        assert_eq!(
+            read_gps_with(jpg, quick_none, full),
+            None,
+            "a JPEG's EXIF is its whole story"
+        );
+        assert_eq!(
+            read_gps_with(jpg, |_| None, full),
+            Some((38.7, -9.1)),
+            "no quick read at all"
+        );
+        assert_eq!(
+            read_gps_with(raw, |_| Some(Some((1.0, 2.0))), |_| panic!("read in full")),
+            Some((1.0, 2.0))
+        );
+    }
+
+    #[test]
+    fn a_file_not_on_disk_gets_no_row() {
+        let d = test_dir::TempDir::new("location-rows");
+        let here = d.join("a.JPG");
+        std::fs::write(&here, b"x").unwrap();
+        let gone = d.join("not-downloaded.RAF");
+        let rows = file_rows([(here.as_path(), None), (gone.as_path(), None)].into_iter());
+        assert_eq!(rows, vec![(here, None)]);
+    }
+
+    #[test]
+    fn a_file_without_gps_reads_as_none() {
+        let d = test_dir::TempDir::new("location-pass-none");
+        let here = d.join("a.JPG");
+        std::fs::write(&here, b"not a jpeg").unwrap();
+        let p = LocationPass::start(vec![here.clone()]);
+        assert_eq!(all(&p), vec![(here, None)]);
+    }
+}

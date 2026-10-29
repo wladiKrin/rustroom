@@ -88,6 +88,8 @@ impl Catalog {
                     shutter: r.get::<_, Option<f64>>(4)?.map(|v| v as f32),
                     aperture: r.get::<_, Option<f64>>(5)?.map(|v| v as f32),
                     focal_len: r.get::<_, Option<f64>>(6)?.map(|v| v as f32),
+                    // ⚠ Not stored here: a location lives in `photo_location` (M10.18b).
+                    gps: None,
                 })
             },
         );
@@ -202,6 +204,7 @@ impl Catalog {
                     shutter: r.get::<_, Option<f64>>(5)?.map(|v| v as f32),
                     aperture: r.get::<_, Option<f64>>(6)?.map(|v| v as f32),
                     focal_len: r.get::<_, Option<f64>>(7)?.map(|v| v as f32),
+                    gps: None,
                 },
             ))
         })?;
@@ -227,6 +230,7 @@ mod tests {
             shutter: Some(0.02),
             aperture: Some(2.0),
             focal_len: Some(23.0),
+            gps: None,
         };
         cat.set_capture(Path::new("/a/one.RAF"), &c).unwrap();
         assert_eq!(cat.capture_of(Path::new("/a/one.RAF")).unwrap(), Some(c));

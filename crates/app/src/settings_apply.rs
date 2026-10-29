@@ -14,6 +14,15 @@ use rustroom_app::settings::{Accent, ThemeChoice};
 use rustroom_app::thumb_loader::ThumbLoader;
 
 impl RustroomApp {
+    /// Choose the top row's views (M10.18c). ⚠ The Library returns to Grid only when the view in use was just
+    /// hidden — never per frame, so a hidden view's shortcut still opens it.
+    pub(crate) fn set_library_views(&mut self, v: rustroom_app::settings::LibraryViews) {
+        self.settings.library_views = v;
+        if !crate::shell::top_bar::mode_shown(&v, self.library_mode) {
+            self.library_mode = crate::LibraryMode::Grid;
+        }
+    }
+
     /// Persist the settings, surfacing a failure in the status line rather than silently.
     pub(crate) fn save_settings(&mut self) {
         if let Err(e) = self.settings_store.save(&self.settings) {
@@ -237,6 +246,35 @@ impl RustroomApp {
 
 #[cfg(test)]
 mod tests {
+
+    /// Review focus 5: hiding the view in use returns to Grid; its shortcut still opens it afterwards.
+    #[test]
+    fn hiding_the_open_view_returns_to_grid() {
+        let mut app = crate::test_app::for_test();
+        app.library_mode = crate::LibraryMode::Map;
+        let mut v = app.settings.library_views;
+        v.people = false;
+        app.set_library_views(v);
+        assert_eq!(
+            app.library_mode,
+            crate::LibraryMode::Map,
+            "hiding another view moved this one"
+        );
+        v.map = false;
+        app.set_library_views(v);
+        assert_eq!(app.library_mode, crate::LibraryMode::Grid);
+        crate::commands::execute(
+            &mut app,
+            &eframe::egui::Context::default(),
+            rustroom_app::menu::Command::ShowMap,
+        );
+        assert_eq!(
+            app.library_mode,
+            crate::LibraryMode::Map,
+            "the shortcut no longer opens a hidden view"
+        );
+    }
+
     use crate::test_app::{for_test, open_test_photo, TestDir};
     use rustroom_app::settings::SettingsStore;
 

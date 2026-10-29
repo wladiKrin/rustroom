@@ -40,6 +40,8 @@ immich = { path = "../immich" }
 ai-mask = { path = "../ai-mask" }
 photo-merge = { path = "../photo-merge" }
 tether = { path = "../tether" }
+# M10.18b: the Map's tiles and place search — already in the tree through `immich` and `ai-mask`.
+ureq = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
 rfd = { workspace = true }

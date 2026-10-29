@@ -30,6 +30,15 @@ pub(crate) fn fs_modified(path: &std::path::Path) -> std::time::SystemTime {
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
 }
 
+/// A [`Library::visible_rev`] no Library has had — from one counter for the whole process. ⚠⚠ A NEW Library takes
+/// one too: starting at 0, two folders with the same number of photos shared a revision, and a view keyed on it
+/// kept the first folder's index — the People view's crops went blank, the Map's pins stale (found in use,
+/// 2026-10-28).
+pub(crate) fn fresh_rev() -> u64 {
+    static REV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    REV.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// What the Library is currently showing.
 ///
 /// ⚠ A collection is a *source*, not a filter, so the format filter and the six sort orders
@@ -58,6 +67,17 @@ pub(crate) enum LibrarySource {
     },
     Keyword {
         id: i64,
+        name: String,
+    },
+    /// A person named only in Rustroom (M10.18c): the catalog's photos of them, following the catalog.
+    Person {
+        id: i64,
+        name: String,
+    },
+    /// A person Immich knows (M10.18c): every asset of theirs on the server, and the local photos named them.
+    ImmichPerson {
+        id: String,
+        person: i64,
         name: String,
     },
     /// One Immich album, its photos cached locally on demand.
@@ -130,6 +150,14 @@ pub(crate) struct Library {
     /// Indices into `entries` that pass `filter`, ascending. Derived — recomputed by
     /// `refilter`, never edited directly.
     pub(crate) visible: Vec<usize>,
+    /// A new value whenever `visible` changes or `entries` are rebuilt ([`Library::bump_visible_rev`]),
+    /// so a view deriving from the visible photos (the Map's pins, M10.18b) can key on it instead of
+    /// hashing them every frame.
+    pub(crate) visible_rev: u64,
+    /// Who is in each photo, for the people filter (M10.18c) — read when the faces change
+    /// (`Catalog::faces_revision`, `people_rev`), only while the filter asks for someone.
+    pub(crate) people_of: std::collections::HashMap<PathBuf, std::collections::BTreeSet<i64>>,
+    pub(crate) people_rev: Option<u64>,
     /// Marks for every marked photo on show, keyed by identity.
     ///
     /// ⚠⚠ Read **once per rebuild**, not per frame and never per cell. The grid draws sixty
@@ -213,18 +241,31 @@ impl Library {
         // ⚠ One derived `visible` list, composed from one filter — **not** a second filtering
         // mechanism. Sparse-versus-dense index confusion is this project's third-most-repeated
         // bug, and `visible` staying the single derived list is the mitigation that has held.
-        self.visible = self
+        let visible: Vec<usize> = self
             .entries
             .iter()
             .enumerate()
             .filter(|(_, e)| {
                 let m = self.marks.get(&e.id).copied().unwrap_or_default();
                 let c = self.captures.get(&e.id.path).cloned().unwrap_or_default();
-                filter.matches(e, m, &c)
+                filter.matches(e, m, &c) && filter.people_match(self.people_of.get(&e.id.path))
             })
             .map(|(i, _)| i)
             .collect();
+        // ⚠ Only when the list CHANGED: a background scan refilters every frame it lands, and the Map
+        // re-derives its pins on every new value (the M10.18b review's #2).
+        if visible != self.visible {
+            self.visible = visible;
+            self.bump_visible_rev();
+        }
         self.selection.retain_visible(&self.visible);
+    }
+
+    /// A new [`Library::visible_rev`] — from one counter for the whole process, so two Libraries never
+    /// share a value. Called when `visible` changed, and when `entries` were rebuilt (the same indices
+    /// may now name other photos).
+    pub(crate) fn bump_visible_rev(&mut self) {
+        self.visible_rev = fresh_rev();
     }
 
     /// Every selected row's [`PhotoId`].
@@ -431,6 +472,7 @@ impl RustroomApp {
             lib.copies.as_ref(),
             &lib.hand_stacks,
         );
+        lib.bump_visible_rev();
 
         // ⚠ The selection is by *index*, and the indices have just shifted — so it is re-derived
         // from the photos we mean rather than kept. Keeping it would silently select whichever
@@ -537,6 +579,30 @@ impl RustroomApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The M10.18b review's #2: a refilter that changes nothing keeps the revision — a background scan
+    /// refilters every frame it lands, and the Map re-derives its pins on each new value — while a
+    /// rebuild of the entries always moves it.
+    #[test]
+    fn visible_rev_moves_only_when_the_view_changes() {
+        let mut app = crate::test_app::for_test();
+        app.library = Some(crate::test_app::library_of(4));
+        let filter = app.filter.clone();
+        let lib = app.library.as_mut().unwrap();
+        lib.refilter(&filter);
+        let rev = lib.visible_rev;
+        lib.refilter(&filter);
+        assert_eq!(
+            lib.visible_rev, rev,
+            "an unchanged refilter moved the revision"
+        );
+        app.rebuild_entries(None);
+        assert_ne!(
+            app.library.as_ref().unwrap().visible_rev,
+            rev,
+            "a rebuild kept it"
+        );
+    }
 
     /// ⚠⚠ **The bug the user reported as "they are not stacked", pinned at the function both paths
     /// now go through.** Stacking was wired into `rebuild_entries` only, so it worked after a
