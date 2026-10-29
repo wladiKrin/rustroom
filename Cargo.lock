@@ -908,6 +908,7 @@ dependencies = [
  "dirs",
  "rusqlite",
  "serde",
+ "serde_json",
  "test-dir",
 ]
 
