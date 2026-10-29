@@ -303,9 +303,56 @@ pub struct StackMember {
     pub id: String,
 }
 
+/// The reply to `POST /albums` — only its id is read (M10.18d).
+///
+/// ⚠ **Constructed from the 3.2.0 schema's `AlbumResponseDto`**, not captured (the key could not be read where
+/// this was written): the first real publish to a new album is the check.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct CreatedAlbum {
+    pub id: String,
+}
+
+/// One id's answer from `PUT`/`DELETE /albums/{id}/assets` (M10.18d) — `BulkIdResponseDto`.
+///
+/// ⚠ Constructed from the schema like [`CreatedAlbum`]; `error` is nullable and may be absent.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct BulkId {
+    pub id: String,
+    pub success: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+impl BulkId {
+    /// Whether the album now holds (or, for a removal, no longer holds) the asset — a `duplicate` add and a
+    /// `not_found` removal already are where they should be.
+    pub fn settled(&self) -> bool {
+        self.success || matches!(self.error.as_deref(), Some("duplicate" | "not_found"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⚠ Constructed, not captured — see [`CreatedAlbum`].
+    const ALBUM_CREATED: &str = include_str!("../tests/fixtures/album_created_constructed.json");
+    /// ⚠ Constructed, not captured — see [`BulkId`]; one entry with `error: null`, one without it.
+    const BULK_IDS: &str = include_str!("../tests/fixtures/bulk_ids_constructed.json");
+
+    #[test]
+    fn a_created_album_reads_its_id() {
+        let a: CreatedAlbum = serde_json::from_str(ALBUM_CREATED).unwrap();
+        assert_eq!(a.id, "3fa85f64-5717-4562-b3fc-2c963f66afa6");
+    }
+
+    #[test]
+    fn bulk_ids_parse_with_a_null_or_absent_error_and_a_duplicate_is_settled() {
+        let ids: Vec<BulkId> = serde_json::from_str(BULK_IDS).unwrap();
+        assert_eq!(ids.len(), 4);
+        let settled: Vec<bool> = ids.iter().map(BulkId::settled).collect();
+        assert_eq!(settled, [true, true, false, true]);
+    }
 
     const ABOUT: &str = include_str!("../tests/fixtures/about.json");
     const ALBUMS: &str = include_str!("../tests/fixtures/albums.json");

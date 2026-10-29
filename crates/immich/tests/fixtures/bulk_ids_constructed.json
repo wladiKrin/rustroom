@@ -1,0 +1,1 @@
+[{"id":"a1","success":true},{"id":"a2","success":false,"error":"duplicate"},{"id":"a3","success":false,"error":"no_permission"},{"id":"a4","success":true,"error":null}]

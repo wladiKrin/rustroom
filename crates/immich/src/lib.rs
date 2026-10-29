@@ -8,8 +8,9 @@ pub mod error;
 pub mod multipart;
 
 pub use dto::{
-    About, AlbumSummary, Asset, AssetPerson, AssetType, Bucket, ExifInfo, FaceBox, NextPage,
-    PeoplePage, Person, SearchAssets, SearchResponse, Stack, StackMember, Upload, UploadStatus,
+    About, AlbumSummary, Asset, AssetPerson, AssetType, Bucket, BulkId, CreatedAlbum, ExifInfo,
+    FaceBox, NextPage, PeoplePage, Person, SearchAssets, SearchResponse, Stack, StackMember,
+    Upload, UploadStatus,
 };
 pub use error::Error;
 
@@ -284,6 +285,49 @@ impl Client {
         Ok(())
     }
 
+    /// `POST /albums` — a new, empty album; its id (M10.18d, a publish service's first publish). Permission
+    /// `album.create`. ⚠ The reply is read only for `id` ([`CreatedAlbum`], constructed from the schema).
+    pub fn create_album(&self, name: &str) -> Result<String, Error> {
+        let a: CreatedAlbum = self.post_json("/albums", &album_body(name))?;
+        Ok(a.id)
+    }
+
+    /// `PUT /albums/{id}/assets` — add assets; each id's answer. Permission `albumAsset.create`.
+    pub fn add_to_album(&self, album: &str, ids: &[String]) -> Result<Vec<BulkId>, Error> {
+        self.send_ids(self.agent.put(self.url(&album_assets_path(album))), ids)
+    }
+
+    /// `DELETE /albums/{id}/assets` — take assets out of an album; each id's answer. Permission
+    /// `albumAsset.delete`. ⚠⚠ The assets stay in the library: this crate never deletes an asset.
+    pub fn remove_from_album(&self, album: &str, ids: &[String]) -> Result<Vec<BulkId>, Error> {
+        self.send_ids(
+            self.agent
+                .delete(self.url(&album_assets_path(album)))
+                .force_send_body(),
+            ids,
+        )
+    }
+
+    fn send_ids(
+        &self,
+        req: ureq::RequestBuilder<ureq::typestate::WithBody>,
+        ids: &[String],
+    ) -> Result<Vec<BulkId>, Error> {
+        let mut res = req
+            .header("x-api-key", &self.key)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .send(serde_json::to_string(&ids_body(ids)).map_err(|e| Error::Decode(e.to_string()))?)
+            .map_err(map_ureq)?;
+        let text = res
+            .body_mut()
+            .with_config()
+            .limit(JSON_LIMIT)
+            .read_to_string()
+            .map_err(|e| Error::Decode(e.to_string()))?;
+        serde_json::from_str(&text).map_err(|e| Error::Decode(e.to_string()))
+    }
+
     /// Every asset matching `filter`, following the server's paging to the last page.
     ///
     /// ⚠⚠ **`POST /search/metadata`, not `GET /albums/{id}`.** `AlbumResponseDto` carries
@@ -471,6 +515,20 @@ pub(crate) fn marks_body(
 ///
 /// ⚠ `http_status_as_error` defaults to `true` in ureq 3, so a 4xx/5xx really does arrive here
 /// as `StatusCode` rather than as a successful response.
+/// `CreateAlbumDto`: only the name — assets are added afterwards, each answered.
+fn album_body(name: &str) -> serde_json::Value {
+    serde_json::json!({ "albumName": name })
+}
+
+/// `BulkIdsDto`.
+fn ids_body(ids: &[String]) -> serde_json::Value {
+    serde_json::json!({ "ids": ids })
+}
+
+fn album_assets_path(album: &str) -> String {
+    format!("/albums/{album}/assets")
+}
+
 fn map_ureq(e: ureq::Error) -> Error {
     match e {
         ureq::Error::StatusCode(code) => Error::from_status(code),
@@ -480,6 +538,17 @@ fn map_ureq(e: ureq::Error) -> Error {
 
 #[cfg(test)]
 mod tests {
+
+    /// M10.18d: the album calls' bodies, per the 3.2.0 schema (`CreateAlbumDto`, `BulkIdsDto`).
+    #[test]
+    fn the_album_bodies_name_the_album_and_the_ids() {
+        assert_eq!(album_body("Web"), serde_json::json!({"albumName": "Web"}));
+        assert_eq!(
+            ids_body(&["a".to_string(), "b".to_string()]),
+            serde_json::json!({"ids": ["a", "b"]})
+        );
+        assert_eq!(album_assets_path("x1"), "/albums/x1/assets");
+    }
 
     /// M10.18c: a person's search names them, and every search asks for the people.
     #[test]
