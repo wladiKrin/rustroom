@@ -111,6 +111,26 @@ pub(super) fn mark_filter(app: &mut RustroomApp, ui: &mut egui::Ui, compact: boo
                         .and_then(|c| c.distinct_lenses().ok())
                         .unwrap_or_default();
                     capture_section(ui, "Lens", &lenses, &mut f.lenses);
+                    // M10.18c: the people the shown photos must ALL have in them.
+                    let people = app.rail_data.people.clone();
+                    if !people.is_empty() {
+                        ui.label("People");
+                        for p in people.iter() {
+                            let mut on = f.people.contains_key(&p.id);
+                            if ui
+                                .checkbox(&mut on, &p.name)
+                                .hover("Shows only the photos this person is in, with everyone else ticked")
+                                .changed()
+                            {
+                                if on {
+                                    f.people.insert(p.id, p.name.clone());
+                                } else {
+                                    f.people.remove(&p.id);
+                                }
+                            }
+                        }
+                        ui.separator();
+                    }
                     ui.separator();
                     if ui.button("Clear").clicked() {
                         f.clear_marks_and_text();
@@ -120,7 +140,7 @@ pub(super) fn mark_filter(app: &mut RustroomApp, ui: &mut egui::Ui, compact: boo
     button.hover(if compact {
         label.as_str()
     } else {
-        "Shows only the photos with the ratings, flags, labels, cameras or lenses you choose"
+        "Shows only the photos with the ratings, flags, labels, cameras, lenses or people you choose"
     });
 
     // ⚠ Guarded on an actual change: this body runs every frame, and refiltering a folder of
@@ -192,6 +212,9 @@ pub(super) fn mark_filter_label(f: &rustroom_app::library_filter::LibraryFilter)
     }
     for l in &f.lenses {
         parts.push(l.clone());
+    }
+    if !f.people.is_empty() {
+        parts.push(f.people.values().cloned().collect::<Vec<_>>().join(" & "));
     }
     if !f.labels.is_empty() {
         let names = ["unlabelled", "red", "blue", "yellow", "green"];

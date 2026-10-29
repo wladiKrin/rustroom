@@ -373,6 +373,14 @@ impl RustroomApp {
                 id,
                 Job::Albums,
             ),
+            Some(LibrarySource::ImmichPerson { id, name, .. }) => self.reindex_immich(
+                Job::Person {
+                    id: id.clone(),
+                    name,
+                },
+                id,
+                Job::People,
+            ),
             Some(LibrarySource::ImmichBucket { bucket, label }) => self.reindex_immich(
                 Job::Bucket {
                     bucket: bucket.clone(),
@@ -647,6 +655,7 @@ mod tests {
             updated_at: "2025-01-02T00:00:00.000Z".into(),
             is_favorite: false,
             exif_info: None,
+            people: None,
         }
     }
 

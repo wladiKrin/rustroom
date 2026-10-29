@@ -201,6 +201,36 @@ fn photos(w: &mut Walk) {
         "fixture check: the map's controls were drawn"
     );
     w.check("Library map", &nodes);
+    // M10.18c: the People view, with a named person and a group of two unnamed faces.
+    let d = test_dir::TempDir::new("hover-people");
+    for n in ["A.JPG", "B.JPG"] {
+        std::fs::write(d.join(n), b"x").unwrap();
+    }
+    let c = egui::Context::default();
+    app.settings.find_faces = false;
+    app.open_folder_at(&c, d.path().to_path_buf());
+    let cat = app.catalog.as_ref().unwrap();
+    for n in ["A.JPG", "B.JPG"] {
+        let f = catalog::db::NewFace {
+            bbox: [0.1, 0.1, 0.3, 0.3],
+            embedding: vec![0.1; 128],
+        };
+        cat.set_local_faces(&d.join(n), &[f]).unwrap();
+    }
+    let anna = cat.person_named("Anna").unwrap();
+    let id = cat.faces_of(&d.join("A.JPG")).unwrap()[0].id;
+    cat.set_face_states(&[(id, (Some(anna), true, false))])
+        .unwrap();
+    app.rail_data.refresh(app.catalog.as_ref(), None);
+    let nodes = test_ui::nodes_on(&ctx, screen, |ui| {
+        let c = ui.ctx().clone();
+        crate::people_view::show(&mut app, ui, &c);
+    });
+    assert!(
+        nodes.iter().any(|n| n.label.starts_with("Anna")),
+        "fixture check: the People view drew its person"
+    );
+    w.check("Library people", &nodes);
 }
 
 fn status_row(w: &mut Walk) {

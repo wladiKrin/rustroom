@@ -114,6 +114,48 @@ pub fn fill_locations(
     cat.set_server_locations(&rows)
 }
 
+/// Immich's people in `assets` (cached under `root`) and their face boxes (M10.18c) — the named, visible ones;
+/// each asset's earlier Immich faces replaced. Returns how many people were seen.
+pub fn fill_faces(
+    cat: &catalog::db::Catalog,
+    root: &Path,
+    assets: &[immich::Asset],
+) -> Result<usize, catalog::db::CatalogError> {
+    let named = |p: &&immich::AssetPerson| !p.is_hidden && !p.name.trim().is_empty();
+    let mut people: Vec<(String, String)> = assets
+        .iter()
+        .flat_map(|a| a.people.iter().flatten().filter(named))
+        .map(|p| (p.id.clone(), p.name.trim().to_string()))
+        .collect();
+    people.sort();
+    people.dedup();
+    if !people.is_empty() {
+        cat.set_immich_people(&people)?;
+    }
+    // ⚠ Only assets the reply spoke for (`Some`, even empty); one transaction for them all (the review's #10).
+    let faces: Vec<catalog::db::ImmichFaces> = assets
+        .iter()
+        .filter_map(|a| {
+            let list = a.people.as_ref()?;
+            let boxes = list
+                .iter()
+                .filter(named)
+                .flat_map(|p| {
+                    p.faces
+                        .iter()
+                        .filter_map(|f| f.normalised())
+                        .map(|b| (b, p.id.clone()))
+                })
+                .collect();
+            Some((crate::immich_source::cache_path(root, a), boxes))
+        })
+        .collect();
+    if !faces.is_empty() {
+        cat.set_immich_faces(&faces)?;
+    }
+    Ok(people.len())
+}
+
 /// Whether this grid cell should carry the downloaded indicator.
 ///
 /// ⚠ **Immich sources only** — asked for under the Immich header and nowhere else. A local photo is
@@ -205,6 +247,7 @@ mod tests {
             updated_at: "2025-01-02T00:00:00.000Z".into(),
             is_favorite: false,
             exif_info: None,
+            people: None,
         }
     }
 
@@ -296,6 +339,65 @@ mod tests {
         };
         assert_eq!(at(&assets[0]), Some((38.7, -9.1)));
         assert_eq!(at(&assets[1]), None, "a null position fills nothing");
+    }
+
+    /// M10.18c, constructed: an asset's named people become Immich faces; a hidden or unnamed one does not.
+    #[test]
+    fn an_assets_people_fill_immich_faces() {
+        let cat = catalog::db::Catalog::open_in_memory().unwrap();
+        let root = std::path::Path::new("/cache/server");
+        let face = immich::FaceBox {
+            image_width: 100.0,
+            image_height: 100.0,
+            bounding_box_x1: 10.0,
+            bounding_box_y1: 10.0,
+            bounding_box_x2: 30.0,
+            bounding_box_y2: 30.0,
+        };
+        let person = |id: &str, name: &str, hidden: bool| immich::AssetPerson {
+            id: id.into(),
+            name: name.into(),
+            is_hidden: hidden,
+            faces: vec![face],
+        };
+        let assets = [immich::Asset {
+            people: Some(vec![
+                person("p1", "Anna", false),
+                person("p2", "", false),
+                person("p3", "Ben", true),
+            ]),
+            ..asset("a")
+        }];
+        let scan = crate::immich_source::entries_from_assets(&assets, root);
+        record_assets(&cat, root, &scan).unwrap();
+        assert_eq!(fill_faces(&cat, root, &assets).unwrap(), 1);
+        let f = cat
+            .faces_of(&crate::immich_source::cache_path(root, &assets[0]))
+            .unwrap();
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0].immich);
+        assert_eq!(cat.people().unwrap()[0].name, "Anna");
+        // The server now says nobody is in it: its Immich faces go. A list without the field changes nothing.
+        let none = [immich::Asset {
+            people: None,
+            ..assets[0].clone()
+        }];
+        fill_faces(&cat, root, &none).unwrap();
+        assert_eq!(
+            cat.faces_of(&crate::immich_source::cache_path(root, &assets[0]))
+                .unwrap()
+                .len(),
+            1
+        );
+        let nobody = [immich::Asset {
+            people: Some(vec![]),
+            ..assets[0].clone()
+        }];
+        fill_faces(&cat, root, &nobody).unwrap();
+        assert!(cat
+            .faces_of(&crate::immich_source::cache_path(root, &assets[0]))
+            .unwrap()
+            .is_empty());
     }
 
     fn marks(rating: u8) -> catalog::db::Marks {

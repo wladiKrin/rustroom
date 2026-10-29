@@ -37,6 +37,7 @@ pub enum Command {
     ShowCompare,
     ShowSurvey,
     ShowMap,
+    ShowPeople,
     ZoomIn,
     ZoomOut,
     FitView,
@@ -453,6 +454,7 @@ fn view_items() -> Vec<Item> {
         action("Survey", Command::ShowSurvey, Some(Shortcut::bare('N'))),
         // ⚠ No default key (M10.18b): the bare letters are the tools and the views'. Bindable.
         action("Map", Command::ShowMap, None),
+        action("People", Command::ShowPeople, None),
         Item::Separator,
         action("Zoom in", Command::ZoomIn, Some(Shortcut::cmd('+'))),
         action("Zoom out", Command::ZoomOut, Some(Shortcut::cmd('-'))),

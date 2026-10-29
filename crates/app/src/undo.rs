@@ -105,6 +105,7 @@ impl RustroomApp {
             ActionKind::PhotoMove { .. } => self.replay_photo_move(ctx, &kind, false),
             ActionKind::StackChange { .. } => self.replay_stack_change(&kind, false),
             ActionKind::LocationChange { .. } => self.replay_location_change(&kind, false),
+            ActionKind::FaceChange { .. } => self.replay_face_change(&kind, false),
             ActionKind::PresetEdit { .. } => self.replay_preset_edit(&kind, false),
             ActionKind::PresetDelete { folder, name } => {
                 match self.preset_store.restore(folder.as_deref(), &name) {
@@ -207,6 +208,7 @@ impl RustroomApp {
             ActionKind::PhotoMove { .. } => self.replay_photo_move(ctx, &kind, true),
             ActionKind::StackChange { .. } => self.replay_stack_change(&kind, true),
             ActionKind::LocationChange { .. } => self.replay_location_change(&kind, true),
+            ActionKind::FaceChange { .. } => self.replay_face_change(&kind, true),
             ActionKind::PresetEdit { .. } => self.replay_preset_edit(&kind, true),
             ActionKind::PresetDelete { folder, name } => {
                 match self.preset_store.delete(folder.as_deref(), &name) {

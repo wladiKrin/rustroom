@@ -352,6 +352,60 @@ impl RustroomApp {
         }
     }
 
+    /// Show every photo of an Immich person (M10.18c) — the server's, and the local ones named after them.
+    pub(crate) fn open_immich_person(
+        &mut self,
+        ctx: &egui::Context,
+        id: String,
+        name: String,
+        assets: &[immich::Asset],
+    ) {
+        let Some(conn) = immich_source::connection(&self.settings) else {
+            return;
+        };
+        let root = immich_source::cache_root(&conn.url);
+        let mut scan = immich_source::entries_from_assets(assets, &root);
+        let person = self.catalog.as_ref().and_then(|cat| {
+            rustroom_app::immich_catalog::record_assets(cat, &root, &scan).ok();
+            let _ = rustroom_app::immich_catalog::fill_marks(cat, &root, assets);
+            let _ = rustroom_app::immich_catalog::fill_locations(cat, &root, assets);
+            let _ = rustroom_app::immich_catalog::fill_faces(cat, &root, assets);
+            cat.people()
+                .ok()?
+                .into_iter()
+                .find(|p| p.immich_id.as_deref() == Some(&id))
+                .map(|p| p.id)
+        });
+        // The local photos named after them, beside the server's.
+        if let (Some(cat), Some(pid)) = (&self.catalog, person) {
+            if let Ok(local) = cat.person_members(pid) {
+                let have: std::collections::HashSet<std::path::PathBuf> =
+                    scan.iter().map(|e| e.path.clone()).collect();
+                let more: Vec<(std::path::PathBuf, u32)> = local
+                    .into_iter()
+                    .filter(|(p, _)| !have.contains(p))
+                    .collect();
+                scan.extend(rustroom_app::collections::scan_of(
+                    &more,
+                    rustroom_app::sidecar::edited_at,
+                    crate::library_state::fs_modified,
+                ));
+            }
+        }
+        catalog::sort(&mut scan, self.settings.library_sort);
+        self.refresh_immich_present();
+        let n = self.open_scan(
+            ctx,
+            LibrarySource::ImmichPerson {
+                id,
+                person: person.unwrap_or(0),
+                name: name.clone(),
+            },
+            scan,
+        );
+        self.status = format!("{n} photos of {name}");
+    }
+
     /// Show one Immich album's photos, downloading nothing.
     ///
     /// ⚠⚠ Goes through `open_scan`, the one place a `Library` is constructed, exactly like a
@@ -392,6 +446,10 @@ impl RustroomApp {
             }
             // M10.18b: Immich's positions, the Map's pins for phone photos.
             if let Err(e) = rustroom_app::immich_catalog::fill_locations(cat, &root, assets) {
+                eprintln!("catalog: {e}");
+            }
+            // M10.18c: Immich's people and their faces, the People list's.
+            if let Err(e) = rustroom_app::immich_catalog::fill_faces(cat, &root, assets) {
                 eprintln!("catalog: {e}");
             }
         }
@@ -448,6 +506,10 @@ impl RustroomApp {
             }
             // M10.18b: Immich's positions, the Map's pins for phone photos.
             if let Err(e) = rustroom_app::immich_catalog::fill_locations(cat, &root, assets) {
+                eprintln!("catalog: {e}");
+            }
+            // M10.18c: Immich's people and their faces, the People list's.
+            if let Err(e) = rustroom_app::immich_catalog::fill_faces(cat, &root, assets) {
                 eprintln!("catalog: {e}");
             }
         }
@@ -510,6 +572,31 @@ impl RustroomApp {
                             self.open_immich_bucket(ctx, bucket, label, &assets);
                         }
                         Err(e) => self.status = format!("Could not open {label}: {e}"),
+                    }
+                }
+                Outcome::People(Ok(people)) => {
+                    let named: Vec<(String, String)> = people
+                        .into_iter()
+                        .map(|p| (p.id, p.name.trim().to_string()))
+                        .collect();
+                    if let Some(cat) = &self.catalog {
+                        // The server's whole list: people gone from it leave ours (the review's #9).
+                        if let Err(e) = cat.replace_immich_people(&named) {
+                            eprintln!("catalog: {e}");
+                        }
+                    }
+                }
+                // ⚠ A key without `person.read` answers 403: said once, and the People list is simply local.
+                Outcome::People(Err(e)) => {
+                    eprintln!("immich: people: {e}");
+                    self.status =
+                        "Immich's people could not be read — the key may lack person.read".into();
+                }
+                Outcome::Person { id, name, result } => {
+                    self.immich_opening = None;
+                    match result {
+                        Ok(assets) => self.open_immich_person(ctx, id, name, &assets),
+                        Err(e) => self.status = format!("Could not open {name}: {e}"),
                     }
                 }
                 Outcome::Album { id, name, result } => {
@@ -591,6 +678,7 @@ mod tests {
             updated_at: "2026-01-01T00:00:00.000Z".into(),
             is_favorite: false,
             exif_info: None,
+            people: None,
         }
     }
 

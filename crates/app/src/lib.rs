@@ -42,6 +42,8 @@ pub mod export_presets;
 pub mod export_summary;
 pub mod eye_detect;
 pub mod eye_tool;
+pub mod face_groups;
+pub mod face_pass;
 pub mod ffdnet;
 pub mod file_rename;
 pub mod filename_template;

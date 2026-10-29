@@ -251,7 +251,9 @@ fn downloaded_flags(
     // kilobyte, and `shows_download_badge` stays the only place that decides.
     let immich_grid = matches!(
         lib.source,
-        crate::LibrarySource::ImmichAlbum { .. } | crate::LibrarySource::ImmichBucket { .. }
+        crate::LibrarySource::ImmichAlbum { .. }
+            | crate::LibrarySource::ImmichBucket { .. }
+            | crate::LibrarySource::ImmichPerson { .. }
     );
     let downloaded: Vec<bool> = if immich_grid {
         lib.entries

@@ -30,6 +30,15 @@ pub(crate) fn fs_modified(path: &std::path::Path) -> std::time::SystemTime {
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
 }
 
+/// A [`Library::visible_rev`] no Library has had — from one counter for the whole process. ⚠⚠ A NEW Library takes
+/// one too: starting at 0, two folders with the same number of photos shared a revision, and a view keyed on it
+/// kept the first folder's index — the People view's crops went blank, the Map's pins stale (found in use,
+/// 2026-10-28).
+pub(crate) fn fresh_rev() -> u64 {
+    static REV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    REV.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// What the Library is currently showing.
 ///
 /// ⚠ A collection is a *source*, not a filter, so the format filter and the six sort orders
@@ -58,6 +67,17 @@ pub(crate) enum LibrarySource {
     },
     Keyword {
         id: i64,
+        name: String,
+    },
+    /// A person named only in Rustroom (M10.18c): the catalog's photos of them, following the catalog.
+    Person {
+        id: i64,
+        name: String,
+    },
+    /// A person Immich knows (M10.18c): every asset of theirs on the server, and the local photos named them.
+    ImmichPerson {
+        id: String,
+        person: i64,
         name: String,
     },
     /// One Immich album, its photos cached locally on demand.
@@ -134,6 +154,10 @@ pub(crate) struct Library {
     /// so a view deriving from the visible photos (the Map's pins, M10.18b) can key on it instead of
     /// hashing them every frame.
     pub(crate) visible_rev: u64,
+    /// Who is in each photo, for the people filter (M10.18c) — read when the faces change
+    /// (`Catalog::faces_revision`, `people_rev`), only while the filter asks for someone.
+    pub(crate) people_of: std::collections::HashMap<PathBuf, std::collections::BTreeSet<i64>>,
+    pub(crate) people_rev: Option<u64>,
     /// Marks for every marked photo on show, keyed by identity.
     ///
     /// ⚠⚠ Read **once per rebuild**, not per frame and never per cell. The grid draws sixty
@@ -224,7 +248,7 @@ impl Library {
             .filter(|(_, e)| {
                 let m = self.marks.get(&e.id).copied().unwrap_or_default();
                 let c = self.captures.get(&e.id.path).cloned().unwrap_or_default();
-                filter.matches(e, m, &c)
+                filter.matches(e, m, &c) && filter.people_match(self.people_of.get(&e.id.path))
             })
             .map(|(i, _)| i)
             .collect();
@@ -241,8 +265,7 @@ impl Library {
     /// share a value. Called when `visible` changed, and when `entries` were rebuilt (the same indices
     /// may now name other photos).
     pub(crate) fn bump_visible_rev(&mut self) {
-        static REV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        self.visible_rev = REV.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.visible_rev = fresh_rev();
     }
 
     /// Every selected row's [`PhotoId`].

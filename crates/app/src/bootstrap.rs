@@ -99,6 +99,8 @@ impl RustroomApp {
         let mut app = Self {
             location_passes,
             map: Default::default(),
+            immich_people_asked: false,
+            people: Default::default(),
             // ⚠ From the settings, not `default()`: the format filter is persisted and this is
             // where it is read back — see `Settings::initial_filter`.
             filter: settings.initial_filter(),

@@ -170,6 +170,14 @@ pub enum ActionKind {
     LocationChange {
         changes: Vec<(PathBuf, catalog::db::Hand, catalog::db::Hand)>,
     },
+    /// Faces named, confirmed, cleared or dismissed in the People view (M10.18c): each face's `(id, before,
+    /// after)`, and each "No" as `(face, person, rejected)` — undo writes the befores and flips the Noes.
+    FaceChange {
+        changes: Vec<(i64, catalog::db::FaceState, catalog::db::FaceState)>,
+        rejections: Vec<(i64, i64)>,
+        /// Pairs of faces kept apart ("Not in this group").
+        apart: Vec<(i64, i64)>,
+    },
     /// Several actions performed by one gesture, undone and redone as a unit.
     ///
     /// Pasting into a multi-selection is the motivating case: it changes the open photo
@@ -242,6 +250,7 @@ fn reachable(kind: &ActionKind, open: Option<&PhotoId>) -> bool {
         | ActionKind::PhotoMove { .. }
         | ActionKind::StackChange { .. }
         | ActionKind::LocationChange { .. }
+        | ActionKind::FaceChange { .. }
         | ActionKind::Rename { .. } => true,
         ActionKind::Batch(parts) => parts.iter().all(|p| reachable(p, open)),
     }

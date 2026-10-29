@@ -7,7 +7,7 @@ mod centre_info;
 mod filter;
 pub(crate) mod keys;
 mod landing;
-mod top_bar;
+pub(crate) mod top_bar;
 
 use crate::{
     commands, develop, library, menu_bar, modals, multi, name_edit, AppView, LibraryMode,
@@ -158,6 +158,8 @@ impl RustroomApp {
         self.pump_hdr(ctx);
         self.pump_pano(ctx);
         self.pump_merges(ctx);
+        self.pump_face_pass(ctx);
+        self.pump_people_filter();
         self.pump_ai(ctx);
         self.pump_denoise(ctx);
         self.pump_removals(ctx);
@@ -228,6 +230,7 @@ impl RustroomApp {
                     LibraryMode::Compare => multi::compare::show(self, ui, ctx),
                     LibraryMode::Survey => multi::survey::show(self, ui, ctx),
                     LibraryMode::Map => crate::map_view::show(self, ui, ctx),
+                    LibraryMode::People => crate::people_view::show(self, ui, ctx),
                 }
             }
         }

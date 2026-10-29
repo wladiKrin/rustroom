@@ -166,7 +166,9 @@ impl RustroomApp {
                 }
                 // ⚠ The album still lists the asset, under its cache path: it shows as not
                 // downloaded, and opening it there downloads a fresh copy.
-                LibrarySource::ImmichAlbum { .. } | LibrarySource::ImmichBucket { .. } => {}
+                LibrarySource::ImmichAlbum { .. }
+                | LibrarySource::ImmichBucket { .. }
+                | LibrarySource::ImmichPerson { .. } => {}
                 // Every catalog view shows the photos where they are now, selection kept.
                 _ => {
                     for e in lib.scan.iter_mut() {
@@ -426,6 +428,7 @@ mod tests {
             updated_at: "2025-01-02T00:00:00.000Z".into(),
             is_favorite: false,
             exif_info: None,
+            people: None,
         }
     }
 

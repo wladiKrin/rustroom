@@ -38,6 +38,10 @@ pub enum Job {
     Bucket { bucket: String, label: String },
     /// `GET /albums/{id}`.
     Album { id: String, name: String },
+    /// `GET /people` — the server's named, visible people (M10.18c).
+    People,
+    /// Every asset one person is in (M10.18c) — opened like an album.
+    Person { id: String, name: String },
     /// `GET /assets/{id}/original`, streamed to `dest`.
     ///
     /// ⚠ `dest` is the **real** cache path. The worker writes to `dest.part` and renames; the
@@ -75,6 +79,12 @@ pub enum Outcome {
         result: Result<Vec<immich::Asset>, String>,
     },
     Album {
+        id: String,
+        name: String,
+        result: Result<Vec<immich::Asset>, String>,
+    },
+    People(Result<Vec<immich::Person>, String>),
+    Person {
         id: String,
         name: String,
         result: Result<Vec<immich::Asset>, String>,
@@ -158,6 +168,8 @@ pub struct ImmichWorker {
     /// Whether the **bucket list** fetch is outstanding. See [`Self::pending_albums`].
     pending_buckets: bool,
     pending_stacks: bool,
+    /// The people list's own guard — never shared (the album-click guard's lesson).
+    pending_people: bool,
     /// Downloads waiting for a slot — see [`MAX_CONCURRENT_DOWNLOADS`].
     ///
     /// ⚠ Only `Job::Original` ever queues. A list fetch is one request and an open is never delayed.
@@ -177,6 +189,7 @@ impl ImmichWorker {
             pending_albums: false,
             pending_buckets: false,
             pending_stacks: false,
+            pending_people: false,
             queued: std::collections::VecDeque::new(),
         }
     }
@@ -244,14 +257,25 @@ impl ImmichWorker {
             // clicking a second album while the first was loading silently discarded the click —
             // reported in use as "it doesn't switch immediately". It bumps the sequence instead, and
             // `latest_open` lets the caller ignore a superseded reply.
-            Job::Album { .. } | Job::Bucket { .. } => {
+            Job::People => {
+                if self.pending_people {
+                    return;
+                }
+                self.pending_people = true;
+                None
+            }
+            Job::Album { .. } | Job::Bucket { .. } | Job::Person { .. } => {
                 self.open_seq += 1;
                 None
             }
             Job::About { .. } | Job::CheckMarks { .. } | Job::SendMarks { .. } => None,
         };
 
-        let seq = matches!(job, Job::Album { .. } | Job::Bucket { .. }).then_some(self.open_seq);
+        let seq = matches!(
+            job,
+            Job::Album { .. } | Job::Bucket { .. } | Job::Person { .. }
+        )
+        .then_some(self.open_seq);
 
         // ⚠⚠ Past the cap, a download **waits** instead of spawning. `in_flight` already holds this
         // asset's id — the dedupe above inserted it — so a queued asset is still deduped, and `poll`
@@ -329,6 +353,7 @@ impl ImmichWorker {
                 Outcome::Albums(_) => self.pending_albums = false,
                 Outcome::Buckets(_) => self.pending_buckets = false,
                 Outcome::Stacks(_) => self.pending_stacks = false,
+                Outcome::People(_) => self.pending_people = false,
                 _ => {}
             }
             // ⚠⚠ A superseded open is **dropped here**, not acted on: its grid would otherwise land
@@ -412,6 +437,12 @@ pub fn live_fetcher(conn: Option<crate::immich_source::Connection>) -> FetchFn {
                         name,
                         result: Err(e),
                     },
+                    Job::People => Outcome::People(Err(e)),
+                    Job::Person { id, name } => Outcome::Person {
+                        id,
+                        name,
+                        result: Err(e),
+                    },
                     Job::Buckets => Outcome::Buckets(Err(e)),
                     Job::Stacks => Outcome::Stacks(Err(e)),
                     Job::Bucket { bucket, label } => Outcome::Bucket {
@@ -443,6 +474,11 @@ pub fn live_fetcher(conn: Option<crate::immich_source::Connection>) -> FetchFn {
             Job::Album { id, name } => {
                 let result = client.album(&id).map_err(|e| e.to_string());
                 Outcome::Album { id, name, result }
+            }
+            Job::People => Outcome::People(client.people().map_err(|e| e.to_string())),
+            Job::Person { id, name } => {
+                let result = client.person(&id).map_err(|e| e.to_string());
+                Outcome::Person { id, name, result }
             }
             Job::Buckets => Outcome::Buckets(client.buckets().map_err(|e| e.to_string())),
             Job::Stacks => Outcome::Stacks(client.stacks().map_err(|e| e.to_string())),

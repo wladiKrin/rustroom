@@ -330,12 +330,12 @@ mod tests {
         assert_eq!(h.of(Command::Stack), None);
         h.click("Reset");
         assert_eq!(h.of(Command::Stack), Some(Shortcut::cmd('G')));
+        // ⚠ Narrowed first: the full list runs past the harness's screen, and a click there lands on
+        // nothing (the list grew past Unstack with M10.18c's commands).
+        h.d.filter = "stack".into();
         h.click("Shortcut for Unstack");
         h.press(egui::Key::Delete, egui::Modifiers::NONE);
         assert!(!h.d.overrides.is_empty(), "the sample");
-        // ⚠ Narrowed first: the full list runs past the harness's screen, and a click there lands on
-        // nothing.
-        h.d.filter = "stack".into();
         h.click("Reset all");
         assert!(h.d.overrides.is_empty());
     }
