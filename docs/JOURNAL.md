@@ -224,9 +224,20 @@ mockups `https://claude.ai/artifact/8veXQc9qb5x7ivD4GnM5UW` (layout A, the autho
   forget-folder undo; the threshold is untuned on real shoots; `ImmichPerson` views do not follow catalog changes;
   `people_view.rs` is 603 lines.
 
-### 2026-10-28 — M10.18a: tethered capture, built and parked (branch `m10.18a-tethering`, not merged)
+### 2026-10-28 — M10.18a: tethered capture (branch `m10.18a-tethering`, merged 2026-10-29)
 
-⏸ **Waiting for the author to try it with the X-T4** ("can we do that later" — he was away from the camera). The
+✅ **Confirmed by the author ("works, merge and delete")** with his X-T4 on the Mac, after `main` was merged in.
+**Found in use, 2026-10-29:**
+- **macOS's `ptpcamerad` claims every camera at plug-in**, so Start said "Another program is using the camera"; launchd
+  restarts it within a second. Now `tether::Hold::photo_service()` kills it (and the older `PTPCamera`) before the open
+  and every 500 ms until the session ends (only the real opener's session — a test's fake holds nothing). A claim left
+  over names the apps to quit. ⚠ The Mac-only lines were first compiled on the Mac: this Linux box has no macOS target.
+- **The camera's own shutter button does not fire during a session** — the body itself does not shoot, so no event is
+  lost; ⚠ unconfirmed guess: the X-T4 locks its controls while the computer holds it. Shoot / F12 is the way.
+- ⚠ On a Mac the build needs `PKG_CONFIG_PATH` set in THAT terminal (`brew install libgphoto2` alone is not enough).
+- An empty `PKG_CONFIG_PATH` was the first error; the pulled-cable check was asked for, not reported separately.
+
+Built 2026-10-28 while the author was away from the camera ("can we do that later"). The
 author skipped the questions ("start"); every choice is in `docs/superpowers/specs/2026-10-28-m10.18a-tethering-design.md`
 on that branch. Crate `tether` (no GUI): a `Camera` trait, a scripted `Fake` (`testing`), the libgphoto2 backend
 behind `gphoto2` (the app's default feature `camera` — **libgphoto2 is now a build dependency**: `pacman -S libgphoto2`,
