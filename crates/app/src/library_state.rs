@@ -65,6 +65,11 @@ pub(crate) enum LibrarySource {
         id: i64,
         name: String,
     },
+    /// A publish service's members (M10.18d), Removed ones included until a Publish clears them.
+    Publish {
+        id: i64,
+        name: String,
+    },
     Keyword {
         id: i64,
         name: String,
@@ -105,7 +110,9 @@ impl LibrarySource {
     pub(crate) fn is_per_copy(&self) -> bool {
         matches!(
             self,
-            LibrarySource::Collection { .. } | LibrarySource::Smart { .. }
+            LibrarySource::Collection { .. }
+                | LibrarySource::Smart { .. }
+                | LibrarySource::Publish { .. }
         )
     }
 }

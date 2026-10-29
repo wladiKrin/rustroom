@@ -211,6 +211,7 @@ impl RustroomApp {
             sync_groups: EditGroups::default(),
             export_draft: settings.export.clone(),
             exporter: None,
+            publish: Default::default(),
             import: None,
             hdr: Default::default(),
             merges: Default::default(),

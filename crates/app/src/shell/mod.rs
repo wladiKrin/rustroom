@@ -154,6 +154,7 @@ impl RustroomApp {
     /// Advance the export, import, AI and Immich jobs.
     fn pump_jobs(&mut self, ctx: &egui::Context) {
         self.pump_export(ctx);
+        self.pump_publish(ctx);
         self.pump_import(ctx);
         self.pump_hdr(ctx);
         self.pump_pano(ctx);

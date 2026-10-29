@@ -36,14 +36,34 @@ impl RustroomApp {
                 })
                 .collect();
         };
-        lib.selection
+        let ids: Vec<PhotoId> = lib
+            .selection
             .iter()
             .filter_map(|i| lib.entries.get(i))
-            .map(|e| {
-                let id = e.id.clone();
+            .map(|e| e.id.clone())
+            .collect();
+        self.export_jobs_for(&ids)
+    }
+
+    /// [`Self::export_jobs`] for `ids` rather than the selection — a publish's members (M10.18d). An id the
+    /// Library is not showing gets no copy name and no marks, and the catalog's other facts as usual.
+    pub(crate) fn export_jobs_for(&self, ids: &[PhotoId]) -> Vec<ExportJob> {
+        let open = self
+            .session
+            .as_ref()
+            .map(|s| (PhotoId::new(s.path.clone(), s.copy), s.edits.clone()));
+        let Some(lib) = &self.library else {
+            return Vec::new();
+        };
+        // ⚠ One map, not a search per id: a service can hold thousands.
+        let labels: std::collections::HashMap<&PhotoId, &Option<String>> =
+            lib.entries.iter().map(|e| (&e.id, &e.label)).collect();
+        ids.iter()
+            .map(|id| {
+                let id = id.clone();
                 // ⚠ The name comes from the *entry*, so it is whatever the Library is showing —
                 // including a rename made this session that has not been re-scanned.
-                let name = e.label.clone();
+                let name = labels.get(&id).and_then(|l| (*l).clone());
                 let edits = match &open {
                     Some((oid, edits)) if *oid == id => edits.clone(),
                     // ⚠ `load_copy`, not `load`: two copies of one file have different edits, and

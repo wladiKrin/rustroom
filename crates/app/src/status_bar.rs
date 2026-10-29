@@ -247,6 +247,8 @@ fn job_or_status(app: &mut RustroomApp, ui: &mut egui::Ui) {
             app.export_progress.clone(),
             Some(RustroomApp::cancel_export),
         )
+    } else if let Some(line) = app.publish_line() {
+        (line, Some(RustroomApp::cancel_publish))
     } else if !app.merges.progress.is_empty() {
         (
             app.merges.progress.clone(),
