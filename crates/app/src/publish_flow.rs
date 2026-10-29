@@ -25,6 +25,33 @@ pub(crate) struct PublishFlow {
     run: Option<Run>,
     /// The open service view's states.
     pub(crate) view: Option<ViewStates>,
+    /// The New / Edit service dialog, while open.
+    pub(crate) dialog: Option<Dialog>,
+}
+
+/// Which export settings a service takes, in its dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SettingsFrom {
+    /// The service's own, unchanged — offered when editing.
+    Keep,
+    /// The export dialog's last-used settings.
+    LastExport,
+    /// A saved export preset, by name — copied, never linked.
+    Preset(String),
+}
+
+/// The New / Edit service dialog's draft.
+#[derive(Debug, Clone)]
+pub(crate) struct Dialog {
+    pub(crate) editing: Option<i64>,
+    pub(crate) name: String,
+    pub(crate) to_immich: bool,
+    pub(crate) folder: Option<std::path::PathBuf>,
+    /// An existing album `(id, name)`, or `None` for a new one named `new_album`.
+    pub(crate) album: Option<(String, String)>,
+    pub(crate) new_album: String,
+    pub(crate) settings: SettingsFrom,
+    pub(crate) error: Option<String>,
 }
 
 /// A running Publish.
@@ -144,7 +171,11 @@ impl RustroomApp {
 
     /// The open service view's states — re-derived only when something they read has moved.
     pub(crate) fn publish_view_states(&mut self) -> Option<&ViewStates> {
-        let id = self.shown_service()?;
+        // ⚠ Dropped once the view shows something else, or its controls would linger in the status row.
+        let Some(id) = self.shown_service() else {
+            self.publish.view = None;
+            return None;
+        };
         let cat = self.catalog.as_ref()?;
         let open = self
             .session
@@ -267,6 +298,175 @@ impl RustroomApp {
             rows: Vec::new(),
             outcome: Outcome::default(),
         });
+    }
+
+    /// Open the New service dialog.
+    pub(crate) fn open_new_service(&mut self) {
+        self.publish.dialog = Some(Dialog {
+            editing: None,
+            name: String::new(),
+            to_immich: false,
+            folder: None,
+            album: None,
+            new_album: String::new(),
+            settings: SettingsFrom::LastExport,
+            error: None,
+        });
+        self.modal = crate::modals::Modal::PublishService;
+    }
+
+    /// Open the Edit dialog for service `id`.
+    pub(crate) fn open_edit_service(&mut self, id: i64) {
+        let Some(row) = self.publish_service(id) else {
+            return;
+        };
+        let (to_immich, folder, album, new_album) = match &row.target {
+            PublishTarget::Folder { path } => (false, Some(path.clone()), None, String::new()),
+            PublishTarget::Immich {
+                album_id: Some(a),
+                album_name,
+            } => (
+                true,
+                None,
+                Some((a.clone(), album_name.clone())),
+                String::new(),
+            ),
+            PublishTarget::Immich {
+                album_id: None,
+                album_name,
+            } => (true, None, None, album_name.clone()),
+        };
+        self.publish.dialog = Some(Dialog {
+            editing: Some(id),
+            name: row.name,
+            to_immich,
+            folder,
+            album,
+            new_album,
+            settings: SettingsFrom::Keep,
+            error: None,
+        });
+        self.modal = crate::modals::Modal::PublishService;
+    }
+
+    /// Save the dialog's service; `false` (with the dialog's error set) when it cannot be saved.
+    pub(crate) fn save_service_dialog(&mut self) -> bool {
+        let Some(d) = self.publish.dialog.clone() else {
+            return false;
+        };
+        let fail = |app: &mut Self, e: &str| {
+            if let Some(d) = app.publish.dialog.as_mut() {
+                d.error = Some(e.to_string());
+            }
+            false
+        };
+        let name = d.name.trim().to_string();
+        if name.is_empty() {
+            return fail(self, "Name the service");
+        }
+        let target = if d.to_immich {
+            match &d.album {
+                Some((id, album_name)) => PublishTarget::Immich {
+                    album_id: Some(id.clone()),
+                    album_name: album_name.clone(),
+                },
+                None if !d.new_album.trim().is_empty() => PublishTarget::Immich {
+                    album_id: None,
+                    album_name: d.new_album.trim().to_string(),
+                },
+                None => return fail(self, "Choose an album or name a new one"),
+            }
+        } else {
+            match &d.folder {
+                Some(path) => PublishTarget::Folder { path: path.clone() },
+                None => return fail(self, "Choose a folder"),
+            }
+        };
+        let kept = d
+            .editing
+            .and_then(|id| self.publish_service(id))
+            .map(|r| r.options_json);
+        let options_json = match (&d.settings, kept) {
+            (SettingsFrom::Keep, Some(json)) => json,
+            (SettingsFrom::Preset(p), _) => match self
+                .export_preset_store
+                .list()
+                .into_iter()
+                .find(|x| x.name == *p)
+            {
+                Some(x) => serde_json::to_string(&x.options).unwrap_or_default(),
+                None => return fail(self, "That export preset is gone"),
+            },
+            _ => serde_json::to_string(&self.settings.export).unwrap_or_default(),
+        };
+        let Some(cat) = &self.catalog else {
+            return fail(self, "No catalog");
+        };
+        let saved = match d.editing {
+            Some(id) => cat.update_publish_service(id, &name, &target, &options_json),
+            None => cat
+                .create_publish_service(&name, &target, &options_json)
+                .map(|_| ()),
+        };
+        if saved.is_err() {
+            return fail(self, "A service of that name already exists");
+        }
+        self.publish.dialog = None;
+        self.publish.view = None;
+        // A renamed service's open view keeps its title in step.
+        if let (Some(id), Some(lib)) = (d.editing, self.library.as_mut()) {
+            if let LibrarySource::Publish { id: shown, name: n } = &mut lib.source {
+                if *shown == id {
+                    *n = name.clone();
+                }
+            }
+        }
+        true
+    }
+
+    /// Delete service `id` — its rows only; nothing it published is touched.
+    pub(crate) fn delete_service(&mut self, id: i64) {
+        if let Some(cat) = &self.catalog {
+            let _ = cat.delete_publish_service(id);
+        }
+        if self.shown_service() == Some(id) {
+            self.publish.view = None;
+        }
+    }
+
+    /// Add the selection to service `id`, or take it out; the status says how many.
+    pub(crate) fn service_selection(&mut self, id: i64, add: bool) {
+        let ids: Vec<PhotoId> = self
+            .library
+            .as_ref()
+            .map(|l| {
+                l.selection
+                    .iter()
+                    .filter_map(|i| l.entries.get(i))
+                    .map(|e| e.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let Some(cat) = &self.catalog else {
+            return;
+        };
+        let n = ids
+            .iter()
+            .filter(|p| {
+                if add {
+                    cat.add_to_service(id, &p.path, p.copy).unwrap_or(false)
+                } else {
+                    cat.remove_from_service(id, &p.path, p.copy)
+                        .unwrap_or(false)
+                }
+            })
+            .count();
+        let photos = if n == 1 { "photo" } else { "photos" };
+        self.status = if add {
+            format!("Added {n} {photos} to publish")
+        } else {
+            format!("Took {n} {photos} out of the service")
+        };
     }
 
     /// The status row's line while a publish runs.

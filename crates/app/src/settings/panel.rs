@@ -17,6 +17,8 @@ pub enum PanelSection {
     Immich,
     /// M10.18c — appended last, so a stored order keeps its sections where they were.
     People,
+    /// M10.18d — appended last, as People was.
+    Publish,
 }
 
 impl PanelSection {
@@ -25,7 +27,7 @@ impl PanelSection {
     /// ⚠ Folders first because "where photos come from" is the outer concept, and All Photos —
     /// the whole catalog — is the natural top of it. That reasoning is `collections_panel`'s and
     /// is preserved here as the default rather than re-derived.
-    pub const ALL: [PanelSection; 7] = [
+    pub const ALL: [PanelSection; 8] = [
         Self::Folders,
         Self::Collections,
         Self::Smart,
@@ -36,6 +38,7 @@ impl PanelSection {
         // rail rather than shuffling the five somebody already arranged.
         Self::Immich,
         Self::People,
+        Self::Publish,
     ];
 }
 
@@ -67,6 +70,8 @@ pub struct PanelSections {
     pub immich: bool,
     /// M10.18c.
     pub people: bool,
+    /// M10.18d.
+    pub publish: bool,
 }
 
 impl Settings {
@@ -154,5 +159,16 @@ mod tests {
             PanelSection::ALL.to_vec()
         );
         assert_eq!(PanelSection::ALL[0], PanelSection::Folders);
+    }
+
+    /// M10.18d: a settings file from before publish services gets the section, at the bottom.
+    #[test]
+    fn an_old_settings_file_gets_the_publish_section() {
+        let s = Settings {
+            panel_order: PanelSection::ALL[..7].to_vec(),
+            ..Settings::default()
+        };
+        assert_eq!(s.panel_order().last(), Some(&PanelSection::Publish));
+        assert_eq!(s.panel_order().len(), 8);
     }
 }

@@ -175,6 +175,7 @@ pub(crate) fn library_row(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::
                         grid_size_slider(app, ui);
                     }
                     sort_combo(app, ui, shown.sort_compact);
+                    crate::publish_panel::status_controls(app, ui);
                     if shown.immich {
                         crate::status_immich::immich_buttons(app, ui);
                     }

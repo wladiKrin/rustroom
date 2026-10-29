@@ -84,6 +84,7 @@ mod people_view;
 mod preset_ops;
 mod preview_flow;
 mod publish_flow;
+mod publish_panel;
 mod removal_flow;
 mod rename_flow;
 mod segmented;

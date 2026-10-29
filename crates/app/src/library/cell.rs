@@ -37,6 +37,9 @@ pub(super) struct CellInputs<'a, 'b> {
     pub(super) stack_drag: rustroom_app::settings::StackDrag,
     /// How a collapsed stack is drawn (Settings → Appearance).
     pub(super) look: rustroom_app::stack::StackLook,
+    /// A publish service view's states (M10.18d) — a mark on New and Modified, Removed dimmed.
+    pub(super) publish:
+        Option<&'a std::collections::HashMap<PhotoId, rustroom_app::publish_state::State>>,
 }
 
 /// A drag that starts on a member of an **unfurled** stack moves it within the stack (M10.8c after
@@ -102,6 +105,7 @@ pub(super) fn draw(
         remote,
         stack_drag,
         look,
+        publish,
     } = c;
     // ⚠⚠ A stable id per photo, not egui's auto-id counter. Under
     // `show_rows` that counter shifts with the scroll position — it skips
@@ -179,6 +183,9 @@ pub(super) fn draw(
                         &pile,
                     );
                     let e = &lib.entries[i];
+                    if let Some(s) = publish.and_then(|m| m.get(&e.id)) {
+                        crate::publish_panel::cell_mark(ui, cell_resp.rect, *s);
+                    }
                     stack_badge(ui, e, &cell_resp, out, remote, &lib.hand_stacks);
                     // ⚠ The selected cell's name is drawn in the strong
                     // text colour: the border says "selected" at the edge

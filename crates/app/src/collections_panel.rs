@@ -132,6 +132,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // enqueued jobs, not catalog operations, and folding them into the catalog `Action` enum would
     // put two unrelated concerns behind one match.
     let mut immich_action = crate::immich_panel::Action::None;
+    // M10.18d: the Publish section's outcome, applied after the panel like the others.
+    let mut publish_out: Option<crate::publish_panel::Out> = None;
     // ⚠ Read once, out here, because Collections and Keywords are separate sections now and both
     // need it — it used to be a local of the Collections block that Keywords happened to see.
     let picked = app.library.as_ref().map(|l| l.selection.len()).unwrap_or(0);
@@ -512,6 +514,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             }
                         })
                             }
+                            PanelSection::Publish => {
+                                let n = app.rail_data.publish.len().to_string();
+                                section(ui, &mut sections.publish, "sec_publish", "Publish services", &n, |ui| {
+                                    if let Some(o) = crate::publish_panel::body(app, ui) {
+                                        publish_out = Some(o);
+                                    }
+                                })
+                            }
                             PanelSection::People => {
                                 app.ask_immich_people();
                                 let n = app.rail_data.people.len().to_string();
@@ -688,6 +698,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     .request(rustroom_app::immich_worker::Job::Bucket { bucket, label });
             }
         }
+    }
+
+    if let Some(o) = publish_out {
+        crate::publish_panel::apply(app, ctx, o);
     }
 
     match action {
