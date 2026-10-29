@@ -118,7 +118,7 @@ pub enum CatalogSnapshot {
         /// The photos already searched for faces.
         faces_read: Vec<String>,
         /// The photos' publish-service rows (M10.18d).
-        publish: crate::db::PublishSnapshot,
+        publish: Box<crate::db::PublishSnapshot>,
     },
 }
 

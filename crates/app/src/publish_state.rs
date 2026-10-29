@@ -134,8 +134,10 @@ mod tests {
     fn a_changed_edit_is_modified() {
         let opts = ExportOptions::default();
         let a = fingerprint(&Edits::default(), &opts, None);
-        let mut e = Edits::default();
-        e.exposure = 0.5;
+        let e = Edits {
+            exposure: 0.5,
+            ..Default::default()
+        };
         let b = fingerprint(&e, &opts, None);
         assert_ne!(a, b);
         assert_eq!(state(&member(Some(a), false), b), State::Modified);

@@ -70,8 +70,10 @@ fn publishing_a_folder_service_writes_and_records_then_a_reedit_is_modified() {
     assert_eq!(files_in(o.path()), ["a.jpg", "b.jpg"]);
     assert_eq!(counts(&mut app).published, 2);
 
-    let mut e = edit_model::Edits::default();
-    e.exposure = 0.7;
+    let e = edit_model::Edits {
+        exposure: 0.7,
+        ..Default::default()
+    };
     rustroom_app::sidecar::save(&d.join("a.jpg"), &e).unwrap();
     // ⚠ A sidecar written behind the app's back moves no revision of its own; the view is re-read as a
     // return from Develop would re-read it.

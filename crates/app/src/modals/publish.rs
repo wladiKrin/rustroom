@@ -142,7 +142,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             }
                         })
                         .response
-                        .hover("Copies these settings into the service; a change marks every photo modified");
+                        .hover("Copies these settings into the service, so changing them marks every photo modified");
                     ui.end_row();
                 });
             if let Some(e) = &d.error {

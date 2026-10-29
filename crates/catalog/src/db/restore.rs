@@ -165,7 +165,7 @@ impl Catalog {
             .collect();
         drop(st);
 
-        let publish = super::publish::snapshot(&tx, id)?;
+        let publish = Box::new(super::publish::snapshot(&tx, id)?);
 
         tx.execute("DELETE FROM folders WHERE id = ?1", [id])?;
         tx.commit()?;
