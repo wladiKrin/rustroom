@@ -72,6 +72,18 @@ pub struct ExportReport {
     pub below_ppi: usize,
     /// Photos made smaller than asked to fit the file-size limit.
     pub shrunk: usize,
+    /// Every photo the run delivered, and where (M10.18d — what a publish records). ⚠ A photo whose upload
+    /// did not confirm is NOT here: its delivery is unknown, so a publish leaves it to the next run.
+    pub written: Vec<WrittenItem>,
+}
+
+/// One delivered photo: the file kept on disk (none when it was only staged for an upload), and the
+/// asset a confirmed upload made or matched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrittenItem {
+    pub id: crate::photo_id::PhotoId,
+    pub file: Option<PathBuf>,
+    pub asset: Option<String>,
 }
 
 impl ExportReport {
@@ -458,7 +470,7 @@ impl Uploader {
         })
     }
 
-    /// Upload one written file. `Err` carries a message for `unconfirmed`.
+    /// Upload one written file; the asset's id. `Err` carries a message for `unconfirmed`.
     #[allow(clippy::too_many_arguments)]
     fn send(
         &self,
@@ -468,7 +480,7 @@ impl Uploader {
         copy: u32,
         which: UploadDate,
         edited_at: Option<i64>,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let filename = exported
             .file_name()
             .and_then(|s| s.to_str())
@@ -482,7 +494,7 @@ impl Uploader {
         // ⚠ Recorded against the SOURCE photo's sidecar, not the exported file: the sidecar belongs
         // to the photo, and under Immich-only the export is deleted moments later.
         crate::immich_upload::record(source, copy, &self.host, &up);
-        Ok(())
+        Ok(up.id)
     }
 }
 
@@ -695,6 +707,25 @@ fn run(
                     // ⚠ `failed` is now in **completion** order, which is nondeterministic. Any
                     // test comparing it must sort or compare as a set.
                     let mut r = shared.lock().expect("export report");
+                    // M10.18d: what was delivered — the kept file, the confirmed asset; nothing for an
+                    // unconfirmed upload.
+                    if outcome.is_ok() {
+                        let id = crate::photo_id::PhotoId::new(p.source.clone(), p.copy);
+                        let file = staging.is_none().then(|| p.dest.clone());
+                        match &upload {
+                            None => r.written.push(WrittenItem {
+                                id,
+                                file,
+                                asset: None,
+                            }),
+                            Some(Ok(asset)) => r.written.push(WrittenItem {
+                                id,
+                                file,
+                                asset: Some(asset.clone()),
+                            }),
+                            Some(Err(_)) => {}
+                        }
+                    }
                     match outcome {
                         Ok(w) => {
                             r.exported += 1;
@@ -708,7 +739,7 @@ fn run(
                         // *response* was lost, not that the server rejected the file — 4 of 2,373
                         // writes failed that way on this network and **none had actually failed to
                         // apply**. Deleting on anything less would destroy work on a flaky link.
-                        Some(Ok(())) => {
+                        Some(Ok(_)) => {
                             r.uploaded += 1;
                             if staging.is_some() {
                                 let _ = std::fs::remove_file(&p.dest);
@@ -1570,6 +1601,84 @@ mod tests {
             1,
             "the failure must be reported, not swallowed"
         );
+    }
+
+    /// M10.18d: a publish records each photo the run wrote, and where.
+    #[test]
+    fn a_written_photo_is_reported_with_its_file() {
+        let d = TempDir::new("written");
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF"]),
+            opts(&d, None),
+            ok_decode(),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            ExportDirs::default(),
+            None,
+        );
+        let report = finished(&worker);
+        assert_eq!(
+            report.written,
+            vec![WrittenItem {
+                id: PhotoId::original(d.0.join("a.RAF")),
+                file: Some(d.0.join("a.jpg")),
+                asset: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_failed_photo_is_not_in_written() {
+        let d = TempDir::new("written_failed");
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF", "b.RAF"]),
+            opts(&d, None),
+            |p: &Path| {
+                if p.ends_with("b.RAF") {
+                    Err("broken".to_string())
+                } else {
+                    ok_decode()(p)
+                }
+            },
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            ExportDirs::default(),
+            None,
+        );
+        let report = finished(&worker);
+        assert_eq!(report.failed.len(), 1, "fixture check: b failed");
+        let ids: Vec<_> = report.written.iter().map(|w| w.id.clone()).collect();
+        assert_eq!(ids, vec![PhotoId::original(d.0.join("a.RAF"))]);
+    }
+
+    /// Review focus 4: a publish to Immich whose upload did not confirm records nothing for it.
+    #[test]
+    fn an_unconfirmed_upload_is_not_in_written() {
+        let d = TempDir::new("written_unconfirmed");
+        let mut o = opts(&d, None);
+        o.destination = Destination::Target(UploadTarget::Immich);
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF"]),
+            o,
+            ok_decode(),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            ExportDirs::default(),
+            Some(crate::immich_upload::UploadConfig {
+                base_url: "http://127.0.0.1:1".to_string(),
+                key: "irrelevant".to_string(),
+            }),
+        );
+        let report = finished(&worker);
+        assert_eq!(
+            report.unconfirmed.len(),
+            1,
+            "fixture check: it did not confirm"
+        );
+        assert!(report.written.is_empty(), "{:?}", report.written);
     }
 
     /// ⚠ The control: with no connection nothing is attempted and nothing is reported, so the
