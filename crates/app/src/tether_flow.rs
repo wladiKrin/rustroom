@@ -13,7 +13,7 @@ use rustroom_app::tether_options::{self, TetherOptions};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
-use tether::{Event, Opener, Session};
+use tether::{Event, Hold, Opener, Session};
 
 /// How often the open dialog looks for a camera again.
 const LOOK_EVERY: Duration = Duration::from_secs(2);
@@ -141,15 +141,29 @@ impl RustroomApp {
             return;
         };
         self.modal = crate::modals::Modal::None;
-        self.start_tether_with(ctx, d.draft, real_opener());
+        // ⚠ Only the real camera pushes macOS's camera service off — a test's fake must not touch the system.
+        self.start_tether_holding(ctx, d.draft, real_opener(), Hold::photo_service());
     }
 
-    /// Make the session's folder, show it, and start the session on `open`'s camera.
+    /// Make the session's folder, show it, and start the session on `open`'s camera — holding nothing, for tests.
+    #[cfg(test)]
     pub(crate) fn start_tether_with(
         &mut self,
         ctx: &egui::Context,
         opts: TetherOptions,
         open: Opener,
+    ) {
+        self.start_tether_holding(ctx, opts, open, Hold::none());
+    }
+
+    /// Make the session's folder, show it, and start the session on `open`'s camera, holding `hold` until it
+    /// ends (`tether::hold`).
+    fn start_tether_holding(
+        &mut self,
+        ctx: &egui::Context,
+        opts: TetherOptions,
+        open: Opener,
+        hold: Hold,
     ) {
         let folder = opts.folder(&tether_options::today());
         if let Err(e) = std::fs::create_dir_all(&folder) {
@@ -168,7 +182,7 @@ impl RustroomApp {
         // ⚠ The folder is OPENED first, so every shot lands as a row of the view.
         self.open_folder_at(ctx, folder.clone());
         self.tether.run = Some(TetherRun {
-            session: Session::start(open, folder.clone()),
+            session: Session::start_holding(open, folder.clone(), hold),
             camera: None,
             shots: 0,
             stopping: false,

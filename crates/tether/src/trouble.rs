@@ -15,6 +15,11 @@ pub enum Trouble {
 /// The status row's sentence for `t`; `raw` is the library's own text, kept for `Other`.
 pub fn sentence(t: Trouble, raw: &str) -> String {
     match t {
+        // ⚠ On macOS the system's own camera service is pushed off by the session (`hold`), so what is left
+        // is an app the person can quit.
+        Trouble::Claimed if cfg!(target_os = "macos") => {
+            "Another program is using the camera — quit Image Capture, Photos or any other camera app".into()
+        }
         Trouble::Claimed => "Another program is using the camera".into(),
         Trouble::Gone => "The camera was disconnected".into(),
         Trouble::Refused => "Set the camera to USB tether shooting".into(),
@@ -31,10 +36,8 @@ mod tests {
 
     #[test]
     fn the_claim_error_reads_as_another_program() {
-        assert_eq!(
-            sentence(Trouble::Claimed, "Could not claim the USB device"),
-            "Another program is using the camera"
-        );
+        assert!(sentence(Trouble::Claimed, "Could not claim the USB device")
+            .starts_with("Another program is using the camera"));
         let s = sentence(Trouble::Other, "Unspecified error.");
         assert!(s.ends_with("Unspecified error"), "{s}");
     }

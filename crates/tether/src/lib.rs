@@ -10,10 +10,12 @@
 pub mod fake;
 #[cfg(feature = "gphoto2")]
 pub mod gphoto;
+pub mod hold;
 pub mod name;
 pub mod session;
 pub mod trouble;
 
+pub use hold::Hold;
 pub use name::free_name;
 pub use session::{Event, Session};
 

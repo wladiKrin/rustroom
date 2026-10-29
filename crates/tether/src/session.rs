@@ -1,6 +1,7 @@
 //! The tethered session: one thread that owns the camera, downloads each new file into a folder and
 //! reports it. The app talks to it only through [`Session`]'s channels.
 
+use crate::hold::Hold;
 use crate::name::{free_name, part_of};
 use crate::{Camera, CameraFile, Opener};
 use std::collections::HashMap;
@@ -39,11 +40,20 @@ pub struct Session {
 impl Session {
     /// Open the camera on a new thread and download every new file into `dir` (which must exist).
     pub fn start(open: Opener, dir: PathBuf) -> Self {
+        Self::start_holding(open, dir, Hold::none())
+    }
+
+    /// [`Session::start`] holding `hold` from before the camera opens until the session ends — a real
+    /// session's [`Hold::photo_service`].
+    pub fn start_holding(open: Opener, dir: PathBuf, hold: Hold) -> Self {
         let (commands, command_rx) = channel();
         let (tx, events) = channel();
         std::thread::Builder::new()
             .name("tether".into())
-            .spawn(move || run(open, &dir, &command_rx, &tx))
+            .spawn(move || {
+                let _hold = hold;
+                run(open, &dir, &command_rx, &tx)
+            })
             .expect("spawn the tether thread");
         Self { commands, events }
     }
@@ -260,6 +270,43 @@ mod tests {
         let Session { commands, events } = s;
         drop(commands);
         assert_eq!(events.recv_timeout(LONG), Ok(Event::Ended(None)));
+    }
+
+    /// Asked for in use: macOS's camera service held the camera, so Start failed. The hold acts BEFORE the
+    /// camera is opened, and lets go when the session ends.
+    #[test]
+    fn a_session_holds_the_service_off_from_before_the_open_until_its_end() {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::Arc;
+        let d = test_dir::TempDir::new("tether-hold");
+        let acted = Arc::new(AtomicUsize::new(0));
+        let (a, seen) = (acted.clone(), acted.clone());
+        let hold = crate::hold::Hold::every(Duration::from_millis(5), move || {
+            a.fetch_add(1, Ordering::SeqCst);
+        });
+        let open: Opener = Box::new(move || {
+            assert!(
+                seen.load(Ordering::SeqCst) > 0,
+                "the camera opened before the hold acted"
+            );
+            Fake::new("X", vec![]).opener()()
+        });
+        let s = Session::start_holding(open, d.path().into(), hold);
+        assert_eq!(next(&s), Event::Connected("X".into()));
+        // The test's handle and the hold thread's — the opener's is spent.
+        assert_eq!(
+            Arc::strong_count(&acted),
+            2,
+            "the hold ended before the session did"
+        );
+        s.stop();
+        assert_eq!(next(&s), Event::Ended(None));
+        // The hold's thread owns the closure's clone; it is gone once the hold is dropped.
+        let t = std::time::Instant::now();
+        while Arc::strong_count(&acted) > 1 {
+            assert!(t.elapsed() < LONG, "the hold outlived its session");
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     #[test]
