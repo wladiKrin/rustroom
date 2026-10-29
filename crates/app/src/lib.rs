@@ -107,6 +107,7 @@ pub mod preview_key;
 pub mod preview_loader;
 pub mod preview_store;
 pub mod publish_folder;
+pub mod publish_run;
 pub mod publish_state;
 pub mod rail_data;
 pub mod removal;
