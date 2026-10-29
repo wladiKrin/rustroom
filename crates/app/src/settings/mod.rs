@@ -88,6 +88,8 @@ pub struct Settings {
     /// Where a merge of downloaded Immich photos goes (2026-10-28) — never the Immich cache, which
     /// Clear… empties. Asked for by the first such merge; changed in Settings → Immich.
     pub immich_merge_folder: Option<std::path::PathBuf>,
+    /// Tethered capture's options (M10.18a) — written only when a session starts.
+    pub tether: crate::tether_options::TetherOptions,
     /// The Map view's tile server, a `{z}/{x}/{y}` template (M10.18b) — OpenStreetMap's by default.
     pub map_tile_url: String,
     /// Which views the Library's top row shows beside Grid (M10.18c, the author's request). A hidden view keeps
@@ -528,6 +530,7 @@ impl Default for Settings {
             hdr: crate::hdr_merge::HdrSettings::default(),
             panorama: crate::pano_merge::PanoSettings::default(),
             immich_merge_folder: None,
+            tether: Default::default(),
             map_tile_url: DEFAULT_TILE_URL.to_string(),
             library_views: LibraryViews::default(),
             find_faces: true,

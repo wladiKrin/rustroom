@@ -1,0 +1,19 @@
+[package]
+name = "tether"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+# Tethered capture (M10.18a): a camera on USB, each new shot downloaded as it is taken. ⚠ Zero GUI —
+# the app's flow drives a `Session` through channels.
+[features]
+# The scripted camera (`fake::Fake`) for other crates' tests.
+testing = []
+# The real cameras, through the system's libgphoto2 (LGPL-2.1).
+gphoto2 = ["dep:gphoto2"]
+
+[dependencies]
+gphoto2 = { version = "3.4", optional = true }
+
+[dev-dependencies]
+test-dir = { path = "../test-dir" }

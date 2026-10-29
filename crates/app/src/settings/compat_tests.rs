@@ -422,6 +422,12 @@ fn settings_round_trip_carries_the_export_options() {
             create_stack: true,
         },
         immich_merge_folder: Some(std::path::PathBuf::from("/merged")),
+        // Every field non-default, so a re-defaulted one cannot pass.
+        tether: crate::tether_options::TetherOptions {
+            destination: std::path::PathBuf::from("/tethered"),
+            session: "Studio".into(),
+            preset: Some("Punchy".into()),
+        },
         // Non-default, so a re-defaulted field cannot pass.
         map_tile_url: "https://tiles.example/{z}/{x}/{y}.png".into(),
         // Every field non-default, so a re-defaulted one cannot pass.
@@ -460,6 +466,13 @@ fn settings_round_trip_carries_the_export_options() {
     };
     store.save(&s).unwrap();
     assert_eq!(store.load(), s);
+}
+
+/// M10.18a: a file from before tethering opens the dialog with the default options.
+#[test]
+fn a_settings_file_from_before_tethering_has_the_default_options() {
+    let s: Settings = serde_json::from_str("{}").unwrap();
+    assert_eq!(s.tether, crate::tether_options::TetherOptions::default());
 }
 
 /// M10.18c: a file from before People shows every view and looks for faces.

@@ -261,6 +261,11 @@ fn job_or_status(app: &mut RustroomApp, ui: &mut egui::Ui) {
         (immich_progress, Some(RustroomApp::cancel_immich_downloads))
     } else if let Some(line) = app.face_pass_line() {
         (line, Some(RustroomApp::cancel_face_pass))
+    } else if let Some(line) = app.tether_line() {
+        // ⚠ Tethering is a session, not a job: Shoot and Stop instead of Cancel (M10.18a). Behind
+        // every job above, whose Cancel matters more for its minutes; F12 still shoots then.
+        tether_controls(app, ui, &line);
+        return;
     } else {
         (app.status.clone(), None)
     };
@@ -287,6 +292,36 @@ fn job_or_status(app: &mut RustroomApp, ui: &mut egui::Ui) {
         if let Some(f) = cancel {
             f(app);
         }
+    }
+}
+
+/// A tethered session's Stop and Shoot, then its line — the job idiom's order (§7.12).
+fn tether_controls(app: &mut RustroomApp, ui: &mut egui::Ui, line: &str) {
+    let stopping = app.tether.run.as_ref().is_some_and(|r| r.stopping);
+    let stop = ui
+        .add_enabled(!stopping, egui::Button::new("Stop"))
+        .hover("Ends the tethered session and leaves the camera's card as it is")
+        .clicked();
+    let shoot = ui
+        .add_enabled(!stopping, egui::Button::new("Shoot"))
+        .hover("Fires the camera's shutter")
+        .clicked();
+    let colour = theme::tokens::of(ui).text2;
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(line)
+                .size(tokens::CAPTION)
+                .color(colour),
+        )
+        .truncate()
+        .selectable(false),
+    )
+    .hover(line);
+    if stop {
+        app.stop_tether();
+    }
+    if shoot {
+        app.shoot_tether();
     }
 }
 

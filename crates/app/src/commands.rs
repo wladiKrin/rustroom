@@ -52,6 +52,9 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
             }
         }
         Command::Import => app.open_import(),
+        Command::Tether => app.open_tether(),
+        Command::Shoot => app.shoot_tether(),
+        Command::StopTether => app.stop_tether(),
         Command::BuildPreviews => app.start_preview_build(),
         Command::Export => {
             if !app.export_jobs().is_empty() {

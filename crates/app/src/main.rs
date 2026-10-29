@@ -103,6 +103,7 @@ mod status_immich;
 mod test_app;
 #[cfg(test)]
 mod test_ui;
+mod tether_flow;
 mod theme;
 mod thumb;
 mod transfer;
