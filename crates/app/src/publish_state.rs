@@ -5,7 +5,7 @@
 //! edits and options, never `DefaultHasher` (its algorithm may change with the toolchain, and every member
 //! would then read Modified at once).
 
-use crate::batch_export::{Destination, ExportOptions};
+use crate::batch_export::ExportOptions;
 use catalog::db::Member;
 use edit_model::Edits;
 
@@ -28,8 +28,13 @@ fn fnv(h: &mut u64, bytes: &[u8]) {
     *h = h.wrapping_mul(0x0000_0100_0000_01b3);
 }
 
-/// What a member would be published as: its edits, the service's settings — where they go excluded, as where
-/// a photo goes is not what it is — and, when the settings embed it, its metadata.
+/// What a member would be published as: its edits, the service's settings — only those that differ from the
+/// defaults, and never where they go — and, when the settings embed it, the metadata a person sets.
+///
+/// ⚠⚠ Stable across builds by construction (the M10.18d review): a NEW `ExportOptions` field at its default
+/// changes nothing, `Edits` already omits its defaults (CLAUDE.md), and the metadata is hashed field by field —
+/// never `Debug` text, never the capture facts (a background scan or the GPS pass filling them later would
+/// otherwise mark a published photo Modified).
 pub fn fingerprint(
     edits: &Edits,
     opts: &ExportOptions,
@@ -37,12 +42,30 @@ pub fn fingerprint(
 ) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
     fnv(&mut h, &serde_json::to_vec(edits).unwrap_or_default());
-    let mut what = opts.clone();
-    what.dest_dir = Default::default();
-    what.destination = Destination::Files;
-    fnv(&mut h, &serde_json::to_vec(&what).unwrap_or_default());
+    let mine = serde_json::to_value(opts).unwrap_or_default();
+    let base = serde_json::to_value(ExportOptions::default()).unwrap_or_default();
+    if let (Some(mine), Some(base)) = (mine.as_object(), base.as_object()) {
+        let mut keys: Vec<&String> = mine.keys().collect();
+        keys.sort();
+        for k in keys {
+            if matches!(k.as_str(), "dest_dir" | "destination" | "delivery")
+                || base.get(k) == mine.get(k)
+            {
+                continue;
+            }
+            fnv(&mut h, k.as_bytes());
+            fnv(&mut h, mine[k].to_string().as_bytes());
+        }
+    }
     if let Some(m) = meta {
-        fnv(&mut h, format!("{m:?}").as_bytes());
+        for part in [&m.title, &m.caption, &m.copyright, &m.creator] {
+            fnv(&mut h, part.as_bytes());
+        }
+        fnv(&mut h, &[m.rating]);
+        fnv(&mut h, m.label.as_deref().unwrap_or("").as_bytes());
+        for path in &m.keywords {
+            fnv(&mut h, path.join("\u{1f}").as_bytes());
+        }
     }
     h
 }
@@ -190,6 +213,27 @@ mod tests {
         let mut h = 0xcbf2_9ce4_8422_2325u64;
         fnv(&mut h, b"rustroom");
         assert_eq!(h, 4_779_478_826_075_588_061);
+    }
+
+    /// ⚠⚠ Pinned (the M10.18d review): the print is stored, so a change here marks every published photo of
+    /// every service Modified — re-exporting them all and churning Immich albums. Re-pin only on purpose.
+    #[test]
+    fn the_print_of_the_defaults_is_pinned() {
+        let m = export::FileMetadata::default();
+        let got = fingerprint(&Edits::default(), &ExportOptions::default(), Some(&m));
+        assert_eq!(
+            got, 12_201_439_358_509_891_507,
+            "re-pin only for a deliberate change"
+        );
+    }
+
+    #[test]
+    fn the_capture_facts_do_not_count() {
+        let (e, o) = (Edits::default(), ExportOptions::default());
+        let a = export::FileMetadata::default();
+        let mut b = a.clone();
+        b.capture.camera = Some("X-T4".into());
+        assert_eq!(fingerprint(&e, &o, Some(&a)), fingerprint(&e, &o, Some(&b)));
     }
 
     #[test]

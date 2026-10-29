@@ -267,6 +267,19 @@ impl Catalog {
         Ok(())
     }
 
+    /// Forget what service `id` published — its destination changed, so every member is New there and the
+    /// Removed ones have nothing to clear (the old destination keeps what it has).
+    pub fn reset_published(&self, id: i64) -> Result<(), CatalogError> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM published WHERE service_id = ?1", [id])?;
+        tx.execute(
+            "DELETE FROM publish_members WHERE service_id = ?1 AND removed = 1",
+            [id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// A Removed member cleared from its destination: its rows go.
     pub fn clear_member(&self, id: i64, photo: &Path, copy: u32) -> Result<(), CatalogError> {
         let Some(pid) = self.photo_id(photo, copy)? else {
@@ -511,5 +524,21 @@ mod tests {
         let cat = Catalog::open_in_memory().unwrap();
         assert_eq!(cat.version().unwrap(), 18);
         assert!(cat.publish_services().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_reset_forgets_what_was_published_and_the_removed() {
+        let (cat, dir) = with_two();
+        let s = cat.create_publish_service("S", &folder(), "{}").unwrap();
+        let (a, b) = (dir.join("a.RAF"), dir.join("b.RAF"));
+        for p in [&a, &b] {
+            cat.add_to_service(s, p, 0).unwrap();
+            cat.record_published(s, p, 0, &file("/out/x.jpg")).unwrap();
+        }
+        cat.remove_from_service(s, &b, 0).unwrap();
+        cat.reset_published(s).unwrap();
+        let m = cat.publish_members(s).unwrap();
+        assert_eq!(m.len(), 1);
+        assert!(m[0].path == a && m[0].published.is_none() && !m[0].removed);
     }
 }

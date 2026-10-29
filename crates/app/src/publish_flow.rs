@@ -64,7 +64,7 @@ struct Run {
     worker: Option<ExportWorker>,
     progress: String,
     /// The album step, on its own thread (it is network).
-    album: Option<Receiver<Result<AlbumSync, String>>>,
+    album: Option<Receiver<Result<AlbumSync, run::AlbumError>>>,
     rows: Vec<(Key, Published)>,
     outcome: Outcome,
 }
@@ -72,9 +72,15 @@ struct Run {
 /// One service view's states and counts.
 pub(crate) struct ViewStates {
     key: (i64, u64, u64, u64, u64),
+    /// When they were derived — a catalog write alone re-derives them at most every [`RECOMPUTE`].
+    at: std::time::Instant,
     pub(crate) states: HashMap<PhotoId, State>,
     pub(crate) counts: Counts,
 }
+
+/// How often a catalog write alone re-derives a service view's states (the M10.18d review): each derivation
+/// reads every member's sidecar and catalog facts, and a scan writes the catalog many times a second.
+const RECOMPUTE: Duration = Duration::from_secs(2);
 
 /// The service's export settings, pointed at its destination.
 pub(crate) fn options_for(row: &PublishServiceRow) -> ExportOptions {
@@ -183,7 +189,15 @@ impl RustroomApp {
             .map_or(0, |s| rustroom_app::thumb_key::edits_fingerprint(&s.edits));
         let rev = self.library.as_ref().map_or(0, |l| l.visible_rev);
         let key = (id, cat.instance(), cat.change_count(), rev, open);
-        if self.publish.view.as_ref().map(|v| v.key) != Some(key) {
+        // ⚠ The service, the view and the open photo's edits re-derive at once; a catalog write alone — a
+        // metadata scan writes many a second — at most every RECOMPUTE.
+        let stale = match &self.publish.view {
+            None => true,
+            Some(v) if v.key == key => false,
+            Some(v) if (v.key.0, v.key.1, v.key.3, v.key.4) != (key.0, key.1, key.3, key.4) => true,
+            Some(v) => v.at.elapsed() >= RECOMPUTE,
+        };
+        if stale {
             let row = self.publish_service(id)?;
             let members = self.catalog.as_ref()?.publish_members(id).ok()?;
             let prints = self.publish_prints(&options_for(&row), &members);
@@ -202,6 +216,7 @@ impl RustroomApp {
                 .collect();
             self.publish.view = Some(ViewStates {
                 key,
+                at: std::time::Instant::now(),
                 states,
                 counts,
             });
@@ -250,7 +265,13 @@ impl RustroomApp {
             .iter()
             .map(|(p, c)| PhotoId::new(p.clone(), *c))
             .collect();
-        let jobs = self.export_jobs_for(&ids);
+        let mut jobs = self.export_jobs_for(&ids);
+        // ⚠ The review's C1: a re-published folder member goes back to its own file, verbatim.
+        if matches!(row.target, PublishTarget::Folder { .. }) {
+            for j in &mut jobs {
+                j.fixed_dest = plan.fixed.get(&(j.id.path.clone(), j.id.copy)).cloned();
+            }
+        }
         let worker = (!jobs.is_empty()).then(|| {
             let demosaic = opts.demosaic;
             let profile = self.camera_profile_path();
@@ -382,10 +403,11 @@ impl RustroomApp {
                 None => return fail(self, "Choose a folder"),
             }
         };
-        let kept = d
-            .editing
-            .and_then(|id| self.publish_service(id))
-            .map(|r| r.options_json);
+        let before = d.editing.and_then(|id| self.publish_service(id));
+        // ⚠ A new folder or album starts every member New (the M10.18d review): the print leaves the
+        // destination out, so without this everything read Published and the new place stayed empty.
+        let moved = before.as_ref().is_some_and(|r| r.target != target);
+        let kept = before.map(|r| r.options_json);
         let options_json = match (&d.settings, kept) {
             (SettingsFrom::Keep, Some(json)) => json,
             (SettingsFrom::Preset(p), _) => match self
@@ -410,6 +432,9 @@ impl RustroomApp {
         };
         if saved.is_err() {
             return fail(self, "A service of that name already exists");
+        }
+        if let (true, Some(id)) = (moved, d.editing) {
+            let _ = cat.reset_published(id);
         }
         self.publish.dialog = None;
         self.publish.view = None;
@@ -474,15 +499,16 @@ impl RustroomApp {
         self.publish.run.as_ref().map(|r| r.progress.clone())
     }
 
-    /// Stop the running publish: what was already delivered is NOT recorded, so it is published again next
-    /// time (a duplicate upload, an overwritten own file) — never lost.
+    /// Stop the running publish after the photos in hand. ⚠ The run is KEPT until the worker's report arrives,
+    /// and what it delivered is recorded (the M10.18d review: dropping it left a New photo's file untracked, and
+    /// the next Publish wrote a second one beside it).
     pub(crate) fn cancel_publish(&mut self) {
-        if let Some(w) = self.publish.run.as_ref().and_then(|r| r.worker.as_ref()) {
-            w.cancel();
+        if let Some(r) = self.publish.run.as_mut() {
+            if let Some(w) = &r.worker {
+                w.cancel();
+                r.progress = format!("Stopping the publish to “{}”…", r.name);
+            }
         }
-        self.publish.run = None;
-        self.publish.view = None;
-        self.status = "Publish cancelled".into();
     }
 
     /// Once a frame: the worker's events, then the album step, then the record.
@@ -499,9 +525,10 @@ impl RustroomApp {
                         r.progress =
                             format!("Publishing {done} of {total} to “{}” — {name}", r.name);
                     }
-                    // ⚠ Answered here, never asked: the service's own file is overwritten, anything else kept.
-                    ExportEvent::Collision { dest } => w.decide(Decision::Resolve {
-                        collision: run::collision_answer(&dest, &r.plan.replacing),
+                    // ⚠ Answered here, never asked, and always "keep both": the service's own files arrive as
+                    // fixed destinations and never collide, so anything that does is someone else's.
+                    ExportEvent::Collision { .. } => w.decide(Decision::Resolve {
+                        collision: rustroom_app::batch_export::Collision::KeepBoth,
                         apply_to_all: false,
                     }),
                     ExportEvent::Finished(rep) => report = Some(rep),
@@ -544,7 +571,7 @@ impl RustroomApp {
             r.outcome.published = run::record(cat, r.service, &r.rows);
             let (cleared, left) = run::clear_folder(cat, r.service, &r.plan.clear);
             r.outcome.cleared = cleared;
-            r.outcome.left = left;
+            r.outcome.left = left + r.plan.changed;
         }
         self.status = r.outcome.summary();
         self.publish.view = None;
@@ -599,7 +626,10 @@ impl RustroomApp {
             .name("publish-album".into())
             .spawn(move || {
                 let result = immich::Client::new(&cfg.base_url, &cfg.key)
-                    .map_err(|e| format!("Immich: {e}"))
+                    .map_err(|e| run::AlbumError {
+                        album: album_id.clone(),
+                        why: format!("Immich: {e}"),
+                    })
                     .and_then(|c| {
                         run::sync_album(
                             &c,
@@ -615,7 +645,7 @@ impl RustroomApp {
             .expect("spawn the album step");
     }
 
-    fn finish_album(&mut self, result: Result<AlbumSync, String>) {
+    fn finish_album(&mut self, result: Result<AlbumSync, run::AlbumError>) {
         let Some(mut r) = self.publish.run.take() else {
             return;
         };
@@ -660,8 +690,25 @@ impl RustroomApp {
                 }
             }
             Err(e) => {
+                // ⚠ An album this step created is kept, so a retry adds to it instead of making another.
+                if let (
+                    Some(cat),
+                    Some(album),
+                    PublishTarget::Immich {
+                        album_id: None,
+                        album_name,
+                    },
+                ) = (&self.catalog, &e.album, &r.target)
+                {
+                    let target = PublishTarget::Immich {
+                        album_id: Some(album.clone()),
+                        album_name: album_name.clone(),
+                    };
+                    let _ =
+                        cat.update_publish_service(r.service, &r.name, &target, &r.options_json);
+                }
                 r.outcome.failed += r.rows.len();
-                r.outcome.notes.push(e);
+                r.outcome.notes.push(e.why);
             }
         }
         self.status = r.outcome.summary();

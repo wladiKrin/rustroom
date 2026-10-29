@@ -34,6 +34,22 @@ pub enum Cleared {
     Gone,
 }
 
+/// Whether the file `place` records is still the service's to write: what was written, or gone.
+pub fn still_ours(place: &Place) -> bool {
+    let Place::File {
+        path,
+        size,
+        mtime: t,
+    } = place
+    else {
+        return false;
+    };
+    match std::fs::metadata(path) {
+        Err(_) => true,
+        Ok(m) => m.is_file() && m.len() == *size && mtime(&m) == *t,
+    }
+}
+
 /// Delete the file `place` records, if it is still what was written.
 pub fn clear(place: &Place) -> Cleared {
     let Place::File {

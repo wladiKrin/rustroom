@@ -231,3 +231,192 @@ fn the_selection_goes_in_and_comes_out() {
         .unwrap()
         .is_empty());
 }
+
+/// Two folders' photos of one name in one service — the review's C1, through a real run each time.
+fn same_name_service(app: &mut RustroomApp, ctx: &egui::Context, d: &Path, out: &Path) -> i64 {
+    for sub in ["one", "two"] {
+        std::fs::create_dir_all(d.join(sub)).unwrap();
+        image::RgbImage::from_pixel(64, 48, image::Rgb([120, 90, 70]))
+            .save(d.join(sub).join("a.jpg"))
+            .unwrap();
+        app.open_folder_at(ctx, d.join(sub));
+    }
+    std::fs::create_dir_all(out).unwrap();
+    let cat = app.catalog.as_ref().unwrap();
+    let s = cat
+        .create_publish_service("Same", &PublishTarget::Folder { path: out.into() }, "{}")
+        .unwrap();
+    for sub in ["one", "two"] {
+        assert!(cat
+            .add_to_service(s, &d.join(sub).join("a.jpg"), 0)
+            .unwrap());
+    }
+    app.open_publish(ctx, s, "Same");
+    s
+}
+
+fn recorded_files(app: &RustroomApp, s: i64) -> Vec<std::path::PathBuf> {
+    let mut v: Vec<_> = app
+        .catalog
+        .as_ref()
+        .unwrap()
+        .publish_members(s)
+        .unwrap()
+        .into_iter()
+        .filter_map(|m| match m.published?.place {
+            catalog::db::Place::File { path, .. } => Some(path),
+            _ => None,
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn two_photos_of_one_name_keep_their_own_files_across_a_settings_change() {
+    let ctx = egui::Context::default();
+    let mut app = crate::test_app::for_test();
+    let (d, o) = (
+        test_dir::TempDir::new("publish-same-src"),
+        test_dir::TempDir::new("publish-same-out"),
+    );
+    let s = same_name_service(&mut app, &ctx, d.path(), o.path());
+    publish_and_wait(&mut app, &ctx);
+    assert_eq!(files_in(o.path()), ["a-1.jpg", "a.jpg"]);
+    let first = recorded_files(&app, s);
+    assert_eq!(first.len(), 2);
+    // Every member Modified at once — the case that made both write one file.
+    let cat = app.catalog.as_ref().unwrap();
+    cat.update_publish_service(
+        s,
+        "Same",
+        &PublishTarget::Folder {
+            path: o.path().into(),
+        },
+        r#"{"quality":50}"#,
+    )
+    .unwrap();
+    app.publish.view = None;
+    assert_eq!(counts(&mut app).modified, 2);
+    publish_and_wait(&mut app, &ctx);
+    assert_eq!(app.status, "Published 2");
+    assert_eq!(
+        files_in(o.path()),
+        ["a-1.jpg", "a.jpg"],
+        "a file was shared, or one leaked"
+    );
+    assert_eq!(recorded_files(&app, s), first, "a member's file moved");
+}
+
+/// The review's I4: a file retouched by hand at the destination is never written over.
+#[test]
+fn a_published_file_changed_by_hand_is_not_overwritten() {
+    let ctx = egui::Context::default();
+    let mut app = crate::test_app::for_test();
+    let (d, o) = (
+        test_dir::TempDir::new("publish-hand-src"),
+        test_dir::TempDir::new("publish-hand-out"),
+    );
+    two_photo_service(&mut app, &ctx, d.path(), o.path());
+    publish_and_wait(&mut app, &ctx);
+    std::fs::write(o.join("a.jpg"), b"retouched by hand").unwrap();
+    let e = edit_model::Edits {
+        exposure: 0.7,
+        ..Default::default()
+    };
+    rustroom_app::sidecar::save(&d.join("a.jpg"), &e).unwrap();
+    app.publish.view = None;
+    publish_and_wait(&mut app, &ctx);
+    assert_eq!(
+        std::fs::read(o.join("a.jpg")).unwrap(),
+        b"retouched by hand"
+    );
+    assert_eq!(files_in(o.path()), ["a-1.jpg", "a.jpg", "b.jpg"]);
+    assert_eq!(
+        app.status,
+        "Published 1, left 1 file changed since it was published"
+    );
+}
+
+/// The review's I2: a cancelled publish records what it delivered, so nothing it wrote is left untracked.
+#[test]
+fn a_cancelled_publish_records_what_it_wrote() {
+    let ctx = egui::Context::default();
+    let mut app = crate::test_app::for_test();
+    let (d, o) = (
+        test_dir::TempDir::new("publish-cancel-src"),
+        test_dir::TempDir::new("publish-cancel-out"),
+    );
+    let s = two_photo_service(&mut app, &ctx, d.path(), o.path());
+    app.start_publish();
+    // ⚠ Cancelled once a photo is WRITTEN — cancelled before, nothing is on disk and the check below would
+    // pass for any code.
+    let t = Instant::now();
+    while !app
+        .publish_line()
+        .is_some_and(|l| l.starts_with("Publishing 1 of"))
+    {
+        assert!(
+            t.elapsed() < Duration::from_secs(120),
+            "no photo was written"
+        );
+        app.pump_publish(&ctx);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    app.cancel_publish();
+    let t = Instant::now();
+    while app.publish_line().is_some() {
+        assert!(t.elapsed() < Duration::from_secs(120), "the cancel hung");
+        app.pump_publish(&ctx);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let on_disk: Vec<std::path::PathBuf> = files_in(o.path()).iter().map(|n| o.join(n)).collect();
+    assert_eq!(
+        recorded_files(&app, s),
+        on_disk,
+        "a written file is untracked"
+    );
+}
+
+/// The review's I5: a new destination starts every member New — the old folder keeps what it has.
+#[test]
+fn a_new_destination_makes_every_photo_new() {
+    let ctx = egui::Context::default();
+    let mut app = crate::test_app::for_test();
+    let (d, o, o2) = (
+        test_dir::TempDir::new("publish-move-src"),
+        test_dir::TempDir::new("publish-move-out"),
+        test_dir::TempDir::new("publish-move-out2"),
+    );
+    let s = two_photo_service(&mut app, &ctx, d.path(), o.path());
+    publish_and_wait(&mut app, &ctx);
+    app.open_edit_service(s);
+    app.publish.dialog.as_mut().unwrap().folder = Some(o2.path().into());
+    assert!(app.save_service_dialog());
+    assert_eq!(counts(&mut app).new, 2);
+    assert_eq!(
+        files_in(o.path()),
+        ["a.jpg", "b.jpg"],
+        "the old folder was touched"
+    );
+}
+
+/// The review's I8: a catalog write alone re-derives the states at most every RECOMPUTE.
+#[test]
+fn a_catalog_write_rederives_the_states_at_most_every_recompute() {
+    let ctx = egui::Context::default();
+    let mut app = crate::test_app::for_test();
+    let (d, o) = (
+        test_dir::TempDir::new("publish-throttle-src"),
+        test_dir::TempDir::new("publish-throttle-out"),
+    );
+    two_photo_service(&mut app, &ctx, d.path(), o.path());
+    let at = app.publish_view_states().unwrap().at;
+    let cat = app.catalog.as_ref().unwrap();
+    cat.create_collection("A write").unwrap();
+    assert_eq!(
+        app.publish_view_states().unwrap().at,
+        at,
+        "re-derived on a write at once"
+    );
+}

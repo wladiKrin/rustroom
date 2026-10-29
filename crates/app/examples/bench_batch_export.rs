@@ -118,6 +118,7 @@ fn one_run(files: &[PathBuf], dest: &Path, width: usize, demosaic: raw_decode::D
             description: Default::default(),
             marks: Default::default(),
             keywords: Vec::new(),
+            fixed_dest: None,
         })
         .collect();
 

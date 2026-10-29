@@ -33,6 +33,7 @@ impl RustroomApp {
                     description: Default::default(),
                     marks: Default::default(),
                     keywords: Vec::new(),
+                    fixed_dest: None,
                 })
                 .collect();
         };
@@ -102,6 +103,7 @@ impl RustroomApp {
                     description,
                     marks,
                     keywords,
+                    fixed_dest: None,
                 }
             })
             .collect()

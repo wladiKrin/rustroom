@@ -263,6 +263,11 @@ fn plan(
     let mut claimed: HashSet<PathBuf> = HashSet::new();
     let mut remembered: Option<Collision> = None;
     let mut out: Vec<Planned> = Vec::new();
+    // ⚠ M10.18d: every fixed destination is reserved BEFORE any photo is named, so a photo of the same stem
+    // planned earlier steps aside instead of taking the service's own file.
+    if check_collisions {
+        claimed.extend(jobs.iter().filter_map(|j| j.fixed_dest.clone()));
+    }
 
     for (seq, job) in jobs.into_iter().enumerate() {
         // ⚠ Resolved per job, before the loop takes the job apart: the preset's defaults under
@@ -273,6 +278,7 @@ fn plan(
             name,
             edits,
             capture,
+            fixed_dest,
             ..
         } = job;
         let source = id.path.clone();
@@ -299,6 +305,19 @@ fn plan(
             taken: capture.taken,
             camera: capture.camera.as_deref(),
         });
+        // M10.18d: a fixed destination is the service's own file — written there, never asked about.
+        if let Some(dest) = fixed_dest.filter(|_| check_collisions) {
+            out.push(Planned {
+                source,
+                dest,
+                edits,
+                meta,
+                capture,
+                copy: id.copy,
+                edited_at: sidecar_seconds(&source_for_edit),
+            });
+            continue;
+        }
         let mut dest = dest_named(out_dir, &base, 0, opts.format);
         // ⚠ Under a staging run only `claimed` matters: the directory is new, so `exists()` can
         // only ever be a name this same run already reserved.
@@ -435,7 +454,24 @@ fn rescue(staged: &Path, dest_dir: &Path) -> PathBuf {
     let Some(name) = staged.file_name() else {
         return staged.to_path_buf();
     };
-    let to = dest_dir.join(name);
+    // ⚠ M10.18d review: never over a file already there — `rename` replaces one silently, and a publish
+    // to Immich rescues into a folder the user exports other things into.
+    let mut to = dest_dir.join(name);
+    let (stem, ext) = (
+        staged
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        staged
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default(),
+    );
+    let mut i = 1;
+    while to.exists() {
+        to = dest_dir.join(format!("{stem}-{i}{ext}"));
+        i += 1;
+    }
     // ⚠ `rename` first: a same-filesystem move is atomic and instant. It fails across devices, and
     // a temp directory very often is one, so copy-then-remove is the fallback rather than the plan.
     if std::fs::rename(staged, &to).is_ok() {
@@ -822,6 +858,7 @@ mod tests {
                 description: Default::default(),
                 marks: Default::default(),
                 keywords: Vec::new(),
+                fixed_dest: None,
             })
             .collect()
     }
@@ -1601,6 +1638,89 @@ mod tests {
             1,
             "the failure must be reported, not swallowed"
         );
+    }
+
+    /// M10.18d review C1: a job's fixed destination is written verbatim and reserved before any other name, so
+    /// another photo of the same stem steps aside rather than sharing the file.
+    #[test]
+    fn a_fixed_destination_is_kept_and_reserved_ahead_of_the_others() {
+        // ⚠ No `a.jpg` on disk: a file there would make the other step aside by itself, hiding a missing
+        // reservation (the first version of this test passed against exactly that sabotage).
+        let d = TempDir::new("fixed_dest");
+        let mut js = jobs(&d, &["a.RAF"]);
+        let mut other = jobs(&d, &["a.RAF"]).remove(0);
+        other.id = PhotoId::original(d.0.join("sub").join("a.RAF"));
+        js[0].fixed_dest = Some(d.0.join("a.jpg"));
+        // The other first, so only an up-front reservation keeps it off the fixed name.
+        let worker = ExportWorker::spawn(
+            vec![other, js.remove(0)],
+            opts(&d, None),
+            ok_decode(),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            ExportDirs::default(),
+            None,
+        );
+        let mut asked = 0;
+        let report = loop {
+            match worker.events().recv().unwrap() {
+                ExportEvent::Collision { .. } => {
+                    asked += 1;
+                    worker.decide(Decision::Resolve {
+                        collision: Collision::KeepBoth,
+                        apply_to_all: false,
+                    });
+                }
+                ExportEvent::Finished(r) => break r,
+                _ => {}
+            }
+        };
+        assert_eq!(
+            asked, 1,
+            "the fixed destination was asked about, or the other was not"
+        );
+        let mut got: Vec<(String, String)> = report
+            .written
+            .iter()
+            .map(|w| {
+                (
+                    w.id.path
+                        .parent()
+                        .unwrap()
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                    w.file
+                        .as_ref()
+                        .unwrap()
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            })
+            .collect();
+        got.sort();
+        let here = d.0.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(
+            got,
+            vec![(here, "a.jpg".into()), ("sub".into(), "a-1.jpg".into())]
+        );
+    }
+
+    /// M10.18d review I3: a rescued upload never replaces a file of the same name already there.
+    #[test]
+    fn a_rescue_takes_a_free_name() {
+        let d = TempDir::new("rescue_free");
+        std::fs::write(d.0.join("a.jpg"), b"mine").unwrap();
+        let staged = TempDir::new("rescue_free_stage");
+        std::fs::write(staged.0.join("a.jpg"), b"staged").unwrap();
+        let at = rescue(&staged.0.join("a.jpg"), &d.0);
+        assert_eq!(std::fs::read(d.0.join("a.jpg")).unwrap(), b"mine");
+        assert_eq!(at, d.0.join("a-1.jpg"));
+        assert_eq!(std::fs::read(&at).unwrap(), b"staged");
     }
 
     /// M10.18d: a publish records each photo the run wrote, and where.

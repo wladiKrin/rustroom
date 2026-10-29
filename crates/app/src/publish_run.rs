@@ -6,12 +6,12 @@
 //! Modified for the next Publish — a re-upload of the same bytes is a `duplicate` with the same asset id.
 //! ⚠⚠ Nothing here deletes an Immich asset; a folder file goes only through `publish_folder::clear`.
 
-use crate::batch_export::{Collision, ExportReport};
+use crate::batch_export::ExportReport;
 use crate::publish_folder::{self, Cleared};
 use crate::publish_state::{state, State};
 use catalog::db::{Catalog, Member, Place, Published};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// A member's key: its file and copy.
 pub type Key = (PathBuf, u32);
@@ -26,8 +26,11 @@ pub struct PublishPlan {
     pub clear: Vec<Member>,
     /// What each exported member is published as.
     pub prints: HashMap<Key, u64>,
-    /// The files this run replaces — the recorded files of the Modified members.
-    pub replacing: HashSet<PathBuf>,
+    /// Where each re-published folder member is written: its own recorded file, still what was written (or
+    /// gone) — so a photo of the same stem can never take it, and its name never drifts (the M10.18d review).
+    pub fixed: HashMap<Key, PathBuf>,
+    /// Re-published members whose file was changed by hand since: written beside it, the changed one left.
+    pub changed: usize,
     /// The assets this run replaces, by member.
     pub old_assets: HashMap<Key, String>,
 }
@@ -54,8 +57,12 @@ pub fn plan(members: &[Member], prints: &HashMap<Key, u64>) -> PublishPlan {
                 }
                 if s == State::Modified {
                     match m.published.as_ref().map(|x| &x.place) {
-                        Some(Place::File { path, .. }) => {
-                            p.replacing.insert(path.clone());
+                        Some(place @ Place::File { path, .. }) => {
+                            if publish_folder::still_ours(place) {
+                                p.fixed.insert(key.clone(), path.clone());
+                            } else {
+                                p.changed += 1;
+                            }
                         }
                         Some(Place::Asset { id }) => {
                             p.old_assets.insert(key.clone(), id.clone());
@@ -71,16 +78,6 @@ pub fn plan(members: &[Member], prints: &HashMap<Key, u64>) -> PublishPlan {
     }
     p.export.extend(new);
     p
-}
-
-/// The answer to the export's collision at `dest`: the service's own file, being re-published, is
-/// overwritten; anything else is kept and the new file named beside it.
-pub fn collision_answer(dest: &Path, replacing: &HashSet<PathBuf>) -> Collision {
-    if replacing.contains(dest) {
-        Collision::Overwrite
-    } else {
-        Collision::KeepBoth
-    }
 }
 
 /// What a Publish did, for the status row.
@@ -223,6 +220,14 @@ fn refusal(e: immich::Error, permission: &str) -> String {
     }
 }
 
+/// An album step that failed: why, and the album's id when it exists — one this step created must be kept, or
+/// every retry would make another album of the same name (the M10.18d review).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlbumError {
+    pub album: Option<String>,
+    pub why: String,
+}
+
 /// Bring the album in step: create it when `album` is `None`, add `add`, then take out each replaced asset
 /// whose replacement is in (`replaced`: old → new) and every asset in `drop`. ⚠ Never deletes an asset.
 pub fn sync_album(
@@ -232,12 +237,17 @@ pub fn sync_album(
     add: &[String],
     replaced: &HashMap<String, String>,
     drop: &[String],
-) -> Result<AlbumSync, String> {
+) -> Result<AlbumSync, AlbumError> {
     let album = match album {
         Some(a) => a.to_string(),
-        None => albums
-            .create(name)
-            .map_err(|e| refusal(e, "album.create"))?,
+        None => albums.create(name).map_err(|e| AlbumError {
+            album: None,
+            why: refusal(e, "album.create"),
+        })?,
+    };
+    let fail = |why: String| AlbumError {
+        album: Some(album.clone()),
+        why,
     };
     let mut out = AlbumSync {
         album: album.clone(),
@@ -246,7 +256,7 @@ pub fn sync_album(
     if !add.is_empty() {
         for r in albums
             .add(&album, add)
-            .map_err(|e| refusal(e, "albumAsset.create"))?
+            .map_err(|e| fail(refusal(e, "albumAsset.create")))?
         {
             if r.settled() {
                 out.added.insert(r.id);
@@ -264,7 +274,7 @@ pub fn sync_album(
     if !take.is_empty() {
         for r in albums
             .remove(&album, &take)
-            .map_err(|e| refusal(e, "albumAsset.delete"))?
+            .map_err(|e| fail(refusal(e, "albumAsset.delete")))?
         {
             if r.settled() {
                 out.removed.insert(r.id);
@@ -325,7 +335,11 @@ mod tests {
             vec![("/a/edited.RAF".into(), 0), ("/a/new.RAF".into(), 0)]
         );
         assert_eq!(p.clear.len(), 1);
-        assert_eq!(p.replacing, HashSet::from([PathBuf::from("/o/edited.jpg")]));
+        // `/o/edited.jpg` is not on disk: gone, so still the service's to write again.
+        assert_eq!(
+            p.fixed,
+            HashMap::from([(("/a/edited.RAF".into(), 0), PathBuf::from("/o/edited.jpg"))])
+        );
         assert_eq!(p.prints.len(), 2);
     }
 
@@ -339,25 +353,42 @@ mod tests {
         assert_eq!(p.export[0].0, PathBuf::from("/z/z.RAF"));
     }
 
-    /// Review focus 2: another member's file of the same name is never overwritten.
+    /// Review focus 2 (C1 of the review): two re-published members of one stem each keep their OWN file.
     #[test]
     fn two_stems_alike_keep_their_own_files() {
         let ms = [
             member("/a/a.RAF", Some((1, file("/o/a.jpg"))), false),
-            member("/b/a.RAF", None, false),
+            member("/b/a.RAF", Some((1, file("/o/a-1.jpg"))), false),
         ];
-        let p = plan(&ms, &prints(&[("/a/a.RAF", 1), ("/b/a.RAF", 1)]));
+        let p = plan(&ms, &prints(&[("/a/a.RAF", 2), ("/b/a.RAF", 2)]));
+        assert_eq!(p.fixed[&("/a/a.RAF".into(), 0)], PathBuf::from("/o/a.jpg"));
         assert_eq!(
-            collision_answer(Path::new("/o/a.jpg"), &p.replacing),
-            Collision::KeepBoth,
-            "the new one would overwrite the published one's file"
+            p.fixed[&("/b/a.RAF".into(), 0)],
+            PathBuf::from("/o/a-1.jpg")
         );
-        let p = plan(&ms, &prints(&[("/a/a.RAF", 2), ("/b/a.RAF", 1)]));
-        assert_eq!(
-            collision_answer(Path::new("/o/a.jpg"), &p.replacing),
-            Collision::Overwrite,
-            "a re-publish did not take back its own file"
-        );
+    }
+
+    /// Review I4: a recorded file changed by hand is not written over — the member goes beside it.
+    #[test]
+    fn a_file_changed_by_hand_is_not_fixed() {
+        let d = test_dir::TempDir::new("publish-run-changed");
+        let f = d.join("a.jpg");
+        std::fs::write(&f, b"jpeg").unwrap();
+        let place = publish_folder::place_of(&f).unwrap();
+        std::fs::write(&f, b"retouched by hand").unwrap();
+        let ms = [Member {
+            path: "/a/a.RAF".into(),
+            copy: 0,
+            removed: false,
+            published: Some(Published {
+                fingerprint: 1,
+                place,
+                at: 1,
+            }),
+        }];
+        let p = plan(&ms, &prints(&[("/a/a.RAF", 2)]));
+        assert!(p.fixed.is_empty());
+        assert_eq!((p.changed, p.export.len()), (1, 1));
     }
 
     fn report(items: Vec<WrittenItem>) -> ExportReport {
@@ -570,9 +601,37 @@ mod tests {
         };
         let e = sync_album(&r, None, "Web", &[], &HashMap::new(), &[]).unwrap_err();
         assert_eq!(
-            e,
+            e.why,
             "Immich refused: the Write key needs the album.create permission"
         );
+        assert_eq!(e.album, None);
+    }
+
+    /// Review I6: an album made before the add failed is handed back, so a retry does not make another.
+    #[test]
+    fn a_failed_add_keeps_the_new_album() {
+        struct AddFails(Recorder);
+        impl Albums for AddFails {
+            fn create(&self, n: &str) -> Result<String, immich::Error> {
+                self.0.create(n)
+            }
+            fn add(&self, _: &str, _: &[String]) -> Result<Vec<immich::BulkId>, immich::Error> {
+                Err(immich::Error::Server(500))
+            }
+            fn remove(&self, a: &str, i: &[String]) -> Result<Vec<immich::BulkId>, immich::Error> {
+                self.0.remove(a, i)
+            }
+        }
+        let e = sync_album(
+            &AddFails(Recorder::default()),
+            None,
+            "Web",
+            &["x".into()],
+            &HashMap::new(),
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(e.album.as_deref(), Some("al1"));
     }
 
     #[test]
