@@ -193,6 +193,37 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-10-29 — M10.18c: people tagging (branch `m10.18c-people`, merged 2026-10-29)
+
+✅ **Confirmed by the author ("works, merge and delete")**, after trying it on the Mac.
+Spec `docs/superpowers/specs/2026-10-28-m10.18c-people-design.md`, plan `docs/superpowers/plans/2026-10-28-m10.18c-people.md`;
+mockups `https://claude.ai/artifact/8veXQc9qb5x7ivD4GnM5UW` (layout A, the author's pick).
+
+- **What:** Library → **People**, a view beside Grid and Map: "Who is this?" groups of unnamed faces (Lightroom's
+  model), a name or a suggested person per group, the rail's People section. Immich's people shown from the server
+  (a click opens all their server photos — `LibrarySource::ImmichPerson`); local faces found by **YuNet 2023mar** (MIT)
+  and told apart by **SFace 2021dec** (Apache-2.0), commit-pinned OpenCV Zoo models (`ai_mask::faces`), searched at the
+  RAW's embedded JPEG size (tiled at 1920) in the background (`face_pass`). ⚠⚠ **Names live in Rustroom only** — never
+  written to Immich or a file (the author).
+- **Catalog:** v16 `people`, `faces` (bbox, embedding, confirmed / dismissed, local | immich), `face_rejections`,
+  `faces_read`; v17 `face_apart`. `faces` and `faces_read` joined `PER_FILE_TABLES`; forget/restore carries faces,
+  rejections and `faces_read`.
+- **Grouping:** `face_groups::group`, a running mean at SFace's own 0.363, honouring every "No" and every apart pair;
+  off the UI thread, keyed on `(instance, faces_revision, visible_rev)`, throttled to 2 s during a search.
+- **Asked for in use:** move a face (drag onto a person, Name as…, Not in this group — each one undo step,
+  `ActionKind::FaceChange`); filter the open view by people (Filter → People, ⌘-click in the rail; ALL ticked people
+  required); hide Compare / Survey / Map / People (Settings → Appearance → Library views).
+- **Found in use, fixed:** ⚠⚠ **every new `Library` takes `library_state::fresh_rev()`** — all started at revision 0,
+  so the People crops went blank and the Map's pins would have stayed stale; crops from the UNEDITED thumbnail; the
+  view says what it is doing and a search's failures are said; a new folder stops the old search and keeps its finds.
+- ⚠ **Constructed, not captured:** the Immich people DTOs (`Person`, `AssetPerson`, `FaceBox`) — reading the API key
+  from the keychain was denied on this machine, so they follow the schema; the author's use showed his people.
+- **Deferred minors:** Send marks does nothing in an Immich person view; the Reindex hover says "folder" there; a
+  local "Anna" made before Immich's Anna stays separate; the Immich people are asked once a session (no retry after an
+  offline launch); no test that the face search skips Immich-path photos; `face_apart` is not restored by a
+  forget-folder undo; the threshold is untuned on real shoots; `ImmichPerson` views do not follow catalog changes;
+  `people_view.rs` is 603 lines.
+
 ### 2026-10-28 — M10.18a: tethered capture, built and parked (branch `m10.18a-tethering`, not merged)
 
 ⏸ **Waiting for the author to try it with the X-T4** ("can we do that later" — he was away from the camera). The
