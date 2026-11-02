@@ -420,3 +420,68 @@ fn a_catalog_write_rederives_the_states_at_most_every_recompute() {
         "re-derived on a write at once"
     );
 }
+
+/// A service's view draws its Publish button in a band above the grid, and the status row no longer does.
+#[test]
+fn a_service_view_shows_publish_in_a_band_above_the_grid() {
+    let ctx = crate::test_ui::ctx();
+    let mut app = crate::test_app::for_test();
+    let (d, o) = (
+        test_dir::TempDir::new("publish-src-band"),
+        test_dir::TempDir::new("publish-out-band"),
+    );
+    two_photo_service(&mut app, &ctx, d.path(), o.path());
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+    let nodes = crate::test_ui::nodes_on(&ctx, screen, |ui| {
+        let c = ui.ctx().clone();
+        crate::library::show(&mut app, ui, &c);
+    });
+    let publish = nodes
+        .iter()
+        .find(|n| n.label == "Publish 2")
+        .unwrap_or_else(|| {
+            panic!(
+                "no Publish 2 in the grid's view: {:?}",
+                nodes.iter().map(|n| &n.label).collect::<Vec<_>>()
+            )
+        });
+    assert!(
+        publish.rect.top() < 40.0,
+        "the button sits at {:?}",
+        publish.rect
+    );
+    assert!(
+        nodes.iter().any(|n| n.label == "2 new"),
+        "the counts are beside it"
+    );
+    let row = crate::test_ui::nodes_on(&ctx, screen, |ui| {
+        let c = ui.ctx().clone();
+        crate::status_bar::library_row(&mut app, ui, &c);
+    });
+    assert!(
+        row.iter().any(|n| !n.label.is_empty()),
+        "the status row drew nothing at all"
+    );
+    assert!(
+        !row.iter().any(|n| n.label.starts_with("Publish")),
+        "the status row still holds Publish"
+    );
+}
+
+/// Outside a service's view there is no band.
+#[test]
+fn a_folder_view_has_no_publish_band() {
+    let ctx = crate::test_ui::ctx();
+    let mut app = crate::test_app::for_test();
+    app.library = Some(crate::test_app::library_of(3));
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+    let nodes = crate::test_ui::nodes_on(&ctx, screen, |ui| {
+        let c = ui.ctx().clone();
+        crate::library::show(&mut app, ui, &c);
+    });
+    assert!(
+        nodes.iter().any(|n| !n.label.is_empty()),
+        "the grid drew nothing at all"
+    );
+    assert!(!nodes.iter().any(|n| n.label.starts_with("Publish")));
+}

@@ -183,6 +183,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // whole of `app` and cannot follow a mutable borrow of one of its fields.
     // M10.18d: derived here, once per change, before the grid borrows the library.
     app.publish_view_states();
+    // ⚠ Before the central panel, which takes what is left: the band spans the grid's column only.
+    crate::publish_panel::band(app, ui);
     let live = app.live_edits();
     // ⚠ Borrowed out of `app` up front, because the grid closure already holds `&mut app.library`
     // and the two are disjoint fields — which the borrow checker only accepts when it can see so.

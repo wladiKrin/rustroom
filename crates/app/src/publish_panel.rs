@@ -105,17 +105,20 @@ pub(crate) fn apply(app: &mut RustroomApp, ctx: &egui::Context, out: Out) {
 }
 
 /// A cell's publish mark (M10.18d), over the picture's top-left corner: a filled dot for New, a ring for
-/// Modified — the accent, which is the selection's colour — and Removed dimmed under the panel's colour.
+/// Modified — the accent, which is the selection's colour, each in a dark rim — and Removed dimmed under the panel's colour.
 pub(crate) fn cell_mark(ui: &egui::Ui, picture: egui::Rect, s: rustroom_app::publish_state::State) {
     use rustroom_app::publish_state::State;
     let accent = ui.visuals().selection.bg_fill;
+    let rim = crate::theme::mark_rim();
     let at = picture.left_top() + egui::vec2(MARK_INSET, MARK_INSET);
     let p = ui.painter();
     match s {
         State::New => {
-            p.circle_filled(at, MARK_RADIUS, accent);
+            p.circle(at, MARK_RADIUS, accent, egui::Stroke::new(1.5, rim));
         }
         State::Modified => {
+            // The rim is a wider stroke under the ring, so it shows a dark edge inside and out.
+            p.circle_stroke(at, MARK_RADIUS - 1.0, egui::Stroke::new(4.0, rim));
             p.circle_stroke(at, MARK_RADIUS - 1.0, egui::Stroke::new(2.0, accent));
         }
         State::Removed => {
@@ -133,24 +136,78 @@ pub(crate) fn cell_mark(ui: &egui::Ui, picture: egui::Rect, s: rustroom_app::pub
 const MARK_RADIUS: f32 = 6.0;
 const MARK_INSET: f32 = 10.0;
 
-/// The status row's Publish controls in a service's view, drawn right to left: **Publish N**, then what is
-/// waiting.
-pub(crate) fn status_controls(app: &mut RustroomApp, ui: &mut egui::Ui) {
+/// A service view's band above the grid (M10.18d, the author's call over the status row): the service's
+/// name and what is waiting at the left, **Publish N** at the right. Nothing outside a service's view.
+pub(crate) fn band(app: &mut RustroomApp, ui: &mut egui::Ui) {
     let Some(c) = app.publish.view.as_ref().map(|v| v.counts) else {
         return;
+    };
+    let name = match app.library.as_ref().map(|l| &l.source) {
+        Some(crate::LibrarySource::Publish { name, .. }) => name.clone(),
+        _ => return,
     };
     let running = app.publish_line().is_some();
     let label = match c.to_publish() {
         0 => "Publish".to_string(),
         n => format!("Publish {n}"),
     };
-    if ui
-        .add_enabled(c.has_work() && !running, egui::Button::new(label))
-        .hover("Exports the new and modified photos and clears the removed ones")
-        .clicked()
-    {
-        app.start_publish();
+    egui::Panel::top("publish_band")
+        .exact_size(crate::status_bar::HEIGHT)
+        .resizable(false)
+        .frame(crate::status_bar::frame(ui.style()))
+        .show(ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.label(egui::RichText::new(name).strong());
+                ui.label(
+                    egui::RichText::new(c.summary()).color(crate::theme::tokens::of(ui).text2),
+                )
+                .hover("New photos have a dot, modified ones a ring, removed ones are dimmed");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if crate::theme::primary_button(ui, &label, c.has_work() && !running)
+                        .hover("Exports the new and modified photos and clears the removed ones")
+                        .clicked()
+                    {
+                        app.start_publish();
+                    }
+                });
+            });
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use rustroom_app::publish_state::State;
+
+    /// The circles `cell_mark` paints for `s`.
+    fn circles(s: State) -> Vec<eframe::epaint::CircleShape> {
+        let ctx = egui::Context::default();
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let r = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 80.0));
+            super::cell_mark(ui, r, s);
+        });
+        out.shapes
+            .into_iter()
+            .filter_map(|c| match c.shape {
+                egui::Shape::Circle(c) => Some(c),
+                _ => None,
+            })
+            .collect()
     }
-    ui.label(egui::RichText::new(c.summary()).color(crate::theme::tokens::of(ui).text2))
-        .hover("New photos have a dot, modified ones a ring, removed ones are dimmed");
+
+    use eframe::egui;
+
+    /// The dot and the ring each carry a dark rim, so they read on a light thumbnail (the author, 2026-11-02).
+    #[test]
+    fn the_new_and_modified_marks_have_a_dark_rim() {
+        for s in [State::New, State::Modified] {
+            let c = circles(s);
+            assert!(!c.is_empty(), "{s:?} drew no circle");
+            assert!(
+                c.iter()
+                    .any(|c| c.stroke.color == crate::theme::mark_rim() && c.stroke.width > 0.0),
+                "{s:?} has no dark rim: {c:?}"
+            );
+        }
+        assert!(circles(State::Published).is_empty());
+    }
 }
