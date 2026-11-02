@@ -188,9 +188,9 @@ control never changes shape on hover (the existing rule).
   put the name 27 pt further left in the Library than in Develop. The facts follow the name and
   truncate into what is left. `the_centred_name_sits_at_the_same_x_in_both_views` and
   `the_name_does_not_move_with_its_facts` (sabotage-checked). Click the name to rename.
-- **A publish service's view has a band above its grid** (`publish_panel::band`, M10.18d): the
-  service's name and what is waiting ("3 new · 1 modified · 1 removed") at the left, **Publish N**
-  as the primary button at the right, the status row's height and frame. Only in a service's view;
+- **A publish service's view has a band above its grid** (`publish_panel::band`, M10.18d): **Publish N**
+  as the primary button at the left end, the service's name and what is waiting ("3 new ·
+  1 modified · 1 removed") at the right end, the status row's height and frame. Only in a service's view;
   the running publish and its Cancel stay in the status row's job slot. A view's own action is not
   the top row's (which only navigates and narrows) and was too hidden in the status row.
 - **The status row informs and sets the view** (`status_bar.rs`). Library: at the left the photo

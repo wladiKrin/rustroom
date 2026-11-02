@@ -136,8 +136,9 @@ pub(crate) fn cell_mark(ui: &egui::Ui, picture: egui::Rect, s: rustroom_app::pub
 const MARK_RADIUS: f32 = 6.0;
 const MARK_INSET: f32 = 10.0;
 
-/// A service view's band above the grid (M10.18d, the author's call over the status row): the service's
-/// name and what is waiting at the left, **Publish N** at the right. Nothing outside a service's view.
+/// A service view's band above the grid (M10.18d, the author's call over the status row): **Publish N**
+/// at the left end, the service's name and what is waiting at the right (the author's layout,
+/// 2026-11-02). Nothing outside a service's view.
 pub(crate) fn band(app: &mut RustroomApp, ui: &mut egui::Ui) {
     let Some(c) = app.publish.view.as_ref().map(|v| v.counts) else {
         return;
@@ -157,18 +158,18 @@ pub(crate) fn band(app: &mut RustroomApp, ui: &mut egui::Ui) {
         .frame(crate::status_bar::frame(ui.style()))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                ui.label(egui::RichText::new(name).strong());
-                ui.label(
-                    egui::RichText::new(c.summary()).color(crate::theme::tokens::of(ui).text2),
-                )
-                .hover("New photos have a dot, modified ones a ring, removed ones are dimmed");
+                if crate::theme::primary_button(ui, &label, c.has_work() && !running)
+                    .hover("Exports the new and modified photos and clears the removed ones")
+                    .clicked()
+                {
+                    app.start_publish();
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if crate::theme::primary_button(ui, &label, c.has_work() && !running)
-                        .hover("Exports the new and modified photos and clears the removed ones")
-                        .clicked()
-                    {
-                        app.start_publish();
-                    }
+                    ui.label(
+                        egui::RichText::new(c.summary()).color(crate::theme::tokens::of(ui).text2),
+                    )
+                    .hover("New photos have a dot, modified ones a ring, removed ones are dimmed");
+                    ui.label(egui::RichText::new(name).strong());
                 });
             });
         });

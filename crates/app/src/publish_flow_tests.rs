@@ -450,6 +450,21 @@ fn a_service_view_shows_publish_in_a_band_above_the_grid() {
         "the button sits at {:?}",
         publish.rect
     );
+    // The button at the band's left end, the name and counts at its right (the author, 2026-11-02).
+    assert!(
+        publish.rect.left() < 40.0,
+        "the button is not at the left end: {:?}",
+        publish.rect
+    );
+    let counts = nodes
+        .iter()
+        .find(|n| n.label == "2 new")
+        .expect("the counts");
+    assert!(
+        counts.rect.right() > 1000.0,
+        "the counts are not at the right end: {:?}",
+        counts.rect
+    );
     assert!(
         nodes.iter().any(|n| n.label == "2 new"),
         "the counts are beside it"
