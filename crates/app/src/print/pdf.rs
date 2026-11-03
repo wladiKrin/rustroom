@@ -259,7 +259,7 @@ impl Writer {
         }
         let mut t = format!("xref\n0 {size}\n0000000000 65535 f \n");
         for off in &at[1..] {
-            let _ = write!(t, "{off:010} 00000 n \n");
+            let _ = writeln!(t, "{off:010} 00000 n ");
         }
         let _ = write!(
             t,

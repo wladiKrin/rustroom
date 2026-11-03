@@ -22,6 +22,8 @@ pub enum Command {
     Shoot,
     StopTether,
     Export,
+    /// Put the selection on pages, as a PDF or on a printer (M10.18e) — ⌘P.
+    Print,
     /// Build rendered previews for the selection, or the open photo (M9.14).
     BuildPreviews,
     Settings,
@@ -568,6 +570,8 @@ fn file_items(recent: &[PathBuf]) -> Vec<Item> {
         action("Shoot", Command::Shoot, fn_key(12).map(Shortcut::bare)),
         action("Stop tethering", Command::StopTether, None),
         action("Export…", Command::Export, Some(Shortcut::cmd('E'))),
+        // M10.18e. ⌘P is every platform's Print, and not a text-editing chord.
+        action("Print…", Command::Print, Some(Shortcut::cmd('P'))),
         Item::Separator,
         action("Settings…", Command::Settings, Some(Shortcut::cmd(','))),
     ]);

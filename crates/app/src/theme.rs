@@ -419,6 +419,16 @@ pub fn mark_rim() -> egui::Color32 {
     egui::Color32::from_black_alpha(200)
 }
 
+/// The Print dialog's sheet of paper (M10.18e) — white in either theme, as paper is.
+pub fn paper() -> egui::Color32 {
+    egui::Color32::from_gray(250)
+}
+
+/// A caption's stand-in line on the Print dialog's paper.
+pub fn paper_ink() -> egui::Color32 {
+    egui::Color32::from_gray(150)
+}
+
 pub fn hint(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).small());
 }

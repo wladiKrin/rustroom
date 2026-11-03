@@ -64,6 +64,7 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
                 app.modal = Modal::ExportSettings;
             }
         }
+        Command::Print => app.open_print(),
         Command::Settings => app.modal = Modal::Settings,
         Command::TakeSnapshot => app.take_snapshot(),
         Command::CreateVirtualCopy => app.create_virtual_copy(ctx),

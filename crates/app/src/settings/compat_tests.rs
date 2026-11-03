@@ -421,6 +421,23 @@ fn settings_round_trip_carries_the_export_options() {
             fill_edges: true,
             create_stack: true,
         },
+        // Every field non-default, so a re-defaulted one cannot pass.
+        print: crate::print::layout::PrintSettings {
+            layout: crate::print::layout::Layout::ContactSheet,
+            paper: crate::print::layout::Paper::Letter,
+            orientation: crate::print::layout::Orientation::Landscape,
+            margin_mm: 3,
+            fit: crate::print::layout::Fit::Fill,
+            columns: 6,
+            rows: 7,
+            gap_mm: 2,
+            captions: false,
+            rotate: false,
+            ppi: 240,
+            sharpening: crate::print::layout::Sharpening::High,
+            printer: Some("Canon_G620".into()),
+            copies: 3,
+        },
         immich_merge_folder: Some(std::path::PathBuf::from("/merged")),
         // Every field non-default, so a re-defaulted one cannot pass.
         tether: crate::tether_options::TetherOptions {
