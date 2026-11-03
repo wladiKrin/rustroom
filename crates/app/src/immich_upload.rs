@@ -79,6 +79,28 @@ pub fn upload_seconds(which: UploadDate, taken: Option<i64>, edited: Option<i64>
     }
 }
 
+/// The capture date an exported FILE carries as `DateTimeOriginal`.
+///
+/// ⚠⚠ Found in use (2026-11-03): **Immich dates its timeline by the file's own `DateTimeOriginal`** and uses
+/// `fileCreatedAt` only for a file without one — so "Upload date" alone left an upload at its capture date. A
+/// run that uploads with the edit or upload date therefore writes that same date into the file (the author's
+/// pick of two; the other left the file undated). The capture date, the default, keeps the photo's own.
+///
+/// ⚠ The file a run also keeps (`Both`) carries it too — one file, one date.
+pub fn file_taken(
+    which: UploadDate,
+    uploads: bool,
+    taken: Option<i64>,
+    edited: Option<i64>,
+    now: i64,
+) -> Option<i64> {
+    if !uploads || which == UploadDate::Captured {
+        taken
+    } else {
+        Some(upload_seconds(which, taken, edited, now))
+    }
+}
+
 /// [`upload_seconds`] as the string Immich's `fileCreatedAt` wants.
 ///
 /// ⚠⚠ Naive wall-clock rendered as if UTC, which is **measured rather than chosen**: Immich did
@@ -152,7 +174,7 @@ pub fn uploaded_note(source: &Path, copy: u32, host: &str) -> Option<String> {
         .rfind(|u| u.host == host)?;
     // ⚠ Date only: the time of day is noise in a one-line note.
     Some(format!(
-        "Already uploaded on {}",
+        "Uploaded on {}; exporting uploads a new copy",
         &last.at[..10.min(last.at.len())]
     ))
 }
@@ -234,9 +256,12 @@ mod tests {
             serde_json::from_str(r#"{"id":"abc","status":"created"}"#).unwrap();
         record(&photo, 2, "https://h", &up);
 
+        let note = uploaded_note(&photo, 2, "https://h")
+            .expect("the note must find an upload of the same copy");
+        // ⚠ Found in use (2026-11-03): "Already uploaded" read as a refusal; it says a new copy goes up.
         assert!(
-            uploaded_note(&photo, 2, "https://h").is_some(),
-            "the note must find an upload of the same copy"
+            note.starts_with("Uploaded on ") && note.ends_with("; exporting uploads a new copy"),
+            "{note}"
         );
         // ⚠ The two discriminating negatives: a different copy and a different host must NOT match.
         assert_eq!(
@@ -335,6 +360,32 @@ mod tests {
             availability(&s),
             Availability::NotConfigured,
             "the toggle must read as NotConfigured, which is what hides the ticks entirely"
+        );
+    }
+
+    #[test]
+    fn the_file_takes_the_upload_s_date_only_when_it_is_uploaded_by_edit_or_upload_date() {
+        let (taken, edited, now) = (Some(100), Some(200), 300);
+        assert_eq!(
+            file_taken(UploadDate::Captured, true, taken, edited, now),
+            taken
+        );
+        assert_eq!(
+            file_taken(UploadDate::Edited, true, taken, edited, now),
+            Some(200)
+        );
+        assert_eq!(
+            file_taken(UploadDate::Uploaded, true, taken, edited, now),
+            Some(300)
+        );
+        // A run that does not upload keeps the photo's own date whatever the setting says.
+        assert_eq!(
+            file_taken(UploadDate::Uploaded, false, taken, edited, now),
+            taken
+        );
+        assert_eq!(
+            file_taken(UploadDate::Captured, true, None, edited, now),
+            None
         );
     }
 }

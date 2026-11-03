@@ -329,7 +329,9 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                                                             d.label(),
                                                         );
                                                     }
-                                                });
+                                                })
+                                                .response
+                                                .hover("Dates the photo in Immich, and in the exported file too unless it is the original date");
                                             // ⚠⚠ The **resolved** moment, for one photo only —
                                             // computed by the same `upload_seconds` the upload
                                             // calls, so the preview cannot disagree with what

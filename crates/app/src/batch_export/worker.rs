@@ -57,6 +57,8 @@ pub struct ExportReport {
     pub cancelled: bool,
     /// Files the server confirmed it stored (whether `created` or `duplicate`).
     pub uploaded: usize,
+    /// Of those, the ones Immich already held byte for byte — no new photo there (said in the summary).
+    pub duplicates: usize,
     /// Files written but whose upload did not confirm, with why.
     ///
     /// ⚠⚠ **"Unconfirmed", not "failed", and never retried automatically.** An SSL/EOF error
@@ -97,6 +99,9 @@ impl ExportReport {
         }
         if !self.failed.is_empty() {
             parts.push(format!("{} failed", self.failed.len()));
+        }
+        if self.duplicates > 0 {
+            parts.push(format!("{} already on Immich unchanged", self.duplicates));
         }
         if self.cancelled {
             parts.push("cancelled".to_string());
@@ -272,7 +277,18 @@ fn plan(
     for (seq, job) in jobs.into_iter().enumerate() {
         // ⚠ Resolved per job, before the loop takes the job apart: the preset's defaults under
         // this photo's own words, cut to the scope. `export_one` then only embeds.
-        let meta = export::FileMetadata::resolve(&opts.metadata, file_metadata(&job));
+        let mut meta = export::FileMetadata::resolve(&opts.metadata, file_metadata(&job));
+        // ⚠ An upload dated by its edit or its upload carries that date in the file too — Immich dates
+        // its timeline by the file's own (`immich_upload::file_taken`). Copyright only writes no date.
+        if opts.metadata.scope == export::MetadataScope::All {
+            meta.capture.taken = crate::immich_upload::file_taken(
+                opts.upload_date,
+                opts.destination.target().is_some(),
+                meta.capture.taken,
+                sidecar_seconds(&job.id.path),
+                chrono::Utc::now().timestamp(),
+            );
+        }
         let ExportJob {
             id,
             name,
@@ -506,7 +522,8 @@ impl Uploader {
         })
     }
 
-    /// Upload one written file; the asset's id. `Err` carries a message for `unconfirmed`.
+    /// Upload one written file; the asset's id, and whether Immich already held it byte for byte. `Err`
+    /// carries a message for `unconfirmed`.
     #[allow(clippy::too_many_arguments)]
     fn send(
         &self,
@@ -516,7 +533,7 @@ impl Uploader {
         copy: u32,
         which: UploadDate,
         edited_at: Option<i64>,
-    ) -> Result<String, String> {
+    ) -> Result<(String, bool), String> {
         let filename = exported
             .file_name()
             .and_then(|s| s.to_str())
@@ -530,7 +547,7 @@ impl Uploader {
         // ⚠ Recorded against the SOURCE photo's sidecar, not the exported file: the sidecar belongs
         // to the photo, and under Immich-only the export is deleted moments later.
         crate::immich_upload::record(source, copy, &self.host, &up);
-        Ok(up.id)
+        Ok((up.id, up.status == immich::UploadStatus::Duplicate))
     }
 }
 
@@ -754,7 +771,7 @@ fn run(
                                 file,
                                 asset: None,
                             }),
-                            Some(Ok(asset)) => r.written.push(WrittenItem {
+                            Some(Ok((asset, _))) => r.written.push(WrittenItem {
                                 id,
                                 file,
                                 asset: Some(asset.clone()),
@@ -775,8 +792,9 @@ fn run(
                         // *response* was lost, not that the server rejected the file — 4 of 2,373
                         // writes failed that way on this network and **none had actually failed to
                         // apply**. Deleting on anything less would destroy work on a flaky link.
-                        Some(Ok(_)) => {
+                        Some(Ok((_, duplicate))) => {
                             r.uploaded += 1;
+                            r.duplicates += usize::from(duplicate);
                             if staging.is_some() {
                                 let _ = std::fs::remove_file(&p.dest);
                             }
@@ -2069,6 +2087,26 @@ mod tests {
         );
     }
 
+    /// Found in use (2026-11-03): Immich answering "duplicate" was counted as an upload and said nowhere, so a
+    /// re-export it already had looked like a new one that never appeared.
+    #[test]
+    fn the_summary_says_when_immich_already_had_a_file() {
+        let r = ExportReport {
+            exported: 3,
+            uploaded: 3,
+            duplicates: 2,
+            ..ExportReport::default()
+        };
+        assert_eq!(r.summary(), "Exported 3, 2 already on Immich unchanged");
+        let one = ExportReport {
+            exported: 1,
+            uploaded: 1,
+            duplicates: 1,
+            ..ExportReport::default()
+        };
+        assert_eq!(one.summary(), "Exported 1, 1 already on Immich unchanged");
+    }
+
     /// Export one `grainy` 600 × 400 photo as a JPEG with `o`: the report, the file's bytes, its size.
     fn exported_jpeg(
         d: &TempDir,
@@ -2157,6 +2195,60 @@ mod tests {
         );
         assert_eq!(r.exported, 1);
         assert_eq!(r.notes, [format!("1 photo made smaller to fit {kb} KB")]);
+    }
+
+    /// The exported file's `exif:DateTimeOriginal`, as seconds — naive wall-clock read as UTC, the way
+    /// `metadata::date_text` writes it.
+    fn date_original(bytes: &[u8]) -> Option<i64> {
+        let text = String::from_utf8_lossy(bytes);
+        let v = text
+            .split("<exif:DateTimeOriginal>")
+            .nth(1)?
+            .split('<')
+            .next()?;
+        chrono::NaiveDateTime::parse_from_str(v, "%Y-%m-%dT%H:%M:%S")
+            .ok()
+            .map(|d| d.and_utc().timestamp())
+    }
+
+    /// Export one photo taken on 2026-08-27 to files and Immich with `which`, and read the file's date back.
+    fn exported_date(tag: &str, which: UploadDate) -> Option<i64> {
+        let d = TempDir::new(tag);
+        let mut o = opts(&d, None);
+        o.format = export::ExportFormat::Jpeg;
+        o.destination = Destination::Both(UploadTarget::Immich);
+        o.upload_date = which;
+        let mut j = jobs(&d, &["a.RAF"]);
+        j[0].capture.taken = Some(TAKEN);
+        let (r, _) = run_export(j, o, vec![], ok_decode());
+        assert_eq!(r.exported, 1, "{r:?}");
+        let file = std::fs::read_dir(&d.0)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|e| e == "jpg"))
+            .expect("the kept file");
+        date_original(&std::fs::read(file).unwrap())
+    }
+
+    /// 2026-08-27 10:00:00, naive wall-clock.
+    const TAKEN: i64 = 1_787_824_800;
+
+    /// Found in use (2026-11-03): Immich dates its timeline by the FILE's `DateTimeOriginal` over the
+    /// upload's `fileCreatedAt`, so "Upload date" left the upload at its capture date. The chosen date is
+    /// now written into the file too.
+    #[test]
+    fn an_upload_dated_by_upload_or_edit_carries_that_date_in_the_file() {
+        assert_eq!(
+            exported_date("date_captured", UploadDate::Captured),
+            Some(TAKEN),
+            "the capture date is the default and stays"
+        );
+        let now = chrono::Utc::now().timestamp();
+        let got = exported_date("date_uploaded", UploadDate::Uploaded).expect("a date in the file");
+        assert!(
+            (got - now).abs() < 120,
+            "the file says {got}, not the upload's moment {now}"
+        );
     }
 
     fn has_caption(bytes: &[u8]) -> bool {
