@@ -1,5 +1,6 @@
 //! A photo's right-click menu, shared by the grid and the filmstrip, and what its actions do.
 
+use crate::theme::Hover as _;
 use crate::RustroomApp;
 use eframe::egui;
 use rustroom_app::photo_id::PhotoId;
@@ -22,6 +23,9 @@ pub enum CellAction {
     Rename,
     /// Show everything known about it.
     Info,
+    /// Edit the targets' title, caption, copyright and creator at once — the same entry as
+    /// [`Self::Info`], with two or more targets.
+    DescribeMany,
     /// Add every target to a collection.
     ///
     /// ⚠ Acts on the **selection**, not on the right-clicked index — which is why the menu
@@ -116,8 +120,6 @@ pub fn cell_menu(
 ) -> Option<CellAction> {
     let mut action = None;
     let n = targets.len();
-    // ⚠ Information is single-photo by nature, so it is **disabled** above one rather than hidden:
-    // a menu that changes shape is harder to learn than one that greys out.
     let single = n == 1;
     if ui.button("Edit").clicked() {
         action = Some(CellAction::Edit);
@@ -133,12 +135,18 @@ pub fn cell_menu(
         });
         ui.close();
     }
-    if ui
-        .add_enabled(single, egui::Button::new("Information…"))
-        .on_disabled_hover_text("One photo at a time")
+    // One photo's Information…; for several, the one thing it edits — their description.
+    if single {
+        if ui.button("Information…").clicked() {
+            action = Some(CellAction::Info);
+            ui.close();
+        }
+    } else if ui
+        .button(format!("Edit description of {n} photos…"))
+        .hover("Edits the title, caption, copyright and creator of every selected photo")
         .clicked()
     {
-        action = Some(CellAction::Info);
+        action = Some(CellAction::DescribeMany);
         ui.close();
     }
     ui.separator();
@@ -429,6 +437,17 @@ pub fn apply_cell_action(
             app.delete_copies(ctx, &targets);
         }
         CellAction::MoveToFolder => app.move_targets_to_folder(ctx, index),
+        CellAction::DescribeMany => {
+            let files: Vec<std::path::PathBuf> = app
+                .library
+                .as_ref()
+                .map(|l| menu_targets(l, index))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|t| t.path)
+                .collect();
+            crate::modals::describe_many::open(app, &files);
+        }
         CellAction::RenameFiles => {
             let targets = app
                 .library
@@ -501,6 +520,28 @@ mod tests {
         };
         assert_eq!(chosen(&ids[..1]), Some(CellAction::Rename));
         assert_eq!(chosen(&ids[..2]), Some(CellAction::RenameFiles));
+    }
+
+    /// One photo's Information… becomes, for several, Edit description of N photos… (2026-11-03).
+    #[test]
+    fn information_is_for_one_and_edit_description_for_several() {
+        let lib = crate::test_app::library_of(3);
+        let ids: Vec<PhotoId> = lib.entries.iter().map(|e| e.id.clone()).collect();
+        let chosen = |label: &str, targets: &[PhotoId]| {
+            let ctx = crate::test_ui::ctx();
+            let mut got = None;
+            crate::test_ui::click(&ctx, label, |ui| {
+                if let Some(a) = cell_menu(ui, None, &lib.source, &Default::default(), targets) {
+                    got = Some(a);
+                }
+            });
+            got
+        };
+        assert_eq!(chosen("Information…", &ids[..1]), Some(CellAction::Info));
+        assert_eq!(
+            chosen("Edit description of 3 photos…", &ids),
+            Some(CellAction::DescribeMany)
+        );
     }
 
     #[test]
