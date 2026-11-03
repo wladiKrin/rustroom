@@ -4,6 +4,36 @@ use super::*;
 use std::path::Path;
 use std::time::Instant;
 
+/// Holds a photo's export decode until the test releases it — so a test that asserts an in-between state
+/// (one photo written, the other not) can look before the run moves on (CLAUDE.md's held-job rule).
+///
+/// ⚠ Keyed on the file, which lives in the test's own directory: tests run in parallel and must not hold
+/// each other's photos.
+pub(crate) mod hold {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    static HELD: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    pub(crate) fn hold(p: &Path) {
+        HELD.lock().unwrap().push(p.to_path_buf());
+    }
+
+    pub(crate) fn release(p: &Path) {
+        HELD.lock().unwrap().retain(|h| h != p);
+    }
+
+    /// Wait while `p` is held, under the 120 s ceiling against a test that never releases it.
+    pub(crate) fn wait(p: &Path) {
+        let t = Instant::now();
+        while HELD.lock().unwrap().iter().any(|h| h == p) && t.elapsed() < Duration::from_secs(120)
+        {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
 /// A folder of two real (tiny) JPEGs, open in the app; a folder service holding both; its view open.
 fn two_photo_service(app: &mut RustroomApp, ctx: &egui::Context, d: &Path, out: &Path) -> i64 {
     for n in ["a.jpg", "b.jpg"] {
@@ -348,6 +378,10 @@ fn a_cancelled_publish_records_what_it_wrote() {
         test_dir::TempDir::new("publish-cancel-out"),
     );
     let s = two_photo_service(&mut app, &ctx, d.path(), o.path());
+    // ⚠ b.jpg is held, or both photos can land between two polls and "1 of" is never seen (it was,
+    // on the merged main, every time).
+    let b = d.path().join("b.jpg");
+    hold::hold(&b);
     app.start_publish();
     // ⚠ Cancelled once a photo is WRITTEN — cancelled before, nothing is on disk and the check below would
     // pass for any code.
@@ -364,6 +398,7 @@ fn a_cancelled_publish_records_what_it_wrote() {
         std::thread::sleep(Duration::from_millis(1));
     }
     app.cancel_publish();
+    hold::release(&b);
     let t = Instant::now();
     while app.publish_line().is_some() {
         assert!(t.elapsed() < Duration::from_secs(120), "the cancel hung");

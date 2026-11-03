@@ -280,6 +280,8 @@ impl RustroomApp {
                 jobs,
                 opts,
                 move |p: &std::path::Path| {
+                    #[cfg(test)]
+                    tests::hold::wait(p);
                     crate::decode::decode_for_export(p, demosaic, profile.clone())
                 },
                 std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -718,4 +720,4 @@ impl RustroomApp {
 
 #[cfg(test)]
 #[path = "publish_flow_tests.rs"]
-mod tests;
+pub(crate) mod tests;
