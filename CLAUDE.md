@@ -226,7 +226,8 @@ that had grown to ~170 lines by appending.)
   Clear… and the startup warning past the soft limit, both through `remove_downloaded`.
   ⚠ **Immich's stars and favourite fill a photo's marks ONCE, never over Rustroom's, never written back**
   (M10.15c): the rule lives in `Catalog::fill_from_server`'s SQL (`photos.filled_rating`/`filled_flag`).
-  ⚠⚠ **Rustroom writes to Immich only from Send marks' confirmation** (M10.15d): `rating` and `isFavorite`,
+  ⚠⚠ **Rustroom writes to Immich only from Send marks' confirmation, export's upload and a publish service's
+  Publish** (M10.15d, M10.18d — an album created, assets added and taken out of it, ⛔ never an asset deleted): `rating` and `isFavorite`,
   never removing a mark there, on the **Write key** (the upload key, with `asset.update`); the prior values
   go to `immich_last_send` for **Undo last send**. Every decision is `rustroom_app::immich_send`'s.
   ⛔ Two-way sync was DECLINED 2026-09-24 with reasons; the author re-opened it as **M10.15d** on

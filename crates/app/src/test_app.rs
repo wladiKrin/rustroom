@@ -202,6 +202,7 @@ pub fn for_test() -> RustroomApp {
         sync_groups: EditGroups::default(),
         export_draft: ExportOptions::default(),
         exporter: None,
+        publish: Default::default(),
         import: None,
         hdr: Default::default(),
         merges: Default::default(),

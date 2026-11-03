@@ -129,6 +129,13 @@ struct GridInputs<'a> {
     look: rustroom_app::stack::StackLook,
     /// The user's shortcuts (M10.9b) — the empty Library's hovers name them.
     keys: &'a [rustroom_app::shortcuts::Rebinding],
+    /// A publish service view's states (M10.18d), for the cells' marks.
+    publish: Option<
+        &'a std::collections::HashMap<
+            rustroom_app::photo_id::PhotoId,
+            rustroom_app::publish_state::State,
+        >,
+    >,
 }
 
 /// Pinch, or ctrl/cmd+scroll, resizes the grid; the size is saved once the gesture settles.
@@ -174,6 +181,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     //
     // ⚠ **Before any `&mut app.*` binding below**: `live_edits` takes `&self`, so it borrows the
     // whole of `app` and cannot follow a mutable borrow of one of its fields.
+    // M10.18d: derived here, once per change, before the grid borrows the library.
+    app.publish_view_states();
+    // ⚠ Before the central panel, which takes what is left: the band spans the grid's column only.
+    crate::publish_panel::band(app, ui);
     let live = app.live_edits();
     // ⚠ Borrowed out of `app` up front, because the grid closure already holds `&mut app.library`
     // and the two are disjoint fields — which the borrow checker only accepts when it can see so.
@@ -201,6 +212,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         stack_drag: app.settings.stack_drag,
         look: app.settings.stacking.look,
         keys: &app.settings.shortcuts,
+        publish: app.publish.view.as_ref().map(|v| &v.states),
     };
     egui::CentralPanel::default().show(ui, |ui| grid::panel(ui, &mut app.library, inp, &mut out));
 

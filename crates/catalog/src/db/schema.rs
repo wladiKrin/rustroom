@@ -378,6 +378,38 @@ impl Catalog {
                  COMMIT;",
             )?;
         }
+        if from < 18 {
+            // M10.18d: publish services — a destination, its export settings, its members (copies, by
+            // `photos.id` as collections are) and what was last published of each.
+            self.conn.execute_batch(
+                "BEGIN;
+                 CREATE TABLE publish_services (
+                     id      INTEGER PRIMARY KEY,
+                     name    TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                     kind    TEXT NOT NULL CHECK (kind IN ('folder', 'immich')),
+                     target  TEXT NOT NULL,
+                     options TEXT NOT NULL,
+                     created INTEGER NOT NULL
+                 );
+                 CREATE TABLE publish_members (
+                     service_id INTEGER NOT NULL REFERENCES publish_services(id) ON DELETE CASCADE,
+                     photo_id   INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+                     added      INTEGER NOT NULL,
+                     removed    INTEGER NOT NULL DEFAULT 0,
+                     PRIMARY KEY (service_id, photo_id)
+                 );
+                 CREATE TABLE published (
+                     service_id  INTEGER NOT NULL REFERENCES publish_services(id) ON DELETE CASCADE,
+                     photo_id    INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+                     fingerprint INTEGER NOT NULL,
+                     place       TEXT NOT NULL,
+                     at          INTEGER NOT NULL,
+                     PRIMARY KEY (service_id, photo_id)
+                 );
+                 PRAGMA user_version = 18;
+                 COMMIT;",
+            )?;
+        }
         Ok(())
     }
 }
@@ -409,7 +441,7 @@ mod tests {
             // was exactly that — the failure is loud, but only if this test exists.
             cat.conn
                 .execute_batch(
-                    "DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; DROP TABLE photo_history;
+                    "DROP TABLE published; DROP TABLE publish_members; DROP TABLE publish_services; DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; DROP TABLE photo_history;
                      DROP TABLE immich_names;
                      DROP TABLE photo_stacks;
                      DROP TABLE photo_description;
@@ -463,7 +495,7 @@ mod tests {
             .unwrap();
             cat.conn
                 .execute_batch(
-                    "DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; DROP TABLE photo_history;
+                    "DROP TABLE published; DROP TABLE publish_members; DROP TABLE publish_services; DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; DROP TABLE photo_history;
                      DROP TABLE immich_names;
                      DROP TABLE photo_stacks;
                      DROP TABLE photo_description;
@@ -514,7 +546,7 @@ mod tests {
             .unwrap();
             cat.conn
                 .execute_batch(
-                    "DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; DROP TABLE photo_history;
+                    "DROP TABLE published; DROP TABLE publish_members; DROP TABLE publish_services; DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; DROP TABLE photo_history;
                      DROP TABLE immich_names;
                      DROP TABLE photo_stacks;
                      DROP TABLE photo_description;
@@ -561,7 +593,7 @@ mod tests {
             cat.set_xmp_mtime(Path::new("/x/a.RAF"), 42).unwrap();
             cat.conn
                 .execute_batch(
-                    "DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; DROP TABLE photo_history;
+                    "DROP TABLE published; DROP TABLE publish_members; DROP TABLE publish_services; DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; DROP TABLE photo_history;
                      DROP TABLE immich_names;
                      DROP TABLE photo_stacks;
                      DROP TABLE photo_description;
@@ -631,7 +663,7 @@ mod tests {
         // there (M9.7, Move to folder).
         cat.conn
             .execute_batch(
-                "DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; DROP TABLE photo_history; DROP TABLE immich_names; DROP TABLE photo_stacks; ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; DROP TABLE immich_last_send; PRAGMA user_version = 7;",
+                "DROP TABLE published; DROP TABLE publish_members; DROP TABLE publish_services; DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; DROP TABLE photo_history; DROP TABLE immich_names; DROP TABLE photo_stacks; ALTER TABLE photos DROP COLUMN filled_rating; ALTER TABLE photos DROP COLUMN filled_flag; DROP TABLE immich_last_send; PRAGMA user_version = 7;",
             )
             .unwrap();
         cat.migrate().unwrap();
@@ -662,7 +694,7 @@ mod tests {
                 .unwrap();
             cat.conn
                 .execute_batch(
-                    "DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; DROP TABLE photo_stacks;
+                    "DROP TABLE published; DROP TABLE publish_members; DROP TABLE publish_services; DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; DROP TABLE photo_stacks;
                      CREATE TABLE photo_stacks (
                          folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
                          file_name TEXT NOT NULL,
@@ -719,7 +751,7 @@ mod tests {
             .unwrap();
             cat.conn
                 .execute_batch(
-                    "DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; ALTER TABLE photos DROP COLUMN filled_rating;
+                    "DROP TABLE published; DROP TABLE publish_members; DROP TABLE publish_services; DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; ALTER TABLE photos DROP COLUMN filled_rating;
                      ALTER TABLE photos DROP COLUMN filled_flag;
                      DROP TABLE immich_last_send; PRAGMA user_version = 12;",
                 )
@@ -749,7 +781,7 @@ mod tests {
             let cat = Catalog::open(&db.0).unwrap();
             cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
             cat.conn
-                .execute_batch("DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; DROP TABLE immich_last_send; PRAGMA user_version = 13;")
+                .execute_batch("DROP TABLE published; DROP TABLE publish_members; DROP TABLE publish_services; DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; DROP TABLE immich_last_send; PRAGMA user_version = 13;")
                 .unwrap();
         }
         let cat = Catalog::open(&db.0).expect("a v13 catalog must upgrade");
@@ -766,7 +798,7 @@ mod tests {
             let cat = Catalog::open(&db.0).unwrap();
             cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
             cat.conn
-                .execute_batch("DROP TABLE face_apart; PRAGMA user_version = 16;")
+                .execute_batch("DROP TABLE published; DROP TABLE publish_members; DROP TABLE publish_services; DROP TABLE face_apart; PRAGMA user_version = 16;")
                 .unwrap();
         }
         let cat = Catalog::open(&db.0).expect("a v16 catalog must upgrade");
@@ -783,7 +815,7 @@ mod tests {
             cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
             cat.conn
                 .execute_batch(
-                    "DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people;
+                    "DROP TABLE published; DROP TABLE publish_members; DROP TABLE publish_services; DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people;
                      PRAGMA user_version = 15;",
                 )
                 .unwrap();
@@ -809,12 +841,30 @@ mod tests {
             let cat = Catalog::open(&db.0).unwrap();
             cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
             cat.conn
-                .execute_batch("DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; PRAGMA user_version = 14;")
+                .execute_batch("DROP TABLE published; DROP TABLE publish_members; DROP TABLE publish_services; DROP TABLE face_apart; DROP TABLE face_rejections; DROP TABLE faces_read; DROP TABLE faces; DROP TABLE people; DROP TABLE photo_location; PRAGMA user_version = 14;")
                 .unwrap();
         }
         let cat = Catalog::open(&db.0).expect("a v14 catalog must upgrade");
         assert_eq!(cat.version().unwrap(), SCHEMA_VERSION);
         assert_eq!(cat.photo_count().unwrap(), 1, "the photo survived");
         assert_eq!(cat.location_of(Path::new("/x/a.RAF")).unwrap(), None);
+    }
+
+    /// M10.18d: a v17 catalog gains the publish tables, empty.
+    #[test]
+    fn a_version_seventeen_catalog_gains_the_publish_tables() {
+        let db = TempDb::new("v17v18");
+        {
+            let cat = Catalog::open(&db.0).unwrap();
+            cat.conn
+                .execute_batch(
+                    "DROP TABLE published; DROP TABLE publish_members; DROP TABLE publish_services;
+                     PRAGMA user_version = 17;",
+                )
+                .unwrap();
+        }
+        let cat = Catalog::open(&db.0).expect("a v17 catalog must upgrade");
+        assert_eq!(cat.version().unwrap(), SCHEMA_VERSION);
+        assert!(cat.publish_services().unwrap().is_empty());
     }
 }

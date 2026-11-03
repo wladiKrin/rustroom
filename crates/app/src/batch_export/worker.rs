@@ -72,6 +72,18 @@ pub struct ExportReport {
     pub below_ppi: usize,
     /// Photos made smaller than asked to fit the file-size limit.
     pub shrunk: usize,
+    /// Every photo the run delivered, and where (M10.18d — what a publish records). ⚠ A photo whose upload
+    /// did not confirm is NOT here: its delivery is unknown, so a publish leaves it to the next run.
+    pub written: Vec<WrittenItem>,
+}
+
+/// One delivered photo: the file kept on disk (none when it was only staged for an upload), and the
+/// asset a confirmed upload made or matched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrittenItem {
+    pub id: crate::photo_id::PhotoId,
+    pub file: Option<PathBuf>,
+    pub asset: Option<String>,
 }
 
 impl ExportReport {
@@ -251,6 +263,11 @@ fn plan(
     let mut claimed: HashSet<PathBuf> = HashSet::new();
     let mut remembered: Option<Collision> = None;
     let mut out: Vec<Planned> = Vec::new();
+    // ⚠ M10.18d: every fixed destination is reserved BEFORE any photo is named, so a photo of the same stem
+    // planned earlier steps aside instead of taking the service's own file.
+    if check_collisions {
+        claimed.extend(jobs.iter().filter_map(|j| j.fixed_dest.clone()));
+    }
 
     for (seq, job) in jobs.into_iter().enumerate() {
         // ⚠ Resolved per job, before the loop takes the job apart: the preset's defaults under
@@ -261,6 +278,7 @@ fn plan(
             name,
             edits,
             capture,
+            fixed_dest,
             ..
         } = job;
         let source = id.path.clone();
@@ -287,6 +305,19 @@ fn plan(
             taken: capture.taken,
             camera: capture.camera.as_deref(),
         });
+        // M10.18d: a fixed destination is the service's own file — written there, never asked about.
+        if let Some(dest) = fixed_dest.filter(|_| check_collisions) {
+            out.push(Planned {
+                source,
+                dest,
+                edits,
+                meta,
+                capture,
+                copy: id.copy,
+                edited_at: sidecar_seconds(&source_for_edit),
+            });
+            continue;
+        }
         let mut dest = dest_named(out_dir, &base, 0, opts.format);
         // ⚠ Under a staging run only `claimed` matters: the directory is new, so `exists()` can
         // only ever be a name this same run already reserved.
@@ -423,7 +454,24 @@ fn rescue(staged: &Path, dest_dir: &Path) -> PathBuf {
     let Some(name) = staged.file_name() else {
         return staged.to_path_buf();
     };
-    let to = dest_dir.join(name);
+    // ⚠ M10.18d review: never over a file already there — `rename` replaces one silently, and a publish
+    // to Immich rescues into a folder the user exports other things into.
+    let mut to = dest_dir.join(name);
+    let (stem, ext) = (
+        staged
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        staged
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default(),
+    );
+    let mut i = 1;
+    while to.exists() {
+        to = dest_dir.join(format!("{stem}-{i}{ext}"));
+        i += 1;
+    }
     // ⚠ `rename` first: a same-filesystem move is atomic and instant. It fails across devices, and
     // a temp directory very often is one, so copy-then-remove is the fallback rather than the plan.
     if std::fs::rename(staged, &to).is_ok() {
@@ -458,7 +506,7 @@ impl Uploader {
         })
     }
 
-    /// Upload one written file. `Err` carries a message for `unconfirmed`.
+    /// Upload one written file; the asset's id. `Err` carries a message for `unconfirmed`.
     #[allow(clippy::too_many_arguments)]
     fn send(
         &self,
@@ -468,7 +516,7 @@ impl Uploader {
         copy: u32,
         which: UploadDate,
         edited_at: Option<i64>,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let filename = exported
             .file_name()
             .and_then(|s| s.to_str())
@@ -482,7 +530,7 @@ impl Uploader {
         // ⚠ Recorded against the SOURCE photo's sidecar, not the exported file: the sidecar belongs
         // to the photo, and under Immich-only the export is deleted moments later.
         crate::immich_upload::record(source, copy, &self.host, &up);
-        Ok(())
+        Ok(up.id)
     }
 }
 
@@ -695,6 +743,25 @@ fn run(
                     // ⚠ `failed` is now in **completion** order, which is nondeterministic. Any
                     // test comparing it must sort or compare as a set.
                     let mut r = shared.lock().expect("export report");
+                    // M10.18d: what was delivered — the kept file, the confirmed asset; nothing for an
+                    // unconfirmed upload.
+                    if outcome.is_ok() {
+                        let id = crate::photo_id::PhotoId::new(p.source.clone(), p.copy);
+                        let file = staging.is_none().then(|| p.dest.clone());
+                        match &upload {
+                            None => r.written.push(WrittenItem {
+                                id,
+                                file,
+                                asset: None,
+                            }),
+                            Some(Ok(asset)) => r.written.push(WrittenItem {
+                                id,
+                                file,
+                                asset: Some(asset.clone()),
+                            }),
+                            Some(Err(_)) => {}
+                        }
+                    }
                     match outcome {
                         Ok(w) => {
                             r.exported += 1;
@@ -708,7 +775,7 @@ fn run(
                         // *response* was lost, not that the server rejected the file — 4 of 2,373
                         // writes failed that way on this network and **none had actually failed to
                         // apply**. Deleting on anything less would destroy work on a flaky link.
-                        Some(Ok(())) => {
+                        Some(Ok(_)) => {
                             r.uploaded += 1;
                             if staging.is_some() {
                                 let _ = std::fs::remove_file(&p.dest);
@@ -791,6 +858,7 @@ mod tests {
                 description: Default::default(),
                 marks: Default::default(),
                 keywords: Vec::new(),
+                fixed_dest: None,
             })
             .collect()
     }
@@ -1570,6 +1638,167 @@ mod tests {
             1,
             "the failure must be reported, not swallowed"
         );
+    }
+
+    /// M10.18d review C1: a job's fixed destination is written verbatim and reserved before any other name, so
+    /// another photo of the same stem steps aside rather than sharing the file.
+    #[test]
+    fn a_fixed_destination_is_kept_and_reserved_ahead_of_the_others() {
+        // ⚠ No `a.jpg` on disk: a file there would make the other step aside by itself, hiding a missing
+        // reservation (the first version of this test passed against exactly that sabotage).
+        let d = TempDir::new("fixed_dest");
+        let mut js = jobs(&d, &["a.RAF"]);
+        let mut other = jobs(&d, &["a.RAF"]).remove(0);
+        other.id = PhotoId::original(d.0.join("sub").join("a.RAF"));
+        js[0].fixed_dest = Some(d.0.join("a.jpg"));
+        // The other first, so only an up-front reservation keeps it off the fixed name.
+        let worker = ExportWorker::spawn(
+            vec![other, js.remove(0)],
+            opts(&d, None),
+            ok_decode(),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            ExportDirs::default(),
+            None,
+        );
+        let mut asked = 0;
+        let report = loop {
+            match worker.events().recv().unwrap() {
+                ExportEvent::Collision { .. } => {
+                    asked += 1;
+                    worker.decide(Decision::Resolve {
+                        collision: Collision::KeepBoth,
+                        apply_to_all: false,
+                    });
+                }
+                ExportEvent::Finished(r) => break r,
+                _ => {}
+            }
+        };
+        assert_eq!(
+            asked, 1,
+            "the fixed destination was asked about, or the other was not"
+        );
+        let mut got: Vec<(String, String)> = report
+            .written
+            .iter()
+            .map(|w| {
+                (
+                    w.id.path
+                        .parent()
+                        .unwrap()
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                    w.file
+                        .as_ref()
+                        .unwrap()
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            })
+            .collect();
+        got.sort();
+        let here = d.0.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(
+            got,
+            vec![(here, "a.jpg".into()), ("sub".into(), "a-1.jpg".into())]
+        );
+    }
+
+    /// M10.18d review I3: a rescued upload never replaces a file of the same name already there.
+    #[test]
+    fn a_rescue_takes_a_free_name() {
+        let d = TempDir::new("rescue_free");
+        std::fs::write(d.0.join("a.jpg"), b"mine").unwrap();
+        let staged = TempDir::new("rescue_free_stage");
+        std::fs::write(staged.0.join("a.jpg"), b"staged").unwrap();
+        let at = rescue(&staged.0.join("a.jpg"), &d.0);
+        assert_eq!(std::fs::read(d.0.join("a.jpg")).unwrap(), b"mine");
+        assert_eq!(at, d.0.join("a-1.jpg"));
+        assert_eq!(std::fs::read(&at).unwrap(), b"staged");
+    }
+
+    /// M10.18d: a publish records each photo the run wrote, and where.
+    #[test]
+    fn a_written_photo_is_reported_with_its_file() {
+        let d = TempDir::new("written");
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF"]),
+            opts(&d, None),
+            ok_decode(),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            ExportDirs::default(),
+            None,
+        );
+        let report = finished(&worker);
+        assert_eq!(
+            report.written,
+            vec![WrittenItem {
+                id: PhotoId::original(d.0.join("a.RAF")),
+                file: Some(d.0.join("a.jpg")),
+                asset: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_failed_photo_is_not_in_written() {
+        let d = TempDir::new("written_failed");
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF", "b.RAF"]),
+            opts(&d, None),
+            |p: &Path| {
+                if p.ends_with("b.RAF") {
+                    Err("broken".to_string())
+                } else {
+                    ok_decode()(p)
+                }
+            },
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            ExportDirs::default(),
+            None,
+        );
+        let report = finished(&worker);
+        assert_eq!(report.failed.len(), 1, "fixture check: b failed");
+        let ids: Vec<_> = report.written.iter().map(|w| w.id.clone()).collect();
+        assert_eq!(ids, vec![PhotoId::original(d.0.join("a.RAF"))]);
+    }
+
+    /// Review focus 4: a publish to Immich whose upload did not confirm records nothing for it.
+    #[test]
+    fn an_unconfirmed_upload_is_not_in_written() {
+        let d = TempDir::new("written_unconfirmed");
+        let mut o = opts(&d, None);
+        o.destination = Destination::Target(UploadTarget::Immich);
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF"]),
+            o,
+            ok_decode(),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            ExportDirs::default(),
+            Some(crate::immich_upload::UploadConfig {
+                base_url: "http://127.0.0.1:1".to_string(),
+                key: "irrelevant".to_string(),
+            }),
+        );
+        let report = finished(&worker);
+        assert_eq!(
+            report.unconfirmed.len(),
+            1,
+            "fixture check: it did not confirm"
+        );
+        assert!(report.written.is_empty(), "{:?}", report.written);
     }
 
     /// ⚠ The control: with no connection nothing is attempted and nothing is reported, so the

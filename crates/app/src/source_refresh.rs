@@ -50,6 +50,9 @@ impl RustroomApp {
         let read = match source {
             LibrarySource::Keyword { id, .. } => cat.keyword_members(*id),
             LibrarySource::Collection { id, .. } => cat.collection_members(*id),
+            LibrarySource::Publish { id, .. } => cat
+                .publish_members(*id)
+                .map(|ms| ms.into_iter().map(|m| (m.path, m.copy)).collect()),
             LibrarySource::Periods { periods, .. } => cat.photos_in_periods(periods),
             LibrarySource::Person { id, .. } => cat.person_members(*id),
             LibrarySource::Smart { id, .. } => {

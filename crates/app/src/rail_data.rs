@@ -34,6 +34,8 @@ pub struct RailData {
     pub days: Arc<Vec<DayRow>>,
     /// Everyone in the People list (M10.18c).
     pub people: Arc<Vec<catalog::db::PersonRow>>,
+    /// The publish services (M10.18d).
+    pub publish: Arc<Vec<catalog::db::PublishServiceRow>>,
     /// How many times the catalog was read — what the tests count.
     computed: usize,
 }
@@ -76,6 +78,7 @@ impl RailData {
         self.keywords = Arc::new(cat.keywords().unwrap_or_default());
         self.days = Arc::new(cat.capture_days().unwrap_or_default());
         self.people = Arc::new(cat.people().unwrap_or_default());
+        self.publish = Arc::new(cat.publish_services().unwrap_or_default());
         self.computed += 1;
     }
 

@@ -14,7 +14,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// The schema this build expects. Bump it whenever [`Catalog::migrate`] gains a step.
-pub const SCHEMA_VERSION: i64 = 17;
+pub const SCHEMA_VERSION: i64 = 18;
 
 /// What can go wrong talking to the catalog.
 ///
@@ -65,6 +65,8 @@ mod marks;
 mod moves;
 /// Folders and their photos: sync, rename, copies, listings.
 mod photos;
+/// Publish services (M10.18d).
+mod publish;
 /// Forgetting a folder, and restoring what a deletion took.
 mod restore;
 /// The schema's migrations, version 1 to [`SCHEMA_VERSION`].
@@ -85,6 +87,7 @@ pub use keywords::{Change as KeywordChange, DayCounts, KeywordMerge, KeywordRow}
 pub use location::Hand;
 pub use marks::{Flag, Marks};
 pub use photos::{FolderRow, PhotoRow};
+pub use publish::{Member, Place, PublishServiceRow, PublishSnapshot, PublishTarget, Published};
 pub use server_fill::ServerFill;
 pub use smart::SmartRow;
 pub use stacks::HandMember;

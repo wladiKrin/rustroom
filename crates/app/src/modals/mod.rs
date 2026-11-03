@@ -41,6 +41,7 @@ pub mod import;
 pub mod info;
 pub mod pano_merge;
 pub mod presets;
+mod publish;
 pub mod rename;
 pub mod rule_edit;
 mod send_marks;
@@ -91,6 +92,13 @@ pub enum Modal {
     Import,
     /// File → Tethered capture… (M10.18a). Its state lives in `RustroomApp::tether`.
     Tether,
+    /// A publish service's New / Edit dialog (M10.18d). Its draft lives in `RustroomApp::publish`.
+    PublishService,
+    /// Confirming a publish service's deletion (M10.18d).
+    ConfirmDeleteService {
+        id: i64,
+        name: String,
+    },
     /// Photo merge → HDR's preview (M10.17a). Its state lives in `RustroomApp::hdr`.
     HdrMerge,
     /// Photo merge → Panorama's preview (M10.17b). Its state lives in `RustroomApp::pano`.
@@ -243,6 +251,8 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Export,
         Import,
         Tether,
+        PublishService,
+        ConfirmDeleteService,
         HdrMerge,
         PanoMerge,
         AiDownload,
@@ -273,6 +283,8 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::ExportSettings => Which::Export,
         Modal::Import => Which::Import,
         Modal::Tether => Which::Tether,
+        Modal::PublishService => Which::PublishService,
+        Modal::ConfirmDeleteService { .. } => Which::ConfirmDeleteService,
         Modal::HdrMerge => Which::HdrMerge,
         Modal::PanoMerge => Which::PanoMerge,
         Modal::AiDownload => Which::AiDownload,
@@ -307,6 +319,8 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::Export => export::settings(app, ctx),
         Which::Import => import::show(app, ctx),
         Which::Tether => tether::show(app, ctx),
+        Which::PublishService => publish::show(app, ctx),
+        Which::ConfirmDeleteService => publish::confirm_delete(app, ctx),
         Which::HdrMerge => hdr_merge::show(app, ctx),
         Which::PanoMerge => pano_merge::show(app, ctx),
         Which::AiDownload => ai_download::show(app, ctx),

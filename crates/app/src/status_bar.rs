@@ -26,8 +26,8 @@ pub const HEIGHT: f32 = 32.0;
 /// Room the left-hand text keeps before anything on the right is allowed to push into it.
 const STATUS_MIN: f32 = 200.0;
 
-/// The frame both rows share: the panel surface, a hairline above, 12 pt either side.
-fn frame(style: &egui::Style) -> egui::Frame {
+/// The frame both rows share — and a service view's Publish band — the panel surface, a hairline, 12 pt either side.
+pub(crate) fn frame(style: &egui::Style) -> egui::Frame {
     egui::Frame::side_top_panel(style).inner_margin(egui::Margin {
         left: 12,
         right: 8,
@@ -247,6 +247,8 @@ fn job_or_status(app: &mut RustroomApp, ui: &mut egui::Ui) {
             app.export_progress.clone(),
             Some(RustroomApp::cancel_export),
         )
+    } else if let Some(line) = app.publish_line() {
+        (line, Some(RustroomApp::cancel_publish))
     } else if !app.merges.progress.is_empty() {
         (
             app.merges.progress.clone(),

@@ -165,6 +165,8 @@ impl Catalog {
             .collect();
         drop(st);
 
+        let publish = Box::new(super::publish::snapshot(&tx, id)?);
+
         tx.execute("DELETE FROM folders WHERE id = ?1", [id])?;
         tx.commit()?;
         Ok(CatalogSnapshot::Folder {
@@ -178,6 +180,7 @@ impl Catalog {
             locations,
             faces,
             faces_read,
+            publish,
         })
     }
 
@@ -261,6 +264,7 @@ impl Catalog {
                 locations,
                 faces,
                 faces_read,
+                publish,
             } => {
                 let path = path.to_string_lossy().to_string();
                 let last_seen = photos.iter().map(|p| p.last_seen).max().unwrap_or(0);
@@ -394,6 +398,7 @@ impl Catalog {
                         rusqlite::params![fid, name],
                     )?;
                 }
+                super::publish::restore(&tx, publish, &map)?;
 
                 for (file_name, source, lat, lon) in locations {
                     tx.execute(

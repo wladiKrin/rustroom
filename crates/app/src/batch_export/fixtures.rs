@@ -140,6 +140,7 @@ pub(crate) fn jobs(dir: &TempDir, names: &[&str]) -> Vec<ExportJob> {
             description: Default::default(),
             marks: Default::default(),
             keywords: Vec::new(),
+            fixed_dest: None,
         })
         .collect()
 }

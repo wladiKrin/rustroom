@@ -328,6 +328,8 @@ pub(crate) struct RustroomApp {
     pub(crate) exporter: Option<ExportWorker>,
     /// Progress line for the running export.
     pub(crate) export_progress: String,
+    /// Publish services' runs and the open service view's states (M10.18d).
+    pub(crate) publish: crate::publish_flow::PublishFlow,
     /// The Import dialog and any import it is running (M9.12); `None` when neither is open.
     pub(crate) import: Option<import_flow::ImportState>,
     /// Photo merge → HDR: its dialog, its queue and the running merge (M10.17a).

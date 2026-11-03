@@ -83,6 +83,7 @@ pub fn build_job(
         description: Default::default(),
         marks: Default::default(),
         keywords: Vec::new(),
+        fixed_dest: None,
     }
 }
 

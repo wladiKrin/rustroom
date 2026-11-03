@@ -36,6 +36,10 @@ pub struct ExportJob {
     pub marks: catalog::db::Marks,
     /// The file's keyword paths, root first, from `xmp_sync::keyword_paths`.
     pub keywords: Vec<Vec<String>>,
+    /// Where this photo MUST be written, verbatim, never asked about — a publish service's own file for a
+    /// re-published photo (M10.18d). Reserved before any other photo is named, so a photo of the same stem
+    /// steps aside. ⚠ Ignored by a staging run, whose names nobody sees. `None` for every ordinary export.
+    pub fixed_dest: Option<PathBuf>,
 }
 
 /// What to export, and how.

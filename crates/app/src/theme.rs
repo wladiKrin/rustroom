@@ -413,6 +413,12 @@ pub fn stale_dim() -> egui::Color32 {
     egui::Color32::from_black_alpha(48)
 }
 
+/// The dark rim around a mark drawn over a thumbnail — a publish service's dot and ring (M10.18d) — so the
+/// accent reads on a light picture as well as a dark one.
+pub fn mark_rim() -> egui::Color32 {
+    egui::Color32::from_black_alpha(200)
+}
+
 pub fn hint(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).small());
 }
