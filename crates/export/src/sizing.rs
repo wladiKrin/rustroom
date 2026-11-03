@@ -313,16 +313,28 @@ mod tests {
 
     #[test]
     fn cover_fills_the_box_and_overflows_one_side() {
-        assert_eq!(dims(px_box(Cover, 1000.0, 1000.0).plan(3000, 2000)), (1500, 1000));
+        assert_eq!(
+            dims(px_box(Cover, 1000.0, 1000.0).plan(3000, 2000)),
+            (1500, 1000)
+        );
         // A box wider than the photo: the width sets it, the height overflows.
-        assert_eq!(dims(px_box(Cover, 1500.0, 500.0).plan(3000, 2000)), (1500, 1000));
+        assert_eq!(
+            dims(px_box(Cover, 1500.0, 500.0).plan(3000, 2000)),
+            (1500, 1000)
+        );
     }
 
     #[test]
     fn cover_either_turns_the_box_to_the_photo() {
         // A portrait into a landscape box covers it turned: 1000 × 1500, never 1500 × 2250.
-        assert_eq!(dims(px_box(CoverEither, 1500.0, 1000.0).plan(2000, 3000)), (1000, 1500));
-        assert_eq!(dims(px_box(Cover, 1500.0, 1000.0).plan(2000, 3000)), (1500, 2250));
+        assert_eq!(
+            dims(px_box(CoverEither, 1500.0, 1000.0).plan(2000, 3000)),
+            (1000, 1500)
+        );
+        assert_eq!(
+            dims(px_box(Cover, 1500.0, 1000.0).plan(2000, 3000)),
+            (1500, 2250)
+        );
     }
 
     #[test]

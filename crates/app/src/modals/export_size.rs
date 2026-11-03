@@ -32,7 +32,10 @@ pub(super) fn body(ui: &mut egui::Ui, opts: &mut ExportOptions) {
             match s.fit {
                 FitMode::Original => {}
                 // ⚠ Cover is a print's (M10.18e), never chosen here; a box like Width & height if it is.
-                FitMode::WidthHeight | FitMode::Dimensions | FitMode::Cover | FitMode::CoverEither => {
+                FitMode::WidthHeight
+                | FitMode::Dimensions
+                | FitMode::Cover
+                | FitMode::CoverEither => {
                     ui.label("Width");
                     length(ui, &mut s.width, unit);
                     ui.end_row();
