@@ -31,6 +31,7 @@
 
 pub mod ai_download;
 mod denoise_cache;
+pub mod describe_many;
 pub mod edits;
 pub mod export;
 mod export_size;
@@ -145,6 +146,10 @@ pub enum Modal {
         /// The editable description, read from the catalog on the **first frame** and cached
         /// here like `dims`, then committed when the dialog closes — see `info::show`.
         description: Option<rustroom_app::description::DescriptionDraft>,
+    },
+    /// Several photos' description, edited at once — see `describe_many`.
+    DescribeMany {
+        draft: rustroom_app::description::BatchDraft,
     },
     /// Confirming that folders are removed from the catalog — one from its ×, or every folder marked
     /// in the rail (M10.19c). `folders` and `photos` count everything beneath them, each once.
@@ -268,6 +273,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         ConfirmDeleteKeyword,
         ConfirmMergeKeyword,
         PhotoInfo,
+        DescribeMany,
         EditRule,
         Settings,
         Shortcuts,
@@ -301,6 +307,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::ConfirmDeleteKeyword { .. } => Which::ConfirmDeleteKeyword,
         Modal::ConfirmMergeKeyword { .. } => Which::ConfirmMergeKeyword,
         Modal::PhotoInfo { .. } => Which::PhotoInfo,
+        Modal::DescribeMany { .. } => Which::DescribeMany,
         Modal::EditRule { .. } => Which::EditRule,
         Modal::Settings => Which::Settings,
         Modal::KeyboardShortcuts => Which::Shortcuts,
@@ -336,6 +343,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::ConfirmDeleteKeyword => confirm_delete_keyword(app, ctx),
         Which::ConfirmMergeKeyword => confirm_merge_keyword(app, ctx),
         Which::PhotoInfo => info::show(app, ctx),
+        Which::DescribeMany => describe_many::show(app, ctx),
         Which::EditRule => rule_edit::show(app, ctx),
         Which::Settings => settings::show(app, ctx),
         Which::Shortcuts => shortcuts(app, ctx),
