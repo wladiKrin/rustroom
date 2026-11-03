@@ -77,7 +77,7 @@ pub fn size(o: &ExportOptions) -> String {
     };
     match s.fit {
         FitMode::Original => "original".to_string(),
-        FitMode::WidthHeight | FitMode::Dimensions => {
+        FitMode::WidthHeight | FitMode::Dimensions | FitMode::Cover | FitMode::CoverEither => {
             format!("{} × {} {unit}{ppi}", num(s.width), num(s.height))
         }
         FitMode::LongEdge => format!("{} {unit} long edge{ppi}", num(s.long_edge)),
