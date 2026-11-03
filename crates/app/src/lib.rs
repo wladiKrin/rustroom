@@ -106,6 +106,7 @@ pub mod preview_build;
 pub mod preview_key;
 pub mod preview_loader;
 pub mod preview_store;
+pub mod print;
 pub mod publish_folder;
 pub mod publish_run;
 pub mod publish_state;
