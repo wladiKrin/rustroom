@@ -172,7 +172,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-11-03)
 
-**4582 tests on Linux** (macOS last counted 4274 before M10.17b; 31 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
+**4585 tests on Linux** (macOS last counted 4274 before M10.17b; 31 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
 gate green on **`main`** (2026-11-03, M10.18d merged). ⚠ On this Linux machine `gpu_pipeline`'s suite can stall
 inside a full run (alone it passes in 4 s) and `sources::reindex_tests` can fail to exit — both pre-existing
 (`grep -n 'Pre-existing, not chased' docs/JOURNAL.md`); run the remaining test binaries directly when it happens. ⚠⚠ **Run the git command above rather than
@@ -267,7 +267,7 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1–c3, d, M10.17a–b, M10.18a–d, M10.19c–d** (table above); ⛔ M10.16c4 declined.
 
-**▶ NOW: export's upload date in the file** (found in use 2026-11-03: "Upload date" leaves an upload at its capture date in Immich's timeline — `grep -n 'M10.18d' docs/JOURNAL.md`), then **M10.18e print**.
+**▶ NOW: M10.18e print** — the next open item. ✅ An upload's chosen date in the file merged 2026-11-03, confirmed by the author (`grep -n 'upload.s chosen date' docs/JOURNAL.md`).
 ✅ M10.18d publish services merged 2026-11-03 with the batch description dialog, confirmed by the author ("okay that works").
 ✅ M10.18a tethering merged 2026-10-29, confirmed by the author with his X-T4 ("works, merge and delete";
 `grep -n 'M10.18a' docs/JOURNAL.md`). ✅ M10.18c people tagging merged 2026-10-29, confirmed by the author

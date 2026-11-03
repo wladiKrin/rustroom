@@ -193,6 +193,22 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-03 — Export: an upload's chosen date in the file (branch `export-upload-date`, merged 2026-11-03)
+
+✅ **Confirmed by the author ("okay, that's working now, merge and delete the branches")**, on the Mac.
+
+- **Found in use:** "Upload date" left an upload at its capture date in Immich's timeline, which read as "it did not
+  upload". ⚠⚠ **Immich dates its timeline by the FILE's `DateTimeOriginal`** and uses the upload's `fileCreatedAt`
+  only for a file without one; export writes the capture date there under All metadata.
+- **Fix (the author's pick of two — the other left the file undated):** a run that uploads with Edit date or Upload
+  date writes that date as the file's `DateTimeOriginal` (`immich_upload::file_taken`, applied in the export plan); a
+  kept copy (`Both`) carries it too; Original date, Copyright only and a run that does not upload are unchanged.
+- **Also:** the summary says "N already on Immich unchanged" when Immich answers duplicate (`ExportReport.duplicates`
+  — ⚠ the count's wiring has no test, the crate has no test server); the dialog's note reads "Uploaded on …;
+  exporting uploads a new copy"; the date combo's hover says it is written into the file.
+- `an_upload_dated_by_upload_or_edit_carries_that_date_in_the_file` reads the exported JPEG's XMP back; sabotaged
+  (the upload check forced off) it fails.
+
 ### 2026-11-03 — M10.18d: publish services, and editing several photos' description (branches `m10.18d-publish`, `batch-description`, merged 2026-11-03)
 
 ✅ **Confirmed by the author ("okay that works"; Immich publishing "works nicely")**, after trying both on the Mac.
