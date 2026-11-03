@@ -193,6 +193,40 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-03 — M10.18d: publish services, and editing several photos' description (branches `m10.18d-publish`, `batch-description`, merged 2026-11-03)
+
+✅ **Confirmed by the author ("okay that works"; Immich publishing "works nicely")**, after trying both on the Mac.
+Spec `docs/superpowers/specs/2026-10-29-m10.18d-publish-design.md`, plan `docs/superpowers/plans/2026-10-29-m10.18d-publish.md`.
+The author skipped the questions ("I'm not really using any of these services"), so every design call was mine.
+
+- **What:** Library rail → **Publish services**: a service keeps a **folder** or an **Immich album** in step with
+  its photos. + / − on its row add or take out the selection, a click opens its view, right-click Edit…, × deletes
+  it (never what it published). The view's **band above the grid** (the author's pick of three, Publish N at its left
+  end by his layout) shows the counts; a dot marks New, a ring Modified (both in a dark rim, `theme::mark_rim`, asked
+  for in use), Removed is dimmed until the next Publish clears it.
+- **Catalog v18:** `publish_services`, `publish_members` (`removed`), `published` (fingerprint, place JSON), keyed on
+  `photos.id`; forget/restore carries them. A photo's fingerprint is FNV-1a over its edits, the non-default export
+  options and named metadata fields (`publish_state::fingerprint`, pinned).
+- **Immich:** `create_album`, `add_to_album`, `remove_from_album` — ⛔ never an asset deleted; a member counts as
+  published only once settled in the album, an old asset leaves only after its replacement is in. ⚠ **Constructed,
+  not captured:** the album DTOs (`CreatedAlbum`, `BulkId`); the author's use showed them working.
+- **Review fixes:** a re-published photo goes back to its own file (reserved before naming, two of one name shared a
+  file); a file changed by hand is left; a cancel records what it wrote; a rescue takes a free name; a new destination
+  starts every photo New; a new album is kept when its add fails; a catalog write re-derives the view at most every 2 s.
+- **Batch description** (asked for in use): with several photos selected the menu's Information… becomes **Edit
+  description of N photos…** — a field shared or "Mixed", Save writing only the fields typed in to every file and its
+  sidecar (`description::BatchDraft`, `commit_many`). No undo, as the single-photo dialog.
+- **Found at merge:** `a_cancelled_publish_records_what_it_wrote` raced on the merged main every time — both photos
+  landed between two polls, so "Publishing 1 of 2" was never seen. Its second photo's decode is now held
+  (`publish_flow::tests::hold`), CLAUDE.md's held-job rule.
+- **Found in use, open (next):** "Upload date" does not move an upload to the end of Immich's timeline — the exported
+  file carries the capture date as `DateTimeOriginal`, which Immich prefers over `fileCreatedAt`.
+- **Deferred minors:** the misplaced `map_ureq` doc comment in `immich/src/lib.rs`; `finish_album` can undo a rename made
+  mid-run; an unmounted destination reads as Gone; a first Immich publish where every upload fails creates an empty
+  album; a member leaving mid-run can leave an orphan row; whether library paste/sync moves `change_count` is
+  unverified; the mtime is whole seconds; the view's derivation reads every member on the UI thread (throttled, not
+  removed); `publish_flow.rs` is past 600 lines.
+
 ### 2026-10-29 — M10.18c: people tagging (branch `m10.18c-people`, merged 2026-10-29)
 
 ✅ **Confirmed by the author ("works, merge and delete")**, after trying it on the Mac.
