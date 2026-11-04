@@ -193,6 +193,28 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-04 — M10.18e: print (branch `m10.18e-print`, merged 2026-11-04)
+
+✅ **Confirmed by the author for Save PDF ("save to pdf works … merge and delete")** — ⚠ **sending to a printer is
+UNSEEN**: the author has no printer and this Linux machine has no CUPS, so `lp` is proven only against a stand-in.
+The author skipped the questions ("just start"); every choice is in the spec as *my call*.
+
+- **File → Print… ⌘P**: a dialog on the selection (or the open photo) — a live page preview with Previous / Next,
+  **Single** (Fit · Fill) or **Contact sheet** (columns × rows, gap, file names), Rotate to fit, paper (A3–A5,
+  Letter, 4×6 / 5×7 / 8×10 in) and orientation, one margin, 150–360 PPI, print sharpening Off–High, and the
+  destination: a PDF file, or a printer `lpstat -e` lists (with copies). Remembered in `Settings.print`.
+- ⚠⚠ **A page is the export's render, never a second one**: each photo goes through `ExportWorker` into a staging
+  folder (cache dir, deleted after) at its printed size × PPI — Fill through the new `FitMode::Cover`/`CoverEither`,
+  never in the export dialog's `ALL` — and `print::pdf` embeds those JPEGs AS IS (`/DCTDecode`, an `ICCBased` sRGB
+  profile, a Fill's crop a clipping path). The PDF is hand-written (no crate); captions are Helvetica/WinAnsi, `?`
+  for anything else. Checked with poppler's `pdfinfo`/`pdftoppm` (A4 595.28 × 841.89 pt, turned photos, `é`).
+- Code: `rustroom_app::print::{layout, pdf, printer, job}` (no egui), `print_flow.rs`, `modals/print.rs`.
+- Not done, by design: Picture Package / Custom layouts, printer ICC profiles and soft-proofing (M10.13's
+  ground), driver settings beyond paper and copies, Windows printing (M11.2 — a PDF works there).
+- 26 tests; sabotaged: Cover's max→min, rotation off, xref offsets +1, the staging folder kept, the footer
+  always "Save PDF…" — each failed its test. ⚠ The shell's `pump_print` call has no test of its own (tests pump
+  directly).
+
 ### 2026-11-03 — Export: an upload's chosen date in the file (branch `export-upload-date`, merged 2026-11-03)
 
 ✅ **Confirmed by the author ("okay, that's working now, merge and delete the branches")**, on the Mac.

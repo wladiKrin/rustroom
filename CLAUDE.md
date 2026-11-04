@@ -170,10 +170,10 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 212 sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-11-03)
+### State (2026-11-04)
 
-**4585 tests on Linux** (macOS last counted 4274 before M10.17b; 31 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
-gate green on **`main`** (2026-11-03, M10.18d merged). ⚠ On this Linux machine `gpu_pipeline`'s suite can stall
+**4611 tests on Linux** (macOS last counted 4274 before M10.17b; 31 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
+gate green on **`main`** (2026-11-04, M10.18e merged). ⚠ On this Linux machine `gpu_pipeline`'s suite can stall
 inside a full run (alone it passes in 4 s) and `sources::reindex_tests` can fail to exit — both pre-existing
 (`grep -n 'Pre-existing, not chased' docs/JOURNAL.md`); run the remaining test binaries directly when it happens. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
@@ -234,7 +234,7 @@ that had grown to ~170 lines by appending.)
   2026-09-29 — start from `docs/BACKLOG.md`'s reasons table. ⚠ The server is a **Tailscale Funnel**: a stopped
   Tailscale on the Mac is never the cause of an Immich error.
 
-**Phase 10 so far — M10.6 to M10.15, M10.16a, b, c1–c3 and d, M10.17a–b, M10.18a–d and M10.19c–d, merged 2026-09-29 – 11-03, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`; what stays open inside M10.12–14 is in the table below):
+**Phase 10 so far — M10.6 to M10.15, M10.16a, b, c1–c3 and d, M10.17a–b, M10.18a–e and M10.19c–d, merged 2026-09-29 – 11-04, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`; what stays open inside M10.12–14 is in the table below):
 
 | Id | What | The thing to remember |
 |---|---|---|
@@ -261,13 +261,14 @@ that had grown to ~170 lines by appending.)
 | M10.18b | GPS and a map: Library → **Map** — clusters over OpenStreetMap tiles (our own layer; Settings → Behaviour's tile server), a strip of a cluster's photos or of those with no location, a drop or the location field (coordinates, or Nominatim on Enter) places the selection, Remove location, right-click menus, the map fits a new source | ⚠⚠ locations live in the CATALOG only (`photo_location`, v15: `hand` > `file` > `server`), never a file or a sidecar; a startup pass and Reindex read files' GPS; the X-T4 has no GPS of its own (the phone app tags it); nothing per frame grows with the catalog — `visible_rev`, the throttled `refresh_pins`, a virtual strip |
 | M10.18c | People: Library → **People** beside Grid and Map — "Who is this?" groups of unnamed faces (YuNet finds, SFace tells apart, in the background), Immich's people from the server (a click opens all their server photos), move a face (drag, Name as…, Not in this group), Filter → People / ⌘-click (everyone ticked must be in the photo), hide views in Settings | ⚠⚠ names live in Rustroom ONLY, never Immich or a file; faces in catalog v16–v17 (`faces`, `faces_read` in `PER_FILE_TABLES`); grouping only SUGGESTS, off the UI thread; ⚠⚠ every new `Library` takes `library_state::fresh_rev()` (all at 0 left crops blank); the Immich people DTOs are constructed, not captured |
 | M10.18d | Publish services: the rail's section, a folder or an Immich album per service, + / − the selection, a band above the view's grid (Publish N, the counts), a dot New / a ring Modified / Removed dimmed; plus **Edit description of N photos…** | catalog v18 keyed on `photos.id`; the fingerprint is pinned (`publish_state`); Immich: an album created, assets added and taken out — ⛔ never an asset deleted; the album DTOs are constructed, not captured |
+| M10.18e | Print: File → Print… ⌘P — a page preview, Single (Fit · Fill) or a contact sheet, paper, margin, PPI and print sharpening, saved as a PDF or sent to a CUPS printer (`lpstat` / `lp`) | a page is the EXPORT's render (`ExportWorker` into a staging folder, Fill via `FitMode::Cover`, never in the export dialog); the PDF is hand-written and embeds those JPEGs as is (`print::pdf`); ⚠ printing to a printer is UNSEEN — no printer, no CUPS here |
 | M10.19d | Retouch as two tasks: **Paint** (one brush, Remove · Heal · Clone · Eye, for NEW retouches only) · **Find** (People · Dust, found and reviewed alike: On the photo **Pick · Add more**, Everyone, Remove N, Cancel); one **Retouches** list of every kind, a picked row selecting it alone with its settings under the list | the photo's gestures follow `RetouchState.task` — in Find only `find_overlay`, never a Paint overlay; the list is `retouch_list::rows`; a patch Find dust made carries `Spot.dust`; the dust view's one writer is `pump_dust`; a look landing after Cancel or Remove N is dropped (people and dust) |
 
 ### ▶ Next action — Phase 10, top down
 
-✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1–c3, d, M10.17a–b, M10.18a–d, M10.19c–d** (table above); ⛔ M10.16c4 declined.
+✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1–c3, d, M10.17a–b, M10.18a–e, M10.19c–d** (table above); ⛔ M10.16c4 declined.
 
-**▶ NOW: M10.18e print** — the next open item. ✅ An upload's chosen date in the file merged 2026-11-03, confirmed by the author (`grep -n 'upload.s chosen date' docs/JOURNAL.md`).
+**▶ NOW: M10.13d camera-matching colour** — the first open item not parked, top down (then M10.19a HEIC, M10.19b Move to folder for Immich photos); ask the author which first. ✅ M10.18e print merged 2026-11-04, Save PDF confirmed by the author, a printer unseen (`grep -n 'M10.18e' docs/JOURNAL.md`). ✅ An upload's chosen date in the file merged 2026-11-03, confirmed by the author (`grep -n 'upload.s chosen date' docs/JOURNAL.md`).
 ✅ M10.18d publish services merged 2026-11-03 with the batch description dialog, confirmed by the author ("okay that works").
 ✅ M10.18a tethering merged 2026-10-29, confirmed by the author with his X-T4 ("works, merge and delete";
 `grep -n 'M10.18a' docs/JOURNAL.md`). ✅ M10.18c people tagging merged 2026-10-29, confirmed by the author
@@ -294,7 +295,6 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | **M10.12** the mask model | c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · d camera-matching colour out of the box (P-22), **with b's `ProfileLookTable` and c's per-photo profile folded in** (re-scoped 2026-10-12: neither changes a photo until d brings such a profile; b's `CameraCalibration` ⛔ withdrawn — a DNG-file tag, never in a profile) |
 | **M10.14** performance & verification | f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h ⏸ the reference photo on the GPU (parked 2026-10-13 until a need shows — 1 of 74 photos; 111–125 ms at 3200, numbers in the backlog) |
-| **M10.18** new modules | e print |
 | **M10.19** found in use (added 2026-10-01) | a HEIC/HEIF photos — libraw cannot read them, so they never appear; needs a decoder · b Move to folder: download Immich assets first, then move (today skipped and counted) (c, d ✅ above) |
 
 **Phase 11, last:** M11.2 Windows + the Linux GUI (first run and confirmed 2026-10-27 on Arch/X11; still unchecked: Wayland,
