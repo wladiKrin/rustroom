@@ -203,6 +203,7 @@ pub fn for_test() -> RustroomApp {
         export_draft: ExportOptions::default(),
         exporter: None,
         publish: Default::default(),
+        print: Default::default(),
         import: None,
         hdr: Default::default(),
         merges: Default::default(),

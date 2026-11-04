@@ -42,6 +42,7 @@ pub mod import;
 pub mod info;
 pub mod pano_merge;
 pub mod presets;
+pub mod print;
 mod publish;
 pub mod rename;
 pub mod rule_edit;
@@ -151,6 +152,8 @@ pub enum Modal {
     DescribeMany {
         draft: rustroom_app::description::BatchDraft,
     },
+    /// File → Print… (M10.18e) — see `print`. Boxed: the photo list makes it the largest variant.
+    Print(Box<print::PrintDraft>),
     /// Confirming that folders are removed from the catalog — one from its ×, or every folder marked
     /// in the rail (M10.19c). `folders` and `photos` count everything beneath them, each once.
     ///
@@ -274,6 +277,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         ConfirmMergeKeyword,
         PhotoInfo,
         DescribeMany,
+        Print,
         EditRule,
         Settings,
         Shortcuts,
@@ -308,6 +312,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::ConfirmMergeKeyword { .. } => Which::ConfirmMergeKeyword,
         Modal::PhotoInfo { .. } => Which::PhotoInfo,
         Modal::DescribeMany { .. } => Which::DescribeMany,
+        Modal::Print(_) => Which::Print,
         Modal::EditRule { .. } => Which::EditRule,
         Modal::Settings => Which::Settings,
         Modal::KeyboardShortcuts => Which::Shortcuts,
@@ -344,6 +349,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::ConfirmMergeKeyword => confirm_merge_keyword(app, ctx),
         Which::PhotoInfo => info::show(app, ctx),
         Which::DescribeMany => describe_many::show(app, ctx),
+        Which::Print => print::show(app, ctx),
         Which::EditRule => rule_edit::show(app, ctx),
         Which::Settings => settings::show(app, ctx),
         Which::Shortcuts => shortcuts(app, ctx),

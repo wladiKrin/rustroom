@@ -24,6 +24,11 @@ pub enum FitMode {
     ShortEdge,
     Megapixels,
     Percentage,
+    /// Cover a box `width` wide and `height` high, as given — a print's Fill (M10.18e). ⚠ Not in
+    /// [`Self::ALL`]: an export has no use for a size that overflows its box.
+    Cover,
+    /// Cover a box either way round — a print's Fill with Rotate to fit.
+    CoverEither,
 }
 
 impl FitMode {
@@ -47,6 +52,8 @@ impl FitMode {
             FitMode::ShortEdge => "Short edge",
             FitMode::Megapixels => "Megapixels",
             FitMode::Percentage => "Percentage",
+            FitMode::Cover => "Cover",
+            FitMode::CoverEither => "Cover either way",
         }
     }
 
@@ -54,7 +61,12 @@ impl FitMode {
     pub fn uses_length(self) -> bool {
         matches!(
             self,
-            FitMode::WidthHeight | FitMode::Dimensions | FitMode::LongEdge | FitMode::ShortEdge
+            FitMode::WidthHeight
+                | FitMode::Dimensions
+                | FitMode::LongEdge
+                | FitMode::ShortEdge
+                | FitMode::Cover
+                | FitMode::CoverEither
         )
     }
 }
@@ -202,6 +214,11 @@ impl OutputSize {
             FitMode::ShortEdge => px(self.short_edge) / short,
             FitMode::Megapixels => (f64::from(self.megapixels) * 1e6 / (w * h)).sqrt(),
             FitMode::Percentage => f64::from(self.percent) / 100.0,
+            FitMode::Cover => (px(self.width) / w).max(px(self.height) / h),
+            FitMode::CoverEither => {
+                let (a, b) = (px(self.width), px(self.height));
+                (a.max(b) / long).max(a.min(b) / short)
+            }
         };
         let asked = if asked.is_finite() && asked > 0.0 {
             asked
@@ -281,6 +298,50 @@ mod tests {
 
     fn dims(p: SizePlan) -> (usize, usize) {
         (p.width, p.height)
+    }
+
+    fn px_box(fit: FitMode, w: f32, h: f32) -> OutputSize {
+        OutputSize {
+            fit,
+            unit: Px,
+            width: w,
+            height: h,
+            dont_enlarge: false,
+            ..OutputSize::default()
+        }
+    }
+
+    #[test]
+    fn cover_fills_the_box_and_overflows_one_side() {
+        assert_eq!(
+            dims(px_box(Cover, 1000.0, 1000.0).plan(3000, 2000)),
+            (1500, 1000)
+        );
+        // A box wider than the photo: the width sets it, the height overflows.
+        assert_eq!(
+            dims(px_box(Cover, 1500.0, 500.0).plan(3000, 2000)),
+            (1500, 1000)
+        );
+    }
+
+    #[test]
+    fn cover_either_turns_the_box_to_the_photo() {
+        // A portrait into a landscape box covers it turned: 1000 × 1500, never 1500 × 2250.
+        assert_eq!(
+            dims(px_box(CoverEither, 1500.0, 1000.0).plan(2000, 3000)),
+            (1000, 1500)
+        );
+        assert_eq!(
+            dims(px_box(Cover, 1500.0, 1000.0).plan(2000, 3000)),
+            (1500, 2250)
+        );
+    }
+
+    #[test]
+    fn cover_is_not_offered_in_the_export_dialog() {
+        assert!(!FitMode::ALL.contains(&Cover));
+        assert!(!FitMode::ALL.contains(&CoverEither));
+        assert!(Cover.uses_length() && CoverEither.uses_length());
     }
 
     #[test]

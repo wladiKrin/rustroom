@@ -20,6 +20,7 @@ pub fn describe(c: Command) -> String {
         C::Shoot => "Fires the tethered camera's shutter",
         C::StopTether => "Ends the tethered session and leaves the camera's card as it is",
         C::Export => "Exports the selected photos with their edits",
+        C::Print => "Puts the selected photos on pages, saved as a PDF or sent to a printer",
         C::BuildPreviews => "Renders full-size previews of the selected photos ahead of time",
         C::Settings => "Opens the settings",
         C::Undo => "Undoes the last change",
