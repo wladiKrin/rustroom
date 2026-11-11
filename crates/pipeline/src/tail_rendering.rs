@@ -36,6 +36,10 @@ pub struct TailRendering<'a> {
     /// preset naming a `.cube` that is not on this machine must render *without the look*, not
     /// without a rendering — see `a_look_with_no_table_leaves_the_camera_rendering_alone`.
     pub look: Option<&'a std::sync::Arc<lut::Cube>>,
+    /// The look learned for this photo's film simulation (M10.13d), applied only under
+    /// `Rendering::CameraMatch` — after the camera rendering, before the creative look. `None` renders
+    /// as `Rendering::Camera`.
+    pub camera_look: Option<&'a std::sync::Arc<lut::Cube>>,
 }
 
 impl TailRendering<'_> {
@@ -124,6 +128,52 @@ mod tests {
             o,
             r + 1,
             "something got between the rendering and the transform: {names:?}"
+        );
+    }
+
+    /// M10.13d: under Camera matching the learned look runs after the rendering and before the user's look;
+    /// under Camera, or with none learned, it does not run at all.
+    #[test]
+    fn the_camera_look_follows_the_rendering_and_only_under_camera_matching() {
+        let cube = std::sync::Arc::new(
+            lut::Cube::parse(
+                "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n",
+            )
+            .unwrap(),
+        );
+        let names = |r: edit_model::Rendering, camera: bool| {
+            let edits = Edits {
+                rendering: Some(r),
+                look: edit_model::Look {
+                    file: Some("mine.cube".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            build_pipeline(
+                &edits,
+                RenderScale::new(1.0),
+                TailRendering {
+                    look: Some(&cube),
+                    camera_look: camera.then_some(&cube),
+                    ..TailRendering::default()
+                },
+            )
+            .stage_names()
+        };
+        let m = names(edit_model::Rendering::CameraMatch, true);
+        let at = |n: &str| {
+            m.iter()
+                .position(|x| *x == n)
+                .unwrap_or_else(|| panic!("{n}: {m:?}"))
+        };
+        assert_eq!(at("camera_look"), at("display_rendering") + 1, "{m:?}");
+        assert_eq!(at("creative_look"), at("camera_look") + 1, "{m:?}");
+        assert!(!names(edit_model::Rendering::Camera, true).contains(&"camera_look"));
+        // None learned for this film: exactly the Camera rendering's tail.
+        assert_eq!(
+            names(edit_model::Rendering::CameraMatch, false),
+            names(edit_model::Rendering::Camera, false)
         );
     }
 

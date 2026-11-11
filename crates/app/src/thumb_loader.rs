@@ -313,6 +313,7 @@ fn render_buf(
             curve: None,
             baseline_ev: None,
             look,
+            camera_look: None, // M10.13d: wired in task 5
         },
     )
     .run(buf);

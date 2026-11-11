@@ -107,6 +107,17 @@ pub enum Rendering {
     /// The camera's rendering: the profile's tone curve when it supplies a usable one, else the
     /// built-in filmic curve.
     Camera,
+    /// **Camera matching** (M10.13d): [`Rendering::Camera`], then the look Rustroom learned for THIS
+    /// photo's film simulation from the camera's own JPEGs. ⚠ Resolved per photo by the app
+    /// (`TailRendering::camera_look`); a photo with none learned renders exactly as `Camera`.
+    CameraMatch,
+}
+
+impl Rendering {
+    /// Whether the camera rendering runs — `Camera` and `CameraMatch` alike.
+    pub fn is_camera(self) -> bool {
+        matches!(self, Rendering::Camera | Rendering::CameraMatch)
+    }
 }
 
 /// The colour space a `.cube` was authored against.

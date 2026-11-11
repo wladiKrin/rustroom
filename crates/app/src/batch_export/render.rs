@@ -275,6 +275,7 @@ pub fn export_one(
             curve: source.curve.as_deref(),
             baseline_ev: source.baseline_ev,
             look,
+            camera_look: None, // M10.13d: wired in task 5
         },
     );
     let rendered = super::sizing::fit(tail.run(img), &sizing.plan, render_space);

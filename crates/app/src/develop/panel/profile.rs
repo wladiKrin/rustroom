@@ -23,7 +23,7 @@ pub fn rendering(
     looks: &LooksState,
     ed: &mut Edited,
 ) {
-    let mut rendered = edits.applied_rendering() == edit_model::Rendering::Camera;
+    let mut rendered = edits.applied_rendering().is_camera();
     if ui
         .checkbox(&mut rendered, "Camera rendering")
         .hover(

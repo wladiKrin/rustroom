@@ -58,6 +58,8 @@ fn decode(v: f32, space: LutSpace) -> f32 {
 
 /// A 3-D LUT applied as a creative look.
 pub struct CreativeLookStage {
+    /// `creative_look`, or `camera_look` for the learned camera look (M10.13d) — the GPU swap is by name.
+    name: &'static str,
     cube: Arc<Cube>,
     space: LutSpace,
     /// `strength / 100`, precomputed. 1.0 is the LUT exactly as authored.
@@ -67,9 +69,19 @@ pub struct CreativeLookStage {
 impl CreativeLookStage {
     pub fn new(cube: Arc<Cube>, space: LutSpace, strength: f32) -> Self {
         Self {
+            name: "creative_look",
             cube,
             space,
             blend: (strength / 100.0).clamp(0.0, 1.0),
+        }
+    }
+
+    /// The camera look learned for a photo's film simulation (M10.13d): an sRGB display table at full
+    /// strength, under its own name.
+    pub fn camera(cube: Arc<Cube>) -> Self {
+        Self {
+            name: "camera_look",
+            ..Self::new(cube, LutSpace::SrgbDisplay, 100.0)
         }
     }
 
@@ -129,7 +141,7 @@ impl crate::per_pixel::PerPixel for CreativeLookStage {
 
 impl PipelineStage for CreativeLookStage {
     fn name(&self) -> &'static str {
-        "creative_look"
+        self.name
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {

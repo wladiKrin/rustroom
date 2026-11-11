@@ -177,6 +177,7 @@ impl RenderEngine {
                     curve: profile.curve.as_deref(),
                     baseline_ev: profile.baseline_ev,
                     look,
+                    camera_look: None, // M10.13d: wired in task 5
                 };
                 // ⚠ The live frame may hand off (no final checkpoint); the settle pass below may not.
                 let (frame, ran) = render_cached_with(
