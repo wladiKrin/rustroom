@@ -36,6 +36,12 @@ impl<T: Clone + PartialEq> History<T> {
         true
     }
 
+    /// Rewrite the current step in place, recording nothing — for a change that is not an edit (M10.12c's
+    /// migration of old marks into decode space, which renders the same picture). Undo and redo are untouched.
+    pub fn replace_current(&mut self, value: T) {
+        self.current = value;
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }

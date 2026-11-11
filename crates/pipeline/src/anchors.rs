@@ -250,6 +250,25 @@ pub fn resolve<'a>(edits: &'a Edits, a: &Anchoring) -> Cow<'a, Edits> {
     Cow::Owned(e)
 }
 
+/// A spot placed or moved in its stage's space, stored in decode space — what every gesture writes.
+pub fn anchor_spot(a: &Anchoring, s: edit_model::Spot) -> edit_model::Spot {
+    edit_model::Spot {
+        centre: a.post_lens_to_decode(s.centre),
+        source: a.post_lens_to_decode(s.source),
+        decode: true,
+        ..s
+    }
+}
+
+/// An eye placed or moved in its stage's space, stored in decode space.
+pub fn anchor_eye(a: &Anchoring, e: edit_model::Eye) -> edit_model::Eye {
+    edit_model::Eye {
+        centre: a.post_lens_to_decode(e.centre),
+        decode: true,
+        ..e
+    }
+}
+
 /// [`resolve`] for a renderer holding `lens` and a decode of `decode_w × decode_h`: builds the [`Anchoring`] only when
 /// some mark needs it.
 pub fn resolve_for<'a>(
