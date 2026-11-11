@@ -11,6 +11,10 @@ image = { workspace = true }
 thiserror = { workspace = true }
 kamadak-exif = "0.6.1"
 chrono = "0.4.45"
+# M10.19a: HEIC/HEIF. ⚠ A SYSTEM build dependency, like libgphoto2 for `tether`: `pacman -S libheif`,
+# `brew install libheif`, CI's `libheif-dev`. Bound at libheif 1.17 — Ubuntu 24.04's.
+libheif-rs = { version = "3", default-features = false, features = ["v1_17"] }
+lcms2 = { workspace = true }
 
 [dev-dependencies]
 # M10.7c: every test directory comes from here — unique per test and per run, and cleaned up.

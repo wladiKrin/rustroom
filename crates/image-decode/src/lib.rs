@@ -1,10 +1,14 @@
-//! Decode non-RAW images (JPEG/PNG/TIFF) into the develop pipeline's working space.
+//! Decode non-RAW images (JPEG/PNG/TIFF, and HEIC/HEIF through libheif — [`heif`]) into the develop
+//! pipeline's working space.
 //!
-//! An image file is display-referred sRGB; we decode it, normalize to f32 (preserving
+//! A JPEG, PNG or TIFF is display-referred sRGB by assumption; we decode it, normalize to f32 (preserving
 //! 8- or 16-bit precision via `to_rgb32f`), linearize with the sRGB EOTF, and convert into
 //! the pipeline's linear ProPhoto working space so the
 //! result lives in the same linear-light space as a decoded RAW.
 
+pub mod heif;
+#[cfg(test)]
+mod heif_tests;
 mod quick_look;
 pub use quick_look::{quick_look, QuickLook};
 
@@ -17,6 +21,8 @@ use std::path::Path;
 pub enum ImageDecodeError {
     #[error("decoding image: {0}")]
     Decode(#[from] image::ImageError),
+    #[error("decoding HEIF: {0}")]
+    Heif(String),
 }
 
 /// A decoded non-RAW image in the linear working space.
@@ -37,6 +43,11 @@ pub struct DecodedImage {
 /// An unreadable or absent orientation tag is treated as "no transform" rather than an
 /// error: a missing tag is the overwhelmingly common case, not a failure.
 fn open_oriented(path: &Path) -> Result<DynamicImage, ImageDecodeError> {
+    // ⚠ A HEIF is shown converted to sRGB from its own colour (an iPhone's is Display P3), and libheif has
+    // already turned it upright.
+    if heif::is_heif(path) {
+        return heif_for_display(path);
+    }
     let mut decoder = ImageReader::open(path)
         .map_err(image::ImageError::IoError)?
         .with_guessed_format()
@@ -56,6 +67,15 @@ fn open_oriented(path: &Path) -> Result<DynamicImage, ImageDecodeError> {
 /// agree with the grid — the sideways-portrait bug was visible in the browser but was never
 /// confined to it.
 pub fn decode(path: &Path) -> Result<DecodedImage, ImageDecodeError> {
+    if heif::is_heif(path) {
+        let p = heif::decode(path)?;
+        let (w, h) = (p.width, p.height);
+        return Ok(DecodedImage {
+            image: ImageBuf::from_vec(w, h, heif::to_linear_prophoto(&p)),
+            width: w,
+            height: h,
+        });
+    }
     let rgb32f = open_oriented(path)?.to_rgb32f(); // samples in [0,1], sRGB-encoded
     let (w, h) = (rgb32f.width() as usize, rgb32f.height() as usize);
     let data: Vec<f32> = rgb32f
@@ -74,6 +94,24 @@ pub fn decode(path: &Path) -> Result<DecodedImage, ImageDecodeError> {
         width: w,
         height: h,
     })
+}
+
+/// A HEIF as 8-bit sRGB for the grid and the instant preview — its own colour converted, out-of-gamut
+/// colours clipped.
+fn heif_for_display(path: &Path) -> Result<DynamicImage, ImageDecodeError> {
+    let p = heif::decode(path)?;
+    let bytes: Vec<u8> = heif::to_linear_prophoto(&p)
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .flat_map(|c| color::prophoto_to_srgb(*c))
+        .map(|v| (color::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8)
+        .collect();
+    image::RgbImage::from_raw(p.width as u32, p.height as u32, bytes)
+        .map(DynamicImage::ImageRgb8)
+        .ok_or_else(|| {
+            ImageDecodeError::Heif("the picture's size does not match its pixels".into())
+        })
 }
 
 /// Make a display thumbnail (decode + downscale to <=512 px). The file is its own preview.
