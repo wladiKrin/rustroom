@@ -563,6 +563,7 @@ fn main() {
                         curve: None,
                         baseline_ev: None,
                         scene_referred: true,
+                        camera_look: None,
                     },
                     &edits,
                     &dest,

@@ -31,6 +31,10 @@ pub struct SettingsDraft {
     write_xmp: bool,
     auto_advance: bool,
     camera_rendering: bool,
+    /// M10.13d: learn the camera's colour and match new photos to it.
+    camera_match: bool,
+    /// M10.13d: Relearn was pressed — the learned looks are forgotten and learned again on OK.
+    relearn: bool,
     auto_lens: bool,
     tier: raw_decode::Demosaic,
     gpu_tail: bool,
@@ -110,6 +114,8 @@ impl SettingsDraft {
             write_xmp: s.write_xmp,
             auto_advance: s.auto_advance,
             camera_rendering: s.default_rendering == edit_model::Rendering::Camera,
+            camera_match: s.camera_match,
+            relearn: false,
             auto_lens: s.auto_lens_correction,
             tier: s.view_demosaic,
             gpu_tail: s.gpu_tail,
@@ -176,6 +182,18 @@ impl SettingsDraft {
         if want_rendering != app.settings.default_rendering {
             app.settings.default_rendering = want_rendering;
             plain = true;
+        }
+        if self.camera_match != app.settings.camera_match {
+            app.settings.camera_match = self.camera_match;
+            plain = true;
+            if self.camera_match {
+                app.start_camera_learning();
+            } else {
+                app.cancel_camera_learning();
+            }
+        }
+        if self.relearn {
+            app.relearn_camera_looks();
         }
         if self.auto_lens != app.settings.auto_lens_correction {
             app.settings.auto_lens_correction = self.auto_lens;
@@ -421,6 +439,21 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         "Open new photos with the camera rendering",
                     )
                     .hover("Opens unedited RAWs with the camera's own tone and colour");
+                    ui.horizontal(|ui| {
+                        ui.add_enabled(
+                            d.camera_rendering,
+                            egui::Checkbox::new(&mut d.camera_match, "Match the camera's colour"),
+                        )
+                        .hover("Learns each film simulation's look from the camera's own JPEGs and opens new photos with it");
+                        let label = if d.relearn { "Relearns on OK" } else { "Relearn" };
+                        if ui
+                            .add_enabled(d.camera_rendering && d.camera_match, egui::Button::new(label))
+                            .hover("Forgets the learned looks and learns them again from your photos")
+                            .clicked()
+                        {
+                            d.relearn = true;
+                        }
+                    });
                     ui.checkbox(&mut d.auto_lens, "Apply lens corrections to new photos")
                         .hover("Applies the lens profile's corrections to unedited RAWs");
                     ui.checkbox(&mut d.write_xmp, "Write XMP sidecars beside RAW files")

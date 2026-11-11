@@ -427,6 +427,8 @@ pub(crate) struct RustroomApp {
     pub(crate) immich_download_total: usize,
     /// A Move to folder waiting for its Immich photos to download (M10.19b) — see `move_flow`.
     pub(crate) pending_move: Option<crate::move_flow::PendingMove>,
+    /// Learning the camera's colour (M10.13d) — see `camera_look_flow`.
+    pub(crate) camera_learning: crate::camera_look_flow::CameraLearning,
     /// The one catalog. `None` when it could not be opened.
     ///
     /// ⚠⚠ **Invisible by design.** Nothing in the UI mentions it; it exists so that collections

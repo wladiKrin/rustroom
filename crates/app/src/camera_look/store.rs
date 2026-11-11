@@ -123,9 +123,7 @@ impl Store {
     /// ⚠ Called while a photo is decoded, never per frame; the cache is keyed by path and modification time,
     /// so a relearned look is read again.
     pub fn cube(&self, body: &str, film: &str) -> Option<Arc<pipeline::lut::Cube>> {
-        static CACHE: OnceLock<
-            Mutex<HashMap<PathBuf, (std::time::SystemTime, Arc<pipeline::lut::Cube>)>>,
-        > = OnceLock::new();
+        static CACHE: OnceLock<Mutex<HashMap<PathBuf, Cached>>> = OnceLock::new();
         let path = self.dir.join(self.learned(body, film)?.file);
         let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok()?;
         let cache = CACHE.get_or_init(Default::default);
@@ -140,6 +138,9 @@ impl Store {
         Some(cube)
     }
 }
+
+/// A parsed table and the modification time it was read at.
+type Cached = (std::time::SystemTime, Arc<pipeline::lut::Cube>);
 
 fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("part");

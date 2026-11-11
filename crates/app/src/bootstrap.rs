@@ -265,6 +265,7 @@ impl RustroomApp {
             immich_download_pending: Default::default(),
             immich_download_total: 0,
             pending_move: None,
+            camera_learning: Default::default(),
             settings,
             catalog,
             modal: Modal::None,
@@ -295,6 +296,8 @@ impl RustroomApp {
         }
         // Last, so no other startup message covers it.
         app.report_unread_keys();
+        // M10.13d: the camera's colour, learned in the background from the catalog's Fuji RAFs.
+        app.start_camera_learning();
         app
     }
 }

@@ -240,6 +240,10 @@ pub struct Settings {
     /// ⚠ Consequence, stated rather than discovered: the GUI and the CLI disagree on a fresh
     /// photo — exactly as they already do about lens correction.
     pub default_rendering: edit_model::Rendering,
+    /// Learn each film simulation's look from the camera's own JPEGs, and open a fresh RAW with it — Camera
+    /// matching (M10.13d). ⚠ A separate switch rather than a third `default_rendering`, so a settings file
+    /// written before it — which says `Camera` — gets it too.
+    pub camera_match: bool,
     /// How the Library and the filmstrip order a folder.
     ///
     /// ⚠ Applied to the **scan**, not to `entries`, which is what keeps a file's copies adjacent
@@ -555,6 +559,7 @@ impl Default for Settings {
             stack_drag: StackDrag::default(),
             auto_lens_correction: true,
             default_rendering: edit_model::Rendering::Camera,
+            camera_match: true,
             library_sort: catalog::SortOrder::default(),
             export_concurrency: DEFAULT_EXPORT_WIDTH,
             library_cell: DEFAULT_CELL,

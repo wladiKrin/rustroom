@@ -316,7 +316,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     out.show_body(ui, |ui| {
                         camera_profile_row(app, ui);
                         if let Some(s) = &mut app.session {
-                            profile::rendering(ui, &mut s.edits, &app.looks, &mut ed);
+                            let camera_look = s.engine.camera_look().cloned();
+                            profile::rendering(
+                                ui,
+                                &mut s.edits,
+                                &app.looks,
+                                camera_look.as_ref(),
+                                &mut ed,
+                            );
                         }
                     });
                 }

@@ -21,6 +21,8 @@ pub fn rendering(
     ui: &mut egui::Ui,
     edits: &mut edit_model::Edits,
     looks: &LooksState,
+    // What Camera matching applies to this photo (M10.13d); `None` when the file names no film simulation.
+    camera_look: Option<&rustroom_app::camera_look::Resolved>,
     ed: &mut Edited,
 ) {
     let mut rendered = edits.applied_rendering().is_camera();
@@ -42,6 +44,30 @@ pub fn rendering(
         // history entry immediately rather than waiting for a `drag_stopped` that never comes.
         ed.mark_changed();
     }
+    // M10.13d: matching the camera, for a photo that names its film simulation.
+    if let (Some(cl), true) = (camera_look, edits.applied_rendering().is_camera()) {
+        let mut matched = edits.applied_rendering() == edit_model::Rendering::CameraMatch;
+        if ui
+            .checkbox(&mut matched, "Match the camera's colour")
+            .hover("Applies the look learned from the camera's own JPEGs of this film simulation")
+            .changed()
+        {
+            edits.rendering = Some(if matched {
+                edit_model::Rendering::CameraMatch
+            } else {
+                edit_model::Rendering::Camera
+            });
+            ed.mark_changed();
+        }
+        if matched {
+            let line = if cl.cube.is_some() {
+                cl.label.clone()
+            } else {
+                format!("{} — not learned yet", cl.label)
+            };
+            crate::theme::hint(ui, &line);
+        }
+    }
     // ⚠ Directly under the camera-rendering checkbox, because a `Linear` look *replaces* it:
     // the two controls decide one thing between them and must be read together.
     crate::develop::panel::look::section(ui, edits, looks, ed);
@@ -62,7 +88,7 @@ mod tests {
 
         crate::test_ui::click(&ctx, "Camera rendering", |ui| {
             ed = Edited::default();
-            rendering(ui, &mut edits, &Default::default(), &mut ed);
+            rendering(ui, &mut edits, &Default::default(), None, &mut ed);
         });
         assert_eq!(
             edits.rendering,
@@ -73,13 +99,87 @@ mod tests {
 
         crate::test_ui::click(&ctx, "Camera rendering", |ui| {
             ed = Edited::default();
-            rendering(ui, &mut edits, &Default::default(), &mut ed);
+            rendering(ui, &mut edits, &Default::default(), None, &mut ed);
         });
         assert_eq!(
             edits.rendering,
             Some(edit_model::Rendering::None),
             "unticking it did not turn the rendering off"
         );
+    }
+
+    /// M10.13d: under the camera rendering, a photo naming its film simulation can be matched to the camera —
+    /// both ways — and the line says which look applies, or that none is learned yet.
+    #[test]
+    fn matching_the_camera_switches_both_ways_and_names_the_look() {
+        let ctx = crate::test_ui::ctx();
+        let mut edits = edit_model::Edits {
+            rendering: Some(edit_model::Rendering::Camera),
+            ..Default::default()
+        };
+        let unlearned = rustroom_app::camera_look::Resolved {
+            label: "Classic Chrome (X-T4)".into(),
+            cube: None,
+        };
+        let mut ed = Edited::default();
+        let label = "Match the camera's colour";
+        crate::test_ui::click(&ctx, label, |ui| {
+            rendering(
+                ui,
+                &mut edits,
+                &Default::default(),
+                Some(&unlearned),
+                &mut ed,
+            );
+        });
+        assert_eq!(edits.rendering, Some(edit_model::Rendering::CameraMatch));
+        assert!(ed.changed);
+        let shown: Vec<String> = crate::test_ui::nodes(&ctx, |ui| {
+            rendering(
+                ui,
+                &mut edits,
+                &Default::default(),
+                Some(&unlearned),
+                &mut Edited::default(),
+            );
+        })
+        .into_iter()
+        .map(|n| n.label)
+        .collect();
+        assert!(
+            shown
+                .iter()
+                .any(|l| l == "Classic Chrome (X-T4) — not learned yet"),
+            "{shown:?}"
+        );
+        crate::test_ui::click(&ctx, label, |ui| {
+            rendering(
+                ui,
+                &mut edits,
+                &Default::default(),
+                Some(&unlearned),
+                &mut Edited::default(),
+            );
+        });
+        assert_eq!(edits.rendering, Some(edit_model::Rendering::Camera));
+        // A file naming no film simulation offers no matching at all.
+        let none: Vec<String> = crate::test_ui::nodes(&ctx, |ui| {
+            rendering(
+                ui,
+                &mut edits,
+                &Default::default(),
+                None,
+                &mut Edited::default(),
+            );
+        })
+        .into_iter()
+        .map(|n| n.label)
+        .collect();
+        assert!(
+            none.iter().any(|l| l == "Camera rendering"),
+            "the sample: {none:?}"
+        );
+        assert!(!none.iter().any(|l| l == label), "{none:?}");
     }
 
     /// ⚠ The checkbox writes `Some` in both directions. `None` on untick would read as
@@ -95,7 +195,7 @@ mod tests {
         let mut ed = Edited::default();
         crate::test_ui::click(&ctx, "Camera rendering", |ui| {
             ed = Edited::default();
-            rendering(ui, &mut edits, &Default::default(), &mut ed);
+            rendering(ui, &mut edits, &Default::default(), None, &mut ed);
         });
         assert_eq!(edits.rendering, Some(edit_model::Rendering::None));
         assert_ne!(
@@ -124,7 +224,7 @@ mod tests {
         let mut ed = Edited::default();
         crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             ed = Edited::default();
-            rendering(ui, edits, looks, &mut ed);
+            rendering(ui, edits, looks, None, &mut ed);
         })
         .into_iter()
         .map(|(l, _)| l)

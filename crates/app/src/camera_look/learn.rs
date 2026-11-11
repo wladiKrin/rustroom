@@ -80,6 +80,9 @@ pub fn spread(paths: &[&Path], n: usize) -> Vec<PathBuf> {
 /// A rendering of one photo: encoded sRGB samples at `w` × `h`.
 pub type Rendered = (Vec<[f32; 3]>, usize, usize);
 
+/// The camera's own picture of a photo at a size — [`camera_jpeg`], or a test's stand-in.
+pub type Target<'a> = &'a dyn Fn(&Path, usize, usize) -> Option<Vec<[f32; 3]>>;
+
 /// The camera's own JPEG of `path` at `w` × `h`, encoded sRGB samples — the target a look is fitted to.
 pub fn camera_jpeg(path: &Path, w: usize, h: usize) -> Option<Vec<[f32; 3]>> {
     let t = raw_decode::extract_preview(path).ok()?;
@@ -102,7 +105,7 @@ pub fn camera_jpeg(path: &Path, w: usize, h: usize) -> Option<Vec<[f32; 3]>> {
 pub fn learn(
     group: &Group,
     render: &dyn Fn(&Path) -> Option<Rendered>,
-    target: &dyn Fn(&Path, usize, usize) -> Option<Vec<[f32; 3]>>,
+    target: Target<'_>,
     store: &Store,
     now: i64,
 ) -> std::io::Result<Option<Learned>> {
