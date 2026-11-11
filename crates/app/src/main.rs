@@ -35,6 +35,7 @@ use std::time::{Duration, Instant};
 mod ai_flow;
 mod app;
 mod bootstrap;
+mod camera_look_flow;
 mod catalog_ops;
 #[cfg(test)]
 mod catalog_scale;

@@ -110,6 +110,7 @@ pub fn for_test() -> RustroomApp {
         immich_download_pending: Default::default(),
         immich_download_total: 0,
         pending_move: None,
+        camera_learning: Default::default(),
         metadata: rustroom_app::metadata_scanner::MetadataScanner::new(|| {}),
         location_passes: Vec::new(),
         map: crate::map_view::MapView::offline(),

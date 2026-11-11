@@ -362,6 +362,8 @@ fn settings_round_trip_carries_the_export_options() {
         // what proves it round-trips rather than being re-defaulted.
         // Not the default, so the round trip actually carries it.
         default_rendering: edit_model::Rendering::None,
+        // Non-default, so a re-defaulted field cannot pass.
+        camera_match: false,
         auto_lens_correction: false,
         // Non-default so a field re-defaulted on load cannot pass.
         composition_guide: crate::composition_guides::CompositionGuide::Thirds,

@@ -72,7 +72,14 @@ impl Settings {
     /// decided-off is a fact worth a sidecar, and seeding it would write a file for every photo
     /// ever opened under an off preference, where today none is written.
     pub fn initial_rendering(&self) -> Option<edit_model::Rendering> {
-        (self.default_rendering != edit_model::Rendering::None).then_some(self.default_rendering)
+        match self.default_rendering {
+            edit_model::Rendering::None => None,
+            // M10.13d: the camera rendering, matched to the camera when that is switched on.
+            edit_model::Rendering::Camera if self.camera_match => {
+                Some(edit_model::Rendering::CameraMatch)
+            }
+            r => Some(r),
+        }
     }
 
     /// What a **fresh** photo's lens corrections start as — `None`, undecided, when the
@@ -212,8 +219,17 @@ mod tests {
             "a fresh RAW must not open colorimetric-only"
         );
         let fresh = s.initial_edits(None);
-        assert_eq!(fresh.rendering, Some(edit_model::Rendering::Camera));
+        // M10.13d: matched to the camera by default; the camera rendering without it when switched off.
+        assert_eq!(fresh.rendering, Some(edit_model::Rendering::CameraMatch));
         assert!(fresh.applied_lens_correction().is_active(), "and corrected");
+        let plain = Settings {
+            camera_match: false,
+            ..Settings::default()
+        };
+        assert_eq!(
+            plain.initial_edits(None).rendering,
+            Some(edit_model::Rendering::Camera)
+        );
     }
 
     /// ⚠⚠ **THE BUG THIS FUNCTION EXISTS FOR, and it was reported from using the app: the

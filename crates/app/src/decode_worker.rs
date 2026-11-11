@@ -80,6 +80,9 @@ pub struct ProfileParts {
     /// ⚠ `None` means no looks are available — every render then behaves as though the `.cube`
     /// were missing, which is the documented fallback rather than a failure.
     pub looks_dir: Option<std::path::PathBuf>,
+    /// The look Camera matching applies to this photo (M10.13d) — resolved by the decode, which reads the
+    /// file, and carried across the full-resolution handover with the rest of this struct.
+    pub camera_look: Option<crate::camera_look::Resolved>,
 }
 
 /// What a decode reports about a file beyond its pixels.

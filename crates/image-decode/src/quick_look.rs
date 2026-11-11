@@ -32,6 +32,29 @@ const MAX_SEGMENTS: usize = 16;
 /// Capture facts and the EXIF thumbnail of a JPEG or a Fuji RAF, reading only its EXIF block.
 /// `Ok(None)` for any other format, or a JPEG with no EXIF block.
 pub fn quick_look(path: &Path) -> std::io::Result<Option<QuickLook>> {
+    let Some(ex) = exif_of(path)? else {
+        return Ok(None);
+    };
+    Ok(Some(QuickLook {
+        capture: crate::capture_of(&ex),
+        thumb: thumbnail_of(&ex),
+    }))
+}
+
+/// The maker note of a JPEG or a Fuji RAF — its bytes as the camera wrote them, from the EXIF block alone
+/// (M10.13d: a Fuji's names the film simulation). `Ok(None)` for another format or a file without one.
+pub fn maker_note(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+    Ok(exif_of(path)?.and_then(|ex| {
+        let f = ex.get_field(exif::Tag::MakerNote, exif::In::PRIMARY)?;
+        match &f.value {
+            exif::Value::Undefined(bytes, _) => Some(bytes.clone()),
+            _ => None,
+        }
+    }))
+}
+
+/// The parsed EXIF block of a JPEG or a Fuji RAF, reading only that block.
+fn exif_of(path: &Path) -> std::io::Result<Option<exif::Exif>> {
     let mut f = std::fs::File::open(path)?;
     let mut magic = [0u8; 16];
     if f.read(&mut magic)? < 2 {
@@ -50,13 +73,7 @@ pub fn quick_look(path: &Path) -> std::io::Result<Option<QuickLook>> {
     let Some(block) = exif_block(&mut f, jpeg_start)? else {
         return Ok(None);
     };
-    let Ok(ex) = exif::Reader::new().read_raw(block) else {
-        return Ok(None);
-    };
-    Ok(Some(QuickLook {
-        capture: crate::capture_of(&ex),
-        thumb: thumbnail_of(&ex),
-    }))
+    Ok(exif::Reader::new().read_raw(block).ok())
 }
 
 /// The TIFF body of the `APP1 Exif` segment of the JPEG at `start`, reading segment headers only.

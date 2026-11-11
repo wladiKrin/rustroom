@@ -89,6 +89,7 @@ fn main() {
             curve,
             baseline_ev,
             scene_referred: true,
+            camera_look: None,
         },
         &e,
         &out.join("export.png"),

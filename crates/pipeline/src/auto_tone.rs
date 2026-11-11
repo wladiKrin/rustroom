@@ -170,7 +170,7 @@ pub fn median_target_for(rendering: edit_model::Rendering, baseline_ev: Option<f
         // curve, so aiming the scene median at `target / gain` is what lands the **rendered**
         // median where `MEDIAN_TARGET` used to put it. The curve is near-identity around grey,
         // which is what makes that exact rather than approximate.
-        edit_model::Rendering::Camera => {
+        edit_model::Rendering::Camera | edit_model::Rendering::CameraMatch => {
             let gain = baseline_ev
                 .unwrap_or(crate::stages::display_rendering::BASELINE_EV)
                 .exp2();

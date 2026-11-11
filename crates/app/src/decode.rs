@@ -18,7 +18,23 @@ use rustroom_app::decode_worker::{DecodeWorker, LensFacts, ProfileParts, SourceF
 ///
 /// ⚠ **One parse for both**, so the curve and the baseline cannot come from different reads of
 /// the same file.
-fn profile_rendering(profile: &Option<std::path::PathBuf>) -> (Option<Vec<[f32; 2]>>, Option<f32>) {
+/// The look Camera matching applies to this RAW (M10.13d), from the user's learned looks.
+fn camera_look_of(
+    path: &std::path::Path,
+    meta: &raw_decode::RawMetadata,
+) -> Option<rustroom_app::camera_look::Resolved> {
+    let config = dirs::config_dir()?;
+    rustroom_app::camera_look::resolve(
+        path,
+        &meta.make,
+        &meta.model,
+        &rustroom_app::camera_look::store::Store::user_default(&config),
+    )
+}
+
+pub(crate) fn profile_rendering(
+    profile: &Option<std::path::PathBuf>,
+) -> (Option<Vec<[f32; 2]>>, Option<f32>) {
     let Some(p) = profile
         .as_ref()
         .and_then(|p| camera_profile::CameraProfile::from_file(p).ok())
@@ -61,6 +77,7 @@ pub(crate) fn decode_for_edit(
                     // knowing where looks live, and the directory is a session fact rather than
                     // a fact about this file.
                     looks_dir: None,
+                    camera_look: camera_look_of(path, &d.metadata),
                 },
                 scene_referred: true,
             },
@@ -179,6 +196,7 @@ pub(crate) fn decode_full_res(
                 curve: profile_curve,
                 baseline_ev,
                 looks_dir: None,
+                camera_look: camera_look_of(path, &d.metadata),
             },
             scene_referred: true,
         },
@@ -253,6 +271,8 @@ pub(crate) fn decode_for_export(
                 baseline_ev,
                 // ⚠ A RAW decode is scene-referred by construction — `DecodeOptions::linear_scene`.
                 scene_referred: true,
+                // ⚠ The preview's own resolution (M10.13d), or the export differs from what was edited.
+                camera_look: camera_look_of(path, &d.metadata).and_then(|c| c.cube),
             }
         })
         .map_err(|e| e.to_string())
@@ -274,6 +294,7 @@ pub(crate) fn decode_for_export(
                 // been rendered; `export_one` strips the camera rendering for it exactly as
                 // `render_cached` does, so the two paths agree.
                 scene_referred: false,
+                camera_look: None,
             })
             .map_err(|e| e.to_string())
     }

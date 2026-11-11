@@ -56,6 +56,7 @@ pub(crate) fn source(image: ImageBuf) -> ExportSource {
         curve: None,
         baseline_ev: None,
         scene_referred: true,
+        camera_look: None,
     }
 }
 

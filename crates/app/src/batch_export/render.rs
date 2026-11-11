@@ -275,6 +275,7 @@ pub fn export_one(
             curve: source.curve.as_deref(),
             baseline_ev: source.baseline_ev,
             look,
+            camera_look: crate::camera_look::applied(edits, source.camera_look.as_ref()),
         },
     );
     let rendered = super::sizing::fit(tail.run(img), &sizing.plan, render_space);
@@ -373,6 +374,8 @@ pub struct ExportSource {
     /// The photo's cached AI mask maps (M9.13) — `ai_coverage::maps_for`, the preview's own
     /// lookup. A prompt with no map renders as nothing and is reported.
     pub ai: crate::ai_coverage::AiMaps,
+    /// The look Camera matching applies (M10.13d) — the preview's own, from `camera_look::resolve`.
+    pub camera_look: Option<std::sync::Arc<pipeline::lut::Cube>>,
 }
 
 /// What the *render* needs that [`ExportOptions`] deliberately does not carry.
@@ -599,6 +602,7 @@ mod tests {
                 curve,
                 baseline_ev,
                 scene_referred: true,
+                camera_look: None,
             },
             &e,
             &dest,
@@ -671,6 +675,7 @@ mod tests {
                     curve: None,
                     baseline_ev: None,
                     scene_referred,
+                    camera_look: None,
                 },
                 &e,
                 &dest,
@@ -708,6 +713,7 @@ mod tests {
                 curve: None,
                 baseline_ev: None,
                 scene_referred: false,
+                camera_look: None,
             },
             &Edits::default(),
             &dest,
@@ -776,6 +782,7 @@ mod tests {
                     curve: None,
                     baseline_ev: None,
                     scene_referred: true,
+                    camera_look: None,
                 },
                 &e,
                 &dest,
@@ -958,6 +965,7 @@ mod tests {
                     curve: None,
                     baseline_ev: None,
                     scene_referred: true,
+                    camera_look: None,
                 },
                 &lens_on(),
                 &dest,

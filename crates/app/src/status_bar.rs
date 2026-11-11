@@ -247,6 +247,8 @@ fn job_or_status(app: &mut RustroomApp, ui: &mut egui::Ui) {
             app.export_progress.clone(),
             Some(RustroomApp::cancel_export),
         )
+    } else if let Some(line) = app.camera_learning.line() {
+        (line.to_owned(), Some(RustroomApp::cancel_camera_learning))
     } else if let Some(line) = app.print.line() {
         (line, Some(RustroomApp::cancel_print))
     } else if let Some(line) = app.publish_line() {

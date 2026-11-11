@@ -115,6 +115,7 @@ pub fn build_pipeline_split_tapped(
         curve: profile_curve,
         baseline_ev,
         look: look_table,
+        camera_look,
     } = rendering;
     let RenderSpec {
         space,
@@ -271,13 +272,19 @@ pub fn build_pipeline_split_tapped(
             // section must say so, because two renderings apparently both switched on with one
             // silently ignored is the invisible-state failure this project keeps recording.
         }
-        edit_model::Rendering::Camera => {
+        r @ (edit_model::Rendering::Camera | edit_model::Rendering::CameraMatch) => {
             // ⚠⚠ An **identity** profile curve is ignored. The X-T4's `ProfileToneCurve` is
             // literally [[0,0],[1,1]], so honouring it would produce no rendering at all —
             // indistinguishable from `None`, and the setting would silently do nothing on the
             // author's own camera.
             let curve = effective_profile_curve(profile_curve);
             tail.push(Box::new(DisplayRenderingStage::new(curve, baseline_ev)));
+            // ⚠ M10.13d: the learned look follows the rendering it was fitted on, and precedes the user's look.
+            if let (edit_model::Rendering::CameraMatch, Some(cube)) = (r, camera_look) {
+                tail.push(Box::new(CreativeLookStage::camera(std::sync::Arc::clone(
+                    cube,
+                ))));
+            }
         }
     }
 

@@ -313,6 +313,8 @@ fn render_buf(
             curve: None,
             baseline_ev: None,
             look,
+            // ⚠ M10.13d: none — the source is the camera's own JPEG, which already holds its film simulation.
+            camera_look: None,
         },
     )
     .run(buf);

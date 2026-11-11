@@ -103,6 +103,7 @@ fn main() {
         curve: Some(&synthetic),
         baseline_ev: Some(0.5),
         look: None,
+        camera_look: None,
     });
     let fixture = gpu_pipeline::compare(&plain, &probe);
     println!(
@@ -121,6 +122,7 @@ fn main() {
                 curve: curve.as_deref(),
                 baseline_ev: None,
                 look: None,
+                camera_look: None,
             },
         ),
         (
@@ -129,6 +131,7 @@ fn main() {
                 curve: None,
                 baseline_ev: baseline,
                 look: None,
+                camera_look: None,
             },
         ),
         (
@@ -137,6 +140,7 @@ fn main() {
                 curve: curve.as_deref(),
                 baseline_ev: baseline,
                 look: None,
+                camera_look: None,
             },
         ),
     ] {

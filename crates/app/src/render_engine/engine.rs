@@ -55,6 +55,8 @@ pub struct RenderEngine {
     /// handover, because "where looks live" existing in two places is how the two come to
     /// disagree.
     looks_dir: Option<std::path::PathBuf>,
+    /// What Camera matching applies to this photo (M10.13d) — kept for the panel's line.
+    camera_look: Option<crate::camera_look::Resolved>,
     /// The photo's AI mask maps (M9.13), shared with the worker's `BrushCache`. The session writes
     /// here when a map arrives and then asks for a render.
     ai_maps: crate::ai_coverage::SharedAiMaps,
@@ -85,6 +87,7 @@ impl RenderEngine {
     ) -> Self {
         let looks_dir = profile.looks_dir.clone();
         let kept_looks_dir = looks_dir.clone();
+        let kept_camera_look = profile.camera_look.clone();
         let (req_tx, req_rx) = channel::<Request>();
         let (res_tx, res_rx) = channel::<RenderedFrame>();
         let warmed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -177,6 +180,10 @@ impl RenderEngine {
                     curve: profile.curve.as_deref(),
                     baseline_ev: profile.baseline_ev,
                     look,
+                    camera_look: crate::camera_look::applied(
+                        &edits,
+                        profile.camera_look.as_ref().and_then(|c| c.cube.as_ref()),
+                    ),
                 };
                 // ⚠ The live frame may hand off (no final checkpoint); the settle pass below may not.
                 let (frame, ran) = render_cached_with(
@@ -298,6 +305,7 @@ impl RenderEngine {
             warmed,
             settle_downloads,
             looks_dir: kept_looks_dir,
+            camera_look: kept_camera_look,
             ai_maps,
         }
     }
@@ -324,6 +332,11 @@ impl RenderEngine {
     /// `cfg(test)`, so a gated accessor would not exist where it is needed.
     pub fn looks_dir(&self) -> Option<&std::path::Path> {
         self.looks_dir.as_deref()
+    }
+
+    /// What Camera matching applies to this photo (M10.13d), `None` for a file naming no film simulation.
+    pub fn camera_look(&self) -> Option<&crate::camera_look::Resolved> {
+        self.camera_look.as_ref()
     }
 
     /// How many renders have been asked for. See the field's doc comment for why this is not

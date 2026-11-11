@@ -155,6 +155,7 @@ impl RustroomApp {
     fn pump_jobs(&mut self, ctx: &egui::Context) {
         self.pump_export(ctx);
         self.pump_print(ctx);
+        self.pump_camera_learning(ctx);
         self.pump_publish(ctx);
         self.pump_import(ctx);
         self.pump_hdr(ctx);

@@ -85,6 +85,7 @@ fn decode(path: &Path, demosaic: raw_decode::Demosaic) -> Result<ExportSource, S
                 curve: None,
                 baseline_ev: None,
                 scene_referred: true,
+                camera_look: None,
             }
         })
         .map_err(|e| e.to_string())
@@ -98,6 +99,7 @@ fn decode(path: &Path, demosaic: raw_decode::Demosaic) -> Result<ExportSource, S
                 curve: None,
                 baseline_ev: None,
                 scene_referred: true,
+                camera_look: None,
             })
             .map_err(|e| e.to_string())
     }

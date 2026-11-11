@@ -54,10 +54,17 @@ pub fn section(
                 edits.look.file = None;
                 ed.mark_changed();
             }
+            let mut learned_heading = false;
             for e in &looks.entries {
+                // M10.13d: the films learned from the camera, in their own group after the user's looks.
+                if e.learned && !learned_heading {
+                    learned_heading = true;
+                    ui.separator();
+                    ui.label(egui::RichText::new("Learned from the camera").weak());
+                }
                 let on = chosen.as_deref() == Some(e.file.as_str());
                 if ui.selectable_label(on, &e.name).clicked() && !on {
-                    edits.look.file = Some(e.file.clone());
+                    choose(edits, e);
                     ed.mark_changed();
                 }
             }
@@ -69,21 +76,15 @@ pub fn section(
         return;
     }
 
-    egui::ComboBox::from_label("Look space")
-        .selected_text(edits.look.space.label())
-        .show_ui(ui, |ui| {
-            for s in edit_model::LutSpace::ALL {
-                let on = edits.look.space == s;
-                if ui.selectable_label(on, s.label()).clicked() && !on {
-                    edits.look.space = s;
-                    ed.mark_changed();
-                }
-            }
-        })
-        .response
-        .hover(
-            "Sets the colour space the .cube file was made for, which the file itself does not record",
-        );
+    // ⚠ A learned look's space is known — it was fitted in sRGB display — so there is nothing to choose.
+    let learned = edits
+        .look
+        .file
+        .as_deref()
+        .is_some_and(rustroom_app::looks::is_learned);
+    if !learned {
+        look_space(ui, edits, ed);
+    }
 
     ed.help_scope = rustroom_app::slider_help::Scope::Look;
     ed.slider(
@@ -100,4 +101,31 @@ pub fn section(
     for note in rustroom_app::looks::notes(edits, looks) {
         ui.colored_label(ui.visuals().warn_fg_color, note);
     }
+}
+
+/// Make `e` the photo's look. ⚠ A learned look is an sRGB display table, whatever the last look's space was.
+pub(crate) fn choose(edits: &mut edit_model::Edits, e: &rustroom_app::looks::LookEntry) {
+    edits.look.file = Some(e.file.clone());
+    if e.learned {
+        edits.look.space = edit_model::LutSpace::SrgbDisplay;
+    }
+}
+
+/// The look's colour space — for a look the user added, whose file does not say.
+fn look_space(ui: &mut egui::Ui, edits: &mut edit_model::Edits, ed: &mut Edited) {
+    egui::ComboBox::from_label("Look space")
+        .selected_text(edits.look.space.label())
+        .show_ui(ui, |ui| {
+            for s in edit_model::LutSpace::ALL {
+                let on = edits.look.space == s;
+                if ui.selectable_label(on, s.label()).clicked() && !on {
+                    edits.look.space = s;
+                    ed.mark_changed();
+                }
+            }
+        })
+        .response
+        .hover(
+            "Sets the colour space the .cube file was made for, which the file itself does not record",
+        );
 }

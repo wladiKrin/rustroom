@@ -100,6 +100,7 @@ fn main() {
                 curve: prof.tone_curve.as_deref(),
                 baseline_ev: prof.baseline_exposure,
                 look: None,
+                camera_look: None,
             },
         );
         // ProPhoto-encoded output → linear working space.

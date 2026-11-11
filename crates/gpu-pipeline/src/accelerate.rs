@@ -143,6 +143,19 @@ const REPLACEABLE: &[(&str, Builder)] = &[
             ctx,
         )))
     }),
+    // ⚠ M10.13d: the look learned for this photo's film simulation, after the rendering and before the
+    // user's look, as in the tail — the creative look's shader in sRGB display at full strength. Declines
+    // without a cube, as the creative look's row does.
+    ("camera_look", |_, _, _, rendering, _, ctx| {
+        rendering.camera_look.map(|cube| {
+            Box::new(crate::GpuCreativeLookStage::new(
+                cube,
+                edit_model::LutSpace::SrgbDisplay,
+                100.0,
+                ctx,
+            )) as Box<dyn GpuStage>
+        })
+    }),
     // ⚠⚠ **Between `display_rendering` and `output_transform`, as in the tail — which is the
     // position that matters most in this table.** A creative look sitting on the CPU is what made
     // a lone `display_rendering` run possible at all, and that run is the one case
@@ -3234,7 +3247,8 @@ mod tests {
                 amount: 40.0,
                 ..Default::default()
             },
-            rendering: Some(edit_model::Rendering::Camera),
+            // ⚠ M10.13d: Camera matching, so the tail carries `camera_look` (its cube from `full_tail`).
+            rendering: Some(edit_model::Rendering::CameraMatch),
             look: edit_model::Look {
                 file: Some("x.cube".into()),
                 space: edit_model::LutSpace::SrgbDisplay,
@@ -3255,6 +3269,7 @@ mod tests {
             None,
             TailRendering {
                 look: cube,
+                camera_look: cube,
                 ..TailRendering::default()
             },
         )
@@ -3494,6 +3509,7 @@ mod tests {
             SCALE,
             TailRendering {
                 look: Some(&cube),
+                camera_look: Some(&cube),
                 ..TailRendering::default()
             },
             RenderSpec::default(),
