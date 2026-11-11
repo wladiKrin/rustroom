@@ -8,11 +8,36 @@ use crate::library_state::fs_modified;
 use crate::{AppView, LibrarySource, RustroomApp};
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
+use rustroom_app::immich_worker::Job;
 use rustroom_app::photo_id::PhotoId;
 use rustroom_app::photo_move::{self, Planned};
 use rustroom_app::sidecar;
 use rustroom_app::status_text::photos;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+
+/// A Move to folder waiting for its Immich photos to download (M10.19b): the whole move runs, as ONE undo
+/// step, when the last download lands.
+///
+/// ⚠ The downloads ride the bulk download's progress and Cancel (`immich_download_pending`); a Cancel drops
+/// this and moves nothing — what did download stays in the cache, as any download does.
+pub(crate) struct PendingMove {
+    files: Vec<PathBuf>,
+    dest: PathBuf,
+    root: Option<PathBuf>,
+    /// The cache paths still downloading.
+    waiting: HashSet<PathBuf>,
+    /// Downloads that failed — those photos are not moved.
+    failed: usize,
+    /// Cancelled: the downloads still in flight land here and open nothing, and nothing moves.
+    cancelled: bool,
+}
+
+impl PendingMove {
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled
+    }
+}
 
 impl RustroomApp {
     /// The right-click's Move to folder…: the files the targets stand for, the system folder picker
@@ -61,8 +86,118 @@ impl RustroomApp {
         dest: &Path,
         immich_root: Option<&Path>,
     ) -> usize {
+        // ⚠ M10.19b: an Immich photo not downloaded yet is downloaded first, and the move waits for it.
+        let fetch: Vec<(String, PathBuf)> = files
+            .iter()
+            .filter(|f| !f.exists())
+            .filter(|f| {
+                immich_root.is_some_and(|r| rustroom_app::immich_source::is_immich_path(r, f))
+            })
+            .filter_map(|f| rustroom_app::immich_source::asset_id_of(f).map(|id| (id, f.clone())))
+            .collect();
+        let connected = rustroom_app::immich_source::connection(&self.settings).is_some();
+        if !fetch.is_empty() && connected {
+            if self.pending_move.is_some() {
+                self.status = "A move is already waiting for its downloads".into();
+                return 0;
+            }
+            self.immich_download_total += fetch.len();
+            for (id, dest) in &fetch {
+                self.immich_download_pending.insert(id.clone());
+                self.immich.request(Job::Original {
+                    asset_id: id.clone(),
+                    dest: dest.clone(),
+                });
+            }
+            self.pending_move = Some(PendingMove {
+                files: files.to_vec(),
+                dest: dest.to_path_buf(),
+                root: immich_root.map(Path::to_path_buf),
+                waiting: fetch.into_iter().map(|(_, p)| p).collect(),
+                failed: 0,
+                cancelled: false,
+            });
+            self.status = self.immich_download_progress();
+            return 0;
+        }
+        self.move_present(ctx, files, dest, immich_root, 0, !fetch.is_empty())
+    }
+
+    /// One Immich download landed: if a pending move waits for it, count it and — when it was the last —
+    /// run the move. Returns whether the download was the move's (and so must open nothing).
+    pub(crate) fn move_download_landed(
+        &mut self,
+        ctx: &egui::Context,
+        dest: &Path,
+        ok: bool,
+    ) -> bool {
+        let Some(m) = self.pending_move.as_mut() else {
+            return false;
+        };
+        if !m.waiting.remove(dest) {
+            return false;
+        }
+        if !ok {
+            m.failed += 1;
+        }
+        if let Some(id) = rustroom_app::immich_source::asset_id_of(dest) {
+            self.immich_download_pending.remove(&id);
+        }
+        if ok {
+            if let Some(name) = dest.file_name() {
+                self.immich_present.insert(name.to_os_string());
+            }
+        }
+        if m.cancelled {
+            if m.waiting.is_empty() {
+                self.pending_move = None;
+            }
+            return true;
+        }
+        if m.waiting.is_empty() {
+            let m = self.pending_move.take().expect("checked above");
+            if self.immich_download_pending.is_empty() {
+                self.immich_download_total = 0;
+            }
+            self.move_present(ctx, &m.files, &m.dest, m.root.as_deref(), m.failed, false);
+        } else {
+            self.status = self.immich_download_progress();
+        }
+        true
+    }
+
+    /// Cancel's half: the move is dropped, and the downloads still in flight are absorbed when they land.
+    pub(crate) fn cancel_pending_move(&mut self) -> bool {
+        match self.pending_move.as_mut() {
+            Some(m) if !m.cancelled => {
+                m.cancelled = true;
+                // ⚠ Those never started will never land.
+                m.waiting.retain(|p| {
+                    rustroom_app::immich_source::asset_id_of(p)
+                        .is_some_and(|id| self.immich.is_downloading(&id))
+                });
+                if m.waiting.is_empty() {
+                    self.pending_move = None;
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The move itself, of the files that are here: `failed_downloads` photos could not be downloaded, and
+    /// `offline` says the missing ones were not tried because Immich is not connected.
+    fn move_present(
+        &mut self,
+        ctx: &egui::Context,
+        files: &[PathBuf],
+        dest: &Path,
+        immich_root: Option<&Path>,
+        failed_downloads: usize,
+        offline: bool,
+    ) -> usize {
         self.persist_current_session();
-        // ⚠ An Immich asset not downloaded yet has no file to move: skipped, and counted.
+        // ⚠ What is still not here — a failed download, or Immich offline — is skipped, and counted.
         let (present, missing): (Vec<PathBuf>, Vec<PathBuf>) =
             files.iter().cloned().partition(|f| f.exists());
         let plan = {
@@ -86,6 +221,15 @@ impl RustroomApp {
         self.after_move(ctx, &done);
         let n = photo_count(&done);
         self.status = status(n, dest, missing.len(), failed);
+        if failed_downloads > 0 {
+            self.status = status(n, dest, 0, None)
+                + &match failed_downloads {
+                    1 => " · 1 could not be downloaded".to_string(),
+                    f => format!(" · {f} could not be downloaded"),
+                };
+        } else if offline {
+            self.status.push_str(" — Immich is not connected");
+        }
         n
     }
 
@@ -410,6 +554,152 @@ mod tests {
         assert!(!got.exists(), "it left the cache");
         assert!(
             app.status.contains("1 isn't downloaded yet"),
+            "{}",
+            app.status
+        );
+    }
+
+    /// An app connected to a constructed Immich whose downloads write the bytes — or fail, for an asset
+    /// id starting with `bad` — and two catalogued assets in `root`: `IMG_1.jpg` downloaded, the other not.
+    fn connected_with_one_downloaded(
+        dir: &TestDir,
+        second: (&str, &str),
+    ) -> (crate::RustroomApp, PathBuf, PathBuf, PathBuf, PathBuf) {
+        let root = dir.0.join("immich");
+        let dest = dir.0.join("photos");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        let mut app = test_app::for_test();
+        // ⚠ The Library, as the right-click happens there — a download that opened its photo would switch to Develop.
+        app.view = crate::AppView::Library;
+        app.settings.immich_enabled = true;
+        app.settings.immich_url = "https://immich.example".into();
+        app.settings.immich_key = "key".into();
+        app.immich = rustroom_app::immich_worker::ImmichWorker::new(
+            std::sync::Arc::new(|job| match job {
+                rustroom_app::immich_worker::Job::Original { asset_id, dest } => {
+                    let result = if asset_id.starts_with("bad") {
+                        Err("the server said no".to_string())
+                    } else {
+                        std::fs::write(&dest, b"jpeg bytes").map_err(|e| e.to_string())
+                    };
+                    rustroom_app::immich_worker::Outcome::Original { dest, result }
+                }
+                _ => panic!("only downloads in this test"),
+            }),
+            || {},
+        );
+        let assets = [asset("3f2a", "IMG_1.jpg"), asset(second.0, second.1)];
+        let scan = rustroom_app::immich_source::entries_from_assets(&assets, &root);
+        rustroom_app::immich_catalog::record_assets(app.catalog.as_ref().unwrap(), &root, &scan)
+            .unwrap();
+        let (got, absent) = (scan[0].path.clone(), scan[1].path.clone());
+        std::fs::write(&got, b"jpeg bytes").unwrap();
+        (app, root, dest, got, absent)
+    }
+
+    /// Pump the Immich worker until no move waits, under the 120 s ceiling against a hang.
+    fn settle(app: &mut crate::RustroomApp, ctx: &egui::Context) {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while app.pending_move.is_some() {
+            assert!(
+                std::time::Instant::now() < until,
+                "the downloads never landed"
+            );
+            app.pump_immich(ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// M10.19b: a photo not downloaded is downloaded first, then everything moves as one undo step.
+    #[test]
+    fn an_undownloaded_immich_photo_is_downloaded_then_moved() {
+        let dir = TestDir::new("move_download");
+        let (mut app, root, dest, got, absent) =
+            connected_with_one_downloaded(&dir, ("9c1b", "IMG_2.jpg"));
+        let ctx = egui::Context::default();
+        let n = app.move_files_under(&ctx, &[got.clone(), absent.clone()], &dest, Some(&root));
+        // ⚠ The in-between state is deterministic: nothing moves until the pump hands the download over.
+        assert_eq!(n, 0);
+        assert!(got.exists(), "nothing moves before the download lands");
+        assert_eq!(app.status, "Downloading 0 of 1 to move…");
+        settle(&mut app, &ctx);
+        assert!(
+            dest.join("IMG_1.jpg").exists() && dest.join("IMG_2.jpg").exists(),
+            "{}",
+            app.status
+        );
+        assert!(!got.exists() && !absent.exists(), "both left the cache");
+        assert!(app.status.starts_with("Moved 2 photos"), "{}", app.status);
+        assert!(
+            app.view == crate::AppView::Library && app.session.is_none(),
+            "a move's download opens nothing"
+        );
+        assert!(app.immich_download_progress().is_empty());
+        app.undo_action(&ctx);
+        assert!(
+            got.exists() && absent.exists(),
+            "one undo step puts both back"
+        );
+    }
+
+    #[test]
+    fn a_failed_download_is_counted_and_the_rest_moves() {
+        let dir = TestDir::new("move_download_fail");
+        let (mut app, root, dest, got, absent) =
+            connected_with_one_downloaded(&dir, ("bad1", "IMG_2.jpg"));
+        let ctx = egui::Context::default();
+        app.move_files_under(&ctx, &[got, absent], &dest, Some(&root));
+        settle(&mut app, &ctx);
+        assert!(dest.join("IMG_1.jpg").exists());
+        assert!(!dest.join("IMG_2.jpg").exists());
+        assert!(
+            app.status.starts_with("Moved 1 photo")
+                && app.status.ends_with(" · 1 could not be downloaded"),
+            "{}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn cancel_moves_nothing_and_a_late_download_opens_nothing() {
+        let dir = TestDir::new("move_download_cancel");
+        let (mut app, root, dest, got, absent) =
+            connected_with_one_downloaded(&dir, ("9c1b", "IMG_2.jpg"));
+        let ctx = egui::Context::default();
+        app.move_files_under(&ctx, &[got.clone(), absent.clone()], &dest, Some(&root));
+        app.cancel_immich_downloads();
+        assert_eq!(app.status, "Move cancelled — nothing moved");
+        // The download was already in flight: it lands, and is absorbed.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while !absent.exists() || app.pending_move.is_some() {
+            assert!(
+                std::time::Instant::now() < until,
+                "the in-flight download never landed"
+            );
+            app.pump_immich(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(got.exists(), "nothing moved");
+        assert!(
+            app.view == crate::AppView::Library,
+            "the late download opened nothing"
+        );
+        assert!(app.session.is_none());
+    }
+
+    #[test]
+    fn without_a_connection_the_undownloaded_are_skipped_and_said() {
+        let dir = TestDir::new("move_offline");
+        let (mut app, root, dest, got, absent) =
+            connected_with_one_downloaded(&dir, ("9c1b", "IMG_2.jpg"));
+        app.settings.immich_enabled = false;
+        let ctx = egui::Context::default();
+        let n = app.move_files_under(&ctx, &[got, absent], &dest, Some(&root));
+        assert_eq!(n, 1);
+        assert!(
+            app.status
+                .ends_with("1 isn't downloaded yet — Immich is not connected"),
             "{}",
             app.status
         );

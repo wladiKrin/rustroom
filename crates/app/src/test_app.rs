@@ -109,6 +109,7 @@ pub fn for_test() -> RustroomApp {
         immich_album_names: Default::default(),
         immich_download_pending: Default::default(),
         immich_download_total: 0,
+        pending_move: None,
         metadata: rustroom_app::metadata_scanner::MetadataScanner::new(|| {}),
         location_passes: Vec::new(),
         map: crate::map_view::MapView::offline(),
