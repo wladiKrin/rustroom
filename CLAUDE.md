@@ -172,8 +172,8 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-11-11)
 
-**4628 tests on Linux** (macOS last counted 4274 before M10.17b; 31 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
-gate green on **`main`** (2026-11-11, M10.19b and the hidden-formats fix merged). ⚠ On this Linux machine `gpu_pipeline`'s suite can stall
+**4646 tests on Linux** (macOS last counted 4274 before M10.17b; 31 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
+gate green on **`main`** (2026-11-11, M10.13d merged). ⚠ On this Linux machine `gpu_pipeline`'s suite can stall
 inside a full run (alone it passes in 4 s) and `sources::reindex_tests` can fail to exit — both pre-existing
 (`grep -n 'Pre-existing, not chased' docs/JOURNAL.md`); run the remaining test binaries directly when it happens. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
@@ -264,13 +264,14 @@ that had grown to ~170 lines by appending.)
 | M10.18d | Publish services: the rail's section, a folder or an Immich album per service, + / − the selection, a band above the view's grid (Publish N, the counts), a dot New / a ring Modified / Removed dimmed; plus **Edit description of N photos…** | catalog v18 keyed on `photos.id`; the fingerprint is pinned (`publish_state`); Immich: an album created, assets added and taken out — ⛔ never an asset deleted; the album DTOs are constructed, not captured |
 | M10.18e | Print: File → Print… ⌘P — a page preview, Single (Fit · Fill) or a contact sheet, paper, margin, PPI and print sharpening, saved as a PDF or sent to a CUPS printer (`lpstat` / `lp`) | a page is the EXPORT's render (`ExportWorker` into a staging folder, Fill via `FitMode::Cover`, never in the export dialog); the PDF is hand-written and embeds those JPEGs as is (`print::pdf`); ⚠ printing to a printer is UNSEEN — no printer, no CUPS here |
 | M10.19a | HEIC/HEIF photos (`.heic` `.heif` `.hif`) through libheif — the container's orientation, the file's own colour (ICC via LittleCMS, else nclx P3 or sRGB), 10 bits kept, EXIF read | ⚠ **libheif is a build dependency** (`pacman -S libheif`, `brew install libheif`, CI's `libheif-dev`); the colour profile is the libheif HANDLE's, never the decoded image's; HDR gain maps ignored; a real container-rotated file unseen |
+| M10.13d | Camera-matching colour, LEARNED: per Fuji body and film simulation (≥ 8 plain photos, ≤ 40 spread, relearned when grown by half) a 17³ lattice fitted from our render to the embedded JPEG; `Rendering::CameraMatch` opens a fresh RAW matched (Settings switch, Relearn); the films listed in the Look menu's "Learned from the camera" | store `<config>/rustroom/looks/camera/`; the look is a tail `CreativeLookStage::camera` in sRGB display with a GPU row; a film picked from the menu REPLACES the photo's own (`camera_look::applied`), never stacks; `camera/<name>` the one look name with a separator (`looks::is_learned`, by components); ΔE 8.9–13.8 → 3.4–7.3 held out; Fuji only |
 | M10.19d | Retouch as two tasks: **Paint** (one brush, Remove · Heal · Clone · Eye, for NEW retouches only) · **Find** (People · Dust, found and reviewed alike: On the photo **Pick · Add more**, Everyone, Remove N, Cancel); one **Retouches** list of every kind, a picked row selecting it alone with its settings under the list | the photo's gestures follow `RetouchState.task` — in Find only `find_overlay`, never a Paint overlay; the list is `retouch_list::rows`; a patch Find dust made carries `Spot.dust`; the dust view's one writer is `pump_dust`; a look landing after Cancel or Remove N is dropped (people and dust) |
 
 ### ▶ Next action — Phase 10, top down
 
-✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1–c3, d, M10.17a–b, M10.18a–e, M10.19a–d** (table above); ⛔ M10.16c4 declined.
+✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15 (M10.13d included), M10.16a, b, c1–c3, d, M10.17a–b, M10.18a–e, M10.19a–d** (table above); ⛔ M10.16c4 declined.
 
-**▶ NOW: M10.13d camera-matching colour** — the one open item not parked. ✅ M10.19b merged 2026-11-11, confirmed by the author (`grep -n 'M10.19b' docs/JOURNAL.md`); ✅ hidden formats leave their stacks before grouping, merged 2026-11-11 (`grep -n 'leave their stacks' docs/JOURNAL.md`). ✅ M10.19a HEIC merged 2026-11-11, confirmed by the author (`grep -n 'M10.19a' docs/JOURNAL.md`). ✅ M10.18e print merged 2026-11-04, Save PDF confirmed by the author, a printer unseen (`grep -n 'M10.18e' docs/JOURNAL.md`). ✅ An upload's chosen date in the file merged 2026-11-03, confirmed by the author (`grep -n 'upload.s chosen date' docs/JOURNAL.md`).
+**▶ NOW: every Phase 10 item left is parked (⏸) — ask the author whether to unpark one or start Phase 11.** ✅ M10.13d camera-matching colour merged 2026-11-11, confirmed by the author (`grep -n 'M10.13d' docs/JOURNAL.md`). ✅ M10.19b merged 2026-11-11, confirmed by the author (`grep -n 'M10.19b' docs/JOURNAL.md`); ✅ hidden formats leave their stacks before grouping, merged 2026-11-11 (`grep -n 'leave their stacks' docs/JOURNAL.md`). ✅ M10.19a HEIC merged 2026-11-11, confirmed by the author (`grep -n 'M10.19a' docs/JOURNAL.md`). ✅ M10.18e print merged 2026-11-04, Save PDF confirmed by the author, a printer unseen (`grep -n 'M10.18e' docs/JOURNAL.md`). ✅ An upload's chosen date in the file merged 2026-11-03, confirmed by the author (`grep -n 'upload.s chosen date' docs/JOURNAL.md`).
 ✅ M10.18d publish services merged 2026-11-03 with the batch description dialog, confirmed by the author ("okay that works").
 ✅ M10.18a tethering merged 2026-10-29, confirmed by the author with his X-T4 ("works, merge and delete";
 `grep -n 'M10.18a' docs/JOURNAL.md`). ✅ M10.18c people tagging merged 2026-10-29, confirmed by the author
@@ -283,8 +284,7 @@ network removes everyday reflections; `grep -n 'M10.16c4' docs/JOURNAL.md`). ✅
 merged 2026-10-22, confirmed by the author ("works, merge and delete"; `grep -n 'M10.19d' docs/JOURNAL.md`). ✅ c3 Find people merged
 2026-10-22 (`grep -n 'M10.16c3' docs/JOURNAL.md`). ✅ c2 Remove dust merged 2026-10-21. ✅ c1 the Remove brush merged 2026-10-19
 (`grep -n 'M10.16c1' docs/JOURNAL.md`). ✅ M10.16c1b merged 2026-10-20: a removal being filled shades the
-AREA it will replace — Detect objects' whole object — sent by the job before the network runs. Left open behind it, by the author's call: M10.12c ⏸, M10.13 (a ⏸,
-d), M10.14 f–h ⏸.
+AREA it will replace — Detect objects' whole object — sent by the job before the network runs. Left open behind it, by the author's call: M10.12c ⏸, M10.13a ⏸, M10.14 f–h ⏸.
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
 release engineering, LAST.** The canonical list — every sub-item with its date, size and reasoning — is
@@ -295,7 +295,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | Milestone | Sub-items |
 |---|---|
 | **M10.12** the mask model | c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
-| **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · d camera-matching colour out of the box (P-22), **with b's `ProfileLookTable` and c's per-photo profile folded in** (re-scoped 2026-10-12: neither changes a photo until d brings such a profile; b's `CameraCalibration` ⛔ withdrawn — a DNG-file tag, never in a profile) |
+| **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · ✅ d merged 2026-11-11 (learned looks; b's LookTable and c's per-photo profile not needed — no such profile in hand) |
 | **M10.14** performance & verification | f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h ⏸ the reference photo on the GPU (parked 2026-10-13 until a need shows — 1 of 74 photos; 111–125 ms at 3200, numbers in the backlog) |
 
 **Phase 11, last:** M11.2 Windows + the Linux GUI (first run and confirmed 2026-10-27 on Arch/X11; still unchecked: Wayland,

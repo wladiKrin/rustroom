@@ -193,6 +193,30 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-11 — M10.13d: camera-matching colour, learned from the camera's own JPEGs (branch `m10.13d-camera-looks`, merged 2026-11-11)
+
+✅ **Confirmed by the author ("thats good, let's merge and delete")**.
+
+- **What it is:** no camera profiles or film simulations can ship legally, so Rustroom LEARNS them. For each Fuji
+  body and film simulation with at least 8 *plain* photos in the catalog (the maker note says which film and that
+  the JPEG settings were untouched — `camera_look::fuji`), a background pass renders up to 40 of them (spread
+  across the group) at 384 px and fits a 17³ lattice mapping our render onto the embedded JPEG; it relearns when
+  the group has grown by half. Store: `<config>/rustroom/looks/camera/` (a `.cube` per body and film, `manifest.json`).
+- **The fit** (`camera_look::fit`): least squares with a squared-Laplacian penalty, solved by CG as an OFFSET from the
+  identity, so a node no photo touched stays put; samples only from the central 80 % where the JPEG is flat.
+- **In the pipeline:** `Rendering::CameraMatch`; under it the tail runs the camera rendering, then
+  `CreativeLookStage::camera(cube)` in sRGB display at strength 100 — a GPU `REPLACEABLE` row (`"camera_look"`).
+  A fresh RAW opens matched when Settings' "Match the camera's colour" is on (default); the Profile block has the
+  checkbox and a line naming the look; Settings has Relearn. Thumbnails take no look (their source is the JPEG).
+- **In the Look menu:** the learned films are their own group, "Learned from the camera"; one picked there REPLACES
+  the photo's own film rather than stacking (`camera_look::applied`, preview and export alike), offers no Look space,
+  and Strength works. `camera/<name>` is the one look name allowed a separator (`looks::is_learned`, by components —
+  `camera/..` was a hole, caught before shipping).
+- **Measured** (spike, the lib and the real pipeline; learned from 13 X-T4 RAFs, held out 5): ΔE **8.9–13.8 → 3.4–7.3**;
+  learning took 17 s for 13 photos.
+- ⚠ **Unseen:** the app-side learning pump on a big catalog; generalisation across scenes and films beyond the
+  author's library; bodies other than Fuji (no maker-note parser for them — they get no learned look).
+
 ### 2026-11-11 — Hidden formats leave their stacks (branch `fix-hidden-format-stacks`, merged 2026-11-11)
 
 ✅ **Confirmed by the author ("works, merge and delete")**.
