@@ -193,6 +193,24 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-11 — M10.19b: Move to folder downloads Immich photos first (branch `m10.19b-move-download`, merged 2026-11-11)
+
+✅ **Confirmed by the author on the Mac ("works")**, against the real server.
+
+- Move to folder with Immich photos not downloaded yet: they are downloaded first ("Downloading 1 of 3 to move…",
+  the bulk download's progress and Cancel), and the whole move runs when the last lands — ONE undo step, original
+  names as before. A failed download is not moved and is said ("· 1 could not be downloaded"); Cancel moves nothing;
+  without a connection the old skip-and-count stays, with "— Immich is not connected".
+- `move_flow::PendingMove` on `RustroomApp.pending_move`; `finish_immich_download` hands each landing to
+  `move_download_landed` first, so a move's download opens nothing. ⚠⚠ **A cancelled move stays until its in-flight
+  downloads land** (`cancel_pending_move` keeps only those `is_downloading`): dropped at once, a late landing fell
+  through to the single-photo branch and OPENED the photo in Develop.
+- 4 tests on a constructed fetcher; sabotaged — the cancelled branch off, a move's download allowed to open, a failure
+  not counted — each failed. ⚠ The test app starts in Develop: a "nothing opened" check must set the Library first,
+  or it measures nothing (it did, until it was).
+- ⚠ A first full gate hit its 1,500 s timeout (exit 124) after 10 binaries, nothing failed; the rerun finished all 22
+  at 4,626 — one panorama test ran over 60 s, the machine was loaded.
+
 ### 2026-11-11 — M10.19a: HEIC/HEIF photos (branch `m10.19a-heic`, merged 2026-11-11)
 
 ✅ **Confirmed by the author on the Mac ("everything else looks fine … merge and delete")** — iPhone HEICs show, open,

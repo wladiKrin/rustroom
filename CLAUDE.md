@@ -172,8 +172,8 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-11-11)
 
-**4622 tests on Linux** (macOS last counted 4274 before M10.17b; 31 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
-gate green on **`main`** (2026-11-11, M10.19a merged). ⚠ On this Linux machine `gpu_pipeline`'s suite can stall
+**4626 tests on Linux** (macOS last counted 4274 before M10.17b; 31 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
+gate green on **`main`** (2026-11-11, M10.19b merged). ⚠ On this Linux machine `gpu_pipeline`'s suite can stall
 inside a full run (alone it passes in 4 s) and `sources::reindex_tests` can fail to exit — both pre-existing
 (`grep -n 'Pre-existing, not chased' docs/JOURNAL.md`); run the remaining test binaries directly when it happens. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
@@ -234,7 +234,7 @@ that had grown to ~170 lines by appending.)
   2026-09-29 — start from `docs/BACKLOG.md`'s reasons table. ⚠ The server is a **Tailscale Funnel**: a stopped
   Tailscale on the Mac is never the cause of an Immich error.
 
-**Phase 10 so far — M10.6 to M10.15, M10.16a, b, c1–c3 and d, M10.17a–b, M10.18a–e and M10.19a, c–d, merged 2026-09-29 – 11-11, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`; what stays open inside M10.12–14 is in the table below):
+**Phase 10 so far — M10.6 to M10.15, M10.16a, b, c1–c3 and d, M10.17a–b, M10.18a–e and M10.19a–d, merged 2026-09-29 – 11-11, all confirmed by use** (`grep -n '<id>' docs/JOURNAL.md`; what stays open inside M10.12–14 is in the table below):
 
 | Id | What | The thing to remember |
 |---|---|---|
@@ -248,6 +248,7 @@ that had grown to ~170 lines by appending.)
 | M10.12b | A mask's WB, Exposure, Contrast and tone regions are **offsets** to the global sliders (Lightroom's model); Temp/Tint relative ±100 | `SceneOffsetsStage` heads the tail (*Warnings*); a range/gating mask with an offset selects once, on the globally edited photo — 31 ms vs 7–9 at fit on the GPU path, the reference on the CPU (M10.14h ⏸); `MIRED_PER_STEP` 1.0 untuned |
 | M10.14b/d/e | The prefix-cache eviction's picture half (a test); the drag gap decomposed and the geometry gather tiled 8×8; `catalog_scale` at 100k photos — All Photos 204 → 3.8 s | de-duplicate through `rustroom_app::unique`; the rail reads through `RailData` (*Warnings*); a and c ⛔ withdrawn on measurements |
 | M10.15a–d | Immich: the keys in the OS keychain; Clear… + a soft limit warned at startup; Immich's stars and favourite filled once; **Send marks** + **Undo last send** | the Immich-invariants lines above; a rebuild asks for the login password once (no Team ID); Immich shows stars only with its Ratings feature on |
+| M10.19b | Move to folder downloads the Immich photos it needs first, then moves them all as one undo step; a failed download is counted, Cancel moves nothing | `move_flow::PendingMove`; a cancelled move stays until its in-flight downloads land, or a late one opens its photo in Develop |
 | M10.19c | ⌘/⇧-click marks folders in the rail; right-click forgets them, one confirmation, one undo step | marks keyed by PATH (rows move on collapse); `folder_tree::subtrees` lists a nested mark once, or its second delete fails mid-batch |
 | M10.16d | Lens Blur: a dense, level-adaptive gather of aperture discs (Circle · Blades · Ring · Cat-eye) in three layers, focus on the Subject map's person or a picked point; the section after Effects, Pick focus, Visualize depth; a GPU twin, live (30–32 ms a frame at 1600 px) | the prefix's LAST step, waiting (no step) until its maps and focus exist; keyed on both maps' content ids; ONE lookup (`lens_blur::inputs`) for the step and its twin; the focus and the planes memoised (*Warnings*) |
 | M10.16a | Depth masks: Depth Anything V2 Small (Apache-2.0) → the Depth range mask, a line picker, Show depth map; AI components now cover in a mask's NR/Dehaze/Defringe | `tract` needs the export's symbols BOUND per size and its shape annotations ignored; recipe `depth:v2` (1036, colour snap r8, equalised, 1536) — bump `DEPTH_QUERY` on any change; *Warnings* below |
@@ -267,9 +268,9 @@ that had grown to ~170 lines by appending.)
 
 ### ▶ Next action — Phase 10, top down
 
-✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1–c3, d, M10.17a–b, M10.18a–e, M10.19a, c–d** (table above); ⛔ M10.16c4 declined.
+✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1–c3, d, M10.17a–b, M10.18a–e, M10.19a–d** (table above); ⛔ M10.16c4 declined.
 
-**▶ NOW: M10.13d camera-matching colour or M10.19b Move to folder for Immich photos** — the two open items not parked; ask the author which first. ✅ M10.19a HEIC merged 2026-11-11, confirmed by the author (`grep -n 'M10.19a' docs/JOURNAL.md`). ✅ M10.18e print merged 2026-11-04, Save PDF confirmed by the author, a printer unseen (`grep -n 'M10.18e' docs/JOURNAL.md`). ✅ An upload's chosen date in the file merged 2026-11-03, confirmed by the author (`grep -n 'upload.s chosen date' docs/JOURNAL.md`).
+**▶ NOW: M10.13d camera-matching colour** — the one open item not parked. ✅ M10.19b merged 2026-11-11, confirmed by the author (`grep -n 'M10.19b' docs/JOURNAL.md`); the hidden-formats-in-stacks fix (`fix-hidden-format-stacks`) is pushed, waiting for the author. ✅ M10.19a HEIC merged 2026-11-11, confirmed by the author (`grep -n 'M10.19a' docs/JOURNAL.md`). ✅ M10.18e print merged 2026-11-04, Save PDF confirmed by the author, a printer unseen (`grep -n 'M10.18e' docs/JOURNAL.md`). ✅ An upload's chosen date in the file merged 2026-11-03, confirmed by the author (`grep -n 'upload.s chosen date' docs/JOURNAL.md`).
 ✅ M10.18d publish services merged 2026-11-03 with the batch description dialog, confirmed by the author ("okay that works").
 ✅ M10.18a tethering merged 2026-10-29, confirmed by the author with his X-T4 ("works, merge and delete";
 `grep -n 'M10.18a' docs/JOURNAL.md`). ✅ M10.18c people tagging merged 2026-10-29, confirmed by the author
@@ -296,7 +297,6 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 | **M10.12** the mask model | c ⏸ anchor strokes and spots in sensor space (no forward lens map) |
 | **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · d camera-matching colour out of the box (P-22), **with b's `ProfileLookTable` and c's per-photo profile folded in** (re-scoped 2026-10-12: neither changes a photo until d brings such a profile; b's `CameraCalibration` ⛔ withdrawn — a DNG-file tag, never in a profile) |
 | **M10.14** performance & verification | f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) · g ⏸ the u8 coverage wire (a shader restructure), `MAX_TILE_DABS` (portability) · h ⏸ the reference photo on the GPU (parked 2026-10-13 until a need shows — 1 of 74 photos; 111–125 ms at 3200, numbers in the backlog) |
-| **M10.19** found in use (added 2026-10-01) | b Move to folder: download Immich assets first, then move (today skipped and counted) (a, c, d ✅ above) |
 
 **Phase 11, last:** M11.2 Windows + the Linux GUI (first run and confirmed 2026-10-27 on Arch/X11; still unchecked: Wayland,
 multi-monitor), M11.3 contributor docs, M11.4 `v0.1` (with the welcome screen and the empty Library's
