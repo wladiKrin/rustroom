@@ -153,7 +153,14 @@ fn corrector(
 ) -> Option<Arc<DisplacementGrid>> {
     type Memo = Vec<(String, Option<Arc<DisplacementGrid>>)>;
     static MEMO: OnceLock<Mutex<Memo>> = OnceLock::new();
-    let key = format!("{l:?}|{lc:?}|{w}x{h}");
+    // ⚠ Named, never `{l:?}`: a profile's Debug is the whole lensfun record, formatted on every frame.
+    let key = format!(
+        "{}|{}|{}|{}|{lc:?}|{w}x{h}",
+        l.profile.lens_name(),
+        l.profile.crop_factor(),
+        l.shot.focal,
+        l.shot.aperture
+    );
     let memo = MEMO.get_or_init(Default::default);
     if let Some((_, c)) = memo.lock().ok()?.iter().find(|(k, _)| *k == key) {
         return c.clone();
@@ -241,6 +248,23 @@ pub fn resolve<'a>(edits: &'a Edits, a: &Anchoring) -> Cow<'a, Edits> {
         }
     }
     Cow::Owned(e)
+}
+
+/// [`resolve`] for a renderer holding `lens` and a decode of `decode_w × decode_h`: builds the [`Anchoring`] only when
+/// some mark needs it.
+pub fn resolve_for<'a>(
+    edits: &'a Edits,
+    lens: Option<&LensShot>,
+    decode_w: usize,
+    decode_h: usize,
+) -> Cow<'a, Edits> {
+    if !has_anchored(edits) {
+        return Cow::Borrowed(edits);
+    }
+    resolve(
+        edits,
+        &Anchoring::for_edits(lens, edits, decode_w, decode_h),
+    )
 }
 
 /// Move every mark still in its stage's space into decode space, keeping where it renders — what opening a photo

@@ -121,6 +121,15 @@ pub fn export_one(
         };
         &stripped
     };
+    // ⚠⚠ M10.12c: marks stored in decode space, mapped to their stages' spaces — the render engine's resolve,
+    // beside its strip for the same reason.
+    let anchored = pipeline::anchors::resolve_for(
+        edits,
+        source.lens.as_ref(),
+        source.image.width(),
+        source.image.height(),
+    );
+    let edits = anchored.as_ref();
     let source_long = source.image.width().max(source.image.height());
     // ⚠⚠ M10.10b: the size is the CROPPED picture's — predicted from the edits, the decode shrunk to
     // the smallest that still covers it. It used to be applied to the uncropped decode.
@@ -984,6 +993,62 @@ mod tests {
             without, with,
             "a matched lens profile must change the exported file"
         );
+    }
+
+    /// M10.12c: a spot stored in decode space exports exactly where its resolved twin — the same spot in the lens
+    /// stage's own space — does, so the export maps it; and the spot does something there, so the two are not
+    /// equal for want of a patch.
+    #[test]
+    fn an_anchored_spot_exports_where_its_resolved_twin_does() {
+        let d = TempDir::new("one_anchored");
+        let dest = d.0.join("a.tif");
+        let o = ExportOptions {
+            format: ExportFormat::Tiff8,
+            ..opts(&d, None)
+        };
+        let write = |e: &Edits| {
+            export_one(
+                ExportSource {
+                    ai: Default::default(),
+                    image: edged(160, 120),
+                    baseline: color::wb::Illuminant::default(),
+                    lens: Some(lens_fixture()),
+                    curve: None,
+                    baseline_ev: None,
+                    scene_referred: true,
+                    camera_look: None,
+                },
+                e,
+                &dest,
+                &o,
+                CPU,
+                &export::FileMetadata::default(),
+                None,
+                None,
+            )
+            .unwrap();
+            std::fs::read(&dest).unwrap()
+        };
+        // Constructed: a clone across the edge near a corner, where the lens moves things most.
+        let anchored = Edits {
+            spots: vec![edit_model::Spot {
+                centre: [0.46, 0.12],
+                source: [0.58, 0.12],
+                radius: 0.05,
+                feather: 0.0,
+                mode: edit_model::SpotMode::Clone,
+                dust: false,
+                decode: true,
+            }],
+            ..lens_on()
+        };
+        let a = pipeline::anchors::Anchoring::for_edits(Some(&lens_fixture()), &anchored, 160, 120);
+        let twin = pipeline::anchors::resolve(&anchored, &a).into_owned();
+        assert!(!twin.spots[0].decode && twin.spots[0].centre != anchored.spots[0].centre);
+        let plain = write(&lens_on());
+        let got = write(&anchored);
+        assert_ne!(got, plain, "the spot must change the picture");
+        assert_eq!(got, write(&twin));
     }
 
     /// ⚠⚠ **THE CARRIER FOR THE SEAM, and a picture test cannot be one.** An accelerated export and
