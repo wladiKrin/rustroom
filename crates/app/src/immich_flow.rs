@@ -196,6 +196,10 @@ impl RustroomApp {
         dest: std::path::PathBuf,
         result: Result<(), String>,
     ) {
+        // ⚠ M10.19b: a download a Move to folder waits for opens nothing; the move runs when the last lands.
+        if self.move_download_landed(ctx, &dest, result.is_ok()) {
+            return;
+        }
         match result {
             Ok(()) => {
                 // ⚠ One insert rather than re-reading the directory: this download's own path
@@ -262,8 +266,17 @@ impl RustroomApp {
         let done = self
             .immich_download_total
             .saturating_sub(self.immich_download_pending.len());
+        let what = if self
+            .pending_move
+            .as_ref()
+            .is_some_and(|m| !m.is_cancelled())
+        {
+            "to move"
+        } else {
+            "from Immich"
+        };
         format!(
-            "Downloading {done} of {} from Immich…",
+            "Downloading {done} of {} {what}…",
             self.immich_download_total
         )
     }
@@ -273,6 +286,12 @@ impl RustroomApp {
         let dropped = self.immich.cancel_downloads();
         self.immich_download_pending.clear();
         self.immich_download_total = 0;
+        // ⚠ M10.19b: a move waiting for these downloads moves nothing — after `cancel_downloads`, so only
+        // the in-flight few are left for it to absorb.
+        if self.cancel_pending_move() {
+            self.status = "Move cancelled — nothing moved".to_string();
+            return;
+        }
         self.status = if dropped == 0 {
             "Nothing left to cancel".to_string()
         } else {

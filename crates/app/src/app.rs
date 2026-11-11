@@ -425,6 +425,8 @@ pub(crate) struct RustroomApp {
     pub(crate) immich_download_pending: std::collections::HashSet<String>,
     /// How many the current bulk download asked for; `0` when none is running.
     pub(crate) immich_download_total: usize,
+    /// A Move to folder waiting for its Immich photos to download (M10.19b) — see `move_flow`.
+    pub(crate) pending_move: Option<crate::move_flow::PendingMove>,
     /// The one catalog. `None` when it could not be opened.
     ///
     /// ⚠⚠ **Invisible by design.** Nothing in the UI mentions it; it exists so that collections

@@ -264,6 +264,7 @@ impl RustroomApp {
                 .unwrap_or_default(),
             immich_download_pending: Default::default(),
             immich_download_total: 0,
+            pending_move: None,
             settings,
             catalog,
             modal: Modal::None,
