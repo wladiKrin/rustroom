@@ -10,8 +10,9 @@ use std::time::SystemTime;
 /// Known RAW file extensions (lowercase, without the dot).
 pub const RAW_EXTENSIONS: &[&str] = &["cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2"];
 
-/// Non-RAW image extensions Rustroom can edit (lowercase, without the dot).
-pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "tif", "tiff"];
+/// Non-RAW image extensions Rustroom can edit (lowercase, without the dot). HEIC/HEIF since M10.19a — an
+/// iPhone's `.heic`, the generic `.heif`, a camera's `.hif` — read through libheif (`image_decode::heif`).
+pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "tif", "tiff", "heic", "heif", "hif"];
 
 /// One browsable photo in a folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -284,6 +285,10 @@ mod tests {
         assert!(!is_raw(Path::new("x.jpg")));
         assert!(is_supported(Path::new("x.jpg")) && is_supported(Path::new("x.NEF")));
         assert!(!is_supported(Path::new("x.txt")));
+        // M10.19a: an iPhone's, the generic and a camera's spelling of HEIF, in any case — never RAW.
+        for p in ["IMG_1.HEIC", "x.heif", "DSCF1.HIF"] {
+            assert!(is_supported(Path::new(p)) && !is_raw(Path::new(p)), "{p}");
+        }
     }
 
     fn entry(name: &str, secs: u64) -> CatalogEntry {

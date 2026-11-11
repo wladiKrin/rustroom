@@ -283,6 +283,17 @@ pub(crate) fn decode_for_export(
 mod tests {
     use super::*;
 
+    /// M10.19a: a HEIC exports through the image path, display-referred — the constructed fixture
+    /// `image-decode/testdata/srgb.heic`.
+    #[test]
+    fn a_heic_decodes_for_export_like_a_jpeg() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../image-decode/testdata/srgb.heic");
+        let s = decode_for_export(&p, raw_decode::Demosaic::default(), None).unwrap();
+        assert_eq!((s.image.width(), s.image.height()), (64, 48));
+        assert!(!s.scene_referred && s.lens.is_none());
+    }
+
     #[test]
     fn every_demosaic_tier_has_a_cost_hint() {
         // ⚠ A table test rather than four assertions: a fifth tier added to `Demosaic::ALL`

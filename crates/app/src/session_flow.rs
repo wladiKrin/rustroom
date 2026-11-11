@@ -982,7 +982,7 @@ impl RustroomApp {
                 "Images",
                 &[
                     "cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2", "jpg", "jpeg", "png",
-                    "tif", "tiff",
+                    "tif", "tiff", "heic", "heif", "hif",
                 ],
             )
             .pick_file()

@@ -10,7 +10,7 @@ use std::path::Path;
 
 /// The one name a format goes by, for extensions that have more than one spelling.
 ///
-/// ⚠⚠ `jpeg` and `jpg` are one format, and so are `tiff` and `tif` — `catalog::IMAGE_EXTENSIONS`
+/// ⚠⚠ `jpeg` and `jpg` are one format, and so are `tiff` and `tif` (and `heic`, `heif`, `hif`) — `catalog::IMAGE_EXTENSIONS`
 /// lists both spellings of each, so without this a folder of mixed spellings grew **two chips for
 /// one format** and hiding one left the other visible. Reported in use, 2026-09-23.
 ///
@@ -20,6 +20,8 @@ pub fn canonical_ext(ext: &str) -> &str {
     match ext {
         "jpeg" => "jpg",
         "tiff" => "tif",
+        // M10.19a: one format, three spellings — an iPhone's, the generic one, a camera's.
+        "heif" | "hif" => "heic",
         other => other,
     }
 }
@@ -188,6 +190,8 @@ mod tests {
         assert_eq!(canonical_ext("jpg"), "jpg");
         assert_eq!(canonical_ext("tiff"), "tif");
         assert_eq!(canonical_ext("tif"), "tif");
+        assert_eq!(canonical_ext("heif"), "heic");
+        assert_eq!(canonical_ext("hif"), "heic");
     }
 
     /// ⚠ The RAW extensions are different formats, not spellings of one.
