@@ -723,6 +723,7 @@ mod tests {
         use pipeline::CoverageRasterizer;
         let tiny = Brush {
             strokes: vec![BrushStroke {
+                decode: false,
                 points: vec![[0.5, 0.5]],
                 radius: 0.01,
                 hardness: 50.0,
@@ -797,6 +798,7 @@ mod tests {
         // each dab references its own centre and the within-stroke combine is a `max`.
         let b = Brush {
             strokes: vec![BrushStroke {
+                decode: false,
                 points: (0..16).map(|i| [0.47, 0.25 + i as f32 * 0.02]).collect(),
                 radius: 0.06,
                 hardness: 50.0,
@@ -965,6 +967,7 @@ mod tests {
         let (plane, bw, bh) = half_base(400, 300);
         let b = Brush {
             strokes: vec![BrushStroke {
+                decode: false,
                 // Starts in the dark half and crosses into the light one.
                 // ⚠⚠ **The stroke runs ALONG the boundary, entirely inside the dark half — it
                 // does not cross it, and that correction is the whole fixture.** A stroke crossing
@@ -1056,6 +1059,7 @@ mod tests {
     /// A paint stroke and a narrower erase stroke over it, both at partial flow.
     fn paint_then_erase() -> (BrushStroke, BrushStroke) {
         let paint = BrushStroke {
+            decode: false,
             points: (0..14).map(|i| [0.2 + i as f32 * 0.04, 0.5]).collect(),
             radius: 0.06,
             hardness: 30.0,

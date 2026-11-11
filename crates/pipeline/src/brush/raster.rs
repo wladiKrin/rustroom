@@ -1224,6 +1224,7 @@ mod tests {
     /// One auto-masked dab, centred at `cx` in frame pixels of an 80-wide frame.
     fn auto_dot(cx: f32, radius: f32, tolerance: f32) -> Brush {
         brush(vec![BrushStroke {
+            decode: false,
             points: vec![[cx / 80.0, 0.5]],
             radius,
             hardness: 100.0,
@@ -1285,6 +1286,7 @@ mod tests {
         // right. Both halves must paint, because each dab references what is under itself.
         let base = split_at(40);
         let b = brush(vec![BrushStroke {
+            decode: false,
             points: vec![[0.15, 0.5], [0.85, 0.5]],
             radius: 0.08,
             hardness: 100.0,
@@ -1832,6 +1834,7 @@ mod tests {
         // the region. That is measured, not assumed: it is why three separate attempts to make
         // the master region invariant fail under this design all passed.
         let b = brush(vec![BrushStroke {
+            decode: false,
             points: vec![[0.05, 0.5], [0.95, 0.5]],
             radius: 0.15,
             hardness: 60.0,

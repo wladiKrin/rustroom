@@ -23,6 +23,7 @@ fn gating_mask() -> MaskedAdjustment {
     // leaves the CPU `MaskStage` to rasterise through `GpuBrushRaster`.
     let mask = Mask::Brush(Brush {
         strokes: vec![BrushStroke {
+            decode: false,
             points: vec![[0.35, 0.35], [0.5, 0.5], [0.65, 0.4]],
             radius: 0.08,
             hardness: 50.0,

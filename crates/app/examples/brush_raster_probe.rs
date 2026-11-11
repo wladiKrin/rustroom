@@ -217,6 +217,7 @@ fn main() {
         let n = 12;
         let sweep = Brush {
             strokes: vec![edit_model::BrushStroke {
+                decode: false,
                 points: (0..n)
                     .map(|i| [0.5 - k / 2.0 + k * i as f32 / (n - 1) as f32, 0.5])
                     .collect(),

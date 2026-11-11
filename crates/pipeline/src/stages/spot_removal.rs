@@ -265,6 +265,7 @@ mod tests {
         let (dx, dy) = delta;
         let source = ((cxp as i64 + dx) as usize, (cyp as i64 + dy) as usize);
         let spot = Spot {
+            decode: false,
             centre: [norm(cxp, w), norm(cyp, h)],
             source: [norm(source.0, w), norm(source.1, h)],
             radius: 0.125,
@@ -388,6 +389,7 @@ mod tests {
         let centre = (48usize, 32usize);
         let source = (16usize, 32usize);
         let mk = |mode| Spot {
+            decode: false,
             centre: [norm(centre.0, w), norm(centre.1, h)],
             source: [norm(source.0, w), norm(source.1, h)],
             radius: 6.0 / 64.0,
@@ -473,6 +475,7 @@ mod tests {
             }
         }
         let spot = |centre: (usize, usize), source: (usize, usize)| Spot {
+            decode: false,
             centre: [norm(centre.0, W), norm(centre.1, H)],
             source: [norm(source.0, W), norm(source.1, H)],
             radius: 6.0 / 64.0,
@@ -511,6 +514,7 @@ mod tests {
         let centre = (32usize, 32usize);
         let (dx, dy) = (-4i64, -3i64);
         let spot = Spot {
+            decode: false,
             centre: [norm(centre.0, W), norm(centre.1, H)],
             source: [
                 norm((centre.0 as i64 + dx) as usize, W),
@@ -539,6 +543,7 @@ mod tests {
         let orig = patterned(W, H);
         let centre = (16usize, 16usize);
         let mk = |source: [f32; 2]| Spot {
+            decode: false,
             centre: [norm(centre.0, W), norm(centre.1, H)],
             source,
             radius: 6.0 / 32.0,
@@ -616,6 +621,7 @@ mod tests {
             let out = run(
                 orig.clone(),
                 &[Spot {
+                    decode: false,
                     centre: [0.5, 0.5],
                     source: [0.2, 0.2],
                     radius,

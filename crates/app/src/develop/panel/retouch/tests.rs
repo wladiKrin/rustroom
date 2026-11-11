@@ -9,6 +9,7 @@ use rustroom_app::retouch_list::Brush;
 
 pub(crate) fn a_spot() -> edit_model::Spot {
     edit_model::Spot {
+        decode: false,
         centre: [0.5, 0.5],
         source: [0.2, 0.2],
         radius: 0.02,
@@ -20,6 +21,7 @@ pub(crate) fn a_spot() -> edit_model::Spot {
 
 pub(crate) fn an_eye() -> edit_model::Eye {
     edit_model::Eye {
+        decode: false,
         centre: [0.5, 0.5],
         radius: 0.02,
         kind: EyeKind::Red,

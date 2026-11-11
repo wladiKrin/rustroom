@@ -37,6 +37,7 @@ fn spots(n: usize, radius: f32, mode: SpotMode) -> Vec<Spot> {
             // output — which would price a different thing.
             let t = i as f32 / n.max(1) as f32;
             Spot {
+                decode: false,
                 centre: [0.2 + 0.6 * t, 0.3 + 0.4 * ((i % 7) as f32 / 7.0)],
                 source: [0.2 + 0.6 * t, 0.7 - 0.4 * ((i % 7) as f32 / 7.0)],
                 radius,

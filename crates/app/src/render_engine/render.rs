@@ -1872,6 +1872,7 @@ mod tests {
                 edit_model::MaskedAdjustment {
                     mask: edit_model::Mask::Brush(edit_model::Brush {
                         strokes: vec![edit_model::BrushStroke {
+                            decode: false,
                             points: vec![[0.2, 0.3], [0.8, 0.7]],
                             radius: 0.2,
                             hardness: 60.0,

@@ -2429,6 +2429,7 @@ mod tests {
         let mut m = mask_carrying(a);
         m.mask = edit_model::Mask::Brush(edit_model::Brush {
             strokes: vec![edit_model::BrushStroke {
+                decode: false,
                 points: (0..12).map(|i| [0.1 + i as f32 * 0.07, 0.5]).collect(),
                 radius: 0.45,
                 hardness: 50.0,

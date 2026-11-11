@@ -323,6 +323,7 @@ mod tests {
         };
         let spot = |e: &mut Edits| {
             e.spots = vec![edit_model::Spot {
+                decode: false,
                 centre: [0.3, 0.3],
                 source: [0.7, 0.7],
                 radius: 0.08,

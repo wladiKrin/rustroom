@@ -192,6 +192,7 @@ pub(super) fn draw_mask_overlay(
                     .and_then(|m| mask_components::component_mut(m, j))
                 {
                     b.strokes.push(edit_model::BrushStroke {
+                        decode: false,
                         points: vec![src],
                         radius,
                         hardness: brush.hardness,

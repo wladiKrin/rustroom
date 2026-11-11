@@ -194,6 +194,11 @@ pub struct BrushStroke {
     pub auto_mask: bool,
     /// How close counts, 0..=100. Larger selects more.
     pub tolerance: f32,
+    /// M10.12c: `points` are in DECODE space (`Removal::points`' space), so the stroke stays on its content
+    /// when lens correction or perspective changes. `false` is a stroke from before, in the post-perspective,
+    /// pre-geometry space described above, rendered exactly as it always was (`pipeline::anchors`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub decode: bool,
 }
 
 impl Default for BrushStroke {
@@ -206,6 +211,7 @@ impl Default for BrushStroke {
             erase: false,
             auto_mask: false,
             tolerance: 35.0,
+            decode: false,
         }
     }
 }
@@ -548,6 +554,7 @@ mod tests {
                 // actually covers them. A pair that both defaulted would serialize nothing new
                 // and this test would keep passing against a `refs` that never persisted.
                 BrushStroke {
+                    decode: false,
                     points: vec![[0.1, 0.2], [0.3, 0.4]],
                     radius: 0.05,
                     hardness: 60.0,

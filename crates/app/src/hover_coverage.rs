@@ -370,6 +370,7 @@ fn every_clickable_control_says_what_it_does() {
     }
     develop(&mut w, "Develop (Retouch)", Tool::Retouch, |s| {
         s.edits.spots = vec![edit_model::Spot {
+            decode: false,
             centre: [0.5, 0.5],
             source: [0.3, 0.3],
             radius: 0.05,

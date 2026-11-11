@@ -176,6 +176,7 @@ pub fn radius_from_px(px: f32, full_long: usize) -> f32 {
 /// A new spot at `centre` sourcing from `source`, taking the tool's current settings.
 pub fn place(centre: [f32; 2], source: [f32; 2], tool: SpotTool) -> Spot {
     Spot {
+        decode: false,
         centre,
         source,
         radius: tool.radius.clamp(MIN_RADIUS, MAX_RADIUS),
@@ -192,6 +193,7 @@ mod tests {
 
     fn spot(cx: f32, cy: f32, sx: f32, sy: f32, r: f32) -> Spot {
         Spot {
+            decode: false,
             centre: [cx, cy],
             source: [sx, sy],
             radius: r,

@@ -95,6 +95,7 @@ pub fn to_spots(
                 ]
             });
         made.push(edit_model::Spot {
+            decode: false,
             centre,
             source,
             radius,

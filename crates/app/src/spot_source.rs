@@ -270,6 +270,7 @@ mod tests {
         let (dest, r) = ([0.5f32, 0.5], 0.04f32);
         let occupied = [dest[0] + 2.0 * r, dest[1]];
         let existing = [Spot {
+            decode: false,
             centre: occupied,
             source: [0.1, 0.1],
             radius: r,
