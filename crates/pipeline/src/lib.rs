@@ -16,6 +16,7 @@ pub use per_pixel::{run_stages, PerPixel};
 /// exists to prevent for the pipeline itself.
 pub use stages::mask_coverage::{hue_chroma, lightness};
 
+pub mod anchors;
 pub mod auto_tone;
 pub mod lens_grid;
 /// ⚠ A **`.cube` parser and sampler, with no image and no stage** — deliberately separate from
