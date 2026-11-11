@@ -18,6 +18,10 @@ impl RustroomApp {
             return Vec::new();
         };
         let remote = &self.immich_stacks.of_asset;
+        // ⚠ A hidden stack-mate is out of the rows (hidden before grouping) but still the photo's: it follows.
+        let hidden = lib.effective(&self.filter).format;
+        // ⚠ Only when something is hidden: otherwise a big selection would walk the folder once per photo.
+        let mates_hidden = self.settings.stacking.enabled && hidden.is_active();
         let mut out: Vec<PathBuf> = Vec::new();
         let mut add = |p: &Path| {
             if !out.iter().any(|q| q == p) {
@@ -32,10 +36,11 @@ impl RustroomApp {
                 .find(|e| &e.id == id)
                 .and_then(|e| e.stack.as_ref())
                 .is_some_and(|s| !s.expanded);
-            if collapsed {
+            if collapsed || mates_hidden {
                 let key = rustroom_app::stack::key_for(&id.path, remote, &lib.hand_stacks);
                 for e in &lib.scan {
                     if key.is_some()
+                        && (collapsed || !hidden.is_visible(&e.path))
                         && rustroom_app::stack::key_for(&e.path, remote, &lib.hand_stacks) == key
                     {
                         add(&e.path);
@@ -253,6 +258,30 @@ impl RustroomApp {
 mod tests {
     use crate::test_app;
     use rustroom_app::menu::Command;
+
+    /// A photo whose stack-mate is hidden still renames and moves WITH it — hiding the JPEG must not split a
+    /// RAW+JPEG pair (2026-11-11, with hidden formats leaving their stacks before grouping).
+    #[test]
+    fn a_hidden_stack_mate_follows_its_photo() {
+        let mut app = crate::test_app::for_test();
+        app.settings.stacking.enabled = true;
+        app.library = Some(crate::test_app::library_of_names(&[
+            "a.JPG", "a.RAF", "b.RAF",
+        ]));
+        app.toggle_format("jpg");
+        let a = rustroom_app::photo_id::PhotoId::original("/nonexistent/a.RAF".into());
+        let files = app.files_of(&[a]);
+        let names: Vec<_> = files
+            .iter()
+            .map(|p| p.file_name().unwrap().to_owned())
+            .collect();
+        assert_eq!(names, ["a.RAF", "a.JPG"]);
+        // The control: with stacking off a hidden JPEG is not the RAW's, and stays put.
+        app.settings.stacking.enabled = false;
+        app.rebuild_entries(None);
+        let a = rustroom_app::photo_id::PhotoId::original("/nonexistent/a.RAF".into());
+        assert_eq!(app.files_of(&[a]).len(), 1);
+    }
 
     /// Four photos in the catalog, the first three selected, the first active.
     fn four() -> crate::RustroomApp {

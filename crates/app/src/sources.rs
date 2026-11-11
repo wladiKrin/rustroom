@@ -339,6 +339,13 @@ impl RustroomApp {
             &self.immich_stacks.of_asset,
             copies.as_ref(),
             &hand_stacks,
+            // ⚠ The effective filter for THIS scan — `Library::effective`'s rule, before a Library exists.
+            &self
+                .filter
+                .effective_for(&rustroom_app::format_filter::formats_of(
+                    scan.iter().map(|e| e.path.as_path()),
+                ))
+                .format,
         );
         let n = entries.len();
         let ctx2 = ctx.clone();

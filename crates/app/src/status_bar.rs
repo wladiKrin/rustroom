@@ -648,16 +648,7 @@ fn format_chips(app: &mut RustroomApp, ui: &mut egui::Ui, rtl: bool) {
         }
     }
     if let Some(ext) = toggled {
-        app.filter.format.toggle(&ext);
-        let filter = app.filter.clone();
-        if let Some(lib) = app.library.as_mut() {
-            lib.refilter(&filter);
-        }
-        // ⚠ Persisted, so it survives a restart as well as a source switch. Written only on an
-        // actual toggle — this body runs every frame, and saving unconditionally would rewrite the
-        // settings file sixty times a second, the `apply_view_demosaic` rule.
-        app.settings.hidden_formats = app.filter.format.clone();
-        app.save_settings();
+        app.toggle_format(&ext);
     }
 }
 
