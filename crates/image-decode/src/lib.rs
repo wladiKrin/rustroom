@@ -10,7 +10,7 @@ pub mod heif;
 #[cfg(test)]
 mod heif_tests;
 mod quick_look;
-pub use quick_look::{quick_look, QuickLook};
+pub use quick_look::{maker_note, quick_look, QuickLook};
 
 use core_image::Capture;
 use core_image::{ImageBuf, Thumbnail};
