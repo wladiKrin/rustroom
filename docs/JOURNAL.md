@@ -193,6 +193,28 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-11 — M10.19a: HEIC/HEIF photos (branch `m10.19a-heic`, merged 2026-11-11)
+
+✅ **Confirmed by the author on the Mac ("everything else looks fine … merge and delete")** — iPhone HEICs show, open,
+colour and details right. ⚠ **A real file the container ROTATES is unseen**: the author had no upright-turned HEIC,
+so orientation is proven only on the constructed `rot.heic`. The author skipped the questions ("just start").
+
+- `.heic` / `.heif` / `.hif` join `catalog::IMAGE_EXTENSIONS` (folders, Import, the open dialog, Immich assets); one
+  format chip (`format_filter::canonical_ext` → `heic`).
+- ⚠⚠ **libheif is a SYSTEM build dependency** (`libheif-rs` 3, bound at libheif 1.17 — Ubuntu 24.04's):
+  `pacman -S libheif`, `brew install libheif`, CI's `libheif-dev`.
+- `image_decode::heif`: sniffed by the `ftyp` box, never the name; the container's `irot`/`imir` applied by libheif,
+  the EXIF tag ignored; ⚠ **the colour profile is the HANDLE's** — the decoded image does not carry the nclx (the
+  first run read every file as sRGB). ICC through LittleCMS into linear ProPhoto, else nclx Display P3 (the inverse of
+  export's `PROPHOTO_TO_DISPLAY_P3`, so a P3 file round-trips) or sRGB; a deeper file decoded at 16 bits. Thumbnails
+  and the instant preview converted to sRGB. EXIF through kamadak-exif, which reads HEIF containers already;
+  `quick_look` falls back to the full read for them.
+- Not done: HDR (PQ/HLG, Apple's gain maps — the SDR picture is decoded), AVIF, HEIC export. JPEG/PNG/TIFF are still
+  sRGB by assumption (an iPhone JPEG's P3 is not read) — M10.13's ground.
+- Fixtures CONSTRUCTED with `heif-enc` (`crates/image-decode/testdata/README.md`); 11 tests; sabotaged — P3 read as
+  sRGB, the 16-bit path off, the HEIF branch dropped from the display path — each failed its tests.
+- ⚠ A first full run counted 3,262 tests and exited 0; the rerun listed every binary at 4,622. Cause not found.
+
 ### 2026-11-04 — M10.18e: print (branch `m10.18e-print`, merged 2026-11-04)
 
 ✅ **Confirmed by the author for Save PDF ("save to pdf works … merge and delete")** — ⚠ **sending to a printer is
