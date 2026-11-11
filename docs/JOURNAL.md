@@ -193,6 +193,22 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-11 — Hidden formats leave their stacks (branch `fix-hidden-format-stacks`, merged 2026-11-11)
+
+✅ **Confirmed by the author ("works, merge and delete")**.
+
+- **Reported in use:** with a RAF+JPG stack, hiding RAF hid the whole stack, JPG included; hiding JPG left the RAF
+  a "stack" of one. ⚠⚠ **Cause: the chips were applied AFTER grouping, to each row's front file** — while
+  `settings::hidden_formats`'s doc had claimed "filter-then-stack" all along. A comment asserting an order is not
+  the order (the standing lesson, a fifth time).
+- **Fix:** `library_state::browser_entries` takes the EFFECTIVE hidden formats (`Library::effective`, so a
+  one-format folder still shows) and drops those files before grouping, on both paths (rebuild and open);
+  a chip toggle (`RustroomApp::toggle_format`, out of `status_bar`) rebuilds rather than refilters.
+- ⚠ **A hidden stack-mate still follows its photo** (`stack_ops::files_of`): without it, Rename or Move on the RAF
+  with JPG hidden would split the pair on disk. Only with stacking on and a format hidden — else a big selection
+  would walk the folder once per photo.
+- 2 tests, both red on the old code (hiding RAF showed nothing at all).
+
 ### 2026-11-11 — M10.19b: Move to folder downloads Immich photos first (branch `m10.19b-move-download`, merged 2026-11-11)
 
 ✅ **Confirmed by the author on the Mac ("works")**, against the real server.

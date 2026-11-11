@@ -172,8 +172,8 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-11-11)
 
-**4626 tests on Linux** (macOS last counted 4274 before M10.17b; 31 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
-gate green on **`main`** (2026-11-11, M10.19b merged). ⚠ On this Linux machine `gpu_pipeline`'s suite can stall
+**4628 tests on Linux** (macOS last counted 4274 before M10.17b; 31 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
+gate green on **`main`** (2026-11-11, M10.19b and the hidden-formats fix merged). ⚠ On this Linux machine `gpu_pipeline`'s suite can stall
 inside a full run (alone it passes in 4 s) and `sources::reindex_tests` can fail to exit — both pre-existing
 (`grep -n 'Pre-existing, not chased' docs/JOURNAL.md`); run the remaining test binaries directly when it happens. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
@@ -270,7 +270,7 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15, M10.16a, b, c1–c3, d, M10.17a–b, M10.18a–e, M10.19a–d** (table above); ⛔ M10.16c4 declined.
 
-**▶ NOW: M10.13d camera-matching colour** — the one open item not parked. ✅ M10.19b merged 2026-11-11, confirmed by the author (`grep -n 'M10.19b' docs/JOURNAL.md`); the hidden-formats-in-stacks fix (`fix-hidden-format-stacks`) is pushed, waiting for the author. ✅ M10.19a HEIC merged 2026-11-11, confirmed by the author (`grep -n 'M10.19a' docs/JOURNAL.md`). ✅ M10.18e print merged 2026-11-04, Save PDF confirmed by the author, a printer unseen (`grep -n 'M10.18e' docs/JOURNAL.md`). ✅ An upload's chosen date in the file merged 2026-11-03, confirmed by the author (`grep -n 'upload.s chosen date' docs/JOURNAL.md`).
+**▶ NOW: M10.13d camera-matching colour** — the one open item not parked. ✅ M10.19b merged 2026-11-11, confirmed by the author (`grep -n 'M10.19b' docs/JOURNAL.md`); ✅ hidden formats leave their stacks before grouping, merged 2026-11-11 (`grep -n 'leave their stacks' docs/JOURNAL.md`). ✅ M10.19a HEIC merged 2026-11-11, confirmed by the author (`grep -n 'M10.19a' docs/JOURNAL.md`). ✅ M10.18e print merged 2026-11-04, Save PDF confirmed by the author, a printer unseen (`grep -n 'M10.18e' docs/JOURNAL.md`). ✅ An upload's chosen date in the file merged 2026-11-03, confirmed by the author (`grep -n 'upload.s chosen date' docs/JOURNAL.md`).
 ✅ M10.18d publish services merged 2026-11-03 with the batch description dialog, confirmed by the author ("okay that works").
 ✅ M10.18a tethering merged 2026-10-29, confirmed by the author with his X-T4 ("works, merge and delete";
 `grep -n 'M10.18a' docs/JOURNAL.md`). ✅ M10.18c people tagging merged 2026-10-29, confirmed by the author
