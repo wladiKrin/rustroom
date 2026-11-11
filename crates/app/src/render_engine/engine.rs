@@ -180,7 +180,10 @@ impl RenderEngine {
                     curve: profile.curve.as_deref(),
                     baseline_ev: profile.baseline_ev,
                     look,
-                    camera_look: profile.camera_look.as_ref().and_then(|c| c.cube.as_ref()),
+                    camera_look: crate::camera_look::applied(
+                        &edits,
+                        profile.camera_look.as_ref().and_then(|c| c.cube.as_ref()),
+                    ),
                 };
                 // ⚠ The live frame may hand off (no final checkpoint); the settle pass below may not.
                 let (frame, ran) = render_cached_with(

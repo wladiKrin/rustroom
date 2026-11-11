@@ -2,8 +2,8 @@
 //! and `manifest.json` saying which file is which, from how many photos, and when.
 //!
 //! ⚠ Plain files on purpose: a look the user dislikes can be deleted by hand, and Relearn empties the folder.
-//! ⚠ In a SUBFOLDER of the looks folder, so the Look menu does not list them — applied twice (as Camera
-//! matching and as a creative look) a film would be rendered twice.
+//! ⚠ In a SUBFOLDER of the looks folder: the Look menu lists them in their own group (`looks::LookStore::list`),
+//! and one chosen there REPLACES the photo's own film rather than stacking on it (`camera_look::applied`).
 
 use super::fit::Lattice;
 use serde::{Deserialize, Serialize};

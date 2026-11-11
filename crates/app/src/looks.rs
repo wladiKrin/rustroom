@@ -17,8 +17,25 @@ pub struct LookEntry {
     /// ⚠ A name and not a path, so a preset carrying a look is shareable. Camera profiles
     /// already behave this way.
     pub file: String,
-    /// What to show in the dropdown: the file stem.
+    /// What to show in the dropdown: the file stem — or a learned look's label.
     pub name: String,
+    /// Learned from the camera's own JPEGs (M10.13d) — `camera/…`, listed in its own group.
+    pub learned: bool,
+}
+
+/// The subfolder learned camera looks live in (`camera_look::store`), and the prefix their names carry here.
+pub const LEARNED_DIR: &str = "camera";
+
+/// Whether a look's file name is a learned camera look — exactly `camera/<plain name>`.
+///
+/// ⚠ By components, never by prefix: `camera/..` begins the same way and climbs out of the folder.
+pub fn is_learned(file: &str) -> bool {
+    use std::path::Component::Normal;
+    let mut parts = Path::new(file).components();
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(Normal(dir)), Some(Normal(_)), None) if dir == LEARNED_DIR
+    )
 }
 
 /// Why a look could not be loaded.
@@ -92,10 +109,28 @@ impl LookStore {
             .filter_map(|path| {
                 let file = path.file_name()?.to_string_lossy().into_owned();
                 let name = path.file_stem()?.to_string_lossy().into_owned();
-                Some(LookEntry { file, name })
+                Some(LookEntry {
+                    file,
+                    name,
+                    learned: false,
+                })
             })
             .collect();
         out.sort_by_key(|e| e.name.to_lowercase());
+        // M10.13d: the looks learned from the camera, after the user's own, named as the panel names them.
+        let store = crate::camera_look::store::Store::new(self.dir.join(LEARNED_DIR));
+        let mut learned: Vec<LookEntry> = store
+            .manifest()
+            .into_iter()
+            .filter(|l| store.dir().join(&l.file).is_file())
+            .map(|l| LookEntry {
+                file: format!("{LEARNED_DIR}/{}", l.file),
+                name: l.label(),
+                learned: true,
+            })
+            .collect();
+        learned.sort_by_key(|e| e.name.to_lowercase());
+        out.extend(learned);
         out
     }
 
@@ -111,7 +146,8 @@ impl LookStore {
             (parts.next(), parts.next()),
             (Some(std::path::Component::Normal(_)), None)
         );
-        if !one_plain_name {
+        // ⚠ M10.13d: and exactly one more form — a learned look, `camera/<plain name>`.
+        if !one_plain_name && !is_learned(file) {
             return Err(LookError::UnsafeName);
         }
         let path = self.dir.join(file);
@@ -269,6 +305,42 @@ mod tests {
         }
         let store = LookStore::user_default(&dir.0);
         (dir, store)
+    }
+
+    /// M10.13d: the looks learned from the camera list after the user's own, by their labels, and load by their
+    /// `camera/…` names — while nothing else with a separator does.
+    #[test]
+    fn learned_looks_list_after_the_users_and_load_by_their_folder() {
+        let (dir, store) = store_with("learned", &[("portra.cube", &identity_text(2))]);
+        let learned = crate::camera_look::store::Store::user_default(&dir.0);
+        let l = learned
+            .save(
+                "FUJIFILM X-T4",
+                "Classic Chrome",
+                &crate::camera_look::fit::fit(&[]),
+                9,
+                9,
+                1,
+            )
+            .unwrap();
+        let list = store.list();
+        let shown: Vec<(&str, bool)> = list.iter().map(|e| (e.name.as_str(), e.learned)).collect();
+        assert_eq!(shown, [("portra", false), ("Classic Chrome (X-T4)", true)]);
+        assert_eq!(list[1].file, format!("camera/{}", l.file));
+        assert!(store.load(&list[1].file).is_ok());
+        for bad in [
+            "camera/..",
+            "camera/../portra.cube",
+            "other/portra.cube",
+            "camera/a/b.cube",
+            "/camera/x.cube",
+        ] {
+            assert!(
+                matches!(store.load(bad), Err(LookError::UnsafeName)),
+                "{bad}"
+            );
+            assert!(!is_learned(bad), "{bad}");
+        }
     }
 
     /// ⚠ `<config>/rustroom/looks`, beside `profiles/` — one convention, not a second one.
@@ -430,6 +502,7 @@ mod tests {
         LooksState::from_entries(vec![LookEntry {
             file: "portra.cube".into(),
             name: "portra".into(),
+            learned: false,
         }])
     }
 

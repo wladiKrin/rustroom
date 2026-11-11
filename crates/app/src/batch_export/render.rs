@@ -275,7 +275,7 @@ pub fn export_one(
             curve: source.curve.as_deref(),
             baseline_ev: source.baseline_ev,
             look,
-            camera_look: source.camera_look.as_ref(),
+            camera_look: crate::camera_look::applied(edits, source.camera_look.as_ref()),
         },
     );
     let rendered = super::sizing::fit(tail.run(img), &sizing.plan, render_space);

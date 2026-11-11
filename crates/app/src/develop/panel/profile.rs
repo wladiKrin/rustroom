@@ -211,12 +211,49 @@ mod tests {
             rustroom_app::looks::LookEntry {
                 file: "portra.cube".into(),
                 name: "portra".into(),
+                learned: false,
             },
             rustroom_app::looks::LookEntry {
                 file: "teal.cube".into(),
                 name: "teal".into(),
+                learned: false,
             },
         ])
+    }
+
+    /// M10.13d: a learned film picked from the Look menu is an sRGB display table — its space is set, and
+    /// there is no space to choose.
+    #[test]
+    fn a_learned_look_sets_its_own_space_and_offers_none() {
+        let learned = rustroom_app::looks::LookEntry {
+            file: "camera/Classic Chrome _X-T4_.cube".into(),
+            name: "Classic Chrome (X-T4)".into(),
+            learned: true,
+        };
+        let looks = LooksState::from_entries(vec![learned.clone()]);
+        let mut edits = edit_model::Edits {
+            look: edit_model::Look {
+                space: edit_model::LutSpace::Linear,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        crate::develop::panel::look::choose(&mut edits, &learned);
+        assert_eq!(edits.look.file.as_deref(), Some(learned.file.as_str()));
+        assert_eq!(edits.look.space, edit_model::LutSpace::SrgbDisplay);
+        let labels = look_labels(&mut edits, &looks);
+        assert!(
+            labels.iter().any(|l| l == "Strength"),
+            "the sample: {labels:?}"
+        );
+        assert!(!labels.iter().any(|l| l == "sRGB display"), "{labels:?}");
+        // A look the user added keeps its space control.
+        let mut mine = edit_model::Edits::default();
+        let own = &two_looks().entries[0].clone();
+        crate::develop::panel::look::choose(&mut mine, own);
+        assert!(look_labels(&mut mine, &two_looks())
+            .iter()
+            .any(|l| l == "sRGB display"));
     }
 
     fn look_labels(edits: &mut edit_model::Edits, looks: &LooksState) -> Vec<String> {
