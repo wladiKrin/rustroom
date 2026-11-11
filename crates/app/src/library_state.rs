@@ -209,7 +209,7 @@ pub(crate) struct Library {
 impl Library {
     /// `filter` as it applies to this folder — the per-folder format override included. `refilter`
     /// and `why_empty` both read it here, so the grid can never explain a filter it did not apply.
-    fn effective(
+    pub(crate) fn effective(
         &self,
         filter: &rustroom_app::library_filter::LibraryFilter,
     ) -> rustroom_app::library_filter::LibraryFilter {
@@ -359,12 +359,18 @@ pub(crate) fn browser_entries(
     copies: Option<&std::collections::HashSet<PhotoId>>,
     // ⚠ M10.8c: the hand stacks, keyed before the server's and the name's.
     hand: &rustroom_app::stack::HandStacks,
+    // ⚠⚠ The formats hidden in this view — the EFFECTIVE filter's (`Library::effective`), so a folder of one
+    // format still shows it.
+    hidden: &rustroom_app::format_filter::FormatFilter,
 ) -> (Vec<entries::PhotoEntry>, rustroom_app::stack::Below) {
     let mut rows = entries::build(scan, sidecar::load_all);
     if let Some(keep) = copies {
         // ⚠ Before grouping, so a stack is made of the rows that are actually shown.
         rows.retain(|e| keep.contains(&e.id));
     }
+    // ⚠⚠ Before grouping too (reported in use, 2026-11-11): grouped first and filtered by the FRONT file, a
+    // hidden RAW took its visible JPEG with it, and a hidden JPEG left the RAW a "stack" of one.
+    rows.retain(|e| hidden.is_visible(&e.id.path));
     rustroom_app::stack::group_with_below(rows, stacking, expanded, remote, hand)
 }
 
@@ -392,6 +398,18 @@ pub(crate) fn hand_stacks_of(
 }
 
 impl RustroomApp {
+    /// Show or hide one format — a status-row chip.
+    pub(crate) fn toggle_format(&mut self, ext: &str) {
+        self.filter.format.toggle(ext);
+        // ⚠ A rebuild, not a refilter: hidden files leave their stacks before grouping (`browser_entries`).
+        self.rebuild_entries(None);
+        // ⚠ Persisted, so it survives a restart as well as a source switch. Written only on an
+        // actual toggle — the chips' body runs every frame, and saving unconditionally would rewrite the
+        // settings file sixty times a second, the `apply_view_demosaic` rule.
+        self.settings.hidden_formats = self.filter.format.clone();
+        self.save_settings();
+    }
+
     /// Re-read the open view's hand stacks from the catalog — after the stacks changed, or after a
     /// rename or a move re-keyed them under new paths (M10.8d; the map is keyed by path, so a stale
     /// one silently takes a renamed photo out of its stack).
@@ -471,6 +489,7 @@ impl RustroomApp {
             .map(|e| e.id.clone());
         let was_selected = lib.selected_ids();
         catalog::sort(&mut lib.scan, sort);
+        let hidden = lib.effective(&filter).format;
         (lib.entries, lib.below) = browser_entries(
             &lib.scan,
             &stacking,
@@ -478,6 +497,7 @@ impl RustroomApp {
             &remote,
             lib.copies.as_ref(),
             &lib.hand_stacks,
+            &hidden,
         );
         lib.bump_visible_rev();
 
@@ -643,6 +663,7 @@ mod tests {
             &Default::default(),
             None,
             &Default::default(),
+            &Default::default(),
         );
         assert_eq!(grouped.len(), 1, "the pair must collapse on the open path");
         assert!(grouped[0].stack.is_some());
@@ -657,11 +678,58 @@ mod tests {
                 &Default::default(),
                 &Default::default(),
                 None,
+                &Default::default(),
                 &Default::default()
             )
             .0
             .len(),
             2
+        );
+    }
+
+    /// The rows shown, by file name, each with whether it is a stack.
+    fn shown(app: &crate::RustroomApp) -> Vec<(String, bool)> {
+        let lib = app.library.as_ref().unwrap();
+        lib.visible
+            .iter()
+            .map(|&i| {
+                let e = &lib.entries[i];
+                (
+                    e.id.path
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                    e.stack.is_some(),
+                )
+            })
+            .collect()
+    }
+
+    /// ⚠⚠ Reported in use (2026-11-11): a hidden format is taken out BEFORE grouping, so hiding a stack's
+    /// front RAW shows its JPEG on its own, and hiding the JPEG leaves the RAW a single photo, not a stack.
+    /// It used to group first and filter the rows by their front file: the stack vanished, or stayed a stack
+    /// of one.
+    #[test]
+    fn hiding_a_format_takes_its_files_out_of_their_stacks() {
+        let mut app = crate::test_app::for_test();
+        app.settings.stacking.enabled = true;
+        app.library = Some(crate::test_app::library_of_names(&[
+            "a.JPG", "a.RAF", "b.RAF",
+        ]));
+        app.rebuild_entries(None);
+        // The sample: the pair is one stack, its RAW in front.
+        assert_eq!(
+            shown(&app),
+            [("a.RAF".into(), true), ("b.RAF".into(), false)]
+        );
+        app.toggle_format("raf");
+        assert_eq!(shown(&app), [("a.JPG".to_string(), false)]);
+        app.toggle_format("raf");
+        app.toggle_format("jpg");
+        assert_eq!(
+            shown(&app),
+            [("a.RAF".to_string(), false), ("b.RAF".into(), false)]
         );
     }
 
