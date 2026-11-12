@@ -100,7 +100,12 @@ pub(crate) fn profile_transform(path: &Path, cam_mul: [f32; 3]) -> Option<Profil
     // ⚠ **One weight, two consumers.** The matrices and the hue/saturation table are interpolated
     // on the same illuminant weight — using two would let the colour transform and the look
     // disagree about what light the scene was under.
-    let matrix = color::camera::forward_to_prophoto(color::camera::blend(forward1, forward2, g));
+    // ⚠ M10.13a: the forward matrices normalised to D50 as the DNG SDK holds them.
+    let matrix = color::camera::forward_to_prophoto(color::camera::blend(
+        color::camera::normalize_forward_matrix(forward1),
+        color::camera::normalize_forward_matrix(forward2),
+        g,
+    ));
     // ⚠ Blended **once**, here, outside the pixel loop. The X-T4's table is 2700 entries; doing
     // this per pixel would be 2700 multiplies per pixel for a value that never changes.
     let hue_sat = p.hue_sat_map.as_ref().map(|m| {
