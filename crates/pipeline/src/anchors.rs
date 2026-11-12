@@ -207,6 +207,11 @@ fn corrector(
     )
     .map(|c| Arc::new(DisplacementGrid::build(&c, w, h, GRID_STEP)));
     let mut m = memo.lock().ok()?;
+    // ⚠ Two threads can miss at once and each build it (the lock is not held while building): the first one stored
+    // wins, so every caller holds ONE field — found by `the_lens_field_is_built_once_and_shared` under a parallel run.
+    if let Some((_, held)) = m.iter().find(|(k, _)| *k == key) {
+        return held.clone();
+    }
     // A handful of photos' worth: one entry per lens, corrections and aspect in use.
     if m.len() >= 16 {
         m.remove(0);
