@@ -59,6 +59,11 @@ pub use stages::color_grading::ColorGradingStage;
 pub use stages::contrast::{ContrastStage, PIVOT as CONTRAST_PIVOT};
 pub use stages::creative_look::CreativeLookStage;
 pub use stages::defringe::DefringeStage;
+/// The defringe stage's constants, for its GPU twin to substitute rather than copy (M10.14f).
+pub use stages::defringe::{
+    EDGE_HI as DEFRINGE_EDGE_HI, EDGE_LO as DEFRINGE_EDGE_LO, FEATHER_DEG as DEFRINGE_FEATHER_DEG,
+    RADIUS_FULL as DEFRINGE_RADIUS_FULL,
+};
 pub use stages::dehaze::DehazeStage;
 // ⚠⚠ Re-exported so `gpu-pipeline` substitutes these into WGSL rather than transcribing them.
 // ⚠ `T_MIN` and `A_MIN` are ALIASED on the way out: they are dehaze's own floors and a bare name

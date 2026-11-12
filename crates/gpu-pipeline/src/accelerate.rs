@@ -371,6 +371,8 @@ pub fn accelerate_prefix_stage(
         // ⚠ Takes no image — noise reduction estimates nothing from the photograph, where dehaze's
         // airlight is a property of *this* frame. The buffer is handed over regardless, because
         // one signature serves both.
+        // ⚠ M10.14f: global amounts only — a mask carrying a local defringe declines inside `new`.
+        "defringe" => Box::new(crate::GpuDefringeStage::new(edits, scale, ctx)?),
         "noise_reduction" => Box::new(crate::GpuNoiseReductionStage::new(
             &edits.noise_reduction,
             scale,

@@ -40,8 +40,8 @@ pub const FEATHER_DEG: f32 = 10.0;
 /// frame. Shares above each level there: 0.05 → 31%, 0.10 → 5%, 0.15 → 1%. Fringing sits at
 /// STRONG edges (a dark branch against sky reads ~0.2–0.3), so the band starts at 0.08. ⚠ It is
 /// still a judgement to confirm on a photograph with real fringing.
-const EDGE_LO: f32 = 0.08;
-const EDGE_HI: f32 = 0.16;
+pub const EDGE_LO: f32 = 0.08;
+pub const EDGE_HI: f32 = 0.16;
 
 pub struct DefringeStage {
     global: Defringe,
