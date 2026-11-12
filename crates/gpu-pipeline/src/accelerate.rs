@@ -561,7 +561,11 @@ fn walk(
     // ⚠ Built once for the whole walk rather than per stage: it holds only an `Arc<GpuContext>`,
     // and a mask clones the `Arc` rather than the rasteriser.
     let coverage: Arc<dyn pipeline::CoverageRasterizer> = Arc::new(crate::GpuBrushRaster::new(ctx));
-    for mut s in tail.into_stages() {
+    let stages = tail.into_stages();
+    // ⚠⚠ M10.14h: the reference photo on the GPU — decided for the whole tail before any stage is built, because it
+    // is all or nothing (`reference_plan`).
+    let plan = reference_plan(&stages, edits, scale, region, rendering, spec, ctx);
+    for mut s in stages {
         // ⚠ Offered to **every** stage this walk sees, before the lookup. A replaceable stage has
         // no inner list and inherits the empty default, so one rule covers both arms rather than
         // one arm carrying an exception nobody would think to check.
@@ -588,7 +592,9 @@ fn walk(
         // `MaskedAdjustment`, and `the_replaceable_names_occur_at_most_once_in_a_tail` rests on
         // each name appearing once — while a tail legitimately holds several masks.
         if let Some(names) = mask_subs {
-            if let Some(g) = gpu_mask(s.as_ref(), &names, scale, region, rendering, spec, ctx) {
+            let fed = plan.as_ref().map_or(&[][..], |p| &p.by_cpu[..]);
+            if let Some(g) = gpu_mask(s.as_ref(), &names, scale, region, rendering, spec, ctx, fed)
+            {
                 run.push((g, s));
                 continue;
             }
@@ -597,7 +603,19 @@ fn walk(
         // mask's own parts (prebuilt maps included), which a builder taking `&Edits` cannot see. A
         // decline falls through to the CPU arm below, exactly as a mask's does.
         if let Some(so) = s.scene_offsets() {
-            if let Some(g) = crate::scene_offsets::GpuSceneOffsetsStage::new(so, ctx) {
+            let twin = match &plan {
+                Some(p) => reference_twins(so, edits, scale, region, rendering, spec, ctx)
+                    .and_then(|t| {
+                        crate::scene_offsets::GpuSceneOffsetsStage::with_reference(
+                            so,
+                            ctx,
+                            t,
+                            p.slots.clone(),
+                        )
+                    }),
+                None => crate::scene_offsets::GpuSceneOffsetsStage::new(so, ctx),
+            };
+            if let Some(g) = twin {
                 run.push((Box::new(g), s));
                 continue;
             }
@@ -674,13 +692,20 @@ fn gpu_mask(
     rendering: TailRendering<'_>,
     spec: RenderSpec,
     ctx: &Arc<GpuContext>,
+    fed: &[(usize, Arc<crate::scene_offsets::GpuCoverageSlot>)],
 ) -> Option<Box<dyn GpuStage>> {
-    // ⚠⚠ M10.12b: a mask fed its coverage from the reference photo declines — a twin would select
-    // from its own base, which its own offsets have moved (the chase b2 removes). Its CPU stage
-    // blends by the slot's plane instead.
-    if s.takes_reference_coverage() {
-        return None;
-    }
+    // ⚠⚠ M10.12b: a mask fed its coverage from the reference photo selects by the plane the offsets stage computed,
+    // never its own base, which its own offsets have moved (the chase b2 removes). Since M10.14h its twin binds the
+    // GPU plane — but only when the walk's plan pairs its slot with a GPU offsets stage; otherwise it declines and
+    // its CPU stage reads the CPU slot.
+    let feed = match s.reference_slot() {
+        Some(cpu) => {
+            let key = Arc::as_ptr(&cpu) as usize;
+            let gpu = fed.iter().find(|(k, _)| *k == key)?.1.clone();
+            Some((gpu, cpu))
+        }
+        None => None,
+    };
     let (masked, geometry, mask_region) = s.mask_description()?;
     // ⚠ The mask's own adjustments projected onto an `Edits`, which is what a `REPLACEABLE`
     // builder reads. `sub_edits`' exhaustive destructure is what stops a field being forgotten.
@@ -693,7 +718,7 @@ fn gpu_mask(
     // ⚠ The whole per-component slice, base first — `BrushCoverage`'s own `[mask][component]`
     // shape, handed over as it stands rather than indexed here. Picking out index 0 is what this
     // did before the fold, and doing it here would have put the chain's ordering in two places.
-    Some(Box::new(crate::GpuMaskStage::new(
+    let twin = crate::GpuMaskStage::new(
         masked,
         geometry,
         mask_region,
@@ -702,7 +727,108 @@ fn gpu_mask(
         s.prebuilt_coverage(),
         subs,
         ctx,
-    )?))
+    )?;
+    Some(Box::new(match feed {
+        Some((gpu, cpu)) => twin.fed_by(gpu, cpu),
+        None => twin,
+    }))
+}
+
+/// The reference photo on the GPU (M10.14h): the GPU slots to pair the offsets stage with the look stages of the
+/// masks that read it.
+struct ReferencePlan {
+    /// One per contributing mask of the offsets stage, `Some` where it reads the reference.
+    slots: Vec<Option<Arc<crate::scene_offsets::GpuCoverageSlot>>>,
+    /// The same GPU slots keyed by their CPU slot's address — how a mask's look stage finds its own.
+    by_cpu: Vec<(usize, Arc<crate::scene_offsets::GpuCoverageSlot>)>,
+}
+
+/// The plan, or `None` — then the offsets stage and those masks run on the CPU, exactly as before M10.14h.
+///
+/// ⚠⚠ **All or nothing, and that is the correctness of it, not caution.** The GPU offsets stage fills only GPU
+/// slots; a mask left on the CPU reads its CPU slot, which would then be empty and select on its own base. So the
+/// plan exists only when every stage from the offsets stage to the last mask reading it gets a twin — the whole
+/// stretch is one run of GPU stages, so one chain and one submission, the slot filled before it is read.
+#[allow(clippy::too_many_arguments)]
+fn reference_plan(
+    stages: &[Box<dyn PipelineStage>],
+    edits: &Edits,
+    scale: RenderScale,
+    region: Option<Region>,
+    rendering: TailRendering<'_>,
+    spec: RenderSpec,
+    ctx: &Arc<GpuContext>,
+) -> Option<ReferencePlan> {
+    let at = stages
+        .iter()
+        .position(|s| s.scene_offsets().is_some_and(|o| o.has_reference()))?;
+    let so = stages[at].scene_offsets()?;
+    let slots: Vec<Option<Arc<crate::scene_offsets::GpuCoverageSlot>>> = so
+        .slots()
+        .map(|c| c.map(|_| Arc::new(Default::default())))
+        .collect();
+    let by_cpu: Vec<(usize, Arc<crate::scene_offsets::GpuCoverageSlot>)> = so
+        .slots()
+        .zip(&slots)
+        .filter_map(|(c, g)| Some((Arc::as_ptr(c?) as usize, g.clone()?)))
+        .collect();
+    // The offsets stage itself, with its reference.
+    let twins = reference_twins(so, edits, scale, region, rendering, spec, ctx)?;
+    crate::scene_offsets::GpuSceneOffsetsStage::with_reference(so, ctx, twins, slots.clone())?;
+    let reads = |s: &dyn PipelineStage| {
+        s.reference_slot()
+            .is_some_and(|c| by_cpu.iter().any(|(k, _)| *k == Arc::as_ptr(&c) as usize))
+    };
+    let last = stages.iter().rposition(|s| reads(s.as_ref())).unwrap_or(at);
+    for s in &stages[at + 1..=last] {
+        let twinned = if s.name() == "mask" {
+            let names = s.sub_stage_names();
+            gpu_mask(
+                s.as_ref(),
+                &names,
+                scale,
+                region,
+                rendering,
+                spec,
+                ctx,
+                &by_cpu,
+            )
+            .is_some()
+        } else {
+            REPLACEABLE
+                .iter()
+                .find(|(n, _)| *n == s.name())
+                .and_then(|(_, build)| build(edits, scale, region, rendering, spec, ctx))
+                .is_some()
+        };
+        if !twinned {
+            return None;
+        }
+    }
+    Some(ReferencePlan { slots, by_cpu })
+}
+
+/// The GPU twins of the offsets stage's reference — the global look, by the names the CPU stage reports, through the
+/// same `REPLACEABLE` builders the tail's own stages use. `None` if any has no twin.
+#[allow(clippy::too_many_arguments)]
+fn reference_twins(
+    so: &pipeline::SceneOffsetsStage,
+    edits: &Edits,
+    scale: RenderScale,
+    region: Option<Region>,
+    rendering: TailRendering<'_>,
+    spec: RenderSpec,
+    ctx: &Arc<GpuContext>,
+) -> Option<Vec<Box<dyn GpuStage>>> {
+    so.reference_names()
+        .iter()
+        .map(|n| {
+            REPLACEABLE
+                .iter()
+                .find(|(r, _)| r == n)
+                .and_then(|(_, build)| build(edits, scale, region, rendering, spec, ctx))
+        })
+        .collect()
 }
 
 /// Put a chain back on the end of a pipeline.
@@ -3361,17 +3487,152 @@ mod tests {
         );
     }
 
-    /// ⚠⚠ M10.12b2 on the GPU: a range mask with a scene offset selects on the reference photo, so
-    /// the offsets stage (which runs it) and the mask's look stage (fed by its slot) both stay on the
-    /// CPU — a `GpuMaskStage` would select from its own base, the chase b2 removes — and the picture
-    /// equals the CPU's.
+    /// ⚠⚠ M10.14h: a range mask with a scene offset selects on the reference photo — and since M10.14h the
+    /// offsets stage computes it on the GPU and the mask's look twin blends by that plane, so NEITHER stays on the
+    /// CPU, and the picture still equals the CPU's. ⚠ The fixture is the chase's: a twin selecting from its own base
+    /// fails the picture check (it was M10.12b2's carrier when both stayed on the CPU).
     #[test]
-    fn a_range_mask_with_an_offset_renders_on_the_cpu_and_agrees() {
+    fn a_range_mask_with_an_offset_renders_on_the_gpu_and_agrees() {
+        let Some(ctx) = ctx() else { return };
+        // ⚠ Twice: with the global look HSL only, and with a global exposure and curve too — without the second the
+        // reference selects what the input does, and a twin that skipped the reference passed (a sabotage did).
+        for global_ev in [0.0, 0.8] {
+            let mut e = with_hsl();
+            e.exposure = global_ev;
+            if global_ev != 0.0 {
+                e.tone_curve.points = vec![[0.0, 0.0], [0.3, 0.42], [1.0, 1.0]];
+            }
+            let base = e.clone();
+            // ⚠ A narrow band and a big lift, so the chase is large: a wide default band selected the
+            // same pixels from either base, and a twin reading its own base passed the picture check.
+            e.masks = vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Luminance(edit_model::LuminanceRange {
+                    low: 0.0,
+                    high: 40.0,
+                    feather: 5.0,
+                    invert: false,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    exposure: 2.0,
+                    saturation: 80.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }];
+            let cpu = tail_of(&e).run(scene_ramp());
+            let p = accel(
+                tail_of(&e),
+                &e,
+                SCALE,
+                TailRendering::default(),
+                RenderSpec::default(),
+                &ctx,
+            );
+            let names = p.stage_names();
+            assert!(
+                !names.contains(&"scene_offsets") && !names.contains(&"mask"),
+                "both run on the GPU: {names:?}"
+            );
+            let gpu = p.run(scene_ramp());
+            assert!(
+                gpu.data().iter().all(|v| v.is_finite()),
+                "a non-finite GPU output"
+            );
+            let plain = tail_of(&base).run(scene_ramp());
+            assert!(
+                crate::compare(&cpu, &plain).worst_levels > 5.0,
+                "fixture check: the mask must change the picture"
+            );
+            let d = crate::compare(&cpu, &gpu);
+            assert!(
+                d.worst_levels < 1.0,
+                "global ev {global_ev}: the GPU path differs by {} levels",
+                d.worst_levels
+            );
+        }
+    }
+
+    /// M10.14h with a colour range and a white-balance offset — the other kind that reads the photograph, and the
+    /// offset whose `ln R` row the plane-fed path must still sum.
+    #[test]
+    fn a_colour_range_with_temp_renders_on_the_gpu_and_agrees() {
+        let Some(ctx) = ctx() else { return };
+        // Constructed: hues all round — `scene_ramp` is nearly grey, and a colour range picked nothing from it.
+        let colourful = || {
+            core_image::ImageBuf::from_vec(
+                64,
+                48,
+                (0..64 * 48)
+                    .flat_map(|i| {
+                        let (x, y) = ((i % 64) as f32 / 64.0, (i / 64) as f32 / 48.0);
+                        [x * 1.1, y, (1.0 - x) * (1.0 - y) * 0.9]
+                    })
+                    .collect(),
+            )
+        };
+        let mut e = with_hsl();
+        e.exposure = 0.6;
+        let base = e.clone();
+        e.masks = vec![edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Colour(edit_model::ColourRange::default()),
+            adjustments: edit_model::LocalAdjustments {
+                temp: 60.0,
+                highlights: -40.0,
+                saturation: 30.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        }];
+        let cpu = tail_of(&e).run(colourful());
+        assert!(
+            crate::compare(&cpu, &tail_of(&base).run(colourful())).worst_levels > 5.0,
+            "fixture check: the mask must change the picture"
+        );
+        let p = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            TailRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        );
+        let names = p.stage_names();
+        assert!(
+            !names.contains(&"scene_offsets") && !names.contains(&"mask"),
+            "both run on the GPU: {names:?}"
+        );
+        let gpu = p.run(colourful());
+        assert!(gpu.data().iter().all(|v| v.is_finite()));
+        let d = crate::compare(&cpu, &gpu);
+        assert!(d.worst_levels < 1.0, "differs by {} levels", d.worst_levels);
+    }
+
+    /// M10.14h is all or nothing: a gating brush between the offsets stage and the mask reading the reference has no
+    /// twin (it gates on the photograph, with no map yet), so the stretch cannot be one chain — and then the offsets
+    /// stage and the reading mask BOTH stay on the CPU, and the picture still equals the CPU's. A GPU offsets stage
+    /// beside a CPU mask would leave that mask's CPU slot empty.
+    #[test]
+    fn the_reference_falls_back_to_the_cpu_as_a_whole() {
         let Some(ctx) = ctx() else { return };
         let mut e = with_hsl();
-        // ⚠ A narrow band and a big lift, so the chase is large: a wide default band selected the
-        // same pixels from either base, and a twin reading its own base passed the picture check.
-        e.masks = vec![edit_model::MaskedAdjustment {
+        e.exposure = 0.8;
+        let gating = edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Brush(edit_model::Brush {
+                strokes: vec![edit_model::BrushStroke {
+                    points: vec![[0.2, 0.5], [0.8, 0.5]],
+                    radius: 0.2,
+                    auto_mask: true,
+                    ..Default::default()
+                }],
+                invert: false,
+            }),
+            adjustments: edit_model::LocalAdjustments {
+                saturation: 40.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let range = edit_model::MaskedAdjustment {
             mask: edit_model::Mask::Luminance(edit_model::LuminanceRange {
                 low: 0.0,
                 high: 40.0,
@@ -3384,7 +3645,8 @@ mod tests {
                 ..Default::default()
             },
             ..Default::default()
-        }];
+        };
+        e.masks = vec![gating, range];
         let cpu = tail_of(&e).run(scene_ramp());
         let p = accel(
             tail_of(&e),
@@ -3396,15 +3658,11 @@ mod tests {
         );
         let names = p.stage_names();
         assert!(
-            names.contains(&"scene_offsets") && names.contains(&"mask"),
-            "both stay on the CPU: {names:?}"
+            names.contains(&"scene_offsets") && names.iter().filter(|n| **n == "mask").count() == 2,
+            "the stretch stays on the CPU: {names:?}"
         );
         let d = crate::compare(&cpu, &p.run(scene_ramp()));
-        assert!(
-            d.worst_levels < 1.0,
-            "the GPU path differs by {} levels",
-            d.worst_levels
-        );
+        assert!(d.worst_levels < 1.0, "differs by {} levels", d.worst_levels);
     }
 
     /// ⚠⚠⚠ **THE CARRIER FOR M8.11, AND IT IS WHAT STOPS THE MILESTONE SHIPPING GREEN AND DEAD.**

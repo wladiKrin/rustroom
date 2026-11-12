@@ -119,6 +119,12 @@ pub trait PipelineStage: Send + Sync {
         false
     }
 
+    /// The slot [`Self::takes_reference_coverage`] reads — what pairs a mask's GPU twin with the offsets stage's
+    /// twin that fills it (M10.14h), by identity.
+    fn reference_slot(&self) -> Option<std::sync::Arc<crate::CoverageSlot>> {
+        None
+    }
+
     /// Coverage maps this stage was handed already rasterized, one per component.
     ///
     /// ⚠⚠ **This is what makes a GATING brush accelerable.** Such a brush reads the photograph to
