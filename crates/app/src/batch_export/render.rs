@@ -337,7 +337,11 @@ fn ai_coverage_for(
         .iter()
         .map(|row| row.iter().map(|_| std::sync::Mutex::new(None)).collect())
         .collect();
-    Some(std::sync::Arc::new(pipeline::BrushCoverage { maps, built }))
+    Some(std::sync::Arc::new(pipeline::BrushCoverage {
+        maps,
+        built,
+        painting: None,
+    }))
 }
 
 /// What a decode hands the exporter.

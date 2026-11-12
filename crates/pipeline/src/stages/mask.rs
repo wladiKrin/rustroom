@@ -246,6 +246,28 @@ impl MaskStage {
                 // ⚠ Fails toward the CPU at every step: no rasteriser offered, a plan that yields
                 // nothing, or a rasteriser that declines (no adapter, a box below its floor, an
                 // allocation refused) all fall through to `rasterize_in`, costing only the attempt.
+                // ⚠⚠ M10.14f: the component being painted, handed its incremental state by the render's brush cache —
+                // only the stroke's new dabs are splatted, against this same base, bit-identical to `rasterize_in`.
+                let painting = self.deposit.as_ref().and_then(|(sink, i)| {
+                    sink.painting
+                        .as_ref()
+                        .filter(|p| p.at == (*i, j))
+                        .and_then(|p| p.state.lock().ok().map(|g| (g, p.base_key)))
+                });
+                if let Some((mut state, key)) = painting {
+                    let built = std::sync::Arc::new(crate::brush::incremental::rasterize_gated(
+                        &mut state,
+                        brush,
+                        geometry,
+                        (fw, fh),
+                        clip,
+                        (&view, key),
+                    ));
+                    if let Some((sink, i)) = &self.deposit {
+                        sink.deposit(*i, j, std::sync::Arc::clone(&built));
+                    }
+                    return Some(built);
+                }
                 let built = self
                     .coverage_gpu
                     .as_ref()

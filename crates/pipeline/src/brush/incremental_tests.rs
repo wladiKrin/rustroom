@@ -160,3 +160,100 @@ fn a_changed_earlier_stroke_under_a_growing_one_rebuilds() {
     let want = rasterize_in(&b, &g, w, h, None, None);
     same_everywhere(&got, &want, w, h).unwrap();
 }
+
+/// Constructed: a base split down the middle — a warm half and a cool half — so an Auto Mask dab on one side paints
+/// only that side.
+struct Split {
+    at: usize,
+}
+
+impl BasePixels for Split {
+    fn at(&self, x: usize, y: usize) -> [f32; 3] {
+        let n = ((x * 7 + y * 13) % 11) as f32 * 0.004;
+        if x < self.at {
+            [0.55 + n, 0.25, 0.1]
+        } else {
+            [0.1, 0.3 + n, 0.6]
+        }
+    }
+}
+
+/// ⚠⚠ An Auto Mask stroke, grown point by point across the edge over earlier strokes, gated and not: the
+/// incremental map is the full raster with the same base, bit for bit, at every step — the gate's references and
+/// pixels and its short-circuit included.
+#[test]
+fn an_auto_masked_stroke_is_the_full_raster_at_every_step() {
+    let (w, h) = (240, 160);
+    let g = Geometry::default();
+    let base = Split { at: 120 };
+    let gated = |s: BrushStroke| BrushStroke {
+        auto_mask: true,
+        tolerance: 30.0,
+        ..s
+    };
+    let head = [
+        gated(stroke(20, 0.4, 70.0, false)),
+        stroke(15, 0.6, 50.0, false),
+    ];
+    let last = gated(stroke(30, 0.5, 90.0, false));
+    let mut state = None;
+    let mut gated_somewhere = false;
+    for n in 1..=last.points.len() {
+        let brush = Brush {
+            strokes: head
+                .iter()
+                .cloned()
+                .chain(std::iter::once(BrushStroke {
+                    points: last.points[..n].to_vec(),
+                    ..last.clone()
+                }))
+                .collect(),
+            invert: false,
+        };
+        let got = rasterize_gated(&mut state, &brush, &g, (w, h), None, (&base, 7));
+        let want = rasterize_in(&brush, &g, w, h, None, Some(&base));
+        if let Err(e) = same_everywhere(&got, &want, w, h) {
+            panic!("{n} points: {e}");
+        }
+        // The gate must bite: the same brush painted positionally differs once the stroke crosses the edge.
+        let positional = rasterize_in(&brush, &g, w, h, None, None);
+        gated_somewhere |= same_everywhere(&want, &positional, w, h).is_err();
+    }
+    assert!(
+        gated_somewhere,
+        "fixture check: the gate must change the coverage"
+    );
+}
+
+/// A new base (its key changed — a global slider moved under the brush) rebuilds: every gated alpha read the old
+/// pixels.
+#[test]
+fn a_changed_base_rebuilds_the_gated_field() {
+    let (w, h) = (200, 140);
+    let g = Geometry::default();
+    let gated = BrushStroke {
+        auto_mask: true,
+        tolerance: 30.0,
+        ..stroke(24, 0.5, 100.0, false)
+    };
+    let brush = |n: usize| Brush {
+        strokes: vec![BrushStroke {
+            points: gated.points[..n].to_vec(),
+            ..gated.clone()
+        }],
+        invert: false,
+    };
+    let mut state = None;
+    let _ = rasterize_gated(
+        &mut state,
+        &brush(12),
+        &g,
+        (w, h),
+        None,
+        (&Split { at: 100 }, 1),
+    );
+    let moved = Split { at: 60 };
+    let got = rasterize_gated(&mut state, &brush(14), &g, (w, h), None, (&moved, 2));
+    let want = rasterize_in(&brush(14), &g, w, h, None, Some(&moved));
+    same_everywhere(&got, &want, w, h).unwrap();
+}

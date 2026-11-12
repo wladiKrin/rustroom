@@ -933,6 +933,95 @@ mod tests {
         );
     }
 
+    /// M10.14f: an Auto Mask stroke painted frame by frame — the brush cache handing the mask stage its incremental
+    /// state — renders each frame exactly as a fresh render does, and the state is in use.
+    #[test]
+    fn an_auto_mask_stroke_paints_incrementally_and_renders_as_a_fresh_frame() {
+        let stroke = |n: usize| edit_model::BrushStroke {
+            points: (0..n)
+                .map(|i| [0.2 + i as f32 * 0.02, 0.5 + (i as f32 * 0.5).sin() * 0.05])
+                .collect(),
+            radius: 0.05,
+            hardness: 30.0,
+            auto_mask: true,
+            // ⚠ Low, so the gate BITES on this fixture's gradients — at 40 every pixel passed it and a sabotage that
+            // dropped the gate from the incremental splat stayed green here.
+            tolerance: 4.0,
+            ..Default::default()
+        };
+        let edits = |n: usize| Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Brush(edit_model::Brush {
+                    strokes: vec![stroke(n)],
+                    invert: false,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    saturation: 80.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Edits::default()
+        };
+        let render = |e: &Edits, prefix: &mut PrefixCache, brush: &mut BrushCache| {
+            render_cached(
+                &hazy_buffer(),
+                e,
+                FrameSpec::fit(200),
+                1.0,
+                None,
+                color::wb::Illuminant::default(),
+                pipeline::TailRendering::default(),
+                prefix,
+                brush,
+            )
+            .0
+        };
+        let (mut prefix, mut brush) = (PrefixCache::default(), BrushCache::default());
+        let plain = render(
+            &Edits::default(),
+            &mut PrefixCache::default(),
+            &mut BrushCache::default(),
+        );
+        let mut changed = false;
+        for n in 1..=24 {
+            let painted = render(&edits(n), &mut prefix, &mut brush);
+            let fresh = render(
+                &edits(n),
+                &mut PrefixCache::default(),
+                &mut BrushCache::default(),
+            );
+            assert_eq!(painted.srgb, fresh.srgb, "{n} points");
+            changed |= painted.srgb != plain.srgb;
+        }
+        assert!(changed, "fixture check: the mask must change the frame");
+        let positional = {
+            let mut e = edits(24);
+            if let edit_model::Mask::Brush(b) = &mut e.masks[0].mask {
+                b.strokes[0].auto_mask = false;
+            }
+            render(&e, &mut PrefixCache::default(), &mut BrushCache::default())
+        };
+        assert_ne!(
+            positional.srgb,
+            render(
+                &edits(24),
+                &mut PrefixCache::default(),
+                &mut BrushCache::default()
+            )
+            .srgb,
+            "fixture check: Auto Mask must gate on this photo"
+        );
+        let held = brush
+            .gating
+            .as_ref()
+            .expect("the painted component took the slot");
+        assert!(
+            held.1.lock().expect("state").is_some(),
+            "the mask stage must have painted through the incremental state"
+        );
+    }
+
     /// M10.14f: geometry followed by a GPU defringe CARRIES its output on the GPU — no download between the two —
     /// and the frame equals the CPU's; a second frame that changes only the defringe (which would resume at geometry's
     /// checkpoint, never cached for a carried step) still renders as the CPU does.
