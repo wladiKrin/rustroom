@@ -49,10 +49,12 @@ impl Session {
             .filter(|(_, &t)| t)
             .map(|(f, _)| *f)
             .collect();
+        // ⚠ M10.12c: made in the patches' working space, stored in decode space like every other patch.
+        let an = self.anchoring();
         let spots: Vec<edit_model::Spot> = self
             .dust_patches(&ticked, tool)
             .into_iter()
-            .map(|sp| edit_model::Spot { dust: true, ..sp })
+            .map(|sp| pipeline::anchors::anchor_spot(&an, edit_model::Spot { dust: true, ..sp }))
             .collect();
         let n = spots.len();
         self.edits.spots.extend(spots);
@@ -73,24 +75,16 @@ impl Session {
         tool: rustroom_app::spot_tool::SpotTool,
     ) -> Vec<edit_model::Spot> {
         let (dw, dh) = (self.buffer.width(), self.buffer.height());
-        let corr = self
-            .lens_memo
-            .get(self.lens.shot.as_ref(), &self.edits, dw, dh);
-        let lens = rustroom_app::ai_space::DecodeMap::with_shared(
-            &edit_model::Geometry::default(),
-            edit_model::Perspective::default(),
-            dw,
-            dh,
-            corr,
-            dw,
-            dh,
-        );
+        // ⚠ M10.12c: through the same anchoring the patches are stored by, so a find lands back on itself exactly.
+        let an = self.anchoring();
         let sample = crate::develop::canvas::spot_overlay::sampler_for(self);
+        // The patches already there, in the same working space, so an overlap is measured like for like.
+        let there = self.anchored_view().spots;
         dust_tool::to_spots(
             finds,
-            &|d| lens.post_lens_of(d),
+            &|d| an.decode_to_post_lens(d),
             dw as f32 / dh as f32,
-            &self.edits.spots,
+            &there,
             tool,
             &sample,
         )

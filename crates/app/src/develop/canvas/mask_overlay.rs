@@ -91,7 +91,9 @@ pub(super) fn draw_mask_overlay(
             lens: s.lens.shot.as_ref(),
             decode: (s.buffer.width(), s.buffer.height()),
         };
-        for (k, shown) in s.edits.masks.iter().zip(s.mask_shown.iter()) {
+        // ⚠ M10.12c: strokes stored in decode space, tinted where their stage draws them.
+        let view = s.anchored_view();
+        for (k, shown) in view.masks.iter().zip(s.mask_shown.iter()) {
             if *shown {
                 paint_tint(&painter, k, &s.edits.geometry, frame_rect, brush.base, &ai);
             }
@@ -173,7 +175,15 @@ pub(super) fn draw_mask_overlay(
                 frame_rect.height() as usize,
             );
             let radius = (brush.size / map.radius_scale.max(1e-6)).max(1e-4);
-            let src = map.inverse_point(p.x - frame_rect.left(), p.y - frame_rect.top());
+            // ⚠⚠ M10.12c: a stroke is STORED in decode space, so it stays on its content when lens correction or
+            // perspective changes; the point under the pointer is found in the stroke stage's space and mapped back.
+            let an = s.anchoring();
+            let src = an.stroke_to_decode(
+                map.inverse_point(p.x - frame_rect.left(), p.y - frame_rect.top()),
+            );
+            // …and its width a fraction of the DECODE's long edge, so the drawn width follows a Scale slider. A new
+            // stroke takes it at the press — its first point, where `anchors::resolve` reads it back.
+            let radius = radius / an.stroke_scale(src);
             // ⚠⚠ **Holding the secondary button erases for the duration of the gesture.** Baked
             // into the stroke at its start, exactly as `radius`, `hardness`, `flow` and
             // `auto_mask` are — so a stroke keeps what it was drawn with and the next one is an
@@ -192,6 +202,7 @@ pub(super) fn draw_mask_overlay(
                     .and_then(|m| mask_components::component_mut(m, j))
                 {
                     b.strokes.push(edit_model::BrushStroke {
+                        decode: true,
                         points: vec![src],
                         radius,
                         hardness: brush.hardness,
@@ -227,7 +238,8 @@ pub(super) fn draw_mask_overlay(
                     .get_mut(i)
                     .and_then(|m| mask_components::component_mut(m, j))
                 {
-                    if let Some(stroke) = b.strokes.last_mut() {
+                    // ⚠ Only onto a stroke this gesture began, which is in decode space like `src`.
+                    if let Some(stroke) = b.strokes.last_mut().filter(|st| st.decode) {
                         let keep = stroke
                             .points
                             .last()
@@ -620,6 +632,48 @@ mod tests {
                 want_erase,
                 "a {button:?} drag painted erase={} when it should be {want_erase}",
                 painted_stroke(&app).erase
+            );
+        }
+    }
+
+    /// M10.12c: a stroke painted on a lens-corrected photo is STORED in decode space — every point the pointer's
+    /// point in the stroke stage's space mapped back through the lens. ⚠ Checked against the SAME drag on the same
+    /// photo with no lens, whose points are the stage-space points themselves: comparing the stored stroke with its
+    /// own resolution would only prove the code agrees with itself (it passed with the mapping deleted).
+    #[test]
+    fn a_stroke_on_a_lens_corrected_photo_is_stored_in_decode_space() {
+        let paint = |lens: bool| {
+            let ctx = egui::Context::default();
+            let mut app = crate::anchor_flow::tests::lens_app(&ctx);
+            if !lens {
+                app.session.as_mut().unwrap().lens.shot = None;
+            }
+            with_selected_brush(&mut app);
+            let centre = canvas_centre(&mut app, &ctx);
+            let from = centre - egui::vec2(70.0, 50.0);
+            let _ = super::super::test_support::drag_through_with(
+                &mut app,
+                &ctx,
+                from,
+                from + egui::vec2(20.0, 8.0),
+                egui::PointerButton::Primary,
+            );
+            let an = app.session.as_ref().unwrap().anchoring();
+            (painted_stroke(&app), an)
+        };
+        let (plain, _) = paint(false);
+        let (stroke, an) = paint(true);
+        assert!(stroke.decode && stroke.points.len() >= 2, "{stroke:?}");
+        assert_eq!(stroke.points.len(), plain.points.len());
+        for (stored, w) in stroke.points.iter().zip(&plain.points) {
+            let want = an.stroke_to_decode(*w);
+            assert!(
+                (want[0] - w[0]).abs() > 1e-3,
+                "the lens must separate the spaces: {want:?} {w:?}"
+            );
+            assert!(
+                (want[0] - stored[0]).abs() < 1e-5 && (want[1] - stored[1]).abs() < 1e-5,
+                "{stored:?} vs {want:?}"
             );
         }
     }

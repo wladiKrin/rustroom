@@ -1408,6 +1408,7 @@ fn auto_mask_edits() -> Edits {
         masks: vec![edit_model::MaskedAdjustment {
             mask: edit_model::Mask::Brush(edit_model::Brush {
                 strokes: vec![edit_model::BrushStroke {
+                    decode: false,
                     // A single dab at the centre, wide enough that its disc spans hues the gate
                     // must refuse as well as the ones it must accept.
                     points: vec![[0.5, 0.5]],
@@ -2121,6 +2122,7 @@ fn spot_chart() -> ImageBuf {
 fn spot_cases() -> Vec<(&'static str, Edits)> {
     let mk = |mode| Edits {
         spots: vec![edit_model::Spot {
+            decode: false,
             centre: [24.0 / 63.0, 20.0 / 47.0],
             // Down and to the right: far enough that the gradient has visibly moved.
             source: [44.0 / 63.0, 34.0 / 47.0],
@@ -2269,6 +2271,7 @@ fn red_eye_chart() -> ImageBuf {
 /// click pads the detected pupil, so skin inside the circle is part of what this pins.
 fn red_eye_case() -> Edits {
     let eye = |x: f32, kind, catchlight| edit_model::Eye {
+        decode: false,
         centre: [x / 63.0, 24.0 / 47.0],
         radius: 7.0 / 64.0,
         kind,

@@ -1184,6 +1184,7 @@ mod tests {
         test_app::open_test_photo(&mut app, &ctx, 80, 40);
         let s = app.session.as_mut().expect("session");
         let spot = |x: f32| edit_model::Spot {
+            decode: false,
             centre: [x, 0.5],
             source: [0.1, 0.1],
             radius: 0.02,

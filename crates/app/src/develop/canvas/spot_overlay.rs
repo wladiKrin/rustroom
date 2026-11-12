@@ -22,6 +22,7 @@ use super::navigation::{tool_drag, tool_drag_started};
 use crate::develop::canvas_geom;
 use crate::Session;
 use eframe::egui;
+use pipeline::anchors::anchor_spot;
 use pipeline::brush::SpotMap;
 use rustroom_app::spot_tool::{self, Handle, SpotTool};
 use rustroom_app::tool::Tool;
@@ -100,8 +101,13 @@ pub(super) fn draw_spot_overlay(
         0.0
     };
     let mut changed = false;
+    // ⚠⚠ M10.12c: patches are STORED in decode space, and worked on here in the stage's own space — the map, the
+    // hit test and the sampler are all written there. `shown` is the patches as the stage sees them; what a gesture
+    // makes goes back through `anchor_spot`.
+    let an = s.anchoring();
+    let mut shown = s.anchored_view().spots;
 
-    // A canvas point → the stage's input space, which is where a spot lives.
+    // A canvas point → the stage's input space, which is where a spot is worked on.
     let to_source = |p: egui::Pos2| -> [f32; 2] {
         let (nx, ny) = canvas_geom::normalized_point(p, frame_rect);
         map.inverse_point(nx * frame_rect.width(), ny * frame_rect.height())
@@ -129,14 +135,14 @@ pub(super) fn draw_spot_overlay(
             let at = to_source(p);
             // ⚠ Hit-test BEFORE placement: a click on an existing handle selects it rather than
             // stacking a new spot on top of it.
-            match spot_tool::hit_test(&s.edits.spots, at, aspect, min_grab) {
+            match spot_tool::hit_test(&shown, at, aspect, min_grab) {
                 Some((i, _)) => {
                     s.selected_spot = Some(i);
                     s.selected_eye = None;
                 }
                 None => {
-                    let sp = place_with_source(at, *tool, &s.edits.spots, aspect, sample);
-                    s.edits.spots.push(sp);
+                    let sp = place_with_source(at, *tool, &shown, aspect, sample);
+                    s.edits.spots.push(anchor_spot(&an, sp));
                     s.selected_spot = Some(s.edits.spots.len() - 1);
                     s.selected_eye = None;
                     changed = true;
@@ -149,7 +155,7 @@ pub(super) fn draw_spot_overlay(
     if tool_drag_started(resp) {
         if let Some(p) = resp.interact_pointer_pos() {
             let at = to_source(p);
-            s.spot_drag = match spot_tool::hit_test(&s.edits.spots, at, aspect, min_grab) {
+            s.spot_drag = match spot_tool::hit_test(&shown, at, aspect, min_grab) {
                 Some((i, h)) => {
                     s.selected_spot = Some(i);
                     s.selected_eye = None;
@@ -195,8 +201,9 @@ pub(super) fn draw_spot_overlay(
             if let Some(p) = resp.interact_pointer_pos() {
                 let now = to_source(p);
                 let was = to_source(p - resp.drag_delta());
-                if let Some(sp) = s.edits.spots.get_mut(i) {
+                if let (Some(sp), Some(stored)) = (shown.get_mut(i), s.edits.spots.get_mut(i)) {
                     spot_tool::apply_drag(sp, h, now[0] - was[0], now[1] - was[1]);
+                    *stored = anchor_spot(&an, *sp);
                 }
                 // ⚠⚠ **Deliberately NO render while the drag runs — the moving circle IS the
                 // feedback**, which is `draw_crop_overlay`'s model rather than the mask overlay's.
@@ -238,13 +245,7 @@ pub(super) fn draw_spot_overlay(
                 // follow it; this only settles the last position, which the release frame may
                 // report more precisely than the previous drag frame did.
                 tool.radius = spot_tool::drag_radius(centre, to_source(to), aspect);
-                Some(place_with_source(
-                    centre,
-                    *tool,
-                    &s.edits.spots,
-                    aspect,
-                    sample,
-                ))
+                Some(place_with_source(centre, *tool, &shown, aspect, sample))
             }
             // ⚠ Same rule: an ⌥-click that never moved has chosen no source, so it falls to
             // the click path and gets an auto-picked one.
@@ -255,7 +256,7 @@ pub(super) fn draw_spot_overlay(
             _ => None,
         };
         if let Some(sp) = placed {
-            s.edits.spots.push(sp);
+            s.edits.spots.push(anchor_spot(&an, sp));
             s.selected_spot = Some(s.edits.spots.len() - 1);
             s.selected_eye = None;
             changed = true;
@@ -298,9 +299,7 @@ pub(super) fn draw_spot_overlay(
     // toggle that disabled the tool would be a mode, which is not what was asked for.
     // ⚠ Per patch since 2026-09-20: the row's eye. A flag past the end — a patch that has not
     // been through `sync_spot_flags` yet — draws, as outlines always did.
-    for (i, sp) in s
-        .edits
-        .spots
+    for (i, sp) in shown
         .iter()
         .enumerate()
         .filter(|(i, _)| s.spot_shown.get(*i).copied().unwrap_or(true))
@@ -552,6 +551,45 @@ mod tests {
             app.session.as_ref().unwrap().selected_spot,
             Some(0),
             "the second click did not select the spot it landed on"
+        );
+    }
+
+    /// M10.12c: a patch placed on a lens-corrected photo is STORED in decode space — the point under the click, as
+    /// the stage sees it, mapped back through the lens. ⚠ Checked against the same click with no lens, whose patch
+    /// is the stage-space point itself (`mask_overlay`'s stroke test says why a self-comparison is no test).
+    #[test]
+    fn a_click_on_a_lens_corrected_photo_stores_the_decode_point() {
+        let place = |lens: bool| {
+            let ctx = egui::Context::default();
+            let mut app = crate::anchor_flow::tests::lens_app(&ctx);
+            if !lens {
+                app.session.as_mut().unwrap().lens.shot = None;
+            }
+            app.tool = rustroom_app::tool::Tool::Retouch;
+            app.remove_tool.active = false;
+            let centre = crate::develop::canvas::test_support::canvas_centre(&mut app, &ctx);
+            // Off the centre, where the lens moves things.
+            let at = centre - egui::vec2(60.0, 45.0);
+            crate::develop::canvas::test_support::click_through(&mut app, &ctx, at);
+            let s = app.session.as_ref().unwrap();
+            assert_eq!(
+                s.edits.spots.len(),
+                1,
+                "fixture check: the click placed a spot"
+            );
+            (s.edits.spots[0], s.anchoring())
+        };
+        let (plain, _) = place(false);
+        let (stored, an) = place(true);
+        assert!(stored.decode, "{stored:?}");
+        let want = an.post_lens_to_decode(plain.centre);
+        assert!(
+            (want[0] - plain.centre[0]).abs() > 1e-3,
+            "the lens must separate the two spaces here: {want:?} vs {plain:?}"
+        );
+        assert!(
+            (want[0] - stored.centre[0]).abs() < 1e-5 && (want[1] - stored.centre[1]).abs() < 1e-5,
+            "{stored:?} vs {want:?}"
         );
     }
 

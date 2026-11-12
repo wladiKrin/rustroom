@@ -20,6 +20,7 @@ fn main() {
         }
     }
     let eye = Eye {
+        decode: false,
         centre: [f(2), f(3)],
         radius: f(4),
         kind: EyeKind::Red,

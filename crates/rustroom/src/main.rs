@@ -265,6 +265,14 @@ fn render(
         }
     }
 
+    // M10.12c: marks stored in decode space, mapped to their stages' spaces — the GUI's resolve.
+    let edits = pipeline::anchors::resolve_for(
+        &edits,
+        lens.as_ref(),
+        decoded.image.width(),
+        decoded.image.height(),
+    )
+    .into_owned();
     let (prefix, tail) = pipeline::build_pipeline_split_in_region_with_brush(
         &edits,
         pipeline::RenderScale::FULL,

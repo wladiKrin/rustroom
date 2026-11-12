@@ -447,6 +447,7 @@ fn band_brush(k: usize, radius: f32, auto_mask_share: f32) -> Brush {
             // The band in normalised x, and a gentle S so the strokes are not one straight line.
             let cx = 0.26 + 0.44 * t;
             BrushStroke {
+                decode: false,
                 points: (0..n_pts)
                     .map(|j| {
                         let s = j as f32 / (n_pts - 1) as f32;

@@ -50,6 +50,7 @@ fn sweep_brush(k: f32, gating: bool) -> Brush {
     let n = 12;
     Brush {
         strokes: vec![BrushStroke {
+            decode: false,
             points: (0..n)
                 .map(|i| [0.5 - k / 2.0 + k * i as f32 / (n - 1) as f32, 0.5])
                 .collect(),

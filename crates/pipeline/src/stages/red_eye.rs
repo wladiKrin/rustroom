@@ -265,6 +265,7 @@ mod tests {
     /// A circle of radius 9 px — deliberately larger than the pupil's 6, so skin lies inside it.
     fn eye(kind: EyeKind) -> Eye {
         Eye {
+            decode: false,
             centre: [0.5, 0.5],
             radius: 9.0 / 41.0,
             kind,

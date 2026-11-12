@@ -166,6 +166,7 @@ mod tests {
 
     fn spot(mode: SpotMode, dust: bool) -> Spot {
         Spot {
+            decode: false,
             centre: [0.5, 0.5],
             source: [0.4, 0.5],
             radius: 0.02,
@@ -177,6 +178,7 @@ mod tests {
 
     fn eye(kind: EyeKind) -> Eye {
         Eye {
+            decode: false,
             centre: [0.5, 0.5],
             radius: 0.01,
             kind,

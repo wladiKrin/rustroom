@@ -92,6 +92,11 @@ fn delete_selected_retouch(app: &mut RustroomApp, ctx: &egui::Context) -> bool {
 pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     use rustroom_app::layout::Piece;
     app.handle_develop_arrows(ctx);
+    // ⚠ M10.12c: marks from before move into decode space once the photo's lens is known — here, every frame, so
+    // a paste, a sync or an undo bringing old marks back is moved too. A check over the marks when there are none.
+    if let Some(s) = app.session.as_mut() {
+        s.migrate_anchors();
+    }
     let mut photo_edited = false;
     // ⚠ The rail writes into a local, which is then applied through `select_tool` — the one
     // place that owns the re-render. The 1–4 keys and the Photo menu arrive through the same

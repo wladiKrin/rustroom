@@ -37,6 +37,11 @@ pub struct Spot {
     /// M10.19d: made by Find dust — the Retouches list says "Dust N". The patch renders as any other.
     #[serde(default, skip_serializing_if = "is_false")]
     pub dust: bool,
+    /// M10.12c: `centre` and `source` are in DECODE space ([`Removal::points`]' space) — they stay on the
+    /// content when lens correction or perspective changes. `false` is a mark from before: in the post-lens,
+    /// pre-perspective frame described above, rendered exactly as it always was (`pipeline::anchors`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub decode: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -80,6 +85,9 @@ pub struct Eye {
     /// screen" is only knowable in the app.
     #[serde(default)]
     pub catchlight: Option<[f32; 2]>,
+    /// M10.12c: `centre` is in DECODE space, as [`Spot::decode`] says.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub decode: bool,
 }
 
 /// One content-aware removal (M10.16c1): a painted stroke — or a person found by Find people (M10.16c3) —
@@ -141,6 +149,7 @@ mod tests {
     #[test]
     fn a_dust_mark_round_trips_and_a_plain_spot_is_unchanged() {
         let plain = Spot {
+            decode: false,
             centre: [0.25, 0.75],
             source: [0.5, 0.75],
             radius: 0.02,
@@ -158,10 +167,72 @@ mod tests {
         assert!(back.dust);
     }
 
+    /// M10.12c: a mark from before the decode anchor serializes as it always did; an anchored one says so and
+    /// round-trips, for all three kinds.
+    #[test]
+    fn a_marker_free_mark_serializes_as_before_and_a_decode_one_round_trips() {
+        let spot = Spot {
+            decode: false,
+            centre: [0.25, 0.75],
+            source: [0.5, 0.75],
+            radius: 0.02,
+            feather: 60.0,
+            mode: SpotMode::Heal,
+            dust: false,
+        };
+        let eye = Eye {
+            decode: false,
+            centre: [0.4, 0.4],
+            radius: 0.01,
+            kind: EyeKind::Red,
+            pupil_size: 50.0,
+            darken: 50.0,
+            catchlight: None,
+        };
+        let stroke = crate::BrushStroke {
+            points: vec![[0.1, 0.2]],
+            radius: 0.03,
+            ..Default::default()
+        };
+        for text in [
+            serde_json::to_string(&spot).unwrap(),
+            serde_json::to_string(&eye).unwrap(),
+            serde_json::to_string(&stroke).unwrap(),
+        ] {
+            assert!(!text.contains("decode"), "{text}");
+        }
+        let s: Spot = serde_json::from_str(
+            &serde_json::to_string(&Spot {
+                decode: true,
+                ..spot
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let e: Eye = serde_json::from_str(
+            &serde_json::to_string(&Eye {
+                decode: true,
+                ..eye
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let k: crate::BrushStroke = serde_json::from_str(
+            &serde_json::to_string(&crate::BrushStroke {
+                decode: true,
+                ..stroke
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(s.decode && e.decode && k.decode);
+    }
+
     #[test]
     fn a_spot_round_trips_and_an_unstated_mode_means_heal() {
         let e = Edits {
             spots: vec![Spot {
+                decode: false,
                 centre: [0.25, 0.75],
                 source: [0.5, 0.75],
                 radius: 0.02,
@@ -226,6 +297,7 @@ mod tests {
     fn an_eye_round_trips_and_an_unstated_catchlight_is_none() {
         let e = Edits {
             eyes: vec![Eye {
+                decode: false,
                 centre: [0.4, 0.3],
                 radius: 0.01,
                 kind: EyeKind::Pet,

@@ -578,6 +578,7 @@ mod tests {
                 ..Default::default()
             },
             spots: vec![edit_model::Spot {
+                decode: false,
                 centre: [0.5, 0.5],
                 source: [0.3, 0.3],
                 radius: 0.02,

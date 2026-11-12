@@ -82,6 +82,7 @@ fn main() {
 
     let spot = |mode| Edits {
         spots: vec![Spot {
+            decode: false,
             centre: [cx_n, cy_n],
             source: [sx_n, sy_n],
             radius,

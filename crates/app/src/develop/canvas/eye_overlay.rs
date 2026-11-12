@@ -12,6 +12,7 @@ use crate::develop::canvas_geom;
 use crate::Session;
 use edit_model::EyeKind;
 use eframe::egui;
+use pipeline::anchors::anchor_eye;
 use pipeline::brush::SpotMap;
 use rustroom_app::eye_detect::{self, Detection};
 use rustroom_app::eye_tool::{self, EyeTool, Grab};
@@ -76,6 +77,10 @@ pub(super) fn draw_eye_overlay(
         frame_rect.min + egui::vec2(x, y)
     };
     let mut changed = false;
+    // ⚠⚠ M10.12c: eyes are STORED in decode space and worked on here in the stage's own space (`spot_overlay`'s
+    // rule): `shown` is them as the stage sees them, and what a gesture makes goes back through `anchor_eye`.
+    let an = s.anchoring();
+    let mut shown = s.anchored_view().eyes;
 
     if let Some(kind) = tool.active {
         // ---- the click: select an eye, or detect and place one ----
@@ -91,7 +96,7 @@ pub(super) fn draw_eye_overlay(
                 let at = to_source(p);
                 // ⚠ Hit-test BEFORE placement, so a click on an eye selects it rather than
                 // stacking a second one on top.
-                match eye_tool::hit_test(&s.edits.eyes, at, aspect, min_grab) {
+                match eye_tool::hit_test(&shown, at, aspect, min_grab) {
                     Some((i, _)) => select(s, tool, i),
                     None => {
                         let found = eye_detect::detect(at, kind, dims, sample);
@@ -99,9 +104,8 @@ pub(super) fn draw_eye_overlay(
                             *status = Some(not_found_message(kind));
                         }
                         let light = catchlight_for(tool, at, p, &to_source, dims);
-                        s.edits
-                            .eyes
-                            .push(eye_tool::place(found, at, kind, tool, light));
+                        let e = eye_tool::place(found, at, kind, tool, light);
+                        s.edits.eyes.push(anchor_eye(&an, e));
                         select(s, tool, s.edits.eyes.len() - 1);
                         changed = true;
                     }
@@ -112,8 +116,7 @@ pub(super) fn draw_eye_overlay(
         // ---- the drags ----
         if tool_drag_started(resp) {
             if let Some(p) = resp.interact_pointer_pos() {
-                s.eye_drag = match eye_tool::hit_test(&s.edits.eyes, to_source(p), aspect, min_grab)
-                {
+                s.eye_drag = match eye_tool::hit_test(&shown, to_source(p), aspect, min_grab) {
                     Some((i, g)) => {
                         select(s, tool, i);
                         // The eye leaves the view for the gesture, so the pupil shows.
@@ -138,7 +141,8 @@ pub(super) fn draw_eye_overlay(
                         // straightened frame is not a plain scale (`spot_overlay`'s note).
                         let now = to_source(p);
                         let was = to_source(p - resp.drag_delta());
-                        if let Some(e) = s.edits.eyes.get_mut(i) {
+                        if let (Some(e), Some(stored)) = (shown.get_mut(i), s.edits.eyes.get_mut(i))
+                        {
                             match g {
                                 Grab::Move => {
                                     e.centre[0] += now[0] - was[0];
@@ -150,6 +154,7 @@ pub(super) fn draw_eye_overlay(
                                     tool.radius = e.radius;
                                 }
                             }
+                            *stored = anchor_eye(&an, *e);
                         }
                     }
                     EyeDrag::None => {}
@@ -166,9 +171,8 @@ pub(super) fn draw_eye_overlay(
                     tool.radius = spot_tool::drag_radius(c, to_source(live.unwrap_or(to)), aspect)
                         .clamp(spot_tool::MIN_RADIUS, spot_tool::MAX_RADIUS);
                     let light = catchlight_for(tool, c, at, &to_source, dims);
-                    s.edits
-                        .eyes
-                        .push(eye_tool::place(Detection::NotFound, c, kind, tool, light));
+                    let e = eye_tool::place(Detection::NotFound, c, kind, tool, light);
+                    s.edits.eyes.push(anchor_eye(&an, e));
                     select(s, tool, s.edits.eyes.len() - 1);
                     changed = true;
                 }
@@ -191,7 +195,7 @@ pub(super) fn draw_eye_overlay(
 
     // ---- the overlay ----
     let painter = ui.painter_at(canvas_geom::overlay_clip(img_rect));
-    for (i, e) in s.edits.eyes.iter().enumerate() {
+    for (i, e) in shown.iter().enumerate() {
         let (halo, mark) = if s.selected_eye == Some(i) {
             (140, 255)
         } else {

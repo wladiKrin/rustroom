@@ -146,6 +146,18 @@ impl RenderEngine {
                         ..req.edits
                     }
                 };
+                // ⚠⚠ M10.12c: marks stored in decode space, mapped to the spaces their stages draw in — here,
+                // once, beside the strip above, so no render path can forget. The buffer is the decode at
+                // `source_scale`; only its aspect matters.
+                let edits = match pipeline::anchors::resolve_for(
+                    &edits,
+                    lens.as_ref(),
+                    buffer.width(),
+                    buffer.height(),
+                ) {
+                    std::borrow::Cow::Borrowed(_) => edits,
+                    std::borrow::Cow::Owned(e) => e,
+                };
                 // ⚠ A look that will not load leaves `look` as `None`, which renders the photo
                 // *without the look* and keeps the camera rendering — never an error that stops
                 // the photo opening. The panel is where the user is told; see `LooksState`.
@@ -426,6 +438,69 @@ mod tests {
             true,
             || {},
         )
+    }
+
+    /// M10.12c: the preview resolves a decode-space spot exactly as export does — the frame equals its resolved
+    /// twin's, and differs from the frame without it.
+    #[test]
+    fn the_preview_draws_an_anchored_spot_where_its_resolved_twin_is() {
+        let buf = varied_rect(128, 96);
+        // Constructed: a synthetic barrel lens, the pipeline's own fixture.
+        let xml = r#"<lensdatabase version="1">
+            <camera><maker>TestMaker</maker><model>TestCam</model>
+                <mount>TestMount</mount><cropfactor>1.0</cropfactor></camera>
+            <lens><maker>TestMaker</maker><model>TestLens 50mm</model>
+                <mount>TestMount</mount><cropfactor>1.0</cropfactor>
+                <calibration>
+                    <distortion model="ptlens" focal="50" a="0.0" b="0.05" c="0.0"/>
+                </calibration></lens>
+        </lensdatabase>"#;
+        let db = lens_profile::Catalogue::from_xml(xml).unwrap();
+        let lens = lens_profile::LensShot {
+            profile: db.find("TestMaker", "TestCam", "TestLens 50mm").unwrap(),
+            shot: lens_profile::Shot {
+                focal: 50.0,
+                aperture: 2.8,
+            },
+        };
+        let engine = RenderEngine::new(
+            buf.clone(),
+            1.0,
+            Some(lens.clone()),
+            color::wb::Illuminant::default(),
+            Default::default(),
+            true,
+            || {},
+        );
+        let base = Edits {
+            lens_correction: Some(edit_model::LensCorrection {
+                distortion: true,
+                ..Default::default()
+            }),
+            ..Edits::default()
+        };
+        let anchored = Edits {
+            spots: vec![edit_model::Spot {
+                centre: [0.12, 0.15],
+                source: [0.5, 0.5],
+                radius: 0.06,
+                feather: 0.0,
+                mode: edit_model::SpotMode::Clone,
+                dust: false,
+                decode: true,
+            }],
+            ..base.clone()
+        };
+        let a = pipeline::anchors::Anchoring::for_edits(Some(&lens), &anchored, 128, 96);
+        let twin = pipeline::anchors::resolve(&anchored, &a).into_owned();
+        let frame = |e: &Edits| {
+            engine.request(e.clone(), FrameSpec::fit(128));
+            wait_for_frame(&engine).rgba
+        };
+        let plain = frame(&base);
+        let got = frame(&anchored);
+        assert_ne!(got, plain, "the spot must change the frame");
+        assert_eq!(got, frame(&twin));
     }
 
     /// ⚠⚠ **Without this the gesture inverts: fluid while dragging, then a stall the moment you

@@ -33,6 +33,7 @@ use rustroom_app::photo_id::PhotoId;
 use std::time::{Duration, Instant};
 
 mod ai_flow;
+mod anchor_flow;
 mod app;
 mod bootstrap;
 mod camera_look_flow;

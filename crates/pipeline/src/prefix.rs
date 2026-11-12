@@ -1096,6 +1096,7 @@ mod tests {
                 5,
                 Edits {
                     spots: vec![edit_model::Spot {
+                        decode: false,
                         centre: [0.7, 0.7],
                         source: [0.2, 0.2],
                         radius: 0.09,
@@ -1256,6 +1257,7 @@ mod tests {
                 ..Default::default()
             }),
             spots: vec![edit_model::Spot {
+                decode: false,
                 centre: [0.5, 0.5],
                 source: [0.3, 0.3],
                 radius: 0.02,
@@ -1264,6 +1266,7 @@ mod tests {
                 dust: false,
             }],
             eyes: vec![edit_model::Eye {
+                decode: false,
                 centre: [0.4, 0.4],
                 radius: 0.01,
                 kind: Default::default(),
@@ -1426,6 +1429,7 @@ mod tests {
             }
         }
         let spot = edit_model::Spot {
+            decode: false,
             centre: [0.5, 0.5],
             source: [0.25, 0.25],
             radius: 0.125,

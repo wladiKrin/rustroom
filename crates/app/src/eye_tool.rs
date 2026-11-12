@@ -69,6 +69,7 @@ pub fn place(
         Detection::NotFound => (click, t.radius),
     };
     Eye {
+        decode: false,
         centre,
         radius: radius.clamp(MIN_RADIUS, MAX_RADIUS),
         kind,

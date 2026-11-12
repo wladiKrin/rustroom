@@ -36,6 +36,7 @@ fn best_of<T>(n: usize, mut f: impl FnMut() -> T) -> (T, f64) {
 /// A stroke across the middle of the frame, in pre-geometry normalised coordinates.
 fn stroke(auto_mask: bool) -> BrushStroke {
     BrushStroke {
+        decode: false,
         points: (0..40).map(|i| [0.3 + i as f32 * 0.01, 0.5]).collect(),
         radius: 0.04,
         hardness: 50.0,

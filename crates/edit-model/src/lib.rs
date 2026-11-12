@@ -556,6 +556,7 @@ mod tests {
 
     fn spot(at: f32) -> Spot {
         Spot {
+            decode: false,
             centre: [at, at],
             source: [at + 0.1, at],
             radius: 0.05,
@@ -988,6 +989,7 @@ mod tests {
                 invert: true,
             }],
             spots: vec![Spot {
+                decode: false,
                 centre: [0.3, 0.4],
                 source: [0.5, 0.4],
                 radius: 0.05,
@@ -996,6 +998,7 @@ mod tests {
                 dust: false,
             }],
             eyes: vec![Eye {
+                decode: false,
                 centre: [0.6, 0.35],
                 radius: 0.01,
                 kind: EyeKind::Pet,

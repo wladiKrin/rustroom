@@ -575,6 +575,7 @@ mod tests {
     fn stroke(auto_mask: bool) -> Mask {
         Mask::Brush(Brush {
             strokes: vec![BrushStroke {
+                decode: false,
                 points: (0..12).map(|i| [0.1 + i as f32 * 0.07, 0.5]).collect(),
                 radius: 0.2,
                 hardness: 50.0,
