@@ -193,6 +193,21 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-12 — M10.14f's follow-up: an Auto Mask brush paints incrementally (branch `m10.14f-auto-mask-paint`, merged 2026-11-12)
+
+✅ **Merged at the author's word ("merge, then delete the branch and push main")** — not tried on the Mac first.
+
+- `incremental::rasterize_gated` splats a new segment's dabs against the BASE (each dab's reference and each pixel's
+  Oklab from it, `composite`'s short-circuit kept) — bit-identical to `rasterize_in` with that base at every step;
+  keyed on what produced the base (`BrushCache::base_id`, hashed), so a global slider rebuilds. `MaskStage` paints
+  through `BrushCoverage::painting`, the slot the cache hands the first Auto Mask component that missed.
+- Measured (`bench_brush_paint`, 1:1, X-T4 frame, RTX 3060 Ti): **a 400-point stroke 27.4 → 15.1 ms a frame on the GPU
+  tail, 54.8 → 23.0 on the CPU**; flat in the stroke's length (the rest is the mask's CPU stage).
+- ⚠ The app test first used tolerance 40 — every pixel passed the gate, and dropping it from the splat stayed green;
+  now 4, with a check that Auto Mask changes the frame. ⚠ Committed once with clippy red (the gate's command did not stop
+  on it); amended.
+- **Phase 10 is complete.**
+
 ### 2026-11-12 — The GPU test audit, and M10.14f closed (branch `m10.14-gpu-test-audit`, merged 2026-11-12)
 
 ✅ **Confirmed by the author ("works, merge and delete")**.
