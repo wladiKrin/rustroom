@@ -1221,7 +1221,7 @@ mod tests {
             let gpu = GpuBrushRaster::new(&ctx)
                 .rasterize(&plan, b.invert, None)
                 .expect("the GPU raster");
-            if (cpu.w * cpu.h) % 4 != 0 {
+            if !(cpu.w * cpu.h).is_multiple_of(4) {
                 odd += 1;
             }
             assert_agrees(&gpu, &cpu);
