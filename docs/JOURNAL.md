@@ -193,6 +193,28 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-12 — M10.14h: the reference photo on the GPU (branch `m10.14h-reference-gpu`, merged 2026-11-12)
+
+✅ **Confirmed by the author ("works, merge and delete")**.
+
+- **The cost:** a range/colour mask or gating brush with a scene offset selects on the reference photo (M10.12b2),
+  which `SceneOffsetsStage` built on the CPU — both it and the mask's look twin declined, and the tail split round
+  them. `bench_mask_reference`, an X-T4 RAF, RTX 3060 Ti: **26.7 ms at 1600, 107 at 3200** (no-offset range: 2.4, 10).
+- **The design:** `GpuSceneOffsetsStage::with_reference` runs the global look's twins (`REPLACEABLE`, from
+  `SceneOffsetsStage::reference_names`) on a copy inside its own encode (`scene_copy`), computes each reading mask's
+  coverage there (`scene_reference`) into a plane, reads it in the offsets kernel, and leaves it in a
+  `GpuCoverageSlot`; `GpuMaskStage::fed_by` binds that plane as its `cov` and skips its coverage dispatch. The two pair
+  up in the walk by the CPU `CoverageSlot`'s address (`PipelineStage::reference_slot`).
+- ⚠⚠ **All or nothing** (`accelerate::reference_plan`): built only when every stage from the offsets stage to the last
+  reading mask gets a twin — one chain, one submission. A GPU offsets stage beside a CPU reading mask would leave the
+  CPU slot empty and the mask selecting on its own base. `duplicate` now SHARES the reference (an `Arc`) and the
+  slots, so a chain failing on the GPU renders the CPU answer.
+- **Measured after:** **2.8 ms at 1600, 11.3 at 3200**; with Saturation too 35 → 3.3 and 176 → 19.
+- ⚠ A sabotage skipping the reference look PASSED the old parity fixture (no global tone change, so reference and
+  input select alike) — the test now runs with a global exposure and curve too (51 levels under the sabotage). The
+  copy test first read its slot after the original had refilled it; reordered.
+- 5 tests. Unseen: the Mac's GPU numbers.
+
 ### 2026-11-12 — M10.12c: spots, eyes and brush strokes anchored in decode space (branch `m10.12c-sensor-anchors`, merged 2026-11-12)
 
 ✅ **Confirmed by the author ("ok, merge and delete")**, after one fix found in use.
