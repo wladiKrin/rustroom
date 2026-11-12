@@ -88,9 +88,21 @@ fn main() {
                             strokes: vec![stroke.clone()],
                             invert: false,
                         }),
-                        adjustments: LocalAdjustments {
-                            saturation: 40.0,
-                            ..Default::default()
+                        // `CLARITY=1`: a heavy sub-stage (local contrast) in place of Saturation — what M8.11's
+                        // inner chain was for.
+                        adjustments: if std::env::var_os("CLARITY").is_some() {
+                            LocalAdjustments {
+                                local_contrast: edit_model::LocalContrast {
+                                    clarity: 40.0,
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            }
+                        } else {
+                            LocalAdjustments {
+                                saturation: 40.0,
+                                ..Default::default()
+                            }
                         },
                         ..Default::default()
                     }],
