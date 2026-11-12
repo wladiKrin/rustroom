@@ -104,6 +104,8 @@ objc2-core-graphics = { version = "0.3", default-features = false, features = [
 ] }
 
 [dev-dependencies]
+# M10.14 audit: a GPU path that silently falls back to the CPU fails a test rather than passing it.
+gpu-pipeline = { path = "../gpu-pipeline", features = ["strict-fallback"] }
 # The constructed panoramas for the panorama merge's tests.
 photo-merge = { path = "../photo-merge", features = ["testing"] }
 # The scripted camera for the tethering flow's tests.

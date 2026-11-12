@@ -75,12 +75,44 @@ mod white_balance;
 /// ⚠ It prints, once per occurrence. A silent fallback would hide a performance cliff — the frame
 /// still arrives, several times slower, with nothing to say why.
 pub(crate) fn guarded<T>(f: impl FnOnce() -> Option<T>) -> Option<T> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+    let out = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(v) => v,
         Err(_) => {
             eprintln!("rustroom: the GPU path panicked; this frame fell back to the CPU");
             None
         }
+    };
+    #[cfg(any(test, feature = "strict-fallback"))]
+    if out.is_none() && !fallback::allowed() {
+        panic!(
+            "a GPU run fell back to the CPU inside a test — every GPU-against-CPU comparison would then compare the \
+             CPU with itself (M10.14 audit). Wrap the call in `crate::fallback::allow` if falling back is the point."
+        );
+    }
+    out
+}
+
+/// ⚠⚠ The M10.14 audit's guard: in this crate's tests a GPU run that falls back to the CPU PANICS, unless the test
+/// says falling back is what it checks. A chain falls back on any GPU failure — an uncompiled shader included — and
+/// every GPU-against-CPU test then compares the CPU with itself and passes: the defringe twin's test did exactly that.
+#[cfg(any(test, feature = "strict-fallback"))]
+pub mod fallback {
+    use std::cell::Cell;
+
+    thread_local! {
+        static ALLOWED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub fn allowed() -> bool {
+        ALLOWED.with(Cell::get)
+    }
+
+    /// Run `f` with falling back permitted — for a test of the fallback itself, or of a refusal.
+    pub fn allow<T>(f: impl FnOnce() -> T) -> T {
+        let was = ALLOWED.with(|a| a.replace(true));
+        let out = f();
+        ALLOWED.with(|a| a.set(was));
+        out
     }
 }
 

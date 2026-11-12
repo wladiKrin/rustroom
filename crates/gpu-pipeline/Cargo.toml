@@ -18,3 +18,8 @@ pollster = { workspace = true }
 bytemuck = { workspace = true }
 # M10.16b5: DRUNet's f16 storage, packed on the CPU (already in the build through naga).
 half = "2.7"
+
+[features]
+# M10.14 audit: a GPU run that falls back to the CPU PANICS — for the app's tests, which enable it as a
+# dev-dependency feature, so no build of the app itself carries it. This crate's own tests have it always.
+strict-fallback = []
