@@ -193,6 +193,24 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-12 — M10.14g: the coverage wire in bytes, the tile capacity per device (branch `m10.14g-coverage-wire`, merged 2026-11-12)
+
+✅ **Confirmed by the author ("works, merge and delete")**.
+
+- **The wire:** `GpuBrushRaster`'s readback carried one `u32` per coverage sample, narrowed on the CPU (85–90 % of
+  the download, `coverage_transfer_probe`). A `pack` kernel in the same pass now packs four to a word; the mapped
+  bytes ARE the map. `bench_coverage_wire` (new; constructed stroke, RTX 3060 Ti), a whole GPU rasterisation:
+  **1.69 → 1.11 ms at 1600, 6.63 → 4.40 at 3200, 44.7 → 20.1 at 6246**. A box whose sample count is not a multiple of
+  four reads back whole (tested over four odd frames).
+- **The capacity:** `MAX_TILE_DABS` (1024) is now the 16 KB floor; `brush_wgsl::capacity_for` sizes it from the
+  device's `max_compute_workgroup_storage_size` — the largest keeping THREE workgroups resident (the 2560 cliff was
+  three → two), in 256s, held to the measured plateau 512–2048. 32 KB (the M2, this RTX) → 2048, measured flat;
+  `max_tile_dabs()` reports the shared device's.
+- ⚠ **Found by the gate, in M10.12c's code:** its timed resolve test (a 50 ms budget) failed once under load; made a
+  probe (`--ignored`), and the memo test that replaced it caught a real race — two threads missing at once each built
+  the lens field and kept their own. The memo now keeps the first one stored.
+- 3 tests. Unseen: a 16 KB device.
+
 ### 2026-11-12 — M10.14h: the reference photo on the GPU (branch `m10.14h-reference-gpu`, merged 2026-11-12)
 
 ✅ **Confirmed by the author ("works, merge and delete")**.
