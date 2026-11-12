@@ -193,6 +193,28 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-12 — The GPU test audit, and M10.14f closed (branch `m10.14-gpu-test-audit`, merged 2026-11-12)
+
+✅ **Confirmed by the author ("works, merge and delete")**.
+
+- **The audit:** a GPU run that falls back to the CPU now PANICS in a test — always in `gpu-pipeline`'s own, in the
+  app's through the `strict-fallback` feature its dev-dependency enables (no build of the app carries it);
+  `gpu_pipeline::fallback::allow` for a test of the fallback itself. The hook is `guarded`, which every chain run goes
+  through (all seven entry points checked). **Result: no other twin's test was comparing the CPU with itself**;
+  positive control — the defringe shader broken again (`smooth`) fails both suites.
+- **Incremental splatting — BUILT:** `pipeline::brush::incremental` keeps the strokes before the last composited and
+  the last one's within-stroke `max` field; a frame splats only the new segment's dabs (its first repeats one, harmless
+  under `max`). Bit-identical to `rasterize_in` at every step (head strokes, erase, invert, clip, crop); rebuilt when
+  an earlier stroke changes (a sabotage found that case untested). The render's `BrushCache` paints through it, one
+  slot. ⚠ The map covers only what was TOUCHED — the clip box made a short stroke slower (6.5 → 8.7 ms). Measured
+  (`bench_brush_paint`, 1:1 on an X-T4 frame, GPU tail): **a 400-point stroke 18.4 → 5.9 ms a frame, flat in the
+  stroke's length**. ⚠ Plain brushes only: an Auto Mask brush is built in `MaskStage` against the base and still
+  redraws every dab (27 ms at 400 points). CPU-path numbers were taken under load (Blender) — not comparable.
+- **The two Oklab round trips — ⛔ DECLINED:** fused on the GPU, HSL + grading cost 0.41 ms against HSL's 0.39 —
+  the second round trip ≤ 0.02 ms (`bench_oklab_pair`); merging the stages would break the seam for that.
+- **M8.11's inner chain — KEPT:** priced by switching it off — a gating brush painting with masked Saturation, no
+  difference (18–19 ms both, alternated); with masked Clarity ~27 against ~30.5 ms. Worth more at export.
+
 ### 2026-11-12 — M10.14f (part): defringe on the GPU, and prefix outputs carried on the GPU (branch `m10.14f-defringe-gpu`, merged 2026-11-12)
 
 ✅ **Merged by the author's call ("let's just merge and delete it")** — he found no photo with visible fringing, so
