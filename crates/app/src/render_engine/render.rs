@@ -118,6 +118,8 @@ pub(super) fn render_cached_with(
         ph,
         prefix_stages,
         img,
+        img_step,
+        gpu_prefix_carried,
         gpu_prefix_steps,
         gpu_prefix_uploads,
         handed,
@@ -238,7 +240,8 @@ pub(super) fn render_cached_with(
         tail_key: &tail_key,
         refused,
     };
-    let (input, from_resident, k) = super::tail::resolve_input(run, input, pw, ph, &img, cache);
+    let (input, from_resident, k) =
+        super::tail::resolve_input(run, input, pw, ph, (&img, img_step), cache);
     let proof = soft_proof.filter(|_| visualize.is_none());
     // ⚠ `input` is cloned **only** when proofing. With the proof off there is one tail, one run,
     // and no clone — bit-exactly the path that existed before this feature.
@@ -304,6 +307,7 @@ pub(super) fn render_cached_with(
             prefix_stages,
             gpu_prefix_steps,
             gpu_prefix_uploads,
+            gpu_prefix_carried,
             handoff: handed.is_some(),
             region_scoped,
             bytes,
@@ -927,6 +931,76 @@ mod tests {
             ran.gpu_prefix_steps, 1,
             "lens blur must have run on the GPU"
         );
+    }
+
+    /// M10.14f: geometry followed by a GPU defringe CARRIES its output on the GPU — no download between the two —
+    /// and the frame equals the CPU's; a second frame that changes only the defringe (which would resume at geometry's
+    /// checkpoint, never cached for a carried step) still renders as the CPU does.
+    #[test]
+    fn a_carried_prefix_renders_as_the_cpu_and_resumes_without_its_checkpoint() {
+        if gpu_pipeline::shared().is_none() {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        }
+        let edits = |amount: f32| Edits {
+            geometry: edit_model::Geometry {
+                angle: 3.0,
+                ..Default::default()
+            },
+            defringe: edit_model::Defringe {
+                purple_amount: amount,
+                green_amount: amount,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        let render = |e: &Edits, gpu: bool, cache: &mut PrefixCache| {
+            render_cached(
+                &hazy_buffer(),
+                e,
+                FrameSpec {
+                    gpu_tail: gpu,
+                    ..FrameSpec::fit(200)
+                },
+                1.0,
+                None,
+                color::wb::Illuminant::default(),
+                pipeline::TailRendering::default(),
+                cache,
+                &mut BrushCache::default(),
+            )
+        };
+        let worst = |a: &RenderedFrame, b: &RenderedFrame| {
+            a.srgb
+                .iter()
+                .zip(b.srgb.iter())
+                .map(|(x, y)| x.abs_diff(*y))
+                .max()
+                .unwrap_or(0)
+        };
+        let (plain, _) = render(&edits(0.0), false, &mut PrefixCache::default());
+        let mut cache = PrefixCache::default();
+        for amount in [100.0, 60.0] {
+            let (cpu, _) = render(&edits(amount), false, &mut PrefixCache::default());
+            assert!(
+                worst(&cpu, &plain) > 3,
+                "fixture check: the defringe must change the frame"
+            );
+            let (gpu, ran) = render(&edits(amount), true, &mut cache);
+            assert_eq!(
+                ran.gpu_prefix_steps, 2,
+                "geometry and defringe must both run on the GPU"
+            );
+            assert_eq!(
+                ran.gpu_prefix_carried, 1,
+                "geometry's output must stay on the GPU"
+            );
+            assert!(
+                worst(&gpu, &cpu) <= 1,
+                "amount {amount}: {} levels",
+                worst(&gpu, &cpu)
+            );
+        }
     }
 
     fn straightened(angle: f32, cache: &mut PrefixCache) -> (RenderedFrame, Ran) {

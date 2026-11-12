@@ -344,6 +344,13 @@ pub struct SeamFacts<'a> {
     pub ai: Option<&'a dyn pipeline::AiRasters>,
 }
 
+/// Whether [`accelerate_prefix_stage`] reads the IMAGE it is handed, not only its size class — so whether a twin can
+/// be built before the step ahead of it has run (M10.14f). Lens correction samples its field for the image's size,
+/// geometry and Lens Blur build for it; the rest build from the edits alone.
+pub fn prefix_twin_reads_image(name: &str) -> bool {
+    matches!(name, "lens_correction" | "geometry" | "lens_blur")
+}
+
 pub fn accelerate_prefix_stage(
     name: &str,
     edits: &Edits,
@@ -371,6 +378,8 @@ pub fn accelerate_prefix_stage(
         // ⚠ Takes no image — noise reduction estimates nothing from the photograph, where dehaze's
         // airlight is a property of *this* frame. The buffer is handed over regardless, because
         // one signature serves both.
+        // ⚠ M10.14f: global amounts only — a mask carrying a local defringe declines inside `new`.
+        "defringe" => Box::new(crate::GpuDefringeStage::new(edits, scale, ctx)?),
         "noise_reduction" => Box::new(crate::GpuNoiseReductionStage::new(
             &edits.noise_reduction,
             scale,

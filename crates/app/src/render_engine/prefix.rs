@@ -53,6 +53,10 @@ pub(super) struct PrefixOut {
     pub(super) prefix_stages: usize,
     /// The last whole-buffer checkpoint — a handoff's last-resort CPU re-run starts from it.
     pub(super) img: Arc<ImageBuf>,
+    /// The step [`Self::img`] is the input of (M10.14f): the re-run runs every step from there.
+    pub(super) img_step: usize,
+    /// How many steps carried their output on the GPU — `Ran::gpu_prefix_carried`.
+    pub(super) gpu_prefix_carried: usize,
     pub(super) gpu_prefix_steps: usize,
     pub(super) gpu_prefix_uploads: usize,
     pub(super) handed: Option<(usize, usize)>,
@@ -209,6 +213,32 @@ pub(super) fn walk_whole(
     let mut gpu_prefix_uploads = 0usize;
     // The output size of a prefix whose last step handed off — there is no CPU image to ask.
     let mut handed: Option<(usize, usize)> = None;
+    // ⚠⚠ M10.14f: a step's output kept ON THE GPU for the next step when that one is a GPU step too — no download
+    // between them. Measured on an RTX 3060 Ti at rung 3200: geometry's 78 MB float checkpoint took ~70 ms to
+    // download when defringe followed it, against 1.2 ms of GPU work; a straighten drag paid it every frame.
+    let mut carry: Option<gpu_pipeline::GpuImage> = None;
+    let mut prebuilt: Option<gpu_pipeline::GpuChain> = None;
+    // The step `img` is the INPUT of — behind the loop's index while outputs are carried, so the last-resort CPU
+    // re-run (and a GPU failure mid-carry) knows how many steps to run again.
+    let mut img_step = start;
+    let mut gpu_prefix_carried = 0usize;
+    let twin = |name: &str, img: &ImageBuf| {
+        gpu_pipeline::shared().and_then(|ctx| {
+            gpu_pipeline::accelerate_prefix_stage(
+                name,
+                edits,
+                scale,
+                img,
+                gpu_pipeline::SeamFacts {
+                    lens: lens.as_ref(),
+                    resampler,
+                    airlight,
+                    ai: Some(&ai),
+                },
+                ctx,
+            )
+        })
+    };
     // ⚠ Resolved ONCE, and only when the setting is on. `shared()` acquires an adapter on first
     // call — ~42 s in a debug build — and the `None` arm of the loop below would otherwise ask for
     // it on every CPU step of every render, including renders with the GPU switched off.
@@ -247,7 +277,9 @@ pub(super) fn walk_whole(
         // ⚠ The step's `key` is never touched: `PrefixStepKey` is derived from the edits, so a
         // checkpoint written by either path is a legitimate hit for the other and `PrefixCache`
         // needs no change at all.
-        let mut accelerated = if gpu_tail {
+        let mut accelerated = if let Some(p) = prebuilt.take() {
+            Some(p)
+        } else if gpu_tail {
             gpu_pipeline::shared().and_then(|ctx| {
                 gpu_pipeline::accelerate_prefix_stage(
                     step.stage.name(),
@@ -291,12 +323,17 @@ pub(super) fn walk_whole(
                 } else {
                     None
                 };
-                let run = match from_resident {
-                    Some((r, uploaded)) => {
+                let run = match (carry.as_ref(), from_resident) {
+                    (Some(c), _) => {
+                        g.run_keeping_output(gpu_pipeline::Input::Resident(c), !handoff_ok)
+                    }
+                    (None, Some((r, uploaded))) => {
                         gpu_prefix_uploads += usize::from(uploaded);
                         g.run_keeping_output(gpu_pipeline::Input::Resident(r), !handoff_ok)
                     }
-                    None => g.run_keeping_output(gpu_pipeline::Input::Cpu(&img), !handoff_ok),
+                    (None, None) => {
+                        g.run_keeping_output(gpu_pipeline::Input::Cpu(&img), !handoff_ok)
+                    }
                 };
                 gpu_prefix_uploads += g.transfer_counts().0;
                 run
@@ -310,6 +347,7 @@ pub(super) fn walk_whole(
             match out {
                 Some(out) => {
                     img = Arc::new(out);
+                    img_step = i + 1;
                     if debug_steps {
                         eprintln!(
                             "    [{i}] {:>16} {:8.1} ms   -> {}x{} ({:.1} Mpx) KEPT",
@@ -337,6 +375,61 @@ pub(super) fn walk_whole(
             }
             break;
         }
+        // ⚠⚠ M10.14f: carried — this step's output stays on the GPU for the next, already built; no checkpoint is
+        // cached for it (a later frame resuming here re-runs this step from the one before, on the GPU).
+        if let (false, Some(g)) = (is_last, accelerated.as_ref()) {
+            let next = steps[i + 1].stage.name();
+            if let Some(n) = (!gpu_pipeline::prefix_twin_reads_image(next))
+                .then(|| twin(next, &img))
+                .flatten()
+            {
+                let kept = match carry.as_ref() {
+                    Some(c) => g.run_keeping_output(gpu_pipeline::Input::Resident(c), false),
+                    None => {
+                        let r = (i == start)
+                            .then(gpu_pipeline::shared)
+                            .flatten()
+                            .and_then(|ctx| cache.resident(&walk.key_at(i), &img, ctx));
+                        match r {
+                            Some((r, uploaded)) => {
+                                gpu_prefix_uploads += usize::from(uploaded);
+                                g.run_keeping_output(gpu_pipeline::Input::Resident(r), false)
+                            }
+                            None => g.run_keeping_output(gpu_pipeline::Input::Cpu(&img), false),
+                        }
+                    }
+                };
+                if let Some((_, k)) = kept {
+                    gpu_prefix_steps += 1;
+                    gpu_prefix_uploads += g.transfer_counts().0;
+                    carry = Some(k);
+                    prebuilt = Some(n);
+                    gpu_prefix_carried += 1;
+                    if debug_steps {
+                        eprintln!(
+                            "    [{i}] {:>16} {:8.1} ms   -> CARRIED on the GPU",
+                            step.stage.name(),
+                            t_step.elapsed().as_secs_f64() * 1000.0,
+                        );
+                    }
+                    continue;
+                }
+            }
+        }
+        // A carried image that could not go on (a GPU failure): bring the CPU checkpoint up to this step first.
+        if img_step < i {
+            let downloaded = carry
+                .take()
+                .and_then(|c| prefix_ctx.as_ref().and_then(|ctx| c.download(ctx)));
+            img = Arc::new(checkpoint_at(
+                steps,
+                img_step,
+                i,
+                (*img).clone(),
+                downloaded,
+            ));
+        }
+        img_step = i + 1;
         img = Arc::new(match accelerated {
             Some(g) => {
                 // ⚠⚠ **Take from the previous step and offer to the next — the whole of the
@@ -437,8 +530,76 @@ pub(super) fn walk_whole(
         ph,
         prefix_stages: ran,
         img,
+        img_step,
+        gpu_prefix_carried,
         gpu_prefix_steps,
         gpu_prefix_uploads,
         handed,
+    }
+}
+
+/// The CPU checkpoint at step `to` when outputs from `from` on were carried on the GPU and the next one failed there:
+/// the carried image downloaded, or — when even that fails — the carried steps run again on the CPU from `img`.
+pub(super) fn checkpoint_at(
+    steps: &[pipeline::PrefixStep],
+    from: usize,
+    to: usize,
+    img: ImageBuf,
+    downloaded: Option<ImageBuf>,
+) -> ImageBuf {
+    downloaded.unwrap_or_else(|| catch_up(steps, from, to, img))
+}
+
+/// Run steps `from..to` on the CPU — a carried prefix brought back to a CPU checkpoint when the GPU failed mid-way.
+pub(super) fn catch_up(
+    steps: &[pipeline::PrefixStep],
+    from: usize,
+    to: usize,
+    img: ImageBuf,
+) -> ImageBuf {
+    steps[from..to].iter().fold(img, |i, s| s.stage.apply(i))
+}
+
+#[cfg(test)]
+mod carry_tests {
+    use super::*;
+
+    /// M10.14f: with the carried image lost, the checkpoint is rebuilt by running every carried step again — never
+    /// the stale input handed on as if it were the later step's.
+    #[test]
+    fn a_lost_carry_is_rebuilt_by_running_the_carried_steps_again() {
+        let edits = Edits {
+            exposure: 0.0,
+            geometry: edit_model::Geometry {
+                angle: 4.0,
+                ..Default::default()
+            },
+            defringe: edit_model::Defringe {
+                purple_amount: 80.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        let steps = pipeline::build_prefix_steps(
+            &edits,
+            RenderScale::FULL,
+            None,
+            pipeline::Resampler::default(),
+            None,
+            None,
+        );
+        assert_eq!(steps.len(), 2, "fixture check: geometry and defringe");
+        let img = (*super::super::fixtures::hazy_buffer()).clone();
+        let want = steps[0].stage.apply(img.clone());
+        assert_ne!(want, img, "fixture check: the straighten moves pixels");
+        assert_eq!(checkpoint_at(&steps, 0, 1, img.clone(), None), want);
+        let both = steps[1].stage.apply(want.clone());
+        assert_eq!(catch_up(&steps, 0, 2, img.clone()), both);
+        let got = ImageBuf::new(1, 1);
+        assert_eq!(
+            checkpoint_at(&steps, 0, 1, img, Some(got.clone())),
+            got,
+            "a download wins"
+        );
     }
 }

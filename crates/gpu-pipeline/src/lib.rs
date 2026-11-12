@@ -22,6 +22,7 @@ mod chain;
 mod context;
 mod contrast;
 mod creative_look;
+mod defringe;
 mod dehaze;
 mod dispatch;
 mod display_rendering;
@@ -83,7 +84,9 @@ pub(crate) fn guarded<T>(f: impl FnOnce() -> Option<T>) -> Option<T> {
     }
 }
 
-pub use accelerate::{accelerate, accelerate_prefix_stage, rejoin, SeamFacts, TailFacts};
+pub use accelerate::{
+    accelerate, accelerate_prefix_stage, prefix_twin_reads_image, rejoin, SeamFacts, TailFacts,
+};
 pub use brush_raster::GpuBrushRaster;
 
 /// How many dabs one 16×16 tile's shared list holds before the rasteriser re-scans.
@@ -102,6 +105,7 @@ pub use chain::{GpuChain, GpuStage, Input, Slot};
 pub use context::{shared, GpuContext};
 pub use contrast::GpuContrastStage;
 pub use creative_look::GpuCreativeLookStage;
+pub use defringe::GpuDefringeStage;
 pub use dehaze::GpuDehazeStage;
 pub use display_rendering::GpuDisplayRenderingStage;
 pub use drunet::{GpuDrunet, GpuFfdnet, Tensor, Weights};
