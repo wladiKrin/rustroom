@@ -177,9 +177,13 @@ pub(super) fn draw_mask_overlay(
             let radius = (brush.size / map.radius_scale.max(1e-6)).max(1e-4);
             // ⚠⚠ M10.12c: a stroke is STORED in decode space, so it stays on its content when lens correction or
             // perspective changes; the point under the pointer is found in the stroke stage's space and mapped back.
-            let src = s.anchoring().stroke_to_decode(
+            let an = s.anchoring();
+            let src = an.stroke_to_decode(
                 map.inverse_point(p.x - frame_rect.left(), p.y - frame_rect.top()),
             );
+            // …and its width a fraction of the DECODE's long edge, so the drawn width follows a Scale slider. A new
+            // stroke takes it at the press — its first point, where `anchors::resolve` reads it back.
+            let radius = radius / an.stroke_scale(src);
             // ⚠⚠ **Holding the secondary button erases for the duration of the gesture.** Baked
             // into the stroke at its start, exactly as `radius`, `hardness`, `flow` and
             // `auto_mask` are — so a stroke keeps what it was drawn with and the next one is an

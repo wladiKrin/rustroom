@@ -133,6 +133,34 @@ impl Anchoring {
         self.post_lens_to_decode(p)
     }
 
+    /// How much a spot's space magnifies decode space at `d` — what a stored radius is multiplied by to draw.
+    pub fn spot_scale(&self, d: [f32; 2]) -> f32 {
+        self.magnification(d, |p| self.decode_to_post_lens(p))
+    }
+
+    /// How much a stroke's space magnifies decode space at `d` — lens, then keystone and its Scale.
+    pub fn stroke_scale(&self, d: [f32; 2]) -> f32 {
+        self.magnification(d, |p| self.decode_to_stroke(p))
+    }
+
+    /// The square root of the map's Jacobian determinant at `d`, in isotropic units (both spaces share the decode's
+    /// aspect): a length's scale, honest to within the keystone's anisotropy across one mark — `SpotMap::
+    /// radius_scale_at`'s argument.
+    fn magnification(&self, d: [f32; 2], f: impl Fn([f32; 2]) -> [f32; 2]) -> f32 {
+        if self.is_identity() {
+            return 1.0;
+        }
+        const E: f32 = 1e-3;
+        let (a, b, c) = (f(d), f([d[0] + E, d[1]]), f([d[0], d[1] + E]));
+        let det = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+        let k = (det.abs() / (E * E)).sqrt();
+        if k.is_finite() && k > 1e-3 {
+            k
+        } else {
+            1.0
+        }
+    }
+
     /// `[0, 1]` → the homography's space: centred, half-height 1 (`SpotMap::hom_of`).
     fn centred(&self, q: [f32; 2]) -> (f32, f32) {
         ((q[0] - 0.5) * 2.0 * self.aspect, (q[1] - 0.5) * 2.0)
@@ -230,17 +258,26 @@ pub fn resolve<'a>(edits: &'a Edits, a: &Anchoring) -> Cow<'a, Edits> {
         return Cow::Borrowed(edits);
     }
     let mut e = edits.clone();
+    // ⚠⚠ Sizes too, not only places: a stored radius is a fraction of the DECODE's long edge, drawn at the
+    // magnification where the mark sits — or a Scale slider (the lens's, the keystone's) moves a stroke with its
+    // content but leaves its width behind (the author's report, 2026-11-12). A stroke is sized at its FIRST point,
+    // which painting never moves, so its width holds while it grows.
     for s in e.spots.iter_mut().filter(|s| s.decode) {
+        s.radius *= a.spot_scale(s.centre);
         s.centre = a.decode_to_post_lens(s.centre);
         s.source = a.decode_to_post_lens(s.source);
         s.decode = false;
     }
     for y in e.eyes.iter_mut().filter(|y| y.decode) {
+        y.radius *= a.spot_scale(y.centre);
         y.centre = a.decode_to_post_lens(y.centre);
         y.decode = false;
     }
     for b in brushes_mut(&mut e) {
         for s in b.strokes.iter_mut().filter(|s| s.decode) {
+            if let Some(&first) = s.points.first() {
+                s.radius *= a.stroke_scale(first);
+            }
             for p in &mut s.points {
                 *p = a.decode_to_stroke(*p);
             }
@@ -252,8 +289,10 @@ pub fn resolve<'a>(edits: &'a Edits, a: &Anchoring) -> Cow<'a, Edits> {
 
 /// A spot placed or moved in its stage's space, stored in decode space — what every gesture writes.
 pub fn anchor_spot(a: &Anchoring, s: edit_model::Spot) -> edit_model::Spot {
+    let centre = a.post_lens_to_decode(s.centre);
     edit_model::Spot {
-        centre: a.post_lens_to_decode(s.centre),
+        radius: s.radius / a.spot_scale(centre),
+        centre,
         source: a.post_lens_to_decode(s.source),
         decode: true,
         ..s
@@ -262,8 +301,10 @@ pub fn anchor_spot(a: &Anchoring, s: edit_model::Spot) -> edit_model::Spot {
 
 /// An eye placed or moved in its stage's space, stored in decode space.
 pub fn anchor_eye(a: &Anchoring, e: edit_model::Eye) -> edit_model::Eye {
+    let centre = a.post_lens_to_decode(e.centre);
     edit_model::Eye {
-        centre: a.post_lens_to_decode(e.centre),
+        radius: e.radius / a.spot_scale(centre),
+        centre,
         decode: true,
         ..e
     }
@@ -293,11 +334,13 @@ pub fn migrate(edits: &mut Edits, a: &Anchoring) -> bool {
     for s in edits.spots.iter_mut().filter(|s| !s.decode) {
         s.centre = a.post_lens_to_decode(s.centre);
         s.source = a.post_lens_to_decode(s.source);
+        s.radius /= a.spot_scale(s.centre);
         s.decode = true;
         changed = true;
     }
     for y in edits.eyes.iter_mut().filter(|y| !y.decode) {
         y.centre = a.post_lens_to_decode(y.centre);
+        y.radius /= a.spot_scale(y.centre);
         y.decode = true;
         changed = true;
     }
@@ -305,6 +348,9 @@ pub fn migrate(edits: &mut Edits, a: &Anchoring) -> bool {
         for s in b.strokes.iter_mut().filter(|s| !s.decode) {
             for p in &mut s.points {
                 *p = a.stroke_to_decode(*p);
+            }
+            if let Some(&first) = s.points.first() {
+                s.radius /= a.stroke_scale(first);
             }
             s.decode = true;
             changed = true;

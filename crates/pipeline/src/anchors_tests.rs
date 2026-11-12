@@ -277,12 +277,15 @@ fn a_migrated_mark_resolves_to_where_it_rendered() {
     assert!(close(back.spots[0].centre, before.spots[0].centre));
     assert!(close(back.spots[0].source, before.spots[0].source));
     assert!(close(back.eyes[0].centre, before.eyes[0].centre));
+    assert!((back.spots[0].radius - before.spots[0].radius).abs() < 1e-6);
+    assert!((back.eyes[0].radius - before.eyes[0].radius).abs() < 1e-6);
     let Mask::Brush(b) = &back.masks[0].mask else {
         unreachable!()
     };
     let Mask::Brush(was) = &before.masks[0].mask else {
         unreachable!()
     };
+    assert!((b.strokes[0].radius - was.strokes[0].radius).abs() < 1e-6);
     for (p, q) in b.strokes[0].points.iter().zip(&was.strokes[0].points) {
         assert!(close(*p, *q), "{p:?} vs {q:?}");
     }
@@ -313,4 +316,79 @@ fn resolving_twenty_thousand_points_costs_well_under_a_frame() {
     let ms = t.elapsed().as_secs_f64() * 1e3;
     eprintln!("resolve 20,000 points: {ms:.2} ms");
     assert!(ms < 50.0, "{ms} ms");
+}
+
+/// ⚠⚠ The author's report (2026-11-12): after a keystone, the perspective's Scale moved a stroke with its content
+/// but left its WIDTH behind. Measured against the real stages: how far apart two decode pixels land, at Scale 0
+/// and at +100, must grow exactly as a resolved stroke's radius does — and it must grow, or the test sees nothing.
+#[test]
+fn a_strokes_width_follows_the_scale_as_its_content_does() {
+    let at = |scale: f32| Edits {
+        lens_correction: Some(on()),
+        perspective: Perspective {
+            scale,
+            ..keystone()
+        },
+        ..Edits::default()
+    };
+    let gap = |e: &Edits| {
+        let a = centroid(&prefix(e, dot(194, 146)));
+        let b = centroid(&prefix(e, dot(206, 146)));
+        (a.0 - b.0).hypot(a.1 - b.1)
+    };
+    let width = |e: &Edits| {
+        let stroke = Edits {
+            masks: marked(true).masks,
+            ..e.clone()
+        };
+        let a = Anchoring::for_edits(Some(&lens()), &stroke, W, H);
+        let r = resolve(&stroke, &a).into_owned();
+        let Mask::Brush(b) = &r.masks[0].mask else {
+            unreachable!()
+        };
+        b.strokes[0].radius
+    };
+    let (lo, hi) = (at(0.0), at(100.0));
+    let content = gap(&hi) / gap(&lo);
+    assert!(
+        (content - 1.0).abs() > 0.03,
+        "the Scale must magnify: {content}"
+    );
+    let drawn = width(&hi) / width(&lo);
+    assert!(
+        (drawn - content).abs() < 0.01,
+        "width ×{drawn} against content ×{content}"
+    );
+}
+
+/// Placing a patch and reading it back keeps its size: stored in decode units, drawn at the magnification where
+/// it sits.
+#[test]
+fn a_spots_radius_round_trips_through_its_anchor() {
+    let a = Anchoring::new(Some(&lens()), on(), keystone(), W, H);
+    let worked = Spot {
+        centre: [0.1, 0.12],
+        source: [0.3, 0.12],
+        radius: 0.03,
+        feather: 50.0,
+        mode: SpotMode::Heal,
+        dust: false,
+        decode: false,
+    };
+    let stored = anchor_spot(&a, worked);
+    assert!(
+        (stored.radius - worked.radius).abs() > 1e-4,
+        "the lens must change the unit here"
+    );
+    let e = Edits {
+        spots: vec![stored],
+        ..Edits::default()
+    };
+    let back = resolve(&e, &a).into_owned().spots[0];
+    assert!(
+        (back.radius - worked.radius).abs() < 1e-5,
+        "{} vs {}",
+        back.radius,
+        worked.radius
+    );
 }
