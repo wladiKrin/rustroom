@@ -32,7 +32,7 @@ and a pointer, not deleted.
 | **M10.9** presets & shortcuts | *Presets: no import/export…* (a, ✅ 2026-10-02); *No user-defined keyboard shortcuts* (b, ✅ 2026-10-10); Lightroom `.xmp` presets, split from (a) by the author 2026-10-02 (c, ✅ 2026-10-11 — the `lr-preset` crate) |
 | **M10.10** export | P-26's image watermark (a, ✅ 2026-10-11) and export sizing (b, ✅ 2026-10-11) |
 | **M10.11** Develop additions | *Film negative inversion* (a, ✅ 2026-10-11); P-26's Grain (b, ✅ 2026-10-12) |
-| **M10.12** the mask model | *Composites are one level deep* (a, ✅ 2026-10-12 — re-scoped: an op in place, Duplicate, Invert mask; nesting itself ⏸ parked on its table); masks' scene sliders as offsets (b, ✅ 2026-10-12 — Lightroom's model; a range or gating mask with an offset selects on the globally edited photo, its GPU cost is M10.14h); *Anchor strokes and spots in sensor space* + *Brush strokes shift…* (c, ⏸) |
+| **M10.12** the mask model | *Composites are one level deep* (a, ✅ 2026-10-12 — re-scoped: an op in place, Duplicate, Invert mask; nesting itself ⏸ parked on its table); masks' scene sliders as offsets (b, ✅ 2026-10-12 — Lightroom's model; a range or gating mask with an offset selects on the globally edited photo, its GPU cost is M10.14h); *Anchor strokes and spots in sensor space* + *Brush strokes shift…* (c, ✅ 2026-11-12, decode-space anchors) |
 | **M10.13** colour & camera profiles | *C2/C3 have no independent oracle* (a, ⏸ parked 2026-10-12 — how to verify is the author's to settle); ~~*`CameraCalibration`…*~~ (b, ⛔ withdrawn 2026-10-12 — not a profile tag) + `ProfileLookTable` (b → folded into d); *Per-photo camera profile* (c → folded into d); P-22 (d) ✅ **merged 2026-11-11** as learned looks (`grep -n 'M10.13d' docs/JOURNAL.md`) — **re-scoped 2026-10-12 by the author:** b's LookTable and c only matter once a profile that has a LookTable, or a second profile for one body, is in hand, which is d's question |
 | **M10.14** performance & verification | ~~*What is left in `HslStage`*~~ (a, ⛔ withdrawn 2026-10-12 — superseded by the GPU port, ~1% of an export); P-21 (e); *incremental splatting*, *Two Oklab round trips* (f, ⏸); *the u8 wire*, `MAX_TILE_DABS` (g, ⏸); *The reference photo on the GPU* (h, ⏸ parked 2026-10-13 — 1 of 74 photos) |
 | **M10.15** Immich | the keychain, cached-original eviction, Immich's rating (a–c); *Two-way sync* (d, re-opened) |
@@ -443,7 +443,7 @@ correction, perspective, spot removal and geometry (all upstream of where a mask
 defined), the vignette and the creative look (frame-wide by nature), and the output transform. A
 mask carries every *adjustment*; it does not carry the geometry or the delivery.
 
-### ⚠⚠ Anchor strokes and spots in sensor space (recorded 2026-09-03 — blocked on a MISSING MAP) → M10.12c ⏸
+### ✅ Anchor strokes and spots in sensor space (recorded 2026-09-03) → M10.12c — DONE 2026-11-12 (`grep -n 'M10.12c' docs/JOURNAL.md`); the entry as recorded:
 
 **Not "extend `FrameMap`", and the name matters.** `FrameMap` is not wrong: it models
 orientation → straighten → crop faithfully, which is its entire domain. The bug is that the space
@@ -522,7 +522,7 @@ above. Only *anchoring* wants the forward map.
   suppressor is a contained follow-up.~~ ✅ **2026-09-02, W3 track D** (`halo_suppression`,
   `169984b`). Same lapse as the bullet above.
 - ~~**No output/print sharpening** for resized exports.~~ ✅ **M6.1d, 2026-09-01** — in the file's display space, deliberately.
-- **Brush strokes shift when lens corrections are toggled.** → **M10.12c** ⏸ (the entry above). Strokes are anchored in
+- ✅ **Brush strokes shift when lens corrections are toggled.** → **M10.12c**, fixed 2026-11-12 (the entry above). Strokes are anchored in
   "pre-geometry" coordinates, which means *the input to `GeometryStage`* — and lens correction now
   runs ahead of it, so enabling or disabling it redefines that basis. The shift is up to ~3.5% at
   the corners and ~0 at the centre. ⚠ The principled fix is to include distortion in `FrameMap` so

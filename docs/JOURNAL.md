@@ -193,6 +193,33 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-12 — M10.12c: spots, eyes and brush strokes anchored in decode space (branch `m10.12c-sensor-anchors`, merged 2026-11-12)
+
+✅ **Confirmed by the author ("ok, merge and delete")**, after one fix found in use.
+
+- **The bug:** strokes were stored post-lens and post-perspective, spots and eyes post-lens — so toggling lens
+  correction (or its Scale), or changing perspective, moved the picture under a mark (up to ~3.5 % at the corners,
+  ~220 px on an X-T4). "Blocked on no forward lens map" since 2026-09-03; M10.16c1's fixed-point inverse unblocked it.
+- **The design:** `Spot`, `Eye`, `BrushStroke` gain `decode: bool` (absent = the old space, rendered exactly as
+  before — no saved file changes). `pipeline::anchors::resolve` maps decode marks to their stages' spaces ONCE at
+  each renderer's entry (the render engine beside its strip, `export_one`, the CLI); nothing downstream changed. The
+  canvas works on `Session::anchored_view` and stores through `anchor_spot`/`anchor_eye`/`stroke_to_decode`. Old
+  marks migrate on open (`Session::migrate_anchors`, every Develop frame, never a ghost session), rewriting the
+  history's present in place (`History::replace_current`) — no undo step.
+- ⚠ **The lens half is a nominal-size field** (1024 px, a `DisplacementGrid` at step 4, memoised): lensfun one point
+  at a time made 20,000 stroke points 20 ms a frame; a full-size corrector costs 290–370 ms. Measured against a
+  6000 px corrector: 0.12 px at Scale 0, 1.28 px at the extreme corner at Scale 100 (each corrector estimates its
+  own autoscale). ⚠ A normalised point is a pixel CENTRE (`i + 0.5`); without the half pixel the two disagreed by ~2 px.
+- ⚠⚠ **Found in use: a stroke's WIDTH stayed behind** when the keystone's Scale moved its content. Radii are now
+  decode units too, drawn at the local magnification (`Anchoring::spot_scale`/`stroke_scale`, √det of the map's
+  Jacobian); a stroke is sized at its FIRST point so painting never changes its width. Tested against the real stages
+  (two dots' gap at Scale 0 and +100).
+- ⚠ **Two canvas tests passed with the mapping deleted** — they compared a stored mark with its own resolution.
+  Rewritten against the same gesture on the same photo with no lens; both sabotages now fail.
+- Not changed: gradients (compositional, frame space), removals and AI maps (already decode). Perspective Scale
+  crops into the frame by design — no panning past it (the author asked; answered, not a bug).
+- 16 tests. Unseen: a real photo with a strong lens at Scale 100's corners.
+
 ### 2026-11-11 — M10.13d: camera-matching colour, learned from the camera's own JPEGs (branch `m10.13d-camera-looks`, merged 2026-11-11)
 
 ✅ **Confirmed by the author ("thats good, let's merge and delete")**.
