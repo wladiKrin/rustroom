@@ -69,7 +69,10 @@ pub struct SceneOffsetsStage {
     /// saturation, HSL and the grade (`build.rs`' `global_look`) — run on a copy of the input to give
     /// the **reference photo**: the globally edited photo, before any mask. `Some` only when a
     /// contributing mask [`reads_reference`], so its cost is paid only there.
-    reference: Option<Vec<Box<dyn PipelineStage>>>,
+    ///
+    /// ⚠ Behind an `Arc` so [`Self::duplicate`] — a GPU twin's CPU fallback (M10.14h) — shares the same stages
+    /// rather than rebuilding them: `apply` takes `&self`.
+    reference: Option<std::sync::Arc<Vec<Box<dyn PipelineStage>>>>,
     /// Kept for [`Self::duplicate`], which rebuilds the coverage-only stages.
     scale: RenderScale,
     baseline: color::wb::Illuminant,
@@ -144,7 +147,10 @@ impl SceneOffsetsStage {
         if masks.is_empty() {
             return None;
         }
-        let reference = masks.iter().any(|m| m.slot.is_some()).then(reference);
+        let reference = masks
+            .iter()
+            .any(|m| m.slot.is_some())
+            .then(|| std::sync::Arc::new(reference()));
         Some(Self {
             global: Scene {
                 gains,
@@ -189,6 +195,19 @@ impl SceneOffsetsStage {
         self.reference.is_some()
     }
 
+    /// The reference's stages by name, in order — what a GPU twin builds its own from (M10.14h); empty without a
+    /// reference.
+    pub fn reference_names(&self) -> Vec<&'static str> {
+        self.reference
+            .as_ref()
+            .map_or_else(Vec::new, |r| r.iter().map(|s| s.name()).collect())
+    }
+
+    /// Each contributing mask's slot, in [`Self::contributions`]' order — `Some` for one that reads the reference.
+    pub fn slots(&self) -> impl Iterator<Item = Option<&std::sync::Arc<CoverageSlot>>> {
+        self.masks.iter().map(|m| m.slot.as_ref())
+    }
+
     /// Mask `i`'s slot (`i` its position in `edits.masks`), for its look `MaskStage` — `Some` when
     /// that mask [`reads_reference`].
     pub fn slot_for(&self, i: usize) -> Option<std::sync::Arc<CoverageSlot>> {
@@ -198,14 +217,13 @@ impl SceneOffsetsStage {
             .and_then(|m| m.slot.clone())
     }
 
-    /// A copy rebuilt from its parts — a GPU twin's own CPU reference (`GpuStage::cpu`) — or `None`
-    /// for a stage with a reference: its boxed stages cannot be copied, and the twin, the only
-    /// caller, declines such a stage anyway (the GPU does not compute the reference — the spec's
-    /// *Out of scope*).
+    /// A copy rebuilt from its parts — a GPU twin's own CPU reference (`GpuStage::cpu`), which a chain that fails
+    /// on the GPU renders instead.
+    ///
+    /// ⚠⚠ M10.14h: it SHARES the reference's stages and the masks' slots — so a fallback fills the very slots the
+    /// masks' look stages read, exactly as the original would. A copy with empty slots would leave those masks
+    /// selecting on their own bases.
     pub fn duplicate(&self) -> Option<Self> {
-        if self.reference.is_some() {
-            return None;
-        }
         Some(Self {
             global: Scene { ..self.global },
             masks: self
@@ -228,11 +246,11 @@ impl SceneOffsetsStage {
                         regions: m.regions,
                         ln_r: m.ln_r,
                         index: m.index,
-                        slot: None,
+                        slot: m.slot.clone(),
                     }
                 })
                 .collect(),
-            reference: None,
+            reference: self.reference.clone(),
             scale: self.scale,
             baseline: self.baseline,
         })
@@ -396,6 +414,48 @@ mod tests {
             exposure: v,
             ..Default::default()
         }
+    }
+
+    /// M10.14h: a copy — a GPU twin's CPU fallback — keeps the reference and FILLS THE ORIGINAL'S SLOTS, so a chain
+    /// failing on the GPU leaves the reading masks' look stages the plane they blend by; and it reports the
+    /// reference's stages by name, which the twin builds its own from.
+    #[test]
+    fn a_copy_keeps_the_reference_and_fills_the_same_slots() {
+        let e = Edits {
+            masks: vec![masked(
+                Mask::Luminance(edit_model::LuminanceRange::default()),
+                ev(1.0),
+            )],
+            ..Default::default()
+        };
+        let original = SceneOffsetsStage::new(
+            &e,
+            RenderScale::FULL,
+            None,
+            &Geometry::default(),
+            None,
+            color::wb::Illuminant::default(),
+            || vec![Box::new(crate::ExposureStage::new(0.5)) as Box<dyn PipelineStage>],
+        )
+        .expect("the stage");
+        assert!(original.has_reference());
+        assert_eq!(original.reference_names(), vec!["exposure"]);
+        let slot = original.slot_for(0).expect("the range reads the reference");
+        let copy = original.duplicate().expect("a copy");
+        assert!(copy.has_reference() && slot.get().is_none());
+        let (w, h) = (12, 8);
+        let out = copy.apply(scene(w, h));
+        // ⚠ Read BEFORE the original runs, which would fill the slot itself.
+        assert_eq!(
+            slot.get().map(|p| p.len()),
+            Some(w * h),
+            "the copy filled the original's slot"
+        );
+        assert_eq!(
+            out,
+            original.apply(scene(w, h)),
+            "the copy renders as the original"
+        );
     }
 
     #[test]

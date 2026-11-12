@@ -14,6 +14,22 @@ use crate::image::GpuImage;
 use crate::mask::{Component, GpuMaskStage};
 use crate::GpuStage;
 
+/// A coverage plane on the GPU, handed from the offsets twin to a mask's look twin (M10.14h) — the GPU side of
+/// [`pipeline::CoverageSlot`]. Filled when the offsets twin is encoded; the mask twin, encoded later in the same
+/// pass, binds it as its coverage.
+#[derive(Default)]
+pub struct GpuCoverageSlot(std::sync::Mutex<Option<Arc<wgpu::Buffer>>>);
+
+impl GpuCoverageSlot {
+    pub fn put(&self, plane: Arc<wgpu::Buffer>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(plane);
+    }
+
+    pub fn get(&self) -> Option<Arc<wgpu::Buffer>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
 /// The GPU twin of [`pipeline::SceneOffsetsStage`].
 pub struct GpuSceneOffsetsStage {
     /// The CPU twin — the equivalence reference, rebuilt from the original's parts.
@@ -24,6 +40,12 @@ pub struct GpuSceneOffsetsStage {
     values: Vec<f32>,
     region: Option<pipeline::Region>,
     cost: f32,
+    /// ⚠⚠ M10.14h: the REFERENCE photo's stages — the global look, twinned from the names the CPU stage reports —
+    /// `Some` exactly when a mask reads it. They run on a copy of the input inside this stage's encode.
+    reference: Option<Vec<Box<dyn GpuStage>>>,
+    /// Per chain, in order: where a mask that reads the reference leaves its coverage — computed on the reference,
+    /// used here, and bound by that mask's look twin.
+    reads: Vec<Option<Arc<GpuCoverageSlot>>>,
 }
 
 /// One mask's coverage, as `GpuMaskStage` holds it.
@@ -46,7 +68,50 @@ const SCENE_COST: f32 = 4.0 + 1.3 + 1.2 + 18.0;
 impl GpuSceneOffsetsStage {
     /// The twin of `cpu`, or `None` where a mask's coverage cannot be built here — a gating brush
     /// without a map, an AI mask still waiting — and the CPU stage runs instead.
-    pub fn new(cpu: &pipeline::SceneOffsetsStage, _ctx: &Arc<GpuContext>) -> Option<Self> {
+    ///
+    /// ⚠ A stage carrying the reference photo declines here — [`Self::with_reference`] is its constructor.
+    pub fn new(cpu: &pipeline::SceneOffsetsStage, ctx: &Arc<GpuContext>) -> Option<Self> {
+        if cpu.has_reference() {
+            return None;
+        }
+        let n = cpu.contributions().count();
+        Self::build(cpu, ctx, None, vec![None; n])
+    }
+
+    /// The twin of a stage carrying the reference photo (M10.14h): `reference` the twins of
+    /// [`pipeline::SceneOffsetsStage::reference_names`], in order; `slots` one per contributing mask, `Some` exactly
+    /// where the CPU stage's own slot is. `None` on any mismatch — the CPU stage runs instead.
+    ///
+    /// ⚠⚠ The caller (the accelerator's walk) builds this only when every mask that reads one of `slots` gets a
+    /// look twin bound to it, in the same chain: a CPU mask would read its CPU slot, which a GPU offsets stage never
+    /// fills.
+    pub fn with_reference(
+        cpu: &pipeline::SceneOffsetsStage,
+        ctx: &Arc<GpuContext>,
+        reference: Vec<Box<dyn GpuStage>>,
+        slots: Vec<Option<Arc<GpuCoverageSlot>>>,
+    ) -> Option<Self> {
+        let names = cpu.reference_names();
+        let matches = cpu.has_reference()
+            && reference.len() == names.len()
+            && reference.iter().zip(&names).all(|(g, n)| g.name() == *n)
+            && slots.len() == cpu.slots().count()
+            && slots
+                .iter()
+                .zip(cpu.slots())
+                .all(|(g, c)| g.is_some() == c.is_some());
+        if !matches {
+            return None;
+        }
+        Self::build(cpu, ctx, Some(reference), slots)
+    }
+
+    fn build(
+        cpu: &pipeline::SceneOffsetsStage,
+        _ctx: &Arc<GpuContext>,
+        reference: Option<Vec<Box<dyn GpuStage>>>,
+        reads: Vec<Option<Arc<GpuCoverageSlot>>>,
+    ) -> Option<Self> {
         let mut values = vec![0.0f32; STRIDE];
         values[..9].copy_from_slice(&cpu.global_values());
         let mut chains = Vec::new();
@@ -80,15 +145,22 @@ impl GpuSceneOffsetsStage {
                 .iter()
                 .flat_map(|c| std::iter::once(&c.base).chain(c.refine.iter().map(|(_, k)| k)))
                 .map(Component::coverage_cost)
+                .sum::<f32>()
+            + reference
+                .iter()
+                .flatten()
+                .map(|s| s.cpu_cost())
                 .sum::<f32>();
         Some(Self {
-            // ⚠ M10.12b: `None` for a stage carrying the reference photo, which the GPU does not compute
-            // (the spec's *Out of scope*) — so such a stage declines and runs on the CPU.
+            // ⚠ M10.14h: the copy SHARES the reference and the slots, so a chain failing on the GPU renders the CPU
+            // answer and fills the slots the CPU masks then read.
             cpu: cpu.duplicate()?,
             chains,
             values,
             region,
             cost,
+            reference,
+            reads,
         })
     }
 
@@ -100,6 +172,11 @@ impl GpuSceneOffsetsStage {
             .flat_map(|c| std::iter::once(&c.base).chain(c.refine.iter().map(|(_, k)| k)))
     }
 
+    /// How many masks read the reference — the planes this stage writes.
+    fn reading(&self) -> usize {
+        self.reads.iter().flatten().count()
+    }
+
     fn shader(&self) -> String {
         use crate::mask_wgsl::{chain, fact_lines, Facts};
         // ⚠ The global component index — `components()`' order, the one `comps[j]` and the packed
@@ -107,6 +184,10 @@ impl GpuSceneOffsetsStage {
         let mut start = 0usize;
         let mut facts = Facts::default();
         let mut body = String::new();
+        // M10.14h: the reference kernel's — each reading mask's coverage on the REFERENCE, into its plane.
+        let mut ref_facts = Facts::default();
+        let mut ref_body = String::new();
+        let mut plane = 0usize;
         for (k, c) in self.chains.iter().enumerate() {
             let base = c.base.expr(start);
             let refine: Vec<(crate::mask_wgsl::Fold, String)> = c
@@ -116,14 +197,25 @@ impl GpuSceneOffsetsStage {
                 .map(|(r, (op, comp))| (*op, comp.expr(start + 1 + r)))
                 .collect();
             start += 1 + c.refine.len();
+            let reads = self.reads.get(k).is_some_and(Option::is_some);
             for f in std::iter::once(&c.base)
                 .chain(c.refine.iter().map(|(_, k)| k))
                 .map(Component::facts)
             {
-                facts.luma |= f.luma;
-                facts.oklab |= f.oklab;
+                let into = if reads { &mut ref_facts } else { &mut facts };
+                into.luma |= f.luma;
+                into.oklab |= f.oklab;
             }
-            body.push_str(&chain(&format!("a{k}"), &base, &refine, c.invert));
+            if reads {
+                // ⚠⚠ Selected on the reference photo, ONCE: the plane this kernel reads is the one the mask's look
+                // twin blends by, so neither half chases the other's effect (M10.12b).
+                ref_body.push_str(&chain(&format!("a{k}"), &base, &refine, c.invert));
+                ref_body.push_str(&format!("    plane{plane}[i] = clamp(a{k}, 0.0, 1.0);\n"));
+                body.push_str(&format!("    let a{k} = plane{plane}[i];\n"));
+                plane += 1;
+            } else {
+                body.push_str(&chain(&format!("a{k}"), &base, &refine, c.invert));
+            }
             let o = STRIDE * (k + 1);
             body.push_str(&format!(
                 "    let c{k} = clamp(a{k}, 0.0, 1.0);\n\
@@ -166,7 +258,7 @@ impl GpuSceneOffsetsStage {
             pipeline::TONE_REGIONS_STRENGTH,
             pipeline::TONE_REGIONS_END_STRENGTH,
             kernel(&fact_lines(facts), &body),
-        )
+        ) + &reference_kernels(plane, &fact_lines(ref_facts), &ref_body)
     }
 
     fn params(&self, img: &GpuImage, row_groups: u32) -> [u8; 48] {
@@ -188,6 +280,52 @@ impl GpuSceneOffsetsStage {
         p[32..36].copy_from_slice(&(fw as f32 / fh as f32).to_le_bytes());
         p
     }
+}
+
+/// M10.14h's two extra entry points, when `planes` masks read the reference: `scene_copy` copies the input
+/// (`src`) into the reference image bound at 0, and `scene_reference` computes each reading mask's coverage on it.
+/// Nothing when no mask reads it, so such a stage's shader is the one it always was.
+fn reference_kernels(planes: usize, facts: &str, body: &str) -> String {
+    if planes == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    for r in 0..planes {
+        out.push_str(&format!(
+            "@group(0) @binding({}) var<storage, read_write> plane{r}: array<f32>;\n",
+            9 + r
+        ));
+    }
+    out.push_str(&format!(
+        r#"@group(0) @binding({}) var<storage, read> src: array<f32>;
+
+@compute @workgroup_size(64)
+fn scene_copy(@builtin(global_invocation_id) id: vec3<u32>) {{
+    let i = id.y * (params.row_groups * 64u) + id.x;
+    if (i >= params.pixels) {{ return; }}
+    let b = i * 3u;
+    img[b] = src[b];
+    img[b + 1u] = src[b + 1u];
+    img[b + 2u] = src[b + 2u];
+}}
+
+@compute @workgroup_size(64)
+fn scene_reference(@builtin(global_invocation_id) id: vec3<u32>) {{
+    let i = id.y * (params.row_groups * 64u) + id.x;
+    if (i >= params.pixels) {{ return; }}
+    let x = i % params.w;
+    let y = i / params.w;
+    let fx = params.x0 + x;
+    let fy = params.y0 + y;
+    let u = f32(fx) / f32(params.fw);
+    let v = f32(fy) / f32(params.fh);
+    let b = i * 3u;
+    let px = vec3<f32>(img[b], img[b + 1u], img[b + 2u]);
+{facts}{body}}}
+"#,
+        9 + planes
+    ));
+    out
 }
 
 /// The one entry point: each mask's coverage from the pixel as it arrives, the summed values, then
@@ -250,8 +388,15 @@ impl GpuStage for GpuSceneOffsetsStage {
 
     /// ⚠ Four planes the shader never touches: `mask_wgsl::PRELUDE` declares `base_r/g/b` and `cov`
     /// at bindings 2-5 for `GpuMaskStage`, and the prelude is shared rather than forked.
+    ///
+    /// ⚠ M10.14h: or more, for a reference stage that asks — they run before this stage's own kernel, so the planes
+    /// are lent to each in turn (`GpuChain`'s rule: the max, never the sum).
     fn scratch_planes(&self) -> usize {
-        4
+        self.reference
+            .iter()
+            .flatten()
+            .map(|s| s.scratch_planes())
+            .fold(4, usize::max)
     }
 
     fn encode(
@@ -275,22 +420,33 @@ impl GpuStage for GpuSceneOffsetsStage {
         };
         let rw = wgpu::BufferBindingType::Storage { read_only: false };
         let ro = wgpu::BufferBindingType::Storage { read_only: true };
+        let planes = self.reading();
+        let mut entries = vec![
+            entry(0, rw),
+            entry(1, wgpu::BufferBindingType::Uniform),
+            entry(2, rw),
+            entry(3, rw),
+            entry(4, rw),
+            entry(5, rw),
+            entry(6, ro),
+            entry(7, ro),
+            entry(8, ro),
+        ];
+        if planes > 0 {
+            entries.extend((0..planes).map(|r| entry(9 + r as u32, rw)));
+            entries.push(entry(9 + planes as u32, ro));
+        }
+        let entry_points: &[&'static str] = if planes > 0 {
+            &["scene_offsets", "scene_reference", "scene_copy"]
+        } else {
+            &["scene_offsets"]
+        };
         let (layout, pipelines) = ctx.cache.program(
             device,
             "scene_offsets",
             &self.shader(),
-            &[
-                entry(0, rw),
-                entry(1, wgpu::BufferBindingType::Uniform),
-                entry(2, rw),
-                entry(3, rw),
-                entry(4, rw),
-                entry(5, rw),
-                entry(6, ro),
-                entry(7, ro),
-                entry(8, ro),
-            ],
-            &["scene_offsets"],
+            &entries,
+            entry_points,
         );
         // ⚠ The FRAME, which without a region is the buffer — `GpuMaskStage::encode`'s rule.
         let frame = match self.region {
@@ -331,30 +487,79 @@ impl GpuStage for GpuSceneOffsetsStage {
             bytemuck::cast_slice(&self.values),
             wgpu::BufferUsages::STORAGE,
         );
-        let bound = [
-            img.buffer.as_entire_binding(),
-            uniform.as_entire_binding(),
-            scratch[0].as_entire_binding(),
-            scratch[1].as_entire_binding(),
-            scratch[2].as_entire_binding(),
-            scratch[3].as_entire_binding(),
-            packed.as_entire_binding(),
-            comp_buf.as_entire_binding(),
-            values.as_entire_binding(),
-        ];
-        let entries: Vec<wgpu::BindGroupEntry<'_>> = bound
-            .into_iter()
-            .enumerate()
-            .map(|(i, resource)| wgpu::BindGroupEntry {
-                binding: i as u32,
-                resource,
+        // ⚠⚠ M10.14h: the reference photo — the input copied, the global look's twins run on the copy — and each
+        // reading mask's coverage computed on it, into a plane this stage reads below and the mask's look twin binds.
+        // A reference image the device cannot hold selects on the input instead: the CPU's empty-slot rule.
+        let reference = match (&self.reference, planes) {
+            (Some(stages), p) if p > 0 => {
+                GpuImage::new(ctx, img.width(), img.height()).map(|r| (stages, r))
+            }
+            _ => None,
+        };
+        let plane_bufs: Vec<Arc<wgpu::Buffer>> = (0..planes)
+            .map(|_| {
+                Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("scene-offsets-plane"),
+                    size: (img.pixels().max(1) as u64) * 4,
+                    usage: wgpu::BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                }))
             })
             .collect();
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("scene-offsets-bind"),
-            layout: &layout,
-            entries: &entries,
-        });
+        let group = |image: &wgpu::Buffer, src: &wgpu::Buffer, label: &'static str| {
+            let mut bound = vec![
+                image.as_entire_binding(),
+                uniform.as_entire_binding(),
+                scratch[0].as_entire_binding(),
+                scratch[1].as_entire_binding(),
+                scratch[2].as_entire_binding(),
+                scratch[3].as_entire_binding(),
+                packed.as_entire_binding(),
+                comp_buf.as_entire_binding(),
+                values.as_entire_binding(),
+            ];
+            if planes > 0 {
+                bound.extend(plane_bufs.iter().map(|b| b.as_entire_binding()));
+                bound.push(src.as_entire_binding());
+            }
+            let entries: Vec<wgpu::BindGroupEntry<'_>> = bound
+                .into_iter()
+                .enumerate()
+                .map(|(i, resource)| wgpu::BindGroupEntry {
+                    binding: i as u32,
+                    resource,
+                })
+                .collect();
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &layout,
+                entries: &entries,
+            })
+        };
+        if planes > 0 {
+            // ⚠ The copy's source is the input; on the main group `src` is unused and bound to a read-only buffer —
+            // one buffer read-write and read-only in one group is a validation error.
+            let (image, src) = match &reference {
+                Some((_, r)) => (&r.buffer, &img.buffer),
+                None => (&img.buffer, &values),
+            };
+            let on_ref = group(image, src, "scene-offsets-reference");
+            if let Some((stages, r)) = &reference {
+                pass.set_pipeline(&pipelines[2]);
+                pass.set_bind_group(0, &on_ref, &[]);
+                pass.dispatch_workgroups(row_groups, col_groups, 1);
+                for st in stages.iter() {
+                    st.encode(ctx, pass, r, &scratch[..st.scratch_planes()]);
+                }
+            }
+            pass.set_pipeline(&pipelines[1]);
+            pass.set_bind_group(0, &on_ref, &[]);
+            pass.dispatch_workgroups(row_groups, col_groups, 1);
+            for (slot, plane) in self.reads.iter().flatten().zip(&plane_bufs) {
+                slot.put(Arc::clone(plane));
+            }
+        }
+        let bind = group(&img.buffer, &values, "scene-offsets-bind");
         pass.set_pipeline(&pipelines[0]);
         pass.set_bind_group(0, &bind, &[]);
         pass.dispatch_workgroups(row_groups, col_groups, 1);

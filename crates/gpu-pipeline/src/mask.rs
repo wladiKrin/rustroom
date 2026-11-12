@@ -204,9 +204,25 @@ pub struct GpuMaskStage {
     invert: bool,
     region: Option<Region>,
     cost: f32,
+    /// ⚠⚠ M10.14h: a mask that reads the reference blends by the plane the offsets twin computed on it — bound as
+    /// this stage's coverage, its own coverage dispatch skipped — never by its own base, which those offsets have
+    /// already moved (M10.12b's chase).
+    from: Option<Arc<crate::scene_offsets::GpuCoverageSlot>>,
 }
 
 impl GpuMaskStage {
+    /// This twin, blending by `gpu`'s plane — and its CPU twin by `cpu`'s, the slot the original CPU stage read, so a
+    /// chain that fails on the GPU renders the CPU answer (M10.14h).
+    pub fn fed_by(
+        mut self,
+        gpu: Arc<crate::scene_offsets::GpuCoverageSlot>,
+        cpu: Arc<pipeline::CoverageSlot>,
+    ) -> Self {
+        self.cpu = self.cpu.with_coverage_from(cpu);
+        self.from = Some(gpu);
+        self
+    }
+
     /// Build a GPU twin for a mask, or decline.
     ///
     /// ⚠⚠ **Declining is always safe and is the gate's own rule** — fail toward the CPU, where a
@@ -267,6 +283,7 @@ impl GpuMaskStage {
             invert: masked.invert,
             region,
             cost,
+            from: None,
         })
     }
 
@@ -700,13 +717,16 @@ impl GpuStage for GpuMaskStage {
         });
         ctx.queue.write_buffer(&comp_buf, 0, &comps);
 
+        // ⚠ M10.14h: a slot's plane in `cov`'s place — then only the seed runs before the sub-stages. A slot nothing
+        // filled (the walk never builds that) falls back to this stage's own coverage.
+        let fed = self.from.as_ref().and_then(|s| s.get());
         let bound = [
             img.buffer.as_entire_binding(),
             uniform.as_entire_binding(),
             scratch[0].as_entire_binding(),
             scratch[1].as_entire_binding(),
             scratch[2].as_entire_binding(),
-            scratch[3].as_entire_binding(),
+            fed.as_deref().unwrap_or(&scratch[3]).as_entire_binding(),
             packed.as_entire_binding(),
             comp_buf.as_entire_binding(),
         ];
@@ -739,7 +759,7 @@ impl GpuStage for GpuMaskStage {
         // rather than a hole in them: `painted_at` reads the uploaded map and never touches `img`,
         // so for a painted or analytic mask the position provably cannot matter. Such a mask emits
         // no `img` read at all today — see `a_chain_that_needs_no_pixel_never_reads_the_image`.
-        for compute in pipelines.iter().take(2) {
+        for compute in pipelines.iter().take(if fed.is_some() { 1 } else { 2 }) {
             pass.set_pipeline(compute);
             pass.set_bind_group(0, &bind, &[]);
             pass.dispatch_workgroups(row_groups, col_groups, 1);

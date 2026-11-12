@@ -506,6 +506,10 @@ impl PipelineStage for MaskStage {
         self.from_reference.is_some()
     }
 
+    fn reference_slot(&self) -> Option<std::sync::Arc<crate::CoverageSlot>> {
+        self.from_reference.clone()
+    }
+
     fn apply(&self, image: ImageBuf) -> ImageBuf {
         // ⚠⚠ **A guard rather than a call, because it has to cover every early return below —
         // and a panic.** An offered rasteriser holds state scoped to one apply (`gpu-pipeline`
