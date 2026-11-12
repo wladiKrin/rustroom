@@ -416,6 +416,31 @@ pub fn rasterize_in(
 /// in `RUSTROOM_DEBUG_MASK` is a slightly tighter measurement of the same thing rather than a
 /// different one.
 fn rasterize_planned(plan: &DabPlan, invert: bool, base: Option<&dyn BasePixels>) -> CoverageMap {
+    let cov = composite(plan, base);
+    let data = cov
+        .iter()
+        .map(|c| {
+            let c = if invert { 1.0 - *c } else { *c };
+            // ⚠ NaN reaches 0 through the cast, not the clamp: `f32::clamp` propagates NaN while
+            // Rust's float-to-int casts saturate. The same note `ImageBuf::quantize` carries.
+            (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+        })
+        .collect();
+    CoverageMap {
+        x0: plan.x0,
+        y0: plan.y0,
+        w: plan.w,
+        h: plan.h,
+        data,
+        outside: plan.outside,
+    }
+}
+
+/// Every stroke of `plan` composited, as floats over its box — before the invert and the 8-bit quantise.
+///
+/// ⚠ M10.14f: split out of [`rasterize_planned`] unchanged, so the incremental rasteriser composites the strokes
+/// before the one being painted with exactly this arithmetic.
+pub(crate) fn composite(plan: &DabPlan, base: Option<&dyn BasePixels>) -> Vec<f32> {
     let DabPlan {
         strokes,
         x0,
@@ -589,16 +614,6 @@ fn rasterize_planned(plan: &DabPlan, invert: bool, base: Option<&dyn BasePixels>
         }
     }
 
-    let data = cov
-        .iter()
-        .map(|c| {
-            let c = if invert { 1.0 - *c } else { *c };
-            // ⚠ NaN reaches 0 through the cast, not the clamp: `f32::clamp` propagates NaN while
-            // Rust's float-to-int casts saturate. The same note `ImageBuf::quantize` carries.
-            (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
-        })
-        .collect();
-
     let d_dabs = t_dabs.elapsed();
     // ⚠ Kept permanently. The split it reports — Oklab conversion against dab compositing — is
     // what decides whether a future change should attack the gate or the splat.
@@ -615,14 +630,8 @@ fn rasterize_planned(plan: &DabPlan, invert: bool, base: Option<&dyn BasePixels>
         );
     }
 
-    CoverageMap {
-        x0,
-        y0,
-        w,
-        h,
-        data,
-        outside,
-    }
+    let _ = outside;
+    cov
 }
 
 /// The smallest Oklab chroma distance the gate accepts, at tolerance 0.
@@ -686,7 +695,7 @@ pub fn auto_mask_gate(pixel: [f32; 3], reference: [f32; 3], ceiling: f32) -> f32
 ///
 /// Smoothstep from 1 at `d/r = hard` to 0 at `d/r = 1` — the mirror of `RadialGradient`'s feather,
 /// with `hard = 1 - feather`.
-fn dab_alpha(d: f32, r: f32, hard: f32) -> f32 {
+pub(crate) fn dab_alpha(d: f32, r: f32, hard: f32) -> f32 {
     if r <= 0.0 {
         return 0.0;
     }

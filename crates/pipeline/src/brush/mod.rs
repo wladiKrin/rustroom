@@ -1,6 +1,7 @@
 //! Rasterizing a painted mask into a coverage map.
 
 mod frame_map;
+pub mod incremental;
 mod raster;
 mod spot_map;
 
