@@ -23,7 +23,9 @@ fn frame_ms(engine: &RenderEngine, edits: &Edits, spec: FrameSpec) -> f64 {
 }
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: bench_oklab_pair <raw>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: bench_oklab_pair <raw>");
     let opts = raw_decode::DecodeOptions::preview();
     let d = raw_decode::decode_raw(std::path::Path::new(&path), &opts).expect("decode");
     let engine = RenderEngine::new(
@@ -72,7 +74,11 @@ fn main() {
                     sum += ms;
                 }
             }
-            println!("{:<4} {label:<8} {:7.2} ms a tail frame", if gpu { "GPU" } else { "CPU" }, sum / 10.0);
+            println!(
+                "{:<4} {label:<8} {:7.2} ms a tail frame",
+                if gpu { "GPU" } else { "CPU" },
+                sum / 10.0
+            );
         }
     }
 }

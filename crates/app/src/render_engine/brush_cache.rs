@@ -68,6 +68,9 @@ pub(super) struct MaskCoverageKey {
     base: Option<(Edits, usize)>,
 }
 
+/// An incremental paint state the mask stage and this cache share across frames (M10.14f).
+type SharedIncremental = Arc<std::sync::Mutex<Option<pipeline::brush::incremental::Incremental>>>;
+
 /// Rasterized brush coverage, **per mask**, so an unrelated slider drag does not re-rasterize.
 ///
 /// ⚠⚠ **Per mask rather than per render, and the win depends on it.** One entry holding every
@@ -87,6 +90,9 @@ pub(super) struct BrushCache {
         (usize, usize),
         Option<pipeline::brush::incremental::Incremental>,
     )>,
+    /// The same for an Auto Mask component, which `MaskStage` rasterises against its base: handed to it through
+    /// `BrushCoverage::painting` (M10.14f).
+    pub(super) gating: Option<((usize, usize), SharedIncremental)>,
     /// The AI maps, shared with the session (M9.13).
     pub(super) ai: crate::ai_coverage::SharedAiMaps,
 }
@@ -249,6 +255,8 @@ impl BrushCache {
         // always addresses the slot the cache computed a key for.
         let mut maps: Vec<Vec<Option<Arc<pipeline::brush::CoverageMap>>>> =
             Vec::with_capacity(edits.masks.len());
+        // ⚠ M10.14f: the first Auto Mask component that missed — the one being painted — gets the incremental slot.
+        let mut painting: Option<pipeline::Painting> = None;
         for (i, m) in edits.masks.iter().enumerate() {
             let mut row = Vec::with_capacity(1 + m.refine.len());
             for j in 0..=m.refine.len() {
@@ -299,6 +307,27 @@ impl BrushCache {
                         });
                         src.component(m, dm, spec.region).map(Arc::new)
                     }
+                    // ⚠ M10.14f: not built here (it reads the image), but handed the incremental state, keyed on
+                    // what produced its base — `base_id`, the identity this cache already keys its map on.
+                    Some(edit_model::Mask::Brush(b)) if painting.is_none() => {
+                        if let Some(base) = Self::base_id(edits, i, b, spec.max_dim) {
+                            use std::hash::{Hash, Hasher};
+                            let mut hsh = std::collections::hash_map::DefaultHasher::new();
+                            serde_json::to_string(&base.0)
+                                .unwrap_or_default()
+                                .hash(&mut hsh);
+                            base.1.hash(&mut hsh);
+                            if self.gating.as_ref().is_none_or(|(at, _)| *at != (i, j)) {
+                                self.gating = Some(((i, j), Arc::default()));
+                            }
+                            painting = Some(pipeline::Painting {
+                                at: (i, j),
+                                base_key: hsh.finish(),
+                                state: Arc::clone(&self.gating.as_ref().expect("set above").1),
+                            });
+                        }
+                        None
+                    }
                     _ => None,
                 };
                 if let Some(built) = &built {
@@ -313,7 +342,11 @@ impl BrushCache {
             .iter()
             .map(|row| row.iter().map(|_| std::sync::Mutex::new(None)).collect())
             .collect();
-        Arc::new(pipeline::BrushCoverage { maps, built })
+        Arc::new(pipeline::BrushCoverage {
+            maps,
+            built,
+            painting,
+        })
     }
 }
 

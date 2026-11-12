@@ -141,7 +141,7 @@ pub use build::{
     RenderSpec, TailHalves,
 };
 pub use coverage::{
-    AiRasters, BrushCoverage, CoverageRasterizer, ImageSource, MapPlane, RasterSource,
+    AiRasters, BrushCoverage, CoverageRasterizer, ImageSource, MapPlane, Painting, RasterSource,
 };
 pub use pipeline_stage::{Pipeline, PipelineStage, RenderScale, SubStageAccelerator};
 pub use prefix::{build_prefix_steps, prefix_output_dims, PrefixKey, PrefixStep, PrefixStepKey};

@@ -2850,6 +2850,7 @@ fn depth_ramp_coverage(range: edit_model::DepthRange) -> std::sync::Arc<pipeline
     std::sync::Arc::new(pipeline::BrushCoverage {
         maps: vec![vec![Some(std::sync::Arc::new(map))]],
         built: vec![vec![std::sync::Mutex::new(None)]],
+        painting: None,
     })
 }
 

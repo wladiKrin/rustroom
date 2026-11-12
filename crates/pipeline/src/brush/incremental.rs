@@ -10,8 +10,8 @@
 //! where the buffer is). Measured before this, at 1:1 on an X-T4 frame: a 400-point stroke's paint frame 18 ms on the
 //! GPU tail, 27 ms on the CPU — every dab of the stroke, every frame (`bench_brush_paint`).
 
-use super::raster::{composite, dab_alpha, CoverageMap};
-use super::{plan_dabs, Dab, DabPlan};
+use super::raster::{auto_mask_gate, composite, dab_alpha, CoverageMap};
+use super::{plan_dabs, BasePixels, Dab, DabPlan};
 use edit_model::{Brush, BrushStroke, Geometry};
 
 /// The state a growing stroke is painted from.
@@ -20,6 +20,9 @@ pub struct Incremental {
     clip: Option<(usize, usize, usize, usize)>,
     geometry: Geometry,
     invert: bool,
+    /// What the base the dabs gate on was rendered from (an Auto Mask brush's), or `None` for a plain brush — a
+    /// change rebuilds, since every gated alpha read the old pixels.
+    base_key: Option<u64>,
     /// Every stroke before the last, and the last as splatted so far.
     head: Vec<BrushStroke>,
     last: BrushStroke,
@@ -66,10 +69,41 @@ pub fn rasterize(
     frame_h: usize,
     clip: Option<(usize, usize, usize, usize)>,
 ) -> CoverageMap {
-    let outside = if brush.invert { 255 } else { 0 };
-    let Some(last) = brush.strokes.last().filter(|_| !brush.needs_base()) else {
+    if brush.needs_base() {
         *state = None;
         return super::rasterize_in(brush, geometry, frame_w, frame_h, clip, None);
+    }
+    rasterize_on(state, brush, geometry, (frame_w, frame_h), clip, None)
+}
+
+/// [`rasterize`] for a brush that may gate on the image — an Auto Mask brush — over `base`, which `base_key`
+/// identifies: as [`super::rasterize_in`] with that base gives it. A new segment's dabs read their references and
+/// their pixels from `base`, so the key must change whenever its pixels might (the render's brush cache derives it
+/// from what produced the base).
+pub fn rasterize_gated(
+    state: &mut Option<Incremental>,
+    brush: &Brush,
+    geometry: &Geometry,
+    frame: (usize, usize),
+    clip: Option<(usize, usize, usize, usize)>,
+    base: (&dyn BasePixels, u64),
+) -> CoverageMap {
+    rasterize_on(state, brush, geometry, frame, clip, Some(base))
+}
+
+fn rasterize_on(
+    state: &mut Option<Incremental>,
+    brush: &Brush,
+    geometry: &Geometry,
+    (frame_w, frame_h): (usize, usize),
+    clip: Option<(usize, usize, usize, usize)>,
+    base: Option<(&dyn BasePixels, u64)>,
+) -> CoverageMap {
+    let outside = if brush.invert { 255 } else { 0 };
+    let (pixels, base_key) = (base.map(|b| b.0), base.map(|b| b.1));
+    let Some(last) = brush.strokes.last() else {
+        *state = None;
+        return super::rasterize_in(brush, geometry, frame_w, frame_h, clip, pixels);
     };
     let head = &brush.strokes[..brush.strokes.len() - 1];
     let reuse = state.as_ref().is_some_and(|s| {
@@ -77,6 +111,7 @@ pub fn rasterize(
             && s.clip == clip
             && s.geometry == *geometry
             && s.invert == brush.invert
+            && s.base_key == base_key
             && s.head == head
             && grows(&s.last, last)
     });
@@ -110,9 +145,9 @@ pub fn rasterize(
             frame_w,
             frame_h,
             clip,
-            None,
+            pixels,
         ) {
-            place(&composite(&p, None), &p, &mut head_cov, boxed);
+            place(&composite(&p, pixels), &p, &mut head_cov, boxed);
             widen(&mut touched, (p.x0, p.y0, p.x0 + p.w, p.y0 + p.h));
         }
         *state = Some(Incremental {
@@ -120,6 +155,7 @@ pub fn rasterize(
             clip,
             geometry: *geometry,
             invert: brush.invert,
+            base_key,
             head: head.to_vec(),
             last: BrushStroke {
                 points: Vec::new(),
@@ -141,8 +177,8 @@ pub fn rasterize(
         }],
         invert: false,
     };
-    if let Some(p) = plan_dabs(&segment, geometry, frame_w, frame_h, clip, None) {
-        splat(&mut s.field, s.boxed, &p.strokes[0].dabs);
+    if let Some(p) = plan_dabs(&segment, geometry, frame_w, frame_h, clip, pixels) {
+        splat(&mut s.field, s.boxed, &p.strokes[0].dabs, pixels);
         widen(&mut s.touched, (p.x0, p.y0, p.x0 + p.w, p.y0 + p.h));
     }
     s.last = last.clone();
@@ -192,7 +228,15 @@ fn place(cov: &[f32], plan: &DabPlan, into: &mut [f32], boxed: (usize, usize, us
 }
 
 /// `max` every dab's alpha into `field` — the within-stroke rule, over each dab's own rect (`composite`'s bounds).
-fn splat(field: &mut [f32], boxed: (usize, usize, usize, usize), dabs: &[Dab]) {
+///
+/// ⚠ A gating dab multiplies by its gate on the pixel's own Oklab, after `composite`'s short-circuit (a positional
+/// alpha that already loses the max cannot win gated) — the same values in the same order, so the same bits.
+fn splat(
+    field: &mut [f32],
+    boxed: (usize, usize, usize, usize),
+    dabs: &[Dab],
+    base: Option<&dyn BasePixels>,
+) {
     let (bx, by, bw, bh) = boxed;
     let (x1, y1) = (bx + bw, by + bh);
     for d in dabs {
@@ -207,9 +251,16 @@ fn splat(field: &mut [f32], boxed: (usize, usize, usize, usize), dabs: &[Dab]) {
                     (((x as f32 + 0.5) - d.x).powi(2) + ((y as f32 + 0.5) - d.y).powi(2)).sqrt();
                 let a = dab_alpha(dist, d.r, d.hard);
                 let slot = &mut field[row + x - bx];
-                if a > *slot {
-                    *slot = a;
+                if a <= *slot {
+                    continue;
                 }
+                let a = match (&d.gate, base) {
+                    (Some((r, ceil)), Some(b)) => {
+                        a * auto_mask_gate(color::oklab::prophoto_to_oklab(b.at(x, y)), *r, *ceil)
+                    }
+                    _ => a,
+                };
+                *slot = slot.max(a);
             }
         }
     }

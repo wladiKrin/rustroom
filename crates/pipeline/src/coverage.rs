@@ -26,6 +26,18 @@ pub struct BrushCoverage {
     /// ⚠ `Mutex` rather than `RefCell`: this crosses into stages that must stay `Sync`. It is
     /// uncontended — `apply` runs sequentially, once per mask per tail.
     pub built: Vec<Vec<std::sync::Mutex<Option<std::sync::Arc<brush::CoverageMap>>>>>,
+    /// M10.14f: the incremental state of the one Auto Mask component being painted — the render's brush cache keeps
+    /// it across frames, `MaskStage` paints through it (`brush::incremental::rasterize_gated`).
+    pub painting: Option<Painting>,
+}
+
+/// Where a gating brush's growing stroke is painted from, frame to frame.
+pub struct Painting {
+    /// `(mask, component)`.
+    pub at: (usize, usize),
+    /// What produced the base the dabs gate on — a change rebuilds the state.
+    pub base_key: u64,
+    pub state: std::sync::Arc<std::sync::Mutex<Option<brush::incremental::Incremental>>>,
 }
 
 impl BrushCoverage {
@@ -47,6 +59,7 @@ impl BrushCoverage {
                 .iter()
                 .map(|&n| (0..n).map(|_| std::sync::Mutex::new(None)).collect())
                 .collect(),
+            painting: None,
         }
     }
 
@@ -256,6 +269,7 @@ mod tests {
         let c = BrushCoverage {
             maps: vec![vec![None], vec![None, Some(a_map())]],
             built: Vec::new(),
+            painting: None,
         };
         assert!(c.get(0, 0).is_none());
         assert!(c.get(1, 1).is_some());
