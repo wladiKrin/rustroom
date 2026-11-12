@@ -76,7 +76,10 @@ impl GpuBrushRaster {
     pub fn new(ctx: &Arc<GpuContext>) -> Self {
         Self {
             ctx: ctx.clone(),
-            capacity: brush_wgsl::MAX_TILE_DABS,
+            // ⚠ M10.14g: sized from this device's workgroup storage, never one GPU's measurement.
+            capacity: brush_wgsl::capacity_for(
+                ctx.device.limits().max_compute_workgroup_storage_size,
+            ),
             count_tests: false,
         }
     }
@@ -370,11 +373,25 @@ impl GpuBrushRaster {
             entry(3, wgpu::BufferBindingType::Storage { read_only: false }),
             entry(4, wgpu::BufferBindingType::Uniform),
             entry(5, wgpu::BufferBindingType::Storage { read_only: false }),
+            entry(6, wgpu::BufferBindingType::Storage { read_only: false }),
         ];
         let shader = brush_wgsl::source(self.capacity, self.count_tests);
-        let (layout, pipelines) =
-            ctx.cache
-                .program(device, "brush-raster", &shader, &layout_entries, &["main"]);
+        let (layout, pipelines) = ctx.cache.program(
+            device,
+            "brush-raster",
+            &shader,
+            &layout_entries,
+            &["main", "pack"],
+        );
+        // M10.14g: the bytes the readback carries — the map four samples to a word.
+        let words = (w * h).div_ceil(4).max(1);
+        let packed_bytes = (words * 4) as u64;
+        let packed = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("brush-cov-packed"),
+            size: packed_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
 
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("brush-raster"),
@@ -404,6 +421,10 @@ impl GpuBrushRaster {
                     binding: 5,
                     resource: counters.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: packed.as_entire_binding(),
+                },
             ],
         });
 
@@ -423,15 +444,20 @@ impl GpuBrushRaster {
             pass.set_pipeline(&pipelines[0]);
             pass.set_bind_group(0, &bind, &[]);
             pass.dispatch_workgroups(gx, gy, 1);
+            // ⚠ In the same pass, after the raster — the in-pass barrier `GpuChain` measures.
+            let groups = words.div_ceil(256);
+            let px = groups.clamp(1, 65535);
+            pass.set_pipeline(&pipelines[1]);
+            pass.dispatch_workgroups(px as u32, groups.div_ceil(px) as u32, 1);
         }
 
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("brush-readback"),
-            size: cov_bytes,
+            size: packed_bytes,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        enc.copy_buffer_to_buffer(&cov_buf, 0, &readback, 0, cov_bytes);
+        enc.copy_buffer_to_buffer(&packed, 0, &readback, 0, packed_bytes);
         let counter_read = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("brush-counter-readback"),
             size: 16,
@@ -466,12 +492,9 @@ impl GpuBrushRaster {
         // into a `Vec<u32>` — **27.35 MB at rung 3200** — whose only use was the narrowing a few
         // lines below. The mapped range is borrowed until `unmap`, so the narrowing has to happen
         // here rather than after it, which is the reason the old code copied at all.
+        // ⚠ M10.14g: and since then the GPU narrows — the mapped bytes ARE the map, a quarter of the old wire.
         let mapped = slice.get_mapped_range();
-        let (cov_words, _) = mapped.as_chunks::<4>();
-        let data: Vec<u8> = cov_words
-            .iter()
-            .map(|c| u32::from_le_bytes(*c).min(255) as u8)
-            .collect();
+        let data: Vec<u8> = mapped[..w * h].to_vec();
         drop(mapped);
         let counts: Vec<u32> = bytemuck::cast_slice(&cslice.get_mapped_range()).to_vec();
         readback.unmap();
@@ -1182,5 +1205,49 @@ mod tests {
             .rasterize(&plan, b.invert, None)
             .expect("the GPU raster must succeed on an available adapter");
         assert_agrees(&gpu, &cpu);
+    }
+
+    /// M10.14g: the coverage crosses the wire four samples to a word — and a box whose sample count is not a multiple
+    /// of four must still read back whole, its last word's spare bytes dropped rather than shifting the map.
+    #[test]
+    fn a_box_of_any_size_reads_back_whole_through_the_packed_wire() {
+        let Some(ctx) = ctx() else { return };
+        let b = one_stroke();
+        let g = Geometry::default();
+        let mut odd = 0;
+        for (fw, fh) in [(400, 300), (401, 303), (397, 301), (403, 299)] {
+            let cpu = pipeline::brush::rasterize(&b, &g, fw, fh);
+            let plan = pipeline::brush::plan_dabs(&b, &g, fw, fh, None, None).expect("dabs");
+            let gpu = GpuBrushRaster::new(&ctx)
+                .rasterize(&plan, b.invert, None)
+                .expect("the GPU raster");
+            if (cpu.w * cpu.h) % 4 != 0 {
+                odd += 1;
+            }
+            assert_agrees(&gpu, &cpu);
+        }
+        assert!(
+            odd > 0,
+            "fixture check: some box must not be a multiple of four"
+        );
+    }
+
+    /// M10.14g: the tile capacity is the device's — three workgroups resident, held to the measured plateau — and a
+    /// 16 KB device, WebGPU's guaranteed minimum, keeps the value the sweep chose.
+    #[test]
+    fn the_tile_capacity_follows_the_devices_workgroup_storage() {
+        assert_eq!(brush_wgsl::capacity_for(16384), brush_wgsl::MAX_TILE_DABS);
+        assert_eq!(brush_wgsl::capacity_for(32768), 2048);
+        assert_eq!(brush_wgsl::capacity_for(8192), 512);
+        for limit in [16384u32, 24576, 32768, 49152, 65536] {
+            let cap = brush_wgsl::capacity_for(limit);
+            // The kernel's storage at this capacity, three times over, must fit — the residency the cliff was about.
+            assert!(3 * (4 * cap + 1032) <= limit, "{limit}: {cap}");
+        }
+        if let Some(ctx) = ctx() {
+            let want =
+                brush_wgsl::capacity_for(ctx.device.limits().max_compute_workgroup_storage_size);
+            assert_eq!(GpuBrushRaster::new(&ctx).capacity, want);
+        }
     }
 }

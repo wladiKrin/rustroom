@@ -46,7 +46,22 @@
 ///
 /// ⚠ Nothing realistic approaches the capacity, which is precisely why the overflow path has to be
 /// reachable by injection in a test. *An unreachable guard is an untested one.*
+///
+/// ⚠⚠ M10.14g: **the floor for a 16 KB device, no longer everyone's value** — [`capacity_for`] sizes it from the
+/// device's own workgroup storage, so a device with more gets the headroom the plateau gives for free.
 pub(crate) const MAX_TILE_DABS: u32 = 1024;
+
+/// Workgroup bytes the kernel holds besides the shared dab list: `thread_off` (256 × 4), `total` and `overflowed`.
+const OTHER_WORKGROUP_BYTES: u32 = 1032;
+
+/// The tile capacity for a device with `limit` bytes of workgroup storage (M10.14g): the largest that still keeps
+/// **three** workgroups resident — the sweep's cliff was the drop from three to two, at 2560 on a 32 KB device —
+/// in steps of 256, held to the measured plateau 512…2048 (flat in cost, so more is pure headroom). A 16 KB device —
+/// WebGPU's guaranteed minimum — gets [`MAX_TILE_DABS`], what the sweep chose.
+pub(crate) fn capacity_for(limit: u32) -> u32 {
+    let fits = (limit / 3).saturating_sub(OTHER_WORKGROUP_BYTES) / 4;
+    (fits / 256 * 256).clamp(512, 2048)
+}
 
 /// Tile edge in pixels. 16 × 16 = 256 threads, one per pixel.
 pub(crate) const TILE: u32 = 16;
@@ -102,6 +117,25 @@ struct Params {
 @group(0) @binding(3) var<storage, read_write> cov: array<u32>;
 @group(0) @binding(4) var<uniform> p: Params;
 @group(0) @binding(5) var<storage, read_write> counters: array<atomic<u32>>;
+/// M10.14g: the coverage packed four to a word for the download — the wire carries bytes, not `u32`s.
+@group(0) @binding(6) var<storage, read_write> packed: array<u32>;
+
+/// Four coverage samples to a word, little-endian, so the readback is the `u8` map byte for byte (M10.14g): the
+/// `u32` wire was 85–90 % inflation and narrowing (`coverage_transfer_probe`).
+@compute @workgroup_size(256)
+fn pack(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
+    let j = id.y * groups.x * 256u + id.x;
+    let n = p.w * p.h;
+    if (j >= (n + 3u) / 4u) { return; }
+    var v = 0u;
+    for (var k = 0u; k < 4u; k = k + 1u) {
+        let i = j * 4u + k;
+        if (i < n) {
+            v = v | (min(cov[i], 255u) << (8u * k));
+        }
+    }
+    packed[j] = v;
+}
 
 var<workgroup> tile_dabs: array<u32, {MAX_TILE_DABS}>;
 /// Per-thread match counts, converted **in place** to exclusive prefix offsets by thread 0.
