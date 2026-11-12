@@ -219,6 +219,9 @@ pub struct Ran {
     /// ⚠ An observable for the resident input (2026-09-26): a drag frame after the first must
     /// read 0, and nothing else in the frame can tell a resident hit from an upload.
     pub gpu_prefix_uploads: usize,
+    /// How many prefix steps kept their output on the GPU for the next one, with no download (M10.14f). ⚠ An
+    /// observable: a carried and a downloaded step render the same picture by design.
+    pub gpu_prefix_carried: usize,
     /// Whether the last prefix step handed its output to the tail on the GPU, with no download
     /// and therefore no final checkpoint. See [`render_cached_with`].
     pub handoff: bool,

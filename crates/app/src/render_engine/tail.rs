@@ -134,7 +134,9 @@ pub(super) fn resolve_input(
     input: Option<Arc<ImageBuf>>,
     pw: usize,
     ph: usize,
-    img: &ImageBuf,
+    // The last whole-buffer checkpoint and the step it is the input of (M10.14f: outputs carried on the GPU leave it
+    // behind the last step).
+    (img, img_step): (&ImageBuf, usize),
     cache: &mut PrefixCache,
 ) -> (Arc<ImageBuf>, Option<Packed>, TailStats) {
     let TailRun {
@@ -190,11 +192,17 @@ pub(super) fn resolve_input(
                     Some(ctx) if cache.settle_from_resident(ctx) => cache
                         .get(&walk.key_at(steps.len()))
                         .expect("settle_from_resident inserted the final"),
-                    // ⚠ The last resort — the GPU refused even a download. The step re-runs on
-                    // the CPU from the checkpoint before it, which `img` still is.
+                    // ⚠ The last resort — the GPU refused even a download. The steps re-run on
+                    // the CPU from the checkpoint `img` is — the one before the last, or earlier
+                    // when outputs were carried on the GPU (M10.14f).
                     _ => {
-                        let last = steps.last().expect("a handoff implies a prefix step");
-                        let out = Arc::new(last.stage.apply((*img).clone()));
+                        assert!(img_step < steps.len(), "a handoff implies a prefix step");
+                        let out = Arc::new(super::prefix::catch_up(
+                            steps,
+                            img_step,
+                            steps.len(),
+                            img.clone(),
+                        ));
                         cache.insert(walk.key_at(steps.len()), out.clone(), Tier::Final);
                         out
                     }

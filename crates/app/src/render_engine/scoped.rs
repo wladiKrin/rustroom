@@ -148,6 +148,9 @@ pub(super) fn output((out, last, frame, ran): Scoped, img: Arc<ImageBuf>) -> Pre
         pw: frame.0,
         ph: frame.1,
         prefix_stages: ran,
+        // ⚠ Unread: the scoped path always hands the tail a CPU input, so no last-resort re-run starts from `img`.
+        img_step: 0,
+        gpu_prefix_carried: 0,
         img,
         gpu_prefix_steps: 0,
         gpu_prefix_uploads: 0,
