@@ -292,8 +292,35 @@ fn a_migrated_mark_resolves_to_where_it_rendered() {
     assert!(!migrate(&mut e, &a), "a second migration changes nothing");
 }
 
-/// What a frame pays: ten strokes of 2,000 points, resolved, recorded as a number.
+/// ⚠⚠ What keeps resolving cheap enough for every frame: the lens field is built ONCE per lens, corrections and
+/// aspect, and every later `Anchoring` holds that same field — a full-size corrector costs 290–370 ms. Deterministic,
+/// where the timing below is not.
 #[test]
+fn the_lens_field_is_built_once_and_shared() {
+    let a = Anchoring::new(Some(&lens()), on(), Perspective::default(), 6000, 4000);
+    let b = Anchoring::new(Some(&lens()), on(), keystone(), 6000, 4000);
+    let (Some((x, ..)), Some((y, ..))) = (&a.lens, &b.lens) else {
+        panic!("the fixture's lens corrects");
+    };
+    assert!(Arc::ptr_eq(x, y), "a second Anchoring built its own field");
+    let other = Anchoring::new(
+        Some(&lens()),
+        LensCorrection { scale: 0.0, ..on() },
+        Perspective::default(),
+        6000,
+        4000,
+    );
+    assert!(
+        !Arc::ptr_eq(x, &other.lens.as_ref().unwrap().0),
+        "a different Scale is a different field"
+    );
+}
+
+/// What a frame pays: ten strokes of 2,000 points, resolved, printed as a number — 20 ms in a debug build here, far
+/// less in release. ⚠ A probe, run on demand (`--ignored`): as a timed assertion it failed under a loaded gate
+/// (2026-11-12), and a test must wait on events, never a clock.
+#[test]
+#[ignore]
 fn resolving_twenty_thousand_points_costs_well_under_a_frame() {
     let mut e = marked(true);
     let Mask::Brush(b) = &mut e.masks[0].mask else {
@@ -315,7 +342,6 @@ fn resolving_twenty_thousand_points_costs_well_under_a_frame() {
     let _ = resolve(&e, &a);
     let ms = t.elapsed().as_secs_f64() * 1e3;
     eprintln!("resolve 20,000 points: {ms:.2} ms");
-    assert!(ms < 50.0, "{ms} ms");
 }
 
 /// ⚠⚠ The author's report (2026-11-12): after a keystone, the perspective's Scale moved a stroke with its content
