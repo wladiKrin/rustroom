@@ -173,8 +173,8 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-11-11)
 
-**4666 tests on Linux** (macOS last counted 4274 before M10.17b; 31 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
-gate green on **`main`** (2026-11-12, M10.14g merged). ⚠ On this Linux machine `gpu_pipeline`'s suite can stall
+**4669 tests on Linux** (macOS last counted 4274 before M10.17b; 31 ignored), **94 golden tests** (81 reference images — `cargo test --workspace --test golden`),
+gate green on **`main`** (2026-11-12, M10.13a merged). ⚠ On this Linux machine `gpu_pipeline`'s suite can stall
 inside a full run (alone it passes in 4 s) and `sources::reindex_tests` can fail to exit — both pre-existing
 (`grep -n 'Pre-existing, not chased' docs/JOURNAL.md`); run the remaining test binaries directly when it happens. ⚠⚠ **Run the git command above rather than
 trusting any count here** — this block has been wrong about the push state before. ⚠ Still never push.
@@ -268,6 +268,7 @@ that had grown to ~170 lines by appending.)
 | M10.12c | Spots, eyes and brush strokes STORED in decode space — they stay on their content, size included, when lens correction (or its Scale) or perspective changes; old marks migrate on open | `pipeline::anchors::resolve` once at each renderer's entry (engine, `export_one`, CLI) — a new renderer calls it too; marks carry `decode` (absent = the old space, rendered as before); the canvas works on `Session::anchored_view` and stores through `anchor_spot`/`anchor_eye`/`stroke_to_decode`; radii in decode units at the local magnification, a stroke's at its first point; the lens half a nominal 1024 px field (≤1.3 px at Scale 100's corners) |
 | M10.14h | A range/colour mask or gating brush with a scene offset stays on the GPU: the reference photo and its coverage computed there — 107 → 11 ms at 3200 | `GpuSceneOffsetsStage::with_reference` + `GpuMaskStage::fed_by`, paired by the CPU slot's address; ⚠⚠ ALL OR NOTHING (`accelerate::reference_plan`) — a GPU offsets stage beside a CPU reading mask leaves its CPU slot empty |
 | M10.14g | The brush raster's coverage downloads as bytes (a GPU `pack` kernel) — 44.7 → 20.1 ms a whole-frame raster; `MAX_TILE_DABS` sized per device | `brush_wgsl::capacity_for(max_compute_workgroup_storage_size)`: three workgroups resident, 512–2048; 1024 stays the 16 KB floor |
+| M10.13a | A DCP's illuminant blend checked against Adobe's DNG SDK and made to match: Robertson's temperature, the SDK's illuminant temperatures and matrix normalisation | the HueSatMap was already right (1e-6); temperature to the kelvin on 49 white balances; the SDK harness lives outside the repo (`dcp_oracle` compares; 5 captured rows pin it) |
 | M10.13d | Camera-matching colour, LEARNED: per Fuji body and film simulation (≥ 8 plain photos, ≤ 40 spread, relearned when grown by half) a 17³ lattice fitted from our render to the embedded JPEG; `Rendering::CameraMatch` opens a fresh RAW matched (Settings switch, Relearn); the films listed in the Look menu's "Learned from the camera" | store `<config>/rustroom/looks/camera/`; the look is a tail `CreativeLookStage::camera` in sRGB display with a GPU row; a film picked from the menu REPLACES the photo's own (`camera_look::applied`), never stacks; `camera/<name>` the one look name with a separator (`looks::is_learned`, by components); ΔE 8.9–13.8 → 3.4–7.3 held out; Fuji only |
 | M10.19d | Retouch as two tasks: **Paint** (one brush, Remove · Heal · Clone · Eye, for NEW retouches only) · **Find** (People · Dust, found and reviewed alike: On the photo **Pick · Add more**, Everyone, Remove N, Cancel); one **Retouches** list of every kind, a picked row selecting it alone with its settings under the list | the photo's gestures follow `RetouchState.task` — in Find only `find_overlay`, never a Paint overlay; the list is `retouch_list::rows`; a patch Find dust made carries `Spot.dust`; the dust view's one writer is `pump_dust`; a look landing after Cancel or Remove N is dropped (people and dust) |
 
@@ -275,7 +276,7 @@ that had grown to ~170 lines by appending.)
 
 ✅ Phase 9; ✅ the design language and reordering masks (2026-09-29); ✅ **M10.6–M10.15 (M10.13d included), M10.16a, b, c1–c3, d, M10.17a–b, M10.18a–e, M10.19a–d** (table above); ⛔ M10.16c4 declined.
 
-**▶ NOW: the parked items, all unparked by the author 2026-11-11, in his agreed order: M10.13a → M10.14f.** ✅ M10.14g merged 2026-11-12 (`grep -n 'M10.14g' docs/JOURNAL.md`). ✅ M10.14h merged 2026-11-12 (`grep -n 'M10.14h' docs/JOURNAL.md`). ✅ M10.12c merged 2026-11-12, confirmed by the author (`grep -n 'M10.12c' docs/JOURNAL.md`). ✅ M10.13d camera-matching colour merged 2026-11-11, confirmed by the author (`grep -n 'M10.13d' docs/JOURNAL.md`). ✅ M10.19b merged 2026-11-11, confirmed by the author (`grep -n 'M10.19b' docs/JOURNAL.md`); ✅ hidden formats leave their stacks before grouping, merged 2026-11-11 (`grep -n 'leave their stacks' docs/JOURNAL.md`). ✅ M10.19a HEIC merged 2026-11-11, confirmed by the author (`grep -n 'M10.19a' docs/JOURNAL.md`). ✅ M10.18e print merged 2026-11-04, Save PDF confirmed by the author, a printer unseen (`grep -n 'M10.18e' docs/JOURNAL.md`). ✅ An upload's chosen date in the file merged 2026-11-03, confirmed by the author (`grep -n 'upload.s chosen date' docs/JOURNAL.md`).
+**▶ NOW: the parked items, all unparked by the author 2026-11-11, in his agreed order: M10.14f, the last.** ✅ M10.13a merged 2026-11-12 (`grep -n 'M10.13a' docs/JOURNAL.md`). ✅ M10.14g merged 2026-11-12 (`grep -n 'M10.14g' docs/JOURNAL.md`). ✅ M10.14h merged 2026-11-12 (`grep -n 'M10.14h' docs/JOURNAL.md`). ✅ M10.12c merged 2026-11-12, confirmed by the author (`grep -n 'M10.12c' docs/JOURNAL.md`). ✅ M10.13d camera-matching colour merged 2026-11-11, confirmed by the author (`grep -n 'M10.13d' docs/JOURNAL.md`). ✅ M10.19b merged 2026-11-11, confirmed by the author (`grep -n 'M10.19b' docs/JOURNAL.md`); ✅ hidden formats leave their stacks before grouping, merged 2026-11-11 (`grep -n 'leave their stacks' docs/JOURNAL.md`). ✅ M10.19a HEIC merged 2026-11-11, confirmed by the author (`grep -n 'M10.19a' docs/JOURNAL.md`). ✅ M10.18e print merged 2026-11-04, Save PDF confirmed by the author, a printer unseen (`grep -n 'M10.18e' docs/JOURNAL.md`). ✅ An upload's chosen date in the file merged 2026-11-03, confirmed by the author (`grep -n 'upload.s chosen date' docs/JOURNAL.md`).
 ✅ M10.18d publish services merged 2026-11-03 with the batch description dialog, confirmed by the author ("okay that works").
 ✅ M10.18a tethering merged 2026-10-29, confirmed by the author with his X-T4 ("works, merge and delete";
 `grep -n 'M10.18a' docs/JOURNAL.md`). ✅ M10.18c people tagging merged 2026-10-29, confirmed by the author
@@ -288,7 +289,7 @@ network removes everyday reflections; `grep -n 'M10.16c4' docs/JOURNAL.md`). ✅
 merged 2026-10-22, confirmed by the author ("works, merge and delete"; `grep -n 'M10.19d' docs/JOURNAL.md`). ✅ c3 Find people merged
 2026-10-22 (`grep -n 'M10.16c3' docs/JOURNAL.md`). ✅ c2 Remove dust merged 2026-10-21. ✅ c1 the Remove brush merged 2026-10-19
 (`grep -n 'M10.16c1' docs/JOURNAL.md`). ✅ M10.16c1b merged 2026-10-20: a removal being filled shades the
-AREA it will replace — Detect objects' whole object — sent by the job before the network runs. Left open behind it, by the author's call: M10.13a, M10.14f (unparked 2026-11-11).
+AREA it will replace — Detect objects' whole object — sent by the job before the network runs. Left open behind it, by the author's call: M10.14f (unparked 2026-11-11).
 
 ⚠⚠ **THE PLAN (the author, 2026-09-29): Phase 10 is every open item, worked top to bottom; Phase 11 is
 release engineering, LAST.** The canonical list — every sub-item with its date, size and reasoning — is
@@ -298,7 +299,7 @@ the vault's `03-plan-of-action.md`, *Phase 10*; `docs/BACKLOG.md` maps each of i
 
 | Milestone | Sub-items |
 |---|---|
-| **M10.13** colour & camera profiles | a ⏸ an independent C2/C3 reference (parked by the author 2026-10-12 — RawTherapee never runs here; the options are in the backlog) · ✅ d merged 2026-11-11 (learned looks; b's LookTable and c's per-photo profile not needed — no such profile in hand) |
+| **M10.13** colour & camera profiles | ✅ a merged 2026-11-12 (checked against Adobe's DNG SDK) · ✅ d merged 2026-11-11 (learned looks; b's LookTable and c's per-photo profile not needed — no such profile in hand) |
 | **M10.14** performance & verification | f ⏸ incremental splatting, the two Oklab round trips, a defringe GPU twin, M8.11's inner chain (`grep -n 'accelerate_inner' docs/JOURNAL.md`) |
 
 **Phase 11, last:** M11.2 Windows + the Linux GUI (first run and confirmed 2026-10-27 on Arch/X11; still unchecked: Wayland,

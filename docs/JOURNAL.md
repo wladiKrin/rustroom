@@ -193,6 +193,29 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-12 — M10.13a: a DCP's illuminant blend checked against Adobe's DNG SDK (branch `m10.13a-dcp-oracle`, merged 2026-11-12)
+
+✅ **Confirmed by the author ("works, merge and delete")**.
+
+- **The oracle:** Adobe's DNG SDK 1.7.1, compiled on Linux without XMP/JPEG/JXL (three JXL files stubbed), linked into
+  a C++ harness that reads RawTherapee's `FUJIFILM X-T4.dcp` through `dng_camera_profile::ParseExtended` and prints,
+  for 49 camera neutrals, `NeutralToXY`'s temperature, `CameraToPCS` × diag(neutral), and `RefBaselineHueSatMap` on a
+  125-colour grid. ⚠ The auto-mode check refused to run SDK code built from a download; **the author ran the script**
+  (`/tmp/m1013a/harness/run.sh`, outside the repo — the SDK is Adobe's and is not committed). `raw-decode`'s
+  `dcp_oracle` example compares.
+- **C3 (the HueSatMap's application) was right:** at the SDK's weight and with its value pin, worst **1e-6**. ⚠ The
+  SDK pins value at 1 (2.5-D table, no over-range); ours keeps a highlight's headroom on purpose.
+- **C2's blend was not, three ways:** McCamy's temperature (a green neutral **3369 K against 4403 K**, 23 %); our
+  illuminant temperatures (2856/5003/6504/6774… against the SDK's 2850/5000/6500/6500…); and the SDK's normalisation —
+  each ColorMatrix scaled so D50 maps to a max of 1 and rounded to 4 decimals (the X-T4's Standard A by 1/1.27: alone,
+  2.5 % hot), each ForwardMatrix rescaled to land on D50. Now `crate::robertson`, the SDK's iteration from D50's xy,
+  its table, `normalize_color_matrix` / `normalize_forward_matrix`.
+- **After:** the temperature to the kelvin on all 49; the matrices **1e-5 on 46**. ⚠ The 3 others are green neutrals
+  where the SDK's own matrix is no blend (row 1 sums to 0.983, not 0.964): its camera white drifted from the neutral,
+  most likely an unconverged iteration — temperature-only there.
+- `the_temperature_and_matrix_match_adobes_dng_sdk` pins 5 CAPTURED rows; sabotaged with the old table and without the
+  normalisation. `camera_profile` stays opt-in only for want of bundled profiles now, not of verification.
+
 ### 2026-11-12 — M10.14g: the coverage wire in bytes, the tile capacity per device (branch `m10.14g-coverage-wire`, merged 2026-11-12)
 
 ✅ **Confirmed by the author ("works, merge and delete")**.
