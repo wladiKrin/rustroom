@@ -9,6 +9,7 @@ pub mod gamut;
 pub mod huesatmap;
 pub mod oklab;
 pub mod output_space;
+pub mod robertson;
 pub mod spaces;
 pub mod wb;
 pub use gamut::{GamutMap, RenderingIntent};

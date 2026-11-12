@@ -51,18 +51,23 @@ pub fn camera_to_prophoto(rgb_cam: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
 /// failing: a slightly wrong illuminant renders a slightly wrong colour, where a hard error would
 /// make a whole camera unusable.
 pub fn illuminant_temperature(code: u16) -> f32 {
+    // ⚠⚠ M10.13a: Adobe's DNG SDK's values (`dng_camera_profile::IlluminantToTemperature`), not the
+    // illuminants' measured CCTs — the profile was calibrated by tools that blend on these, and 2856 against 2850 or
+    // 6774 against 6500 (Standard C) moves the weight. A fluorescent class is the middle of its band.
     match code {
-        1 => 5500.0,  // Daylight
-        2 => 4200.0,  // Fluorescent
-        3 => 2856.0,  // Tungsten
-        17 => 2856.0, // Standard A
-        18 => 4874.0, // Standard B
-        19 => 6774.0, // Standard C
-        20 => 5503.0, // D55
-        21 => 6504.0, // D65
-        22 => 7504.0, // D75
-        23 => 5003.0, // D50
-        _ => 6504.0,
+        3 | 17 => 2850.0,                  // Tungsten, Standard A
+        24 => 3200.0,                      // ISO studio tungsten
+        23 => 5000.0,                      // D50
+        1 | 4 | 9 | 18 | 20 => 5500.0,     // Daylight, Flash, Fine weather, Standard B, D55
+        10 | 19 | 21 => 6500.0,            // Cloudy, Standard C, D65
+        11 | 22 => 7500.0,                 // Shade, D75
+        12 => (5700.0 + 7100.0) * 0.5,     // Daylight fluorescent
+        13 => (4600.0 + 5500.0) * 0.5,     // Day white fluorescent
+        2 | 14 => (3800.0 + 4500.0) * 0.5, // Fluorescent, Cool white fluorescent
+        15 => (3250.0 + 3800.0) * 0.5,     // White fluorescent
+        16 => (2600.0 + 3250.0) * 0.5,     // Warm white fluorescent
+        // ⚠ Unknown: the SDK treats the profile as single-illuminant; D65 keeps ours dual and is the commonest.
+        _ => 6500.0,
     }
 }
 
@@ -86,6 +91,41 @@ pub fn illuminant_weight(temp: f32, temp1: f32, temp2: f32) -> f32 {
         return if temp1 < temp2 { 0.0 } else { 1.0 };
     }
     ((1.0 / temp - 1.0 / temp2) / (1.0 / temp1 - 1.0 / temp2)).clamp(0.0, 1.0)
+}
+
+/// D50 as the DNG SDK's PCS white: the XYZ of chromaticity (0.3457, 0.3585).
+const PCS_WHITE: [f64; 3] = [0.3457 / 0.3585, 1.0, (1.0 - 0.3457 - 0.3585) / 0.3585];
+
+/// A profile's `ColorMatrix` as Adobe's DNG SDK holds it (`dng_camera_profile::NormalizeColorMatrix`): scaled so D50
+/// white maps to a camera value whose largest channel is 1 — unless it already is, within 1 % — then rounded to four
+/// decimals.
+///
+/// ⚠⚠ M10.13a: the two calibrations are BLENDED, so scaling one and not the other moves every blend between them.
+/// The X-T4's Standard A matrix maps D50 to 1.27 and is scaled by 1/1.27; read raw, a tungsten-ish neutral solved
+/// 2.5 % hot of the SDK.
+pub fn normalize_color_matrix(m: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    let coord = m.map(|r| (0..3).map(|k| f64::from(r[k]) * PCS_WHITE[k]).sum::<f64>());
+    let max = coord.iter().cloned().fold(f64::MIN, f64::max);
+    let scale = if max > 0.0 && !(0.99..=1.01).contains(&max) {
+        1.0 / max
+    } else {
+        1.0
+    };
+    m.map(|r| r.map(|v| ((f64::from(v) * scale * 10000.0).round() / 10000.0) as f32))
+}
+
+/// A profile's `ForwardMatrix` as the DNG SDK holds it (`NormalizeForwardMatrix`): each row scaled so camera white
+/// `(1, 1, 1)` lands exactly on D50 — a profile's own rows sum to it only to its printed precision.
+pub fn normalize_forward_matrix(m: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    let mut out = m;
+    for (i, row) in out.iter_mut().enumerate() {
+        let sum: f64 = row.iter().map(|v| f64::from(*v)).sum();
+        if sum.abs() > 1e-9 {
+            let k = PCS_WHITE[i] / sum;
+            *row = row.map(|v| (f64::from(v) * k) as f32);
+        }
+    }
+    out
 }
 
 /// A convex combination of two matrices: `g` of `a`, `1 - g` of `b`.
@@ -191,9 +231,8 @@ pub fn cam_xyz_from_rgb_cam(rgb_cam: &[[f32; 3]; 3]) -> Option<[[f32; 3]; 3]> {
 /// than it needs — it converges in a handful — and a fixed count avoids any question of a loop
 /// that does not terminate on a malformed profile.
 ///
-/// ⚠ The temperature comes from McCamy's approximation, accurate to about 2% over the range
-/// profiles actually use. That error moves the interpolation weight slightly and is far below the
-/// difference between the two matrices; it is recorded rather than hidden.
+/// ⚠⚠ The temperature is Robertson's (`crate::robertson`), as in Adobe's DNG SDK — since M10.13a, measured against
+/// it. McCamy's approximation, used before, was called "about 2 %" here and read a green-tinted neutral 23 % off.
 pub fn neutral_temperature(
     neutral: [f32; 3],
     color1: [[f32; 3]; 3],
@@ -201,30 +240,36 @@ pub fn neutral_temperature(
     t1: f32,
     t2: f32,
 ) -> f32 {
-    let mut temp = (t1 + t2) * 0.5;
-    for _ in 0..30 {
+    // ⚠⚠ M10.13a: the DNG SDK's own iteration (`dng_color_spec::NeutralToXY`) — from D50's chromaticity, the white
+    // the blended matrix maps the neutral back to, until it moves less than 1e-7, averaging the last two if it never
+    // settles — with the temperature by Robertson's method, as the SDK computes it.
+    // ⚠ Normalised as the SDK holds them — idempotent, so a caller that already did it loses nothing.
+    let (color1, color2) = (
+        normalize_color_matrix(color1),
+        normalize_color_matrix(color2),
+    );
+    let (mut x, mut y) = (0.3457f64, 0.3585f64);
+    for pass in 0..30 {
+        let temp = crate::robertson::temperature(x, y) as f32;
         let g = illuminant_weight(temp, t1, t2);
         let Some(inv) = invert(&blend(color1, color2, g)) else {
             return temp;
         };
-        let xyz = crate::spaces::apply(&inv, neutral);
+        let xyz = crate::spaces::apply(&inv, neutral).map(f64::from);
         let sum = xyz[0] + xyz[1] + xyz[2];
-        if sum.abs() < 1e-9 {
+        if sum.abs() < 1e-12 || !sum.is_finite() {
             return temp;
         }
-        let (x, y) = (xyz[0] / sum, xyz[1] / sum);
-        let n = (x - 0.3320) / (0.1858 - y);
-        let next = 449.0 * n * n * n + 3525.0 * n * n + 6823.3 * n + 5520.33;
-        if !next.is_finite() {
-            return temp;
+        let (nx, ny) = (xyz[0] / sum, xyz[1] / sum);
+        if (nx - x).abs() + (ny - y).abs() < 1e-7 {
+            return crate::robertson::temperature(nx, ny) as f32;
         }
-        let next = next.clamp(1500.0, 15000.0);
-        if (next - temp).abs() < 1.0 {
-            return next;
+        if pass == 29 {
+            return crate::robertson::temperature((x + nx) * 0.5, (y + ny) * 0.5) as f32;
         }
-        temp = next;
+        (x, y) = (nx, ny);
     }
-    temp
+    unreachable!("the loop returns on its last pass")
 }
 
 #[cfg(test)]
@@ -243,6 +288,95 @@ mod tests {
         [0.2698, 0.6609, 0.0693],
         [0.0002, 0.0160, 0.8088],
     ];
+
+    /// The X-T4 profile's ColorMatrices — the same file as [`FM1`]/[`FM2`].
+    const CM1: [[f32; 3]; 3] = [
+        [1.8038, -0.902, 0.0103],
+        [-0.3719, 1.4063, 0.2712],
+        [-0.0196, 0.0991, 0.6531],
+    ];
+    const CM2: [[f32; 3]; 3] = [
+        [0.9798, -0.3701, -0.0878],
+        [-0.446, 1.2149, 0.2613],
+        [-0.0705, 0.1228, 0.6461],
+    ];
+
+    /// ⚠⚠ M10.13a's oracle, CAPTURED: Adobe's DNG SDK 1.7.1 (`dng_color_spec::NeutralToXY`, `dng_temperature`,
+    /// `SetWhiteXY`) on RawTherapee's `FUJIFILM X-T4.dcp` (byte-identical to the author's), 2026-11-12 — a C++ harness
+    /// linked against the SDK, run by the author; `raw-decode`'s `dcp_oracle` example compares all 49 of its white
+    /// balances. Per row: the camera neutral, the SDK's temperature, and its forward matrix on white-balanced camera
+    /// RGB with Y's row scaled to 1. ⚠ The first row was 23 % off under McCamy (3369 K against 4403 K).
+    // ⚠ The digits as the harness printed them, kept so the fixture can be checked against its source.
+    #[allow(clippy::excessive_precision)]
+    const SDK: [([f32; 3], f32, [f32; 9]); 5] = [
+        (
+            [0.833333, 1.0, 0.833333],
+            4403.015,
+            // ⚠ Temperature only, here and on two more green neutrals of the 49: the SDK's matrix there is no blend
+            // of the two (its first row sums to 0.983, not D50's 0.964) — its camera white drifted from the neutral.
+            [0.0; 9],
+        ),
+        (
+            [0.833333, 1.0, 0.555556],
+            3597.748,
+            [
+                0.641169258,
+                0.138594411,
+                0.184529668,
+                0.261273539,
+                0.683014099,
+                0.055712362,
+                0.000871664546,
+                0.0258175996,
+                0.798421497,
+            ],
+        ),
+        (
+            [0.666667, 1.0, 0.666667],
+            4414.436,
+            [
+                0.623236498,
+                0.131539809,
+                0.209513607,
+                0.266894599,
+                0.668428857,
+                0.0646765435,
+                0.000428601249,
+                0.0193426615,
+                0.805345925,
+            ],
+        ),
+        ([0.555556, 1.0, 0.833333], 6122.389, [0.0; 9]),
+        ([0.357143, 1.0, 0.833333], 9761.624, [0.0; 9]),
+    ];
+
+    #[test]
+    fn the_temperature_and_matrix_match_adobes_dng_sdk() {
+        let (t1, t2) = (illuminant_temperature(17), illuminant_temperature(23));
+        for (neutral, temp, fm) in SDK {
+            let ours = neutral_temperature(neutral, CM1, CM2, t1, t2);
+            assert!(
+                (ours - temp).abs() / temp < 0.002,
+                "{neutral:?}: ours {ours} K, the SDK {temp} K"
+            );
+            if fm[0] != 0.0 {
+                let m = blend(
+                    normalize_forward_matrix(FM1),
+                    normalize_forward_matrix(FM2),
+                    illuminant_weight(ours, t1, t2),
+                );
+                let s: f32 = m[1].iter().sum();
+                for k in 0..9 {
+                    assert!(
+                        (m[k / 3][k % 3] / s - fm[k]).abs() < 1e-4,
+                        "{neutral:?} [{k}]: {} against {}",
+                        m[k / 3][k % 3] / s,
+                        fm[k]
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn the_blend_reaches_both_endpoints_exactly() {
