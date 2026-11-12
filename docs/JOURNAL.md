@@ -193,6 +193,26 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-12 — M10.14f (part): defringe on the GPU, and prefix outputs carried on the GPU (branch `m10.14f-defringe-gpu`, merged 2026-11-12)
+
+✅ **Merged by the author's call ("let's just merge and delete it")** — he found no photo with visible fringing, so
+the defringe itself remains unjudged on a real one (as at M9.6).
+
+- **The twin:** `GpuDefringeStage` — lightness, Sobel, separable max, the Oklab apply — global amounts only; a mask
+  carrying a local defringe declines (same predicate as `build_prefix_steps`). Parity < 1 level at scale 1 and 0.4.
+- ⚠⚠ **The test first passed with a shader that did not compile** (`smooth` is a WGSL keyword): `GpuChain::apply`
+  falls back to the CPU twin on any failure, so it compared the CPU with itself — and two sabotages passed too. It now
+  goes through `apply_keeping_input` and asserts the GPU RAN. ⚠ Other twins' tests in `gpu-pipeline` compare through
+  a plain `apply` — the same blind spot, not yet audited. A first fixture also put the fringe ON the edge, where the
+  Sobel alone reaches it; now 3–4 px off, on a grey of the same luminance.
+- ⚠⚠ **The bigger cost was a DOWNLOAD:** with the twin alone a straighten drag was still 78 ms at 3200 — geometry's
+  78 MB float checkpoint downloaded (~70 ms on this RTX 3060 Ti, 1.2 ms of GPU work) because defringe followed it. A
+  step whose next step is a GPU twin that does not read the image (`gpu_pipeline::prefix_twin_reads_image`) now keeps
+  its output on the GPU (`Ran::gpu_prefix_carried`); `img_step` says which step the CPU checkpoint feeds, so a GPU
+  failure mid-carry (`checkpoint_at`) and the tail's last resort (`catch_up`) run every carried step again.
+- **Measured** (`bench_defringe_drag`, a straighten drag): **29.4 → 3.3 ms at 1600, 146.6 → 20.8 at 3200**.
+- 4 tests, each sabotaged.
+
 ### 2026-11-12 — M10.13a: a DCP's illuminant blend checked against Adobe's DNG SDK (branch `m10.13a-dcp-oracle`, merged 2026-11-12)
 
 ✅ **Confirmed by the author ("works, merge and delete")**.
