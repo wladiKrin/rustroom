@@ -76,10 +76,17 @@ pub(super) struct MaskCoverageKey {
 /// free.
 ///
 /// ⚠ It misses on every frame *while painting*, and that is correct — the strokes really did
-/// change, so there is nothing to reuse.
+/// change. ⚠ Since M10.14f the miss is cheap: the brush being painted keeps its
+/// `pipeline::brush::incremental` state in [`Self::painting`], so a frame splats only the stroke's new dabs.
 #[derive(Default)]
 pub(super) struct BrushCache {
     pub(super) entries: Vec<(MaskCoverageKey, Arc<pipeline::brush::CoverageMap>)>,
+    /// The incremental state of the one component being painted, by `(mask, component)` — one slot, since only one
+    /// stroke grows at a time; a miss on another component takes it over.
+    pub(super) painting: Option<(
+        (usize, usize),
+        Option<pipeline::brush::incremental::Incremental>,
+    )>,
     /// The AI maps, shared with the session (M9.13).
     pub(super) ai: crate::ai_coverage::SharedAiMaps,
 }
@@ -260,13 +267,19 @@ impl BrushCache {
                 // through `BrushCoverage::deposit`; `render_cached` stores it with `remember`.
                 let built = match Self::mask_at(edits, i, j) {
                     Some(edit_model::Mask::Brush(b)) if !b.needs_base() => {
-                        Some(Arc::new(pipeline::brush::rasterize_in(
+                        // ⚠ M10.14f: through the incremental rasteriser — bit-identical to `rasterize_in`, and a stroke
+                        // grown since the last miss splats only its new dabs.
+                        if self.painting.as_ref().is_none_or(|(at, _)| *at != (i, j)) {
+                            self.painting = Some(((i, j), None));
+                        }
+                        let state = &mut self.painting.as_mut().expect("set above").1;
+                        Some(Arc::new(pipeline::brush::incremental::rasterize(
+                            state,
                             b,
                             &edits.geometry,
                             spec.fw,
                             spec.fh,
                             spec.region,
-                            None,
                         )))
                     }
                     // ⚠ M9.13: an AI component is its map, resampled into this frame with its
