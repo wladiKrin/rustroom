@@ -149,3 +149,40 @@ fn there_is_no_drop_hint() {
         "{labels:?}"
     );
 }
+
+/// The pointer on a key's line lights its part of the map: the line reports its number, and the map paints that
+/// part lighter (the author, 2026-11-13).
+#[test]
+fn hovering_a_key_line_lights_its_part() {
+    let ctx = test_ui::ctx();
+    crate::theme::install_fonts(&ctx);
+    let rows = rows();
+    let mut body = |ui: &mut egui::Ui| {
+        let _ = show(
+            ui,
+            StartInputs {
+                rows: &rows,
+                show_welcome: true,
+                keys: &[],
+            },
+        );
+    };
+    let rects = test_ui::labelled_rects_on(&ctx, test_ui::screen(), &mut body);
+    let at = rects
+        .iter()
+        .find(|(l, _)| l.starts_with("Rail"))
+        .map(|(_, r)| r.center())
+        .expect("the Rail key line is drawn");
+    assert_eq!(lit(&ctx), None, "nothing lit at rest");
+    for _ in 0..2 {
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(test_ui::screen()),
+                events: vec![egui::Event::PointerMoved(at)],
+                ..Default::default()
+            },
+            &mut body,
+        );
+    }
+    assert_eq!(lit(&ctx), Some(2));
+}

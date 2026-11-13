@@ -29,10 +29,14 @@ fn paint_disc(ui: &egui::Ui, at: egui::Pos2, n: u8) {
     );
 }
 
-/// Paint `map` at `width`.
-pub(crate) fn paint(ui: &mut egui::Ui, map: Map, width: f32) {
+/// Room for a map `width` wide.
+pub(crate) fn allocate(ui: &mut egui::Ui, width: f32) -> egui::Rect {
     let size = egui::vec2(width, (width * ASPECT).round());
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    ui.allocate_exact_size(size, egui::Sense::hover()).0
+}
+
+/// Paint `map` into `rect`, the part numbered `lit` a step lighter — its key line is under the pointer.
+pub(crate) fn paint(ui: &egui::Ui, rect: egui::Rect, map: Map, lit: Option<u8>) {
     let tok = crate::theme::tokens::of(ui);
     let p = ui.painter();
     p.rect_filled(rect, 8.0, tok.canvas);
@@ -44,9 +48,39 @@ pub(crate) fn paint(ui: &mut egui::Ui, map: Map, width: f32) {
     let top = 20.0_f32.min(r.height() * 0.16);
     let status = 12.0_f32.min(r.height() * 0.1);
     let body_top = r.top() + top + gap;
-    let fill = |rect: egui::Rect, c: egui::Color32| p.rect_filled(rect, 3.0, c);
+    // A part is painted a step up the elevation scale while lit: `panel` → `raised`, `raised` → `hover`.
+    let lift = |c: egui::Color32| {
+        if c == tok.panel {
+            tok.raised
+        } else {
+            tok.hover
+        }
+    };
+    let fill = |rect: egui::Rect, c: egui::Color32, n: Option<u8>| {
+        let c = if n.is_some() && n == lit { lift(c) } else { c };
+        p.rect_filled(rect, 3.0, c)
+    };
     let bar = block(r.left(), r.top(), r.right(), r.top() + top);
-    fill(bar, tok.raised);
+    fill(bar, tok.raised, None);
+    // The top bar's two ends: the app switch at the left, search and Filter (or Export) at the right.
+    let bar_left = block(
+        bar.left(),
+        bar.top(),
+        bar.left() + bar.width() * 0.3,
+        bar.bottom(),
+    );
+    let bar_right = block(
+        bar.right() - bar.width() * 0.35,
+        bar.top(),
+        bar.right(),
+        bar.bottom(),
+    );
+    let right_n = if map == Map::Library { 3 } else { 8 };
+    for (seg, n) in [(bar_left, 1), (bar_right, right_n)] {
+        if lit == Some(n) {
+            fill(seg, tok.raised, Some(n));
+        }
+    }
     let mut discs: Vec<(egui::Pos2, u8)> = Vec::new();
     match map {
         Map::Library => {
@@ -59,9 +93,9 @@ pub(crate) fn paint(ui: &mut egui::Ui, map: Map, width: f32) {
                 r.bottom() - status - gap,
             );
             let st = block(grid.left(), grid.bottom() + gap, r.right(), r.bottom());
-            fill(rail, tok.raised);
-            fill(grid, tok.panel);
-            fill(st, tok.raised);
+            fill(rail, tok.raised, Some(2));
+            fill(grid, tok.panel, None);
+            fill(st, tok.raised, Some(4));
             // The grid's tiles: four by two.
             let (cols, rows) = (4.0, 2.0);
             let pad = 6.0;
@@ -103,11 +137,11 @@ pub(crate) fn paint(ui: &mut egui::Ui, map: Map, width: f32) {
                 strip.top() - gap,
             );
             let photo = block(r.left(), body_top, panel.left() - gap, st.top() - gap);
-            fill(photo, tok.panel);
-            fill(panel, tok.raised);
-            fill(tools, tok.raised);
-            fill(st, tok.raised);
-            fill(strip, tok.raised);
+            fill(photo, tok.panel, None);
+            fill(panel, tok.raised, Some(5));
+            fill(tools, tok.raised, Some(6));
+            fill(st, tok.raised, None);
+            fill(strip, tok.raised, Some(7));
             // The photo: a lighter frame on the canvas, so the area reads as a picture.
             p.rect_filled(
                 photo.shrink2(egui::vec2(photo.width() * 0.12, 6.0)),

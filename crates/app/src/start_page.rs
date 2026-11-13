@@ -231,6 +231,7 @@ fn welcome_card(ui: &mut egui::Ui) -> bool {
             )
             .selectable(false),
         );
+        let mut lit = None;
         let gap = 20.0;
         let half = ((ui.available_width() - gap) / 2.0).max(0.0);
         ui.horizontal_top(|ui| {
@@ -243,13 +244,19 @@ fn welcome_card(ui: &mut egui::Ui) -> bool {
                     ui.set_width(half);
                     ui.spacing_mut().item_spacing.y = 8.0;
                     crate::theme::sub_label(ui, label);
-                    crate::start_page_maps::paint(ui, map, half);
+                    // ⚠ Room for the map first, painted after the keys: the line under the pointer lights its
+                    // part in the same frame (the author, 2026-11-13).
+                    let rect = crate::start_page_maps::allocate(ui, half);
                     for &(n, name, what) in key {
-                        key_line(ui, n, name, what);
+                        if key_line(ui, n, name, what) {
+                            lit = Some(n);
+                        }
                     }
+                    crate::start_page_maps::paint(ui, rect, map, lit);
                 });
             }
         });
+        ui.ctx().data_mut(|d| d.insert_temp(lit_id(), lit));
         let mut ticked = false;
         if ui
             .checkbox(&mut ticked, DONT_SHOW)
@@ -262,9 +269,19 @@ fn welcome_card(ui: &mut egui::Ui) -> bool {
     hide
 }
 
-/// One line of a map's key: the number's disc, the part's name, what it is for.
-fn key_line(ui: &mut egui::Ui, n: u8, name: &str, what: &str) {
-    ui.horizontal(|ui| {
+fn lit_id() -> egui::Id {
+    egui::Id::new("start_page_lit")
+}
+
+/// The map part the pointer's key line lit on the last frame — what the tests read.
+#[cfg(test)]
+pub(crate) fn lit(ctx: &egui::Context) -> Option<u8> {
+    ctx.data(|d| d.get_temp::<Option<u8>>(lit_id())).flatten()
+}
+
+/// One line of a map's key: the number's disc, the part's name, what it is for. `true` while the pointer is on it.
+fn key_line(ui: &mut egui::Ui, n: u8, name: &str, what: &str) -> bool {
+    let row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         crate::start_page_maps::disc(ui, n);
         let tok = crate::theme::tokens::of(ui);
@@ -279,6 +296,7 @@ fn key_line(ui: &mut egui::Ui, n: u8, name: &str, what: &str) {
         job.wrap.max_width = ui.available_width();
         ui.add(egui::Label::new(job).selectable(false));
     });
+    ui.rect_contains_pointer(row.response.rect)
 }
 
 /// Which window a map draws.
