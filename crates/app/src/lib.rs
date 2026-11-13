@@ -135,6 +135,7 @@ pub mod spot_tool;
 pub mod stack;
 pub mod stack_by_hand;
 pub mod stand_in;
+pub mod start;
 pub mod status_text;
 pub mod straighten_line;
 pub mod sync;
