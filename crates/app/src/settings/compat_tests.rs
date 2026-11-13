@@ -1095,3 +1095,13 @@ fn a_place_round_trips() {
     store.save(&s).unwrap();
     assert_eq!(store.load().last_place, s.last_place);
 }
+
+/// ⚠⚠ The review's #2: a place this build cannot read — a source kind from a newer build, a hand edit — costs only
+/// the place. `load` is infallible, so a failing field would reset EVERY setting.
+#[test]
+fn an_unreadable_place_costs_only_the_place() {
+    let json = r#"{"auto_advance":false,"last_place":{"source":{"kind":"SomethingNewer","x":1},"selected":null}}"#;
+    let s: Settings = serde_json::from_str(json).expect("an unreadable place must not fail the file");
+    assert!(!s.auto_advance, "every other setting survives");
+    assert!(s.last_place.is_none());
+}

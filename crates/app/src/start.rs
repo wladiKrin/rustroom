@@ -67,6 +67,18 @@ pub struct Place {
     pub selected: Option<(PathBuf, u32)>,
 }
 
+/// Read a stored place, or nothing when it cannot be read — a source kind from a newer build, a hand edit.
+///
+/// ⚠⚠ `SettingsStore::load` is infallible: a field that fails resets EVERY setting to its default, so the one field
+/// rewritten on every source switch must never be the one that fails (M11.4's review).
+pub fn lenient<'de, D>(d: D) -> Result<Option<Place>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).ok())
+}
+
 /// Whether `source` can be opened again: a folder on disk (`exists`) or still in the catalog (an unplugged drive,
 /// which the rail opens from its last-seen rows); a catalog id still in its list; an Immich source only while
 /// `immich_connected`. All Photos and dates always — they may show nothing, which is not a failure.

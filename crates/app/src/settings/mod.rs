@@ -408,6 +408,10 @@ pub struct Settings {
     /// (M11.4). ⚠ Defaults to **true**, the same trap as [`Self::reopen_last`].
     pub show_welcome: bool,
     /// What the Library showed last, mirrored by the bin's `place.rs` (M11.4); `None` when nothing was open.
+    ///
+    /// ⚠ Read leniently ([`crate::start::lenient`]): one unreadable place must not reset every setting. A missing
+    /// field still takes the container-level default.
+    #[serde(deserialize_with = "crate::start::lenient")]
     pub last_place: Option<crate::start::Place>,
     /// The Immich server's base URL, e.g. `https://photos.example.com`. Empty means unconfigured.
     ///
