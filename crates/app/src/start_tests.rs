@@ -193,3 +193,30 @@ fn an_empty_catalog_and_no_recents_has_nothing_to_continue() {
     let rail = RailData::default();
     assert!(continue_rows(&[], &rail, 0, |_| true).is_empty());
 }
+
+/// ⚠⚠ The review's #3: the start page draws every frame, and `is_dir` on a stale network mount can block for
+/// seconds — so the rows are derived once per input, not per frame.
+#[test]
+fn the_continue_rows_are_checked_once_per_change() {
+    let rail = RailData::default();
+    let calls = std::cell::Cell::new(0);
+    let exists = |_: &Path| {
+        calls.set(calls.get() + 1);
+        true
+    };
+    let recent = vec![PathBuf::from("/a"), PathBuf::from("/b")];
+    let mut memo = ContinueMemo::default();
+    assert_eq!(memo.rows(&recent, &rail, 0, exists).len(), 2);
+    assert_eq!(memo.rows(&recent, &rail, 0, exists).len(), 2);
+    assert_eq!(calls.get(), 2, "two folders checked once, not once a frame");
+    let more = vec![
+        PathBuf::from("/c"),
+        PathBuf::from("/a"),
+        PathBuf::from("/b"),
+    ];
+    assert_eq!(memo.rows(&more, &rail, 0, exists).len(), 3);
+    assert_eq!(calls.get(), 5, "a new recent list is checked again");
+    memo.clear();
+    let _ = memo.rows(&more, &rail, 0, exists);
+    assert_eq!(calls.get(), 8, "and so is a page shown again");
+}

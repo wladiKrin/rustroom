@@ -1101,7 +1101,8 @@ fn a_place_round_trips() {
 #[test]
 fn an_unreadable_place_costs_only_the_place() {
     let json = r#"{"auto_advance":false,"last_place":{"source":{"kind":"SomethingNewer","x":1},"selected":null}}"#;
-    let s: Settings = serde_json::from_str(json).expect("an unreadable place must not fail the file");
+    let s: Settings =
+        serde_json::from_str(json).expect("an unreadable place must not fail the file");
     assert!(!s.auto_advance, "every other setting survives");
     assert!(s.last_place.is_none());
 }

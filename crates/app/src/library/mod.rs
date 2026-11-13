@@ -147,14 +147,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ Same reason: the context menu reads the catalog while the closure holds `&mut
     // app.library`, and the borrow checker only accepts that when the two fields are visibly
     // disjoint.
-    // M11.4: the start page's rows, only while it shows — at most a handful of `stat`s, never per photo.
-    let start_rows = if app.library.is_none() {
+    // M11.4: the start page's rows, only while it shows, and checked once per change (`ContinueMemo`) — an
+    // `is_dir` on a stale mount can block.
+    let start_rows: &[rustroom_app::start::ContinueRow] = if app.library.is_none() {
         let all = app.rail_data.all(&app.immich_present);
-        rustroom_app::start::continue_rows(&app.settings.recent_folders, &app.rail_data, all, |p| {
-            p.is_dir()
-        })
+        app.start_rows
+            .rows(&app.settings.recent_folders, &app.rail_data, all, |p| {
+                p.is_dir()
+            })
     } else {
-        Vec::new()
+        app.start_rows.clear();
+        &[]
     };
     let catalog = app.catalog.as_ref();
     // ⚠ From the settings, not a constant. Everything below is expressed as a fraction of it so
@@ -175,7 +178,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         stack_drag: app.settings.stack_drag,
         look: app.settings.stacking.look,
         keys: &app.settings.shortcuts,
-        start_rows: &start_rows,
+        start_rows,
         show_welcome: app.settings.show_welcome,
         publish: app.publish.view.as_ref().map(|v| &v.states),
     };

@@ -195,6 +195,7 @@ impl RustroomApp {
             keyword_suggest: Default::default(),
             rail_data: Default::default(),
             place_state: Default::default(),
+            start_rows: Default::default(),
             rename_draft: None,
             label_draft: None,
             snapshot_rename: None,

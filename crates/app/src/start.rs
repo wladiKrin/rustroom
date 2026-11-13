@@ -169,6 +169,43 @@ pub fn continue_rows(
     rows
 }
 
+/// [`continue_rows`] derived once per input: the recent list, the All Photos count and the rail's folder rows
+/// (by identity — `RailData` swaps the `Arc` on each re-read).
+///
+/// ⚠⚠ The start page draws every frame, and an `is_dir` on a stale network mount or a sleeping drive can block
+/// for seconds (M11.4's review). [`ContinueMemo::clear`] when a source opens, so the page shown again re-checks.
+#[derive(Default)]
+pub struct ContinueMemo {
+    key: Option<(Vec<PathBuf>, i64, usize)>,
+    rows: Vec<ContinueRow>,
+}
+
+impl ContinueMemo {
+    pub fn rows(
+        &mut self,
+        recent: &[PathBuf],
+        rail: &RailData,
+        all_photos: i64,
+        exists: impl Fn(&Path) -> bool,
+    ) -> &[ContinueRow] {
+        let key = (
+            recent.to_vec(),
+            all_photos,
+            std::sync::Arc::as_ptr(&rail.folders) as usize,
+        );
+        if self.key.as_ref() != Some(&key) {
+            self.rows = continue_rows(recent, rail, all_photos, exists);
+            self.key = Some(key);
+        }
+        &self.rows
+    }
+
+    pub fn clear(&mut self) {
+        self.key = None;
+        self.rows.clear();
+    }
+}
+
 #[cfg(test)]
 #[path = "start_tests.rs"]
 mod tests;
