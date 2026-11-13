@@ -195,7 +195,8 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ### 2026-11-13 — M11.4 (first half): the start page, the welcome, and reopening where you left off (branch `m11.4-start-page`)
 
-⏳ **Awaiting the author's look.** Spec `docs/superpowers/specs/2026-11-13-m11.4-start-page-design.md`, plan beside it,
+✅ **Merged 2026-11-13, confirmed by the author ("works, merge and delete")** — with the map key's hover lighting its part
+of the map, his request after the first look. Gate on the tip: fmt, clippy, 4,713 tests green. Spec `docs/superpowers/specs/2026-11-13-m11.4-start-page-design.md`, plan beside it,
 mockups <https://claude.ai/artifact/Hnj6DR4oeAh21SR1KGYjge> (the author picked the two-map welcome, the welcome
 BENEATH Continue, back to the Library — never Develop — with the photo selected).
 
