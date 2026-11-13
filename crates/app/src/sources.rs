@@ -328,6 +328,9 @@ impl RustroomApp {
         scan: Vec<catalog::CatalogEntry>,
         copies: Option<std::collections::HashSet<PhotoId>>,
     ) -> usize {
+        // ⚠ Whatever was loading from Immich is no longer what the author wants: its reply is dropped when it lands
+        // (`immich_flow::awaited_reply`).
+        self.immich_opening = None;
         // ⚠⚠ **Through `browser_entries`, never a bare `entries::build`.** This is the
         // folder-open path, and building the rows here without grouping is exactly the bug that
         // shipped: stacking worked after a re-sort and did nothing when a folder was opened.

@@ -353,3 +353,53 @@ fn a_close_request_remembers_the_place() {
         Some(place(folder(d.path()), Some(&files[2])))
     );
 }
+
+/// ⚠⚠ The review's #1: a reopen's Immich reply that lands AFTER the author opened something else must not replace
+/// it — the start page invites exactly that click while "Loading…" waits.
+#[test]
+fn a_late_immich_reply_does_not_replace_a_source_opened_meanwhile() {
+    let (mut app, d, _) = app_with_folder("place-late-reply", 2);
+    app.settings.immich_url = "https://example.invalid".to_string();
+    app.settings.immich_key = "key".to_string();
+    let ctx = egui::Context::default();
+    app.settings.last_place = Some(place(
+        Source::ImmichAlbum {
+            id: "al".to_string(),
+            name: "Trip".to_string(),
+        },
+        None,
+    ));
+    app.pump_place(&ctx);
+    assert_eq!(
+        app.immich_opening.as_deref(),
+        Some("al"),
+        "fixture check: loading"
+    );
+    app.open_catalog_folder(&ctx, d.path());
+    app.land_immich_album(
+        &ctx,
+        "al".to_string(),
+        "Trip".to_string(),
+        Ok(vec![asset("a1")]),
+    );
+    assert_eq!(
+        source(&app),
+        Some(LibrarySource::Folder(d.path().to_path_buf()))
+    );
+    assert!(
+        app.immich_assets.contains_key("al"),
+        "the reply is still remembered"
+    );
+    // And a reply that IS awaited still opens.
+    app.immich_opening = Some("al".to_string());
+    app.land_immich_album(
+        &ctx,
+        "al".to_string(),
+        "Trip".to_string(),
+        Ok(vec![asset("a1")]),
+    );
+    assert!(matches!(
+        source(&app),
+        Some(LibrarySource::ImmichAlbum { .. })
+    ));
+}
