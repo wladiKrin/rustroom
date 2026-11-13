@@ -38,6 +38,8 @@ impl eframe::App for RustroomApp {
         self.reset_view_scoped_state();
         self.pump_loaders(&ctx);
         self.handle_input(&ctx);
+        // M11.4: reopen where you left off on the first frame, then follow the Library.
+        self.pump_place(&ctx);
         self.pump_jobs(&ctx);
 
         // Pull any finished preview frame into a texture.

@@ -83,6 +83,7 @@ mod pano_flow;
 mod people_flow;
 mod people_rail;
 mod people_view;
+mod place;
 mod preset_ops;
 mod preview_flow;
 mod print_flow;

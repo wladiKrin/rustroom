@@ -93,6 +93,12 @@ pub(super) fn panel(
         }
         centre_on = super::keys::grid_keys(i, lib, cols, auto_advance, out);
     });
+    // M11.4: a reopen selected the stored photo — bring it into view, once.
+    if std::mem::take(&mut lib.reveal) {
+        let active = lib.selection.active();
+        centre_on =
+            centre_on.or_else(|| active.and_then(|a| lib.visible.iter().position(|&v| v == a)));
+    }
 
     // ⚠ How many rows of prefetch to keep resident beyond the drawn ones. Latency, not
     // correctness: at 0 the grid is still right, it just shows grey while you scroll. No test

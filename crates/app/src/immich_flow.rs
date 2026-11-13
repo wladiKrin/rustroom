@@ -553,6 +553,52 @@ impl RustroomApp {
     }
 
     /// Drain the Immich worker. Called once a frame from [`crate::shell`].
+    /// Open an Immich album by id, as a click on its rail row does (and a reopen at launch, M11.4) — one path.
+    pub(crate) fn open_immich_album_by_id(
+        &mut self,
+        ctx: &egui::Context,
+        id: String,
+        name: String,
+    ) {
+        // ⚠⚠ Already fetched this session: open it now rather than waiting a couple of seconds
+        // for the same reply again. This is what makes switching back and forth feel instant.
+        if let Some(assets) = self.immich_assets.get(&id).cloned() {
+            self.open_immich_album(ctx, id, name, &assets);
+        } else if let Some(assets) = self.immich_cached_album(&id) {
+            // ⚠ On disk from an earlier run, and its validator still matches what the rail's
+            // album list says — so the *first* visit after a launch is instant too.
+            self.immich_assets.insert(id.clone(), assets.clone());
+            self.open_immich_album(ctx, id, name, &assets);
+        } else {
+            // ⚠ Feedback **before** the request, or the click looks like it did nothing: the
+            // rail's highlight follows `library.source`, which will not change for seconds.
+            self.immich_opening = Some(id.clone());
+            self.status = format!("Loading “{name}” from Immich…");
+            self.immich
+                .request(rustroom_app::immich_worker::Job::Album { id, name });
+        }
+    }
+
+    /// Open one month of the Immich timeline, as a click on its rail row does (and a reopen, M11.4).
+    pub(crate) fn open_immich_bucket_by_id(
+        &mut self,
+        ctx: &egui::Context,
+        bucket: String,
+        label: String,
+    ) {
+        if let Some(assets) = self.immich_assets.get(&bucket).cloned() {
+            self.open_immich_bucket(ctx, bucket, label, &assets);
+        } else if let Some(assets) = self.immich_cached_bucket(&bucket) {
+            self.immich_assets.insert(bucket.clone(), assets.clone());
+            self.open_immich_bucket(ctx, bucket, label, &assets);
+        } else {
+            self.immich_opening = Some(bucket.clone());
+            self.status = format!("Loading {label} from Immich…");
+            self.immich
+                .request(rustroom_app::immich_worker::Job::Bucket { bucket, label });
+        }
+    }
+
     pub(crate) fn pump_immich(&mut self, ctx: &egui::Context) {
         for outcome in self.immich.poll() {
             match outcome {

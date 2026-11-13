@@ -187,6 +187,7 @@ pub fn for_test() -> RustroomApp {
         keyword_field: Default::default(),
         keyword_suggest: Default::default(),
         rail_data: Default::default(),
+        place_state: Default::default(),
         rename_draft: None,
         label_draft: None,
         snapshot_rename: None,
@@ -403,6 +404,7 @@ pub fn library_of_names(names: &[&str]) -> Library {
         below: Default::default(),
         members_read_at: 0,
         members_settling: None,
+        reveal: false,
     };
     lib.refilter(&Default::default());
     lib

@@ -379,6 +379,7 @@ impl RustroomApp {
             below,
             members_read_at: read_at,
             members_settling: None,
+            reveal: false,
         });
         // ⚠ Applied explicitly rather than left to `reload_marks`, which early-returns when there
         // is no catalog — the filter must hold across a source switch whether or not one is open.
