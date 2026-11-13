@@ -183,6 +183,11 @@ impl RustroomApp {
         self.save_settings();
     }
 
+    /// What a close request does here, on every platform (`shell`): the macOS exit workaround stays there.
+    pub(crate) fn on_close_requested(&mut self) {
+        self.remember_place_on_close();
+    }
+
     /// When the window closes: the place with its photo — the one open in Develop if any, since that is the one the
     /// author was on, else the Library's active photo.
     pub(crate) fn remember_place_on_close(&mut self) {

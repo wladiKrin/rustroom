@@ -29,10 +29,14 @@ impl eframe::App for RustroomApp {
         // KVO observer for "nextResponder" from `WinitView` with an imbalanced count,
         // throwing an uncaught `NSRangeException` (SIGABRT). Exiting here — before that
         // deferred observer invalidation runs during teardown — gives a clean exit.
-        #[cfg(target_os = "macos")]
         if ctx.input(|i| i.viewport().close_requested()) {
-            self.persist_current_session();
-            std::process::exit(0);
+            // M11.4: on every platform — the close is the one moment the selection is stored with the place.
+            self.on_close_requested();
+            #[cfg(target_os = "macos")]
+            {
+                self.persist_current_session();
+                std::process::exit(0);
+            }
         }
 
         self.reset_view_scoped_state();

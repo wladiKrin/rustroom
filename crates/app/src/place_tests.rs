@@ -329,3 +329,27 @@ fn every_source_converts_both_ways() {
         assert_eq!(from_place(&to_place(&source)), source);
     }
 }
+
+/// The window's close, on every platform: the place is stored with the photo that was selected.
+#[test]
+fn a_close_request_remembers_the_place() {
+    let (mut app, d, files) = app_with_folder("place-close-request", 3);
+    let ctx = egui::Context::default();
+    app.pump_place(&ctx);
+    app.open_catalog_folder(&ctx, d.path());
+    app.pump_place(&ctx);
+    let i = app
+        .library
+        .as_ref()
+        .unwrap()
+        .entries
+        .iter()
+        .position(|e| e.id.path == files[2])
+        .unwrap();
+    app.library.as_mut().unwrap().selection.click(i);
+    app.on_close_requested();
+    assert_eq!(
+        app.settings.last_place,
+        Some(place(folder(d.path()), Some(&files[2])))
+    );
+}
