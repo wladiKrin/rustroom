@@ -1,4 +1,5 @@
 use super::*;
+use std::path::Path;
 
 /// The settings file names each kind plainly (`"kind": "Folder"`), so it reads — and a renamed variant shows.
 #[test]
@@ -82,4 +83,113 @@ fn every_source_kind_serialises_with_its_kind_tag() {
         let back: Source = serde_json::from_value(v).unwrap();
         assert_eq!(back, source);
     }
+}
+
+/// Constructed: a catalog of `files` in `dir`, read into a `RailData` as the rail would.
+fn rail_over(dir: &Path, files: &[&str]) -> (catalog::db::Catalog, RailData) {
+    for f in files {
+        std::fs::write(dir.join(f), b"x").unwrap();
+    }
+    let cat = catalog::db::Catalog::open_in_memory().unwrap();
+    let scan = catalog::scan_folder(dir).unwrap();
+    cat.sync_folder(dir, &scan).unwrap();
+    let mut rail = RailData::default();
+    rail.refresh(Some(&cat), None);
+    (cat, rail)
+}
+
+#[test]
+fn a_folder_that_exists_or_is_catalogued_reopens() {
+    let d = test_dir::TempDir::new("start-folder");
+    let (_cat, rail) = rail_over(d.path(), &["a.jpg"]);
+    assert!(
+        !rail.folders.is_empty(),
+        "fixture check: the catalog lists the folder"
+    );
+    let folder = |p: &Path| Source::Folder {
+        path: p.to_path_buf(),
+    };
+    // On disk, and catalogued.
+    assert!(reopenable(&folder(d.path()), &rail, false, |p| p.is_dir()));
+    // Gone from the disk (an unplugged drive) but still catalogued: the rail would open it, so this does.
+    assert!(reopenable(&folder(d.path()), &rail, false, |_| false));
+    // Neither.
+    let other = d.join("never-seen");
+    assert!(!reopenable(&folder(&other), &rail, false, |p| p.is_dir()));
+    // On disk only (opened through File → Open folder before the catalog knew it).
+    std::fs::create_dir(&other).unwrap();
+    assert!(reopenable(&folder(&other), &rail, false, |p| p.is_dir()));
+}
+
+#[test]
+fn a_deleted_collection_does_not_reopen() {
+    let d = test_dir::TempDir::new("start-collection");
+    let (cat, _) = rail_over(d.path(), &["a.jpg"]);
+    let id = cat.create_collection("Portfolio").unwrap();
+    let mut rail = RailData::default();
+    rail.refresh(Some(&cat), None);
+    let c = Source::Collection {
+        id,
+        name: "Portfolio".to_string(),
+    };
+    assert!(reopenable(&c, &rail, false, |_| true));
+    cat.delete_collection(id).unwrap();
+    rail.refresh(Some(&cat), None);
+    assert!(!reopenable(&c, &rail, false, |_| true));
+}
+
+#[test]
+fn immich_sources_need_a_connection() {
+    let rail = RailData::default();
+    let album = Source::ImmichAlbum {
+        id: "u".to_string(),
+        name: "Trip".to_string(),
+    };
+    let bucket = Source::ImmichBucket {
+        bucket: "2026-11-01".to_string(),
+        label: "November 2026".to_string(),
+    };
+    for s in [&album, &bucket] {
+        assert!(!reopenable(s, &rail, false, |_| true));
+        assert!(reopenable(s, &rail, true, |_| true));
+    }
+    // All Photos and dates always reopen, though they may show nothing.
+    assert!(reopenable(&Source::AllPhotos, &rail, false, |_| false));
+}
+
+#[test]
+fn continue_lists_all_photos_then_five_existing_recents() {
+    let d = test_dir::TempDir::new("start-continue");
+    let (_cat, rail) = rail_over(d.path(), &["a.jpg", "b.jpg"]);
+    let recent: Vec<PathBuf> = (0..7).map(|i| d.join(format!("r{i}"))).collect();
+    let mut recent = recent;
+    recent.insert(1, d.path().to_path_buf());
+    let gone = recent[3].clone();
+    let rows = continue_rows(&recent, &rail, 2, |p| p != gone && p.starts_with(d.path()));
+    assert_eq!(rows[0].kind, ContinueKind::AllPhotos);
+    assert_eq!(rows[0].count, Some(2));
+    let folders: Vec<&PathBuf> = rows[1..]
+        .iter()
+        .map(|r| match &r.kind {
+            ContinueKind::Folder(p) => p,
+            ContinueKind::AllPhotos => panic!("All Photos twice"),
+        })
+        .collect();
+    assert_eq!(folders.len(), CONTINUE_MAX);
+    let want: Vec<&PathBuf> = recent.iter().filter(|p| **p != gone).take(5).collect();
+    assert_eq!(folders, want);
+    // The catalogued folder carries its count; one the catalog has never seen has none.
+    assert_eq!(rows[2].count, Some(2));
+    assert_eq!(rows[1].count, None);
+    assert_eq!(
+        rows[2].name,
+        d.path().file_name().unwrap().to_string_lossy()
+    );
+    assert!(rows[2].parent.is_some());
+}
+
+#[test]
+fn an_empty_catalog_and_no_recents_has_nothing_to_continue() {
+    let rail = RailData::default();
+    assert!(continue_rows(&[], &rail, 0, |_| true).is_empty());
 }
