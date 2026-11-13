@@ -103,6 +103,8 @@ mod snapshots;
 mod source_refresh;
 mod sources;
 mod stack_ops;
+mod start_page;
+mod start_page_maps;
 mod status_bar;
 mod status_immich;
 #[cfg(test)]

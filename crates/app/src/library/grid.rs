@@ -1,7 +1,7 @@
 //! The grid's geometry: how many columns fit, and which positions each row holds.
 
 use super::cell::MARK_SCALE;
-use super::{empty_library, GridInputs, GridOutcome};
+use super::{GridInputs, GridOutcome};
 use crate::thumb;
 use eframe::egui;
 use rustroom_app::thumb_loader::ThumbRequest;
@@ -52,13 +52,22 @@ pub(super) fn panel(
         stack_drag,
         look,
         keys,
+        start_rows,
+        show_welcome,
         publish,
     } = inp;
     // ⚠ The grid's own gap, 12 each way (`docs/DESIGN.md` §5) — scoped to this panel, because
     // `item_spacing` is also every control row's air and 12 there would double the panel.
     ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
     let Some(lib) = library else {
-        out.empty_pick = empty_library(ui, keys);
+        out.start_pick = crate::start_page::show(
+            ui,
+            crate::start_page::StartInputs {
+                rows: start_rows,
+                show_welcome,
+                keys,
+            },
+        );
         return;
     };
     // A folder can be reloaded with fewer photos than the selection remembers. This
