@@ -396,6 +396,11 @@ fn an_empty_view_says_why() {
     let d = test_dir::TempDir::new("people-empty");
     std::fs::write(d.join("A.JPG"), b"x").unwrap();
     app.settings.find_faces = false;
+    // ⚠ An injected finder, so the face models count as present wherever this runs: without it the view read this
+    // machine's model folder, and on CI — no models downloaded — said they were missing instead (2026-11-13).
+    app.people.finder = Some(Arc::new(|_| Ok(Vec::new())));
+    // …and an EMPTY models folder, as on CI, so the injected finder is what makes the models present here too.
+    app.ai.dirs = Some((d.path().join("empty"), d.path().join("empty")));
     app.open_folder_at(&ctx, d.path().to_path_buf());
     let text = |app: &mut RustroomApp| {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));

@@ -25,7 +25,7 @@ jobs:
             /opt/hostedtoolcache/CodeQL /usr/local/share/boost
           df -h /
       - name: Install system deps
-        run: sudo apt-get update && sudo apt-get install -y libraw-dev liblcms2-dev libgphoto2-dev libheif-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libraw-dev liblcms2-dev libgphoto2-dev libheif-dev libheif-plugin-libde265 pkg-config
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
