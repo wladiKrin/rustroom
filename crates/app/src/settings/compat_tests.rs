@@ -296,6 +296,15 @@ fn settings_round_trip_carries_the_export_options() {
         // decision rather than as a silently defaulted value.
         export_concurrency: DEFAULT_EXPORT_WIDTH + 1,
         recent_folders: vec![std::path::PathBuf::from("/photos/2026-09")],
+        reopen_last: false,
+        show_welcome: false,
+        last_place: Some(crate::start::Place {
+            source: crate::start::Source::Collection {
+                id: 7,
+                name: "Portfolio".to_string(),
+            },
+            selected: Some((std::path::PathBuf::from("/photos/2026-09/a.raf"), 0)),
+        }),
         ui_scale: UiScale::Larger,
         // Not the default, so the round trip actually carries it.
         hidden_formats: {
@@ -1055,4 +1064,45 @@ fn a_settings_file_from_before_b6_runs_ffdnet() {
     let loaded = SettingsStore::new(f.0.clone()).load();
     assert!(!loaded.confirm_preset_delete, "the old field must survive");
     assert_eq!(loaded.denoise_network, DenoiseNetwork::Ffdnet);
+}
+
+/// ⚠ M11.4: a file from before the start page reopens where you left off and shows the welcome — both default ON
+/// through `Settings::default()`, the container-level `serde(default)` rule (`auto_advance`'s trap).
+#[test]
+fn an_old_settings_file_reopens_and_welcomes() {
+    let json = r#"{"pan_drag":"Secondary","auto_advance":false}"#;
+    let s: Settings = serde_json::from_str(json).expect("an older settings file must load");
+    assert!(!s.auto_advance, "the stored value survived");
+    assert!(s.reopen_last);
+    assert!(s.show_welcome);
+    assert!(s.last_place.is_none());
+}
+
+#[test]
+fn a_place_round_trips() {
+    let f = TempFile::new("place_rt");
+    let store = SettingsStore::new(f.0.clone());
+    let s = Settings {
+        last_place: Some(crate::start::Place {
+            source: crate::start::Source::Periods {
+                periods: vec![(2026, Some(11), None), (2025, None, None)],
+                label: "November 2026 and 2025".to_string(),
+            },
+            selected: Some((PathBuf::from("/p/a.raf"), 2)),
+        }),
+        ..Settings::default()
+    };
+    store.save(&s).unwrap();
+    assert_eq!(store.load().last_place, s.last_place);
+}
+
+/// ⚠⚠ The review's #2: a place this build cannot read — a source kind from a newer build, a hand edit — costs only
+/// the place. `load` is infallible, so a failing field would reset EVERY setting.
+#[test]
+fn an_unreadable_place_costs_only_the_place() {
+    let json = r#"{"auto_advance":false,"last_place":{"source":{"kind":"SomethingNewer","x":1},"selected":null}}"#;
+    let s: Settings =
+        serde_json::from_str(json).expect("an unreadable place must not fail the file");
+    assert!(!s.auto_advance, "every other setting survives");
+    assert!(s.last_place.is_none());
 }

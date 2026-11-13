@@ -365,6 +365,15 @@ native check on macOS (M10.8b).
 Centred: Display heading, one Body sentence in `text2`, up to two buttons (one primary). The
 one place explanatory prose is allowed on screen, because there is nothing else there.
 
+**The Library's empty state is the start page** (M11.4, 2026-11-13, mockups at
+<https://claude.ai/artifact/Hnj6DR4oeAh21SR1KGYjge>): a column of at most 620, the Display heading and its sentence,
+the two Title-size buttons (Open a folder… primary), a **Continue** card (Caption sub-label, list rows with the counts
+in the count column — All Photos, then up to five recent folders with their parent in `text3`), and beneath it the
+**welcome** card until "Don't show this again": "What's where", two numbered maps of the window (Library, Develop) in
+the surface tokens with accent discs, each with its key. The page scrolls when both are taller than the window. ⚠ No
+drop hint, by the author's call. The heading follows the welcome: "Welcome to Rustroom" while it shows, "No photos
+open" after.
+
 ### 7.15 Histogram
 92 tall on a near-black surface, 6 radius, the three channel fills at 45–55 % opacity as today.
 

@@ -26,7 +26,7 @@ and a pointer, not deleted.
 
 | Milestone | Entries in this file |
 | --- | --- |
-| **M10.6** your to-do + a design leftover | (from the vault's `to dos.md` and `DESIGN.md`; the welcome screen and the empty Library's text went to **M11.4**) |
+| **M10.6** your to-do + a design leftover | (from the vault's `to dos.md` and `DESIGN.md`; the welcome screen and the empty Library's text went to **M11.4** — ✅ built as the start page, 2026-11-13, `grep -n 'M11.4' docs/JOURNAL.md`) |
 | **M10.7** code health | *Exports are not bit-reproducible* (a, ✅ 2026-09-30); the `ProfileRendering` → `TailRendering` rename (b, ✅ 2026-09-30 — the entries below keep the old name, as history); the temp-dir test isolation (c, ✅ 2026-09-30 — the `test-dir` crate); the large files split, with M10.7e's `PrefixCache` tests (d, ✅ 2026-09-30); the follow-ups d left on purpose are below the table |
 | **M10.8** Library & workflow | keyword suggestions (a, ✅ 2026-10-01 — from M4.2b's caveat, never an entry here; its two omissions are below the table); P-26's batch rename (d, ✅ 2026-10-02); *Library: … vertical filmstrip* (b, ✅ 2026-10-01 — widened to movable panels); hand stacks (c, ✅ 2026-10-02) |
 | **M10.9** presets & shortcuts | *Presets: no import/export…* (a, ✅ 2026-10-02); *No user-defined keyboard shortcuts* (b, ✅ 2026-10-10); Lightroom `.xmp` presets, split from (a) by the author 2026-10-02 (c, ✅ 2026-10-11 — the `lr-preset` crate) |

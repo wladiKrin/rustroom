@@ -553,6 +553,132 @@ impl RustroomApp {
     }
 
     /// Drain the Immich worker. Called once a frame from [`crate::shell`].
+    /// Open an Immich album by id, as a click on its rail row does (and a reopen at launch, M11.4) — one path.
+    pub(crate) fn open_immich_album_by_id(
+        &mut self,
+        ctx: &egui::Context,
+        id: String,
+        name: String,
+    ) {
+        // ⚠⚠ Already fetched this session: open it now rather than waiting a couple of seconds
+        // for the same reply again. This is what makes switching back and forth feel instant.
+        if let Some(assets) = self.immich_assets.get(&id).cloned() {
+            self.open_immich_album(ctx, id, name, &assets);
+        } else if let Some(assets) = self.immich_cached_album(&id) {
+            // ⚠ On disk from an earlier run, and its validator still matches what the rail's
+            // album list says — so the *first* visit after a launch is instant too.
+            self.immich_assets.insert(id.clone(), assets.clone());
+            self.open_immich_album(ctx, id, name, &assets);
+        } else {
+            // ⚠ Feedback **before** the request, or the click looks like it did nothing: the
+            // rail's highlight follows `library.source`, which will not change for seconds.
+            self.immich_opening = Some(id.clone());
+            self.status = format!("Loading “{name}” from Immich…");
+            self.immich
+                .request(rustroom_app::immich_worker::Job::Album { id, name });
+        }
+    }
+
+    /// Open one month of the Immich timeline, as a click on its rail row does (and a reopen, M11.4).
+    pub(crate) fn open_immich_bucket_by_id(
+        &mut self,
+        ctx: &egui::Context,
+        bucket: String,
+        label: String,
+    ) {
+        if let Some(assets) = self.immich_assets.get(&bucket).cloned() {
+            self.open_immich_bucket(ctx, bucket, label, &assets);
+        } else if let Some(assets) = self.immich_cached_bucket(&bucket) {
+            self.immich_assets.insert(bucket.clone(), assets.clone());
+            self.open_immich_bucket(ctx, bucket, label, &assets);
+        } else {
+            self.immich_opening = Some(bucket.clone());
+            self.status = format!("Loading {label} from Immich…");
+            self.immich
+                .request(rustroom_app::immich_worker::Job::Bucket { bucket, label });
+        }
+    }
+
+    /// Whether a reply for `key` is the one still awaited — and if so, no longer awaited.
+    ///
+    /// ⚠⚠ A reply for anything else is STALE: the author opened another source while it was on its way (any
+    /// opener clears `immich_opening` through `open_scan_with`), and it must not replace that — the start page
+    /// invites exactly that click while a reopen's album loads (M11.4's review).
+    fn awaited_reply(&mut self, key: &str) -> bool {
+        let wanted = self.immich_opening.as_deref() == Some(key);
+        if wanted {
+            self.immich_opening = None;
+        }
+        wanted
+    }
+
+    /// An album's asset list arrived: remembered, and opened if it is still the one awaited.
+    pub(crate) fn land_immich_album(
+        &mut self,
+        ctx: &egui::Context,
+        id: String,
+        name: String,
+        result: Result<Vec<immich::Asset>, String>,
+    ) {
+        let wanted = self.awaited_reply(&id);
+        match result {
+            Ok(assets) => {
+                // ⚠ Remembered so switching back is instant — the round trip is a
+                // couple of seconds for a large album.
+                self.immich_assets.insert(id.clone(), assets.clone());
+                // ⚠ And on disk too, so the *first* visit after the next launch is
+                // instant as well — that is what the list cache buys over this map.
+                let v = self.album_validator(&id);
+                self.remember_immich_list(list_cache::Key::Album(id.clone()), v, &assets);
+                if wanted {
+                    self.open_immich_album(ctx, id, name, &assets);
+                }
+            }
+            Err(e) if wanted => self.status = format!("Could not open “{name}”: {e}"),
+            Err(_) => {}
+        }
+    }
+
+    /// A timeline month's asset list arrived: remembered, and opened.
+    pub(crate) fn land_immich_bucket(
+        &mut self,
+        ctx: &egui::Context,
+        bucket: String,
+        label: String,
+        result: Result<Vec<immich::Asset>, String>,
+    ) {
+        let wanted = self.awaited_reply(&bucket);
+        match result {
+            Ok(assets) => {
+                self.immich_assets.insert(bucket.clone(), assets.clone());
+                let v = self.bucket_validator(&bucket);
+                self.remember_immich_list(list_cache::Key::Bucket(bucket.clone()), v, &assets);
+                if wanted {
+                    self.open_immich_bucket(ctx, bucket, label, &assets);
+                }
+            }
+            Err(e) if wanted => self.status = format!("Could not open {label}: {e}"),
+            Err(_) => {}
+        }
+    }
+
+    /// An Immich person's assets arrived: opened.
+    pub(crate) fn land_immich_person(
+        &mut self,
+        ctx: &egui::Context,
+        id: String,
+        name: String,
+        result: Result<Vec<immich::Asset>, String>,
+    ) {
+        if !self.awaited_reply(&id) {
+            return;
+        }
+        match result {
+            Ok(assets) => self.open_immich_person(ctx, id, name, &assets),
+            Err(e) => self.status = format!("Could not open {name}: {e}"),
+        }
+    }
+
     pub(crate) fn pump_immich(&mut self, ctx: &egui::Context) {
         for outcome in self.immich.poll() {
             match outcome {
@@ -577,22 +703,7 @@ impl RustroomApp {
                     bucket,
                     label,
                     result,
-                } => {
-                    self.immich_opening = None;
-                    match result {
-                        Ok(assets) => {
-                            self.immich_assets.insert(bucket.clone(), assets.clone());
-                            let v = self.bucket_validator(&bucket);
-                            self.remember_immich_list(
-                                list_cache::Key::Bucket(bucket.clone()),
-                                v,
-                                &assets,
-                            );
-                            self.open_immich_bucket(ctx, bucket, label, &assets);
-                        }
-                        Err(e) => self.status = format!("Could not open {label}: {e}"),
-                    }
-                }
+                } => self.land_immich_bucket(ctx, bucket, label, result),
                 Outcome::People(Ok(people)) => {
                     let named: Vec<(String, String)> = people
                         .into_iter()
@@ -612,31 +723,10 @@ impl RustroomApp {
                         "Immich's people could not be read — the key may lack person.read".into();
                 }
                 Outcome::Person { id, name, result } => {
-                    self.immich_opening = None;
-                    match result {
-                        Ok(assets) => self.open_immich_person(ctx, id, name, &assets),
-                        Err(e) => self.status = format!("Could not open {name}: {e}"),
-                    }
+                    self.land_immich_person(ctx, id, name, result)
                 }
                 Outcome::Album { id, name, result } => {
-                    self.immich_opening = None;
-                    match result {
-                        Ok(assets) => {
-                            // ⚠ Remembered so switching back is instant — the round trip is a
-                            // couple of seconds for a large album.
-                            self.immich_assets.insert(id.clone(), assets.clone());
-                            // ⚠ And on disk too, so the *first* visit after the next launch is
-                            // instant as well — that is what the list cache buys over this map.
-                            let v = self.album_validator(&id);
-                            self.remember_immich_list(
-                                list_cache::Key::Album(id.clone()),
-                                v,
-                                &assets,
-                            );
-                            self.open_immich_album(ctx, id, name, &assets);
-                        }
-                        Err(e) => self.status = format!("Could not open “{name}”: {e}"),
-                    }
+                    self.land_immich_album(ctx, id, name, result)
                 }
                 // ⚠ Into the dialog's own field, never the status line: the status line is behind
                 // the modal, so the answer to the Test button was invisible.

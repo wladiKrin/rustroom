@@ -730,10 +730,9 @@ mod tests {
         // A frame must run first: a fresh `Context` has not built its atlas.
         let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {});
         let id = egui::FontId::proportional(14.0);
-        let mut strings: Vec<String> = vec![
-            crate::library::EMPTY_LIBRARY_TEXT.to_owned(),
-            crate::develop::canvas::empty_develop_text(&[]),
-        ];
+        let mut strings: Vec<String> = vec![crate::develop::canvas::empty_develop_text(&[])];
+        // M11.4: the start page, which replaced the empty Library's text.
+        strings.extend(crate::start_page::strings());
         strings.extend(
             rustroom_app::library_filter::EmptyGrid::ALL
                 .iter()

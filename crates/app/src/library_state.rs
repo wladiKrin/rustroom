@@ -204,6 +204,9 @@ pub(crate) struct Library {
     /// A change count seen once and waiting to be seen again before the members are re-read — a
     /// burst of writes is read once, when it has settled.
     pub(crate) members_settling: Option<u64>,
+    /// Scroll the grid to the active photo on its next draw, once — set when a reopen selects the stored photo
+    /// (M11.4).
+    pub(crate) reveal: bool,
 }
 
 impl Library {

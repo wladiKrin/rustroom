@@ -6,60 +6,10 @@ mod cell_menu;
 mod grid;
 mod keys;
 
-use crate::theme::Hover as _;
 use crate::{name_edit, RustroomApp};
 pub use cell_menu::{apply_cell_action, cell_menu, distinct_files, menu_targets, CellAction};
 use eframe::egui;
 use rustroom_app::photo_id::PhotoId;
-
-/// What an empty Library says. Also swept by `theme::every_menu_string_is_renderable`.
-pub(crate) const EMPTY_LIBRARY_TEXT: &str =
-    "You can also drop a folder or some photos onto this window. Nothing is copied or changed: \
-     Rustroom reads your photos where they are and keeps its edits beside them.";
-
-/// The empty Library: two real buttons and one sentence, where the first-use review found a
-/// footnote in a void (A-08).
-fn empty_library(
-    ui: &mut egui::Ui,
-    keys: &[rustroom_app::shortcuts::Rebinding],
-) -> Option<rustroom_app::menu::Command> {
-    let hint = |c| rustroom_app::shortcuts::hint(c, keys);
-    let mut picked: Option<rustroom_app::menu::Command> = None;
-    ui.vertical_centered(|ui| {
-        ui.add_space((ui.available_height() * 0.35).max(24.0));
-        ui.label(egui::RichText::new("No photos yet").heading());
-        ui.add_space(12.0);
-        let big = |text: &str| {
-            egui::Button::new(egui::RichText::new(text).size(crate::theme::tokens::TITLE))
-                .min_size(egui::vec2(240.0, 36.0))
-        };
-        if ui
-            .add(big("Open a folder…"))
-            .hover(format!(
-                "Opens a folder of photos{}",
-                hint(rustroom_app::menu::Command::OpenFolder)
-            ))
-            .clicked()
-        {
-            picked = Some(rustroom_app::menu::Command::OpenFolder);
-        }
-        ui.add_space(6.0);
-        if ui
-            .add(big("Import from a card…"))
-            .hover(format!(
-                "Copies new photos from a memory card into dated folders{}",
-                hint(rustroom_app::menu::Command::Import)
-            ))
-            .clicked()
-        {
-            picked = Some(rustroom_app::menu::Command::Import);
-        }
-        ui.add_space(14.0);
-        ui.set_max_width(460.0);
-        crate::theme::hint(ui, EMPTY_LIBRARY_TEXT);
-    });
-    picked
-}
 
 /// What one frame of the grid collected, applied after the panel closes: every one of these needs
 /// `&mut RustroomApp`, which the panel cannot have while it holds `&mut app.library`.
@@ -68,9 +18,9 @@ struct GridOutcome {
     open_index: Option<usize>,
     /// Delete or Backspace in the grid: the selection leaves the collection on screen, if one is.
     remove_from_collection: bool,
-    /// ⚠ Declared out here like `open_index`: the empty state's buttons run a command that needs
-    /// `&mut RustroomApp`, which the closure cannot have while it borrows fields of it.
-    empty_pick: Option<rustroom_app::menu::Command>,
+    /// ⚠ Declared out here like `open_index`: the start page's clicks need `&mut RustroomApp`, which the
+    /// closure cannot have while it borrows fields of it (M11.4).
+    start_pick: Option<crate::start_page::StartPick>,
     /// ⚠ Same shape: a star clicked on a thumbnail rates through `apply_mark_to`, which needs
     /// `&mut RustroomApp` once the closure has let go of the library.
     star_click: Option<(PhotoId, u8)>,
@@ -127,8 +77,12 @@ struct GridInputs<'a> {
     stack_drag: rustroom_app::settings::StackDrag,
     /// How a collapsed stack is drawn (Settings → Appearance).
     look: rustroom_app::stack::StackLook,
-    /// The user's shortcuts (M10.9b) — the empty Library's hovers name them.
+    /// The user's shortcuts (M10.9b) — the start page's hovers name them.
     keys: &'a [rustroom_app::shortcuts::Rebinding],
+    /// The start page's Continue rows — empty while a source is open (M11.4).
+    start_rows: &'a [rustroom_app::start::ContinueRow],
+    /// Whether the start page shows the welcome.
+    show_welcome: bool,
     /// A publish service view's states (M10.18d), for the cells' marks.
     publish: Option<
         &'a std::collections::HashMap<
@@ -193,6 +147,18 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ Same reason: the context menu reads the catalog while the closure holds `&mut
     // app.library`, and the borrow checker only accepts that when the two fields are visibly
     // disjoint.
+    // M11.4: the start page's rows, only while it shows, and checked once per change (`ContinueMemo`) — an
+    // `is_dir` on a stale mount can block.
+    let start_rows: &[rustroom_app::start::ContinueRow] = if app.library.is_none() {
+        let all = app.rail_data.all(&app.immich_present);
+        app.start_rows
+            .rows(&app.settings.recent_folders, &app.rail_data, all, |p| {
+                p.is_dir()
+            })
+    } else {
+        app.start_rows.clear();
+        &[]
+    };
     let catalog = app.catalog.as_ref();
     // ⚠ From the settings, not a constant. Everything below is expressed as a fraction of it so
     // the thumbnail, the cell and the name all grow together — a fixed caption beside a scaling
@@ -212,6 +178,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         stack_drag: app.settings.stack_drag,
         look: app.settings.stacking.look,
         keys: &app.settings.shortcuts,
+        start_rows,
+        show_welcome: app.settings.show_welcome,
         publish: app.publish.view.as_ref().map(|v| &v.states),
     };
     egui::CentralPanel::default().show(ui, |ui| grid::panel(ui, &mut app.library, inp, &mut out));
@@ -268,14 +236,32 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     if let Some((i, action)) = out.menu {
         apply_cell_action(app, ctx, i, action);
     }
-    if let Some(cmd) = out.empty_pick {
-        crate::commands::execute(app, ctx, cmd);
+    if let Some(pick) = out.start_pick {
+        apply_start_pick(app, ctx, pick);
     }
     if let Some((id, stars)) = out.star_click {
         app.apply_mark_to(&[id], rustroom_app::marks::MarkAction::Rating(stars));
     }
     if let Some(i) = out.open_index {
         app.open_entry(ctx, i);
+    }
+}
+
+/// What a click on the start page does (M11.4).
+pub(crate) fn apply_start_pick(
+    app: &mut RustroomApp,
+    ctx: &egui::Context,
+    pick: crate::start_page::StartPick,
+) {
+    use crate::start_page::StartPick;
+    match pick {
+        StartPick::Command(cmd) => crate::commands::execute(app, ctx, cmd),
+        StartPick::AllPhotos => app.open_all_photos(ctx),
+        StartPick::Folder(dir) => app.open_folder_at(ctx, dir),
+        StartPick::HideWelcome => {
+            app.settings.show_welcome = false;
+            app.save_settings();
+        }
     }
 }
 

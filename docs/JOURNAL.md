@@ -193,6 +193,29 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-13 — M11.4 (first half): the start page, the welcome, and reopening where you left off (branch `m11.4-start-page`)
+
+✅ **Merged 2026-11-13, confirmed by the author ("works, merge and delete")** — with the map key's hover lighting its part
+of the map, his request after the first look. Gate on the tip: fmt, clippy, 4,713 tests green. Spec `docs/superpowers/specs/2026-11-13-m11.4-start-page-design.md`, plan beside it,
+mockups <https://claude.ai/artifact/Hnj6DR4oeAh21SR1KGYjge> (the author picked the two-map welcome, the welcome
+BENEATH Continue, back to the Library — never Develop — with the photo selected).
+
+- **Why:** every launch showed "No photos yet" over a catalog of 2,914 photos — `bootstrap` builds `library: None`.
+- **Reopen (on by default, Settings → Behaviour):** `rustroom_app::start::Place` (a serialisable mirror of
+  `LibrarySource` + the selected `(path, copy)`) in `Settings.last_place`; `place.rs` reopens it on the first frame
+  through the rail's own openers (a folder through `open_catalog_folder`, so an unplugged drive shows its last-seen
+  rows; an Immich album or month through `open_immich_album_by_id` / `open_immich_bucket_by_id`, moved out of the
+  rail so both share one path), selects the photo and scrolls to it (`Library.reveal`). ⚠⚠ **After the first frame the
+  place MIRRORS the Library, "nothing open" included** — one derived writer instead of the ~ten sites that set
+  `library = None`, so forgetting a folder is not undone by the next launch; and nothing is written before the reopen
+  has been tried, or the launch's empty Library would wipe the place. The selection is stored on close, which now runs
+  on every platform (only macOS handled a close before).
+- **The start page** (`start_page.rs`, `start_page_maps.rs`, replacing `library::empty_library`): the heading, Open a
+  folder… / Import from a card…, a Continue card (All Photos, up to five recent folders that still exist), and the
+  welcome — two numbered maps, Library and Develop — until "Don't show this again". No drop hint (the author's call).
+- ⚠ Four sabotages on `place.rs` and three on the page, each caught — the code was written before its tests there,
+  so the sabotages stand in for the red runs.
+
 ### 2026-11-12 — M10.14f's follow-up: an Auto Mask brush paints incrementally (branch `m10.14f-auto-mask-paint`, merged 2026-11-12)
 
 ✅ **Merged at the author's word ("merge, then delete the branch and push main")** — not tried on the Mac first.

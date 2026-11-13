@@ -249,6 +249,10 @@ pub(crate) struct RustroomApp {
     pub(crate) keyword_suggest: rustroom_app::keyword_suggest::Cache,
     /// What the Library rail shows from the catalog, re-read only when the catalog changes (M10.14e).
     pub(crate) rail_data: rustroom_app::rail_data::RailData,
+    /// Where reopening the last place stands (M11.4, `place.rs`).
+    pub(crate) place_state: crate::place::PlaceState,
+    /// The start page's Continue rows, checked once per change rather than per frame (M11.4).
+    pub(crate) start_rows: rustroom_app::start::ContinueMemo,
     /// Scratch text for the filename field, with **the photo it belongs to**.
     ///
     /// ⚠ A draft rather than writing through, so a half-typed name is never committed and a

@@ -399,6 +399,20 @@ pub struct Settings {
     pub auto_advance: bool,
     /// The folders opened most recently, first first — the File menu's "Open recent".
     pub recent_folders: Vec<std::path::PathBuf>,
+    /// Open what the Library last showed when Rustroom starts (M11.4).
+    ///
+    /// ⚠ Defaults to **true** through `Settings::default()` — no field-level `#[serde(default)]`, which would
+    /// read `false` from every older file (`auto_advance`'s trap). `an_old_settings_file_reopens_and_welcomes`.
+    pub reopen_last: bool,
+    /// Show the welcome — what each part of the window is for — on the start page until it is ticked away
+    /// (M11.4). ⚠ Defaults to **true**, the same trap as [`Self::reopen_last`].
+    pub show_welcome: bool,
+    /// What the Library showed last, mirrored by the bin's `place.rs` (M11.4); `None` when nothing was open.
+    ///
+    /// ⚠ Read leniently ([`crate::start::lenient`]): one unreadable place must not reset every setting. A missing
+    /// field still takes the container-level default.
+    #[serde(deserialize_with = "crate::start::lenient")]
+    pub last_place: Option<crate::start::Place>,
     /// The Immich server's base URL, e.g. `https://photos.example.com`. Empty means unconfigured.
     ///
     /// ⚠ No field-level `#[serde(default)]`: the struct carries a container-level one, so a
@@ -576,6 +590,9 @@ impl Default for Settings {
             drag_quality: DragQuality::default(),
             auto_advance: true,
             recent_folders: Vec::new(),
+            reopen_last: true,
+            show_welcome: true,
+            last_place: None,
         }
     }
 }
