@@ -193,6 +193,23 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-14 — M11.3 started: the README as a product page + contributor docs (branch `m11.3-docs`, brainstorm half done)
+
+⏳ **To be continued on the Mac** (the author's call — the screenshots are taken there). Everything agreed is in
+`docs/superpowers/specs/2026-11-14-m11.3-readme-and-contributor-docs-design.md`; nothing is built yet.
+
+- **The author's calls:** the README is for **photographers, mostly**; it must leave them with *professional grade,
+  feature-rich, open source, tested*, and **Immich gets its own section** ("something that's important to me"). Write it
+  **as of the public launch** — Windows works, `v0.1` released; the repo goes public once Phase 11 is done. All seven
+  additions accepted: hero image + GIF, "your photos stay yours", coming from Lightroom, download & requirements,
+  badges, credits (model licences), where next. No comparison table against darktable / RawTherapee.
+- **Screenshots:** the agent takes them itself, on the Mac. ⚠⚠ **None of the author's own albums may be visible**;
+  temporary demo albums / collections / keywords may be created and **every change reverted** — Rustroom has no
+  separate-profile switch, so back up `~/Library/Application Support/rustroom/` and any touched sidecars first.
+- **Open:** the whole contributor-docs half; which photos may appear; faces and names in People; the Immich shot (the
+  rail lists every server album); whether `CLAUDE.md` / the journal stay public as they are; where questions go.
+- **Before it:** M11.4's first half merged (`eb459ba1`); `main` was 15 commits ahead of `origin/main`, unpushed.
+
 ### 2026-11-13 — M11.4 (first half): the start page, the welcome, and reopening where you left off (branch `m11.4-start-page`)
 
 ✅ **Merged 2026-11-13, confirmed by the author ("works, merge and delete")** — with the map key's hover lighting its part

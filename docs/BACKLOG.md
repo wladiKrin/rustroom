@@ -1961,7 +1961,7 @@ at meanwhile.
 
 ## Contributor-facing documentation (recorded 2026-08-26 — the cheap half of "open source") → M11.3
 
-**Status:** 🟡 wanted, small — and **deliberately scheduled LAST, at the final alpha** (user's call,
+**Status (2026-11-14):** ⏳ **in brainstorm** — joined by a rewrite of `README.md` as a product page for photographers; the agreed half is in `docs/superpowers/specs/2026-11-14-m11.3-readme-and-contributor-docs-design.md`. As first recorded — 🟡 wanted, small — and **deliberately scheduled LAST, at the final alpha** (user's call,
 2026-08-27). ⚠ The reason is not priority: it describes a shape that is still moving weekly, so
 writing it now means writing it twice. It stays the highest-value thing for attracting
 contributions *once the architecture has settled*.
