@@ -209,6 +209,12 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - **Open:** the whole contributor-docs half; which photos may appear; faces and names in People; the Immich shot (the
   rail lists every server album); whether `CLAUDE.md` / the journal stay public as they are; where questions go.
 - **Before it:** M11.4's first half merged (`eb459ba1`); `main` was 15 commits ahead of `origin/main`, unpushed.
+- **On the Mac, 2026-11-14:** `main` found pushed (`origin/main..main` empty). ⚠ **The vault had lagged since
+  2026-10-28** — everything merged on Linux after it (M10.18a–e, M10.19a–b, M10.12c, M10.13a/d, M10.14f–h, M11.4's
+  first half, the Linux GUI's first run) still read ⬜ / ⏸ there, and `01-lightroom-capabilities.md` still listed
+  AI denoise, Lens Blur and content-aware remove as ⬜. Swept: `03-plan-of-action.md` (status block, both tables,
+  every item, Phase 11, the sequencing note), `01-lightroom-capabilities.md` (17 lines) and `to dos.md`, each
+  caveat kept beside its tick (printer unseen, a rotated HEIC unseen, defringe unjudged, learned looks Fuji-only).
 
 ### 2026-11-13 — M11.4 (first half): the start page, the welcome, and reopening where you left off (branch `m11.4-start-page`)
 
