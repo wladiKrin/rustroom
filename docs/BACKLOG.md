@@ -41,7 +41,7 @@ and a pointer, not deleted.
 | **M10.18** new modules | P-25 (brought in by the author) — tethering (a, ✅ merged 2026-10-29, confirmed by use with the X-T4: "works"); GPS and a map (b, ✅ merged 2026-10-28, confirmed by use: "works"); people tagging (c, ✅ merged 2026-10-29, confirmed by use: "works"); publish services (d, ✅ merged 2026-11-03, confirmed by use: "okay that works"); print (e, ✅ merged 2026-11-04, Save PDF confirmed by use — a printer unseen) |
 | **M10.19** found in use | HEIC/HEIF support (a, new 2026-10-01 — never an entry here; ✅ merged 2026-11-11, confirmed by use — a container-rotated real file unseen); *Move to folder left one thing out* (b, ✅ merged 2026-11-11, confirmed by use); marking several folders and forgetting them from a right-click menu (c, ✅ 2026-10-12 — found in use and built the same day at the author's request); **the Retouch panel as two tasks, Paint · Find** (d, new 2026-10-22 — the author, after c3: too many buttons in one place, patches and removals kept apart, drawing to look again invisible; his pick, option B of `https://claude.ai/artifact/7ACHJJ2zFpWPJ3WspdRYcC`; ✅ merged 2026-10-22, confirmed by use) |
 | **M11.2** Windows & Linux | *The in-window menu bar has never been run*; *Multi-monitor on Linux and Windows*; P-28 |
-| **M11.3** / **M11.5** | *Contributor-facing documentation* / *A plugin system* |
+| **M11.3** / **M11.5** | *Contributor-facing documentation* (✅ merged 2026-11-16) / *A plugin system* |
 | **Going public** (after M11.5) | *Going public* (recorded 2026-11-16 by M11.3) |
 
 ### Found by M10.17a (2026-10-26) — not in its scope, unscheduled
@@ -1960,9 +1960,9 @@ deliberately *before* publishing any API.
 well-shaped contribution with a golden-image test to prove it. That is what to point contributors
 at meanwhile.
 
-## Contributor-facing documentation (recorded 2026-08-26 — the cheap half of "open source") → M11.3
+## ✅ Contributor-facing documentation (recorded 2026-08-26 — the cheap half of "open source") → M11.3, merged 2026-11-16
 
-**Status (2026-11-14):** ⏳ **in brainstorm** — joined by a rewrite of `README.md` as a product page for photographers; the agreed half is in `docs/superpowers/specs/2026-11-14-m11.3-readme-and-contributor-docs-design.md`. As first recorded — 🟡 wanted, small — and **deliberately scheduled LAST, at the final alpha** (user's call,
+**Status (2026-11-16):** ✅ **merged** — `README.md` (a product page for photographers, with screenshots), `AGENTS.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` and the GitHub forms (`grep -n 'M11.3 merged' docs/JOURNAL.md`). The small labelled starter issues are drafted at *Going public*.
 2026-08-27). ⚠ The reason is not priority: it describes a shape that is still moving weekly, so
 writing it now means writing it twice. It stays the highest-value thing for attracting
 contributions *once the architecture has settled*.

@@ -193,6 +193,37 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-16 — M11.3 merged: the README, AGENTS.md, ARCHITECTURE.md, CONTRIBUTING.md (branch `m11.3-docs`)
+
+✅ **Merged 2026-11-16 at the author's word ("Merge it").** Spec `docs/superpowers/specs/2026-11-14-m11.3-readme-and-contributor-docs-design.md`,
+plan `docs/superpowers/plans/2026-11-16-m11.3-readme-and-contributor-docs.md`. Gate on the tip: fmt, clippy, **4,716** tests green.
+
+- **What shipped:** the README as a product page for photographers (six screenshots in `docs/images/`, the author's
+  photos, no people; "all rights reserved" in its licence section); `CLAUDE.md` split into the public `AGENTS.md`
+  (400 lines) and the untracked `CLAUDE.local.md`; `ARCHITECTURE.md` with four recipes; `CONTRIBUTING.md`; a bug form,
+  contact links and an ideas form (questions go to Discussions, turned on at *Going public*); `docs/PARALLEL-WORK.md`
+  folded in and deleted; the Immich hostname scrubbed from the tree.
+- **The screenshot session** (the method, if it is ever repeated): rename the profile AND `~/Library/Caches/rustroom`
+  aside — ⚠ the Immich caches are keyed by SERVER, not account, so a demo account shares the real one's cached lists;
+  a fresh profile seeded with copies of `models/`, `looks/`, `profiles/`; copies of the photos in
+  `/Users/Shared/Rustroom Demo/` (no username in the rail); a demo Immich user with BOTH keys replaced. Restored by
+  renaming back; the catalog's sha256 matched. ⚠ Scripted ⌘-keystrokes (`osascript`) never reach egui — Select All and
+  undo through the UI or the menu; shift-click by CGEvent flags. Homebrew's ffmpeg is broken here (libx265 missing):
+  the GIF was made with AVFoundation + ImageIO.
+- ⚠⚠ **A secret has more than one spelling.** The dotted-hostname search proved "zero left" — the final review found
+  the same host as an underscore cache-folder slug in four files. *Going public*'s rewrite now names both forms.
+- ⚠⚠ **A claim the README made was checked, and false:** "locations are never uploaded" — an export carries the
+  catalog's location by default (`MetadataScope::All`), and so do uploads and published albums. Rewritten.
+- ⚠ **Moving the checkout leaves `env!("CARGO_MANIFEST_DIR")` stale** — cargo does not rebuild for it, so
+  `test-dir`'s three sweeps failed `NotFound`, and `cargo test` stopped at that binary (4,669 counted, not 4,716).
+  `touch crates/test-dir/src/lib.rs` (now in `AGENTS.md`).
+- **Found, for v0.1 (backlog, *Going public*):** the About window shows no version; only eight RAW extensions are
+  scanned though LibRaw knows 1,219 cameras. **Seen once, cause unverified:** with an Immich album open, a click on a
+  local folder did not switch the grid ("All Photos" did).
+- **Deferred minors:** "ONNX through tract" is wrong for the two denoisers; `ARCHITECTURE.md`'s straighten/append
+  wording and two recipes without tests; `AGENTS.md`'s Standing lessons still first-person; ~25 old comments cite
+  `CLAUDE.md` for rules it never held.
+
 ### 2026-11-14 — M11.3 started: the README as a product page + contributor docs (branch `m11.3-docs`, brainstorm half done)
 
 ⏳ **To be continued on the Mac** (the author's call — the screenshots are taken there). Everything agreed is in
