@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question
+    url: https://github.com/wladiKrin/rustroom/discussions/categories/q-a
+    about: How to do something, whether your camera works, why a picture looks the way it does
+  - name: Suggest an idea
+    url: https://github.com/wladiKrin/rustroom/discussions/categories/ideas
+    about: A feature you would like — ideas are discussed first, then become issues

@@ -9,7 +9,7 @@ a hard question gets picked up as though it were a small job.
 
 Milestone-level work lives in the roadmap
 (`~/Documents/obsidian/private/rustroom/03-plan-of-action.md`); implementation detail
-lives in `CLAUDE.md`. This file is for things consciously left undone.
+lives in `AGENTS.md` and `ARCHITECTURE.md`. This file is for things consciously left undone.
 
 ---
 
@@ -41,7 +41,8 @@ and a pointer, not deleted.
 | **M10.18** new modules | P-25 (brought in by the author) — tethering (a, ✅ merged 2026-10-29, confirmed by use with the X-T4: "works"); GPS and a map (b, ✅ merged 2026-10-28, confirmed by use: "works"); people tagging (c, ✅ merged 2026-10-29, confirmed by use: "works"); publish services (d, ✅ merged 2026-11-03, confirmed by use: "okay that works"); print (e, ✅ merged 2026-11-04, Save PDF confirmed by use — a printer unseen) |
 | **M10.19** found in use | HEIC/HEIF support (a, new 2026-10-01 — never an entry here; ✅ merged 2026-11-11, confirmed by use — a container-rotated real file unseen); *Move to folder left one thing out* (b, ✅ merged 2026-11-11, confirmed by use); marking several folders and forgetting them from a right-click menu (c, ✅ 2026-10-12 — found in use and built the same day at the author's request); **the Retouch panel as two tasks, Paint · Find** (d, new 2026-10-22 — the author, after c3: too many buttons in one place, patches and removals kept apart, drawing to look again invisible; his pick, option B of `https://claude.ai/artifact/7ACHJJ2zFpWPJ3WspdRYcC`; ✅ merged 2026-10-22, confirmed by use) |
 | **M11.2** Windows & Linux | *The in-window menu bar has never been run*; *Multi-monitor on Linux and Windows*; P-28 |
-| **M11.3** / **M11.5** | *Contributor-facing documentation* / *A plugin system* |
+| **M11.3** / **M11.5** | *Contributor-facing documentation* (✅ merged 2026-11-16) / *A plugin system* |
+| **Going public** (after M11.5) | *Going public* (recorded 2026-11-16 by M11.3) |
 
 ### Found by M10.17a (2026-10-26) — not in its scope, unscheduled
 
@@ -81,7 +82,7 @@ done (`grep -n 'M10.7d' docs/JOURNAL.md`):
 
 ## ⚠⚠ 2026-09-01 — most of this file is now scheduled
 
-The roadmap was re-planned on 2026-09-01 (see `03-plan-of-action.md` and `PARALLEL-WORK.md`). Items
+The roadmap was re-planned on 2026-09-01 (see `03-plan-of-action.md`). Items
 below that were "deferred" are now **milestones with an order**, and this table is the map. An entry
 still carries the reasoning that matters — read the entry, then build it under its milestone number.
 
@@ -562,7 +563,7 @@ above. Only *anchoring* wants the forward map.
   secondary to the interpolator question above, which is why that one came first. ⚠⚠ **And that one
   is DONE: M7.3a shipped 2026-09-01**, so the 48%-of-a-single-pass win is already taken and this
   ~20% is what is actually left. Do not read the entry above as still-open work — it is struck
-  through for a reason, and `CLAUDE.md`'s own warning applies: verify a backlog item against what
+  through for a reason, and `AGENTS.md`'s own warning applies: verify a backlog item against what
   shipped before proposing it, since several were closed under another name. ⚠ The cost is
   that `FrameMap` must then invert a **homography** rather than a rotation, and its agreement test
   with `GeometryStage` is exactly what caught the rotation sign error in M3.1c-A. It also loses
@@ -1587,7 +1588,7 @@ the **path's own file name**, never `CatalogEntry::file_name`; `row_is_browsable
 actually cost time were not about originals at all: `GET /albums/{id}` returns **no `assets` field**,
 and a real server pages by **`nextPage`** while leaving `nextCursor` null. Neither is discoverable
 from the OpenAPI schema, and both were found by a real reply. **Before the next Immich slice, capture
-a real response for every endpoint it touches** — see the fixture lesson in `CLAUDE.md`'s standing
+a real response for every endpoint it touches** — see the fixture lesson in `AGENTS.md`'s standing
 lessons.
 
 ### ⛔ Two-way sync — DECLINED 2026-09-24 (the user's call, with reasons) → re-opened 2026-09-29 as M10.15d
@@ -1959,9 +1960,9 @@ deliberately *before* publishing any API.
 well-shaped contribution with a golden-image test to prove it. That is what to point contributors
 at meanwhile.
 
-## Contributor-facing documentation (recorded 2026-08-26 — the cheap half of "open source") → M11.3
+## ✅ Contributor-facing documentation (recorded 2026-08-26 — the cheap half of "open source") → M11.3, merged 2026-11-16
 
-**Status:** 🟡 wanted, small — and **deliberately scheduled LAST, at the final alpha** (user's call,
+**Status (2026-11-16):** ✅ **merged** — `README.md` (a product page for photographers, with screenshots), `AGENTS.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` and the GitHub forms (`grep -n 'M11.3 merged' docs/JOURNAL.md`). The small labelled starter issues are drafted at *Going public*.
 2026-08-27). ⚠ The reason is not priority: it describes a shape that is still moving weekly, so
 writing it now means writing it twice. It stays the highest-value thing for attracting
 contributions *once the architecture has settled*.
@@ -1977,6 +1978,38 @@ to an AI assistant, not to a contributor**, and it is enormous.
    guess), how to run and regenerate the goldens, and the sabotage-testing discipline, which is
    this project's most distinctive practice and completely invisible from outside.
 3. **Small labelled issues.** Several already exist in this file.
+
+## Going public (recorded 2026-11-16 by M11.3) → Phase 11's last step, after M11.5
+
+The repository goes public once **all** of Phase 11 is done. The steps, from the M11.3 spec
+(`docs/superpowers/specs/2026-11-14-m11.3-readme-and-contributor-docs-design.md`, *Going public*):
+
+0. **Re-read the README against what shipped.** Fill its marked spots (`<!-- fill at v0.1: … -->` —
+   the file per OS, minimum OS versions, bundled libraries, signing, the graphics-card requirement;
+   `CONTRIBUTING.md`'s Windows build steps); check every feature claim per OS (as of 2026-11-16:
+   printing on Windows is to a PDF only, tethering on Windows unproven, printing to a printer never
+   seen working — the README offers PDF only until it is); add plugins if M11.5 shipped
+   them; measure the test count again.
+1. **Rewrite the history once**, as the very last step, with `git-filter-repo`: the Immich server's
+   hostname → `immich.example` — in BOTH forms, dotted and the underscore slug of a cache folder
+   (`https___…`, which M11.3's dotted search missed in four files), the home path → `~`, the author's email → his GitHub no-reply
+   address. The replacement expressions file lives **outside** the repository and is never committed.
+2. **Remap the ~31 commit hashes** the docs quote, from filter-repo's old → new commit map.
+3. **Push to a newly created GitHub repository** rather than force-pushing the old one (verify against
+   GitHub's own guidance whether old commits stay reachable after a force-push). Every machine
+   re-clones afterwards.
+4. **Turn on Discussions** (categories Q&A and Ideas — the forms in `.github/` expect them), file the
+   starter issues (small, labelled — drafted at this step), and check the README's badges, the forms'
+   contact links and the Releases links resolve. Every link uses `wladiKrin/rustroom`; if the new
+   repository's name differs, replace it.
+
+**Gaps found while writing the README (2026-11-16), for v0.1:**
+- **The About window shows no version** (`modals::about` — one hint line), while the bug-report form
+  asks for one. The form now says "the version you downloaded, or `git log -1`".
+- **Only eight RAW extensions are scanned** (`catalog::RAW_EXTENSIONS`: CR2, CR3, NEF, ARW, RAF, DNG,
+  ORF, RW2), though the bundled LibRaw 0.21.3 knows 1,219 cameras — Pentax PEF, Nikon NRW, Samsung
+  SRW, Leica RWL, Hasselblad 3FR, Phase One IIQ and others never appear in the Library. The README
+  lists the eight honestly.
 
 ## ✅ ~~The whole-pipeline builders default `ProfileRendering` SILENTLY~~ — CLOSED 2026-09-18
 

@@ -1,7 +1,7 @@
 //! The Map view's clusters (M10.18b): photos close together on screen become one pin with a count. No egui.
 //!
 //! ⚠⚠ Memoised — the map draws every frame, and nothing drawn per frame may grow with the catalog
-//! (CLAUDE.md, the rail warning). [`ClusterMemo`] recomputes only when the view's points or the zoom change.
+//! (AGENTS.md, the rail warning). [`ClusterMemo`] recomputes only when the view's points or the zoom change.
 
 /// One pin: its world position at the clustering zoom (the members' mean) and which points it holds.
 #[derive(Debug, Clone, PartialEq)]

@@ -32,7 +32,7 @@ fn fnv(h: &mut u64, bytes: &[u8]) {
 /// defaults, and never where they go — and, when the settings embed it, the metadata a person sets.
 ///
 /// ⚠⚠ Stable across builds by construction (the M10.18d review): a NEW `ExportOptions` field at its default
-/// changes nothing, `Edits` already omits its defaults (CLAUDE.md), and the metadata is hashed field by field —
+/// changes nothing, `Edits` already omits its defaults (AGENTS.md), and the metadata is hashed field by field —
 /// never `Debug` text, never the capture facts (a background scan or the GPS pass filling them later would
 /// otherwise mark a published photo Modified).
 pub fn fingerprint(

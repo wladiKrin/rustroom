@@ -1,0 +1,55 @@
+name: Bug report
+description: Something in Rustroom does not work as it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. A question or an idea? Please use [Discussions](https://github.com/wladiKrin/rustroom/discussions) instead.
+  - type: input
+    id: version
+    attributes:
+      label: Rustroom version
+      description: The version you downloaded, or the commit if you built it yourself (git log -1 --oneline)
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: camera
+    attributes:
+      label: Camera or file type
+      description: For example "Fujifilm X-T4, RAF" or "iPhone HEIC"
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did
+      description: The steps that lead to the problem
+    validations:
+      required: true
+  - type: textarea
+    id: saw
+    attributes:
+      label: What you saw
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: Drag an image here if it helps

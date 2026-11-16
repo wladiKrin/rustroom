@@ -24,3 +24,6 @@ Cargo.lock.orig
 
 # graphify knowledge-graph artefacts (regenerable; 27 MB)
 graphify-out/
+
+# The author's private notes for Claude Code (M11.3)
+CLAUDE.local.md

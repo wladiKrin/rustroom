@@ -22,7 +22,7 @@ pub enum Mask {
     /// ⚠ A function of the pixel's **hue**, not of its position — see [`ColourRange`]. The
     /// companion `Luminance` anticipated: "leaving room for a colour range beside it".
     ///
-    /// ⚠ **Appended**, per `docs/PARALLEL-WORK.md` rule 3: `Mask` is externally tagged, so a new
+    /// ⚠ **Appended**, per `AGENTS.md`'s append-never-insert rule: `Mask` is externally tagged, so a new
     /// variant is backward compatible with every sidecar on disk, and appending is what git merges
     /// cleanly.
     Colour(ColourRange),

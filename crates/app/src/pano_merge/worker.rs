@@ -330,7 +330,7 @@ mod tests {
     use photo_merge::synth_pano;
     use std::time::{Duration, Instant};
 
-    /// ⚠ A ceiling against a hang, never a budget — CLAUDE.md's rule for a test that waits on a job.
+    /// ⚠ A ceiling against a hang, never a budget — AGENTS.md's rule for a test that waits on a job.
     const LONG: Duration = Duration::from_secs(120);
 
     fn next(w: &PanoWorker, want: impl Fn(&PanoEvent) -> bool) -> PanoEvent {

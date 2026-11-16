@@ -2,7 +2,7 @@
 //! at each declared [`LutSpace`], on a real RAW.
 //!
 //! ⚠⚠ **This probe draws no conclusion and tunes nothing.** Per the spec's §7 and
-//! `PARALLEL-WORK.md` §6, the space/placement convention is the user's call and this only
+//! `AGENTS.md` (*Where new code goes*), the space/placement convention is the user's call and this only
 //! supplies the evidence. Do not add a "and therefore X" line to its output.
 //!
 //! ```text

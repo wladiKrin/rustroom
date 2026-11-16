@@ -2,7 +2,7 @@
 //! the export worker, then the folder's or the album's bookkeeping (`rustroom_app::publish_run`).
 //!
 //! ⚠ States derive once per change — the service, the catalog's count, the view's revision, the open photo's
-//! edits — never per frame: a service can hold thousands of photos (CLAUDE.md, the rail's rule).
+//! edits — never per frame: a service can hold thousands of photos (AGENTS.md, the rail's rule).
 
 use crate::library_state::LibrarySource;
 use crate::RustroomApp;

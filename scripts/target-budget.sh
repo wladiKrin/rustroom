@@ -24,7 +24,7 @@ target="$root/target"
 n=$(find "$target" -type f 2>/dev/null | head -n $((CAP + 1)) | wc -l | tr -d ' ')
 
 if [ "$n" -gt "$CAP" ]; then
-  printf '{"systemMessage":"⚠ target/ holds more than %s build files (a healthy tree here is ~37k). Cargo never prunes stale artefacts. Reclaim with: rm -rf target/debug — and see CLAUDE.md on using ONE cargo invocation mode, which is what makes them pile up."}\n' "$CAP"
+  printf '{"systemMessage":"⚠ target/ holds more than %s build files (a healthy tree here is ~37k). Cargo never prunes stale artefacts. Reclaim with: rm -rf target/debug — and see AGENTS.md on using ONE cargo invocation mode, which is what makes them pile up."}\n' "$CAP"
 fi
 
 exit 0

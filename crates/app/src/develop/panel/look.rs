@@ -1,7 +1,7 @@
 //! The creative-look controls, at the top of the Tone section beside the camera rendering.
 //!
 //! ⚠ Its own module rather than more lines in `adjustments.rs`, which is already 836 — the
-//! standing instruction in `PARALLEL-WORK.md` §5. Every oversized file in this repo got that way
+//! standing instruction in `AGENTS.md`, *Where new code goes*. Every oversized file in this repo got that way
 //! one reasonable-seeming addition at a time.
 
 use crate::develop::panel::Edited;
