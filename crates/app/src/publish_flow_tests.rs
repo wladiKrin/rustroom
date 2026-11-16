@@ -535,3 +535,67 @@ fn a_folder_view_has_no_publish_band() {
     );
     assert!(!nodes.iter().any(|n| n.label.starts_with("Publish")));
 }
+
+/// One finished Immich run: two uploaded photos waiting for the album step.
+fn uploaded_run() -> Run {
+    let asset = |p: &str, id: &str| {
+        (
+            (std::path::PathBuf::from(p), 0),
+            Published {
+                fingerprint: 1,
+                place: catalog::db::Place::Asset { id: id.into() },
+                at: 0,
+            },
+        )
+    };
+    Run {
+        service: 1,
+        target: PublishTarget::Immich {
+            album_id: Some("al1".into()),
+            album_name: "analog".into(),
+        },
+        options_json: String::new(),
+        name: "analog".into(),
+        plan: run::PublishPlan::default(),
+        worker: None,
+        progress: String::new(),
+        album: None,
+        rows: vec![asset("/a.jpg", "n1"), asset("/b.jpg", "n2")],
+        outcome: Outcome::default(),
+    }
+}
+
+/// The reported bug (2026-11-16): every photo uploaded, the album step was refused, and the status line read
+/// "Published 0, 75 failed". Photos the album step could not place are said as uploaded, with Immich's reason.
+#[test]
+fn a_refused_album_step_says_the_photos_were_uploaded() {
+    let mut app = crate::test_app::for_test();
+    app.publish.run = Some(uploaded_run());
+    app.finish_album(Err(run::AlbumError {
+        album: Some("al1".into()),
+        why: "Immich refused: Missing required permission: albumAsset.create".into(),
+    }));
+    assert_eq!(
+        app.status,
+        "2 uploaded but not added to the album, \
+         Immich refused: Missing required permission: albumAsset.create"
+    );
+}
+
+/// An add the album answered "no" for, per photo, is uploaded-not-added too — never "failed".
+#[test]
+fn a_photo_the_album_turned_down_is_uploaded_not_failed() {
+    let mut app = crate::test_app::for_test();
+    app.publish.run = Some(uploaded_run());
+    app.finish_album(Ok(AlbumSync {
+        album: "al1".into(),
+        added: ["n1".to_string()].into_iter().collect(),
+        ..Default::default()
+    }));
+    assert!(
+        app.status.contains("1 uploaded but not added to the album")
+            && !app.status.contains("failed"),
+        "{}",
+        app.status
+    );
+}

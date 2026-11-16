@@ -54,16 +54,16 @@ pub fn key_hover(kind: KeyKind, home: KeyHome) -> &'static str {
             "A read-only Immich API key, kept in plain text in settings.json"
         }
         (KeyKind::Upload, KeyHome::Keychain) => {
-            "An optional Immich key that can upload and change marks, for Export and Send marks, kept in your keychain"
+            "An optional Immich key for Export, Send marks and Publish, kept in your keychain"
         }
         (KeyKind::Browse, KeyHome::Unreadable) => {
             "A read-only Immich API key, in the keychain, which could not be read — restart Rustroom and allow access"
         }
         (KeyKind::Upload, KeyHome::Unreadable) => {
-            "The Write key for Export and Send marks, in the keychain, which could not be read — restart and allow access"
+            "The keychain's Write key for Export, Send marks and Publish could not be read — restart and allow access"
         }
         (KeyKind::Upload, KeyHome::File) => {
-            "An optional Immich key that can upload and change marks, for Export and Send marks, kept in settings.json"
+            "An optional Immich key for Export, Send marks and Publish, kept in settings.json"
         }
     }
 }
@@ -245,12 +245,16 @@ mod tests {
         }
     }
 
-    /// M10.15d: the upload key is the Write key — its hover names both deliberate uses.
+    /// M10.15d: the upload key is the Write key — its hover names every deliberate use, Publish included (the
+    /// 2026-11-16 report: nothing said Publish needs it, or the album permissions it then needs).
     #[test]
-    fn the_write_key_hover_names_both_uses() {
+    fn the_write_key_hover_names_every_use() {
         for home in [KeyHome::Keychain, KeyHome::File, KeyHome::Unreadable] {
             let t = key_hover(KeyKind::Upload, home);
-            assert!(t.contains("Export") && t.contains("Send marks"), "{t}");
+            assert!(
+                t.contains("Export") && t.contains("Send marks") && t.contains("Publish"),
+                "{t}"
+            );
         }
     }
 

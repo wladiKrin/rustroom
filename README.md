@@ -63,7 +63,8 @@ your folders.
 - **People from Immich** appear beside the faces Rustroom finds itself.
 - **Your keys stay in the system keychain**, where the system has one (otherwise in Rustroom's own
   settings file). A read key and a separate write key let you decide whether Rustroom may change
-  anything at all.
+  anything at all. The write key needs `asset.upload` and `asset.update`, and, to publish to albums,
+  `album.create`, `albumAsset.create` and `albumAsset.delete`.
 
 And plainly what it never does: **Rustroom never deletes a photo from your server.** It writes to
 Immich only when you send marks, upload an export or publish an album.

@@ -7,6 +7,9 @@ pub mod dto;
 pub mod error;
 pub mod multipart;
 
+#[cfg(test)]
+mod album_reply_tests;
+
 pub use dto::{
     About, AlbumSummary, Asset, AssetPerson, AssetType, Bucket, BulkId, CreatedAlbum, ExifInfo,
     FaceBox, NextPage, PeoplePage, Person, SearchAssets, SearchResponse, Stack, StackMember,
@@ -288,7 +291,10 @@ impl Client {
     /// `POST /albums` — a new, empty album; its id (M10.18d, a publish service's first publish). Permission
     /// `album.create`. ⚠ The reply is read only for `id` ([`CreatedAlbum`], constructed from the schema).
     pub fn create_album(&self, name: &str) -> Result<String, Error> {
-        let a: CreatedAlbum = self.post_json("/albums", &album_body(name))?;
+        let text =
+            self.send_reading_refusals(self.agent.post(self.url("/albums")), &album_body(name))?;
+        let a: CreatedAlbum =
+            serde_json::from_str(&text).map_err(|e| Error::Decode(e.to_string()))?;
         Ok(a.id)
     }
 
@@ -313,19 +319,39 @@ impl Client {
         req: ureq::RequestBuilder<ureq::typestate::WithBody>,
         ids: &[String],
     ) -> Result<Vec<BulkId>, Error> {
+        let text = self.send_reading_refusals(req, &ids_body(ids))?;
+        serde_json::from_str(&text).map_err(|e| Error::Decode(e.to_string()))
+    }
+
+    /// Send an album call's JSON `body` and read the reply whole — a refusal's too, so [`Error::from_reply`]
+    /// keeps Immich's reason ("Missing required permission: albumAsset.create") instead of a guess from the
+    /// status alone. ⚠ Only the album calls read refusals; every other call maps a status ([`map_ureq`]).
+    fn send_reading_refusals(
+        &self,
+        req: ureq::RequestBuilder<ureq::typestate::WithBody>,
+        body: &serde_json::Value,
+    ) -> Result<String, Error> {
         let mut res = req
+            .config()
+            .http_status_as_error(false)
+            .build()
             .header("x-api-key", &self.key)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
-            .send(serde_json::to_string(&ids_body(ids)).map_err(|e| Error::Decode(e.to_string()))?)
+            .send(serde_json::to_string(body).map_err(|e| Error::Decode(e.to_string()))?)
             .map_err(map_ureq)?;
+        let status = res.status().as_u16();
         let text = res
             .body_mut()
             .with_config()
             .limit(JSON_LIMIT)
-            .read_to_string()
-            .map_err(|e| Error::Decode(e.to_string()))?;
-        serde_json::from_str(&text).map_err(|e| Error::Decode(e.to_string()))
+            .read_to_string();
+        if (200..300).contains(&status) {
+            text.map_err(|e| Error::Decode(e.to_string()))
+        } else {
+            // A refusal whose body cannot be read is still a refusal, with no reason.
+            Err(Error::from_reply(status, &text.unwrap_or_default()))
+        }
     }
 
     /// Every asset matching `filter`, following the server's paging to the last page.
@@ -511,10 +537,6 @@ pub(crate) fn marks_body(
     serde_json::Value::Object(m)
 }
 
-/// Map a `ureq` failure onto this crate's error, keeping the status distinction the UI needs.
-///
-/// ⚠ `http_status_as_error` defaults to `true` in ureq 3, so a 4xx/5xx really does arrive here
-/// as `StatusCode` rather than as a successful response.
 /// `CreateAlbumDto`: only the name — assets are added afterwards, each answered.
 fn album_body(name: &str) -> serde_json::Value {
     serde_json::json!({ "albumName": name })
@@ -529,6 +551,11 @@ fn album_assets_path(album: &str) -> String {
     format!("/albums/{album}/assets")
 }
 
+/// Map a `ureq` failure onto this crate's error, keeping the status distinction the UI needs.
+///
+/// ⚠ `http_status_as_error` defaults to `true` in ureq 3, so a 4xx/5xx really does arrive here
+/// as `StatusCode` rather than as a successful response — without its body. The album calls turn that
+/// off to keep Immich's reason ([`Client::send_reading_refusals`]).
 fn map_ureq(e: ureq::Error) -> Error {
     match e {
         ureq::Error::StatusCode(code) => Error::from_status(code),
