@@ -677,7 +677,8 @@ impl RustroomApp {
                     })
                     .cloned()
                     .collect();
-                r.outcome.failed += r.rows.len() - rows.len();
+                // Uploaded, but the album answered no for these.
+                r.outcome.not_in_album += r.rows.len() - rows.len();
                 if let Some(cat) = &self.catalog {
                     r.outcome.published = run::record(cat, r.service, &rows);
                     for m in &r.plan.clear {
@@ -709,7 +710,8 @@ impl RustroomApp {
                     let _ =
                         cat.update_publish_service(r.service, &r.name, &target, &r.options_json);
                 }
-                r.outcome.failed += r.rows.len();
+                // ⚠ Uploaded, every one: only the album step failed (the 2026-11-16 report read "Published 0").
+                r.outcome.not_in_album += r.rows.len();
                 r.outcome.notes.push(e.why);
             }
         }

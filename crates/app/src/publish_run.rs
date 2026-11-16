@@ -85,6 +85,9 @@ pub fn plan(members: &[Member], prints: &HashMap<Key, u64>) -> PublishPlan {
 pub struct Outcome {
     pub published: usize,
     pub failed: usize,
+    /// Uploaded to Immich but not put in the service's album — the album step was refused or answered no.
+    /// ⚠ Not "failed": the photos ARE on the server, and the status line must not say otherwise.
+    pub not_in_album: usize,
     pub cleared: usize,
     /// Files changed since they were published, left where they are.
     pub left: usize,
@@ -93,9 +96,19 @@ pub struct Outcome {
 }
 
 impl Outcome {
-    /// `Published 5, 1 failed, removed 1, left 1 file changed since it was published`.
+    /// `Published 5, 1 failed, removed 1, left 1 file changed since it was published`; a run whose album step
+    /// failed leads with `75 uploaded but not added to the album` rather than `Published 0`.
     pub fn summary(&self) -> String {
-        let mut parts = vec![format!("Published {}", self.published)];
+        let mut parts = Vec::new();
+        if self.published > 0 || self.not_in_album == 0 {
+            parts.push(format!("Published {}", self.published));
+        }
+        if self.not_in_album > 0 {
+            parts.push(format!(
+                "{} uploaded but not added to the album",
+                self.not_in_album
+            ));
+        }
         if self.failed > 0 {
             parts.push(format!("{} failed", self.failed));
         }
@@ -210,11 +223,19 @@ pub struct AlbumSync {
     pub removed: HashSet<String>,
 }
 
-/// A refusal, said with the permission the Write key lacks.
+/// A refusal, in Immich's own words when it gave them; `permission` — what the step needs — is named only as a
+/// likely cause when it did not. ⚠ A 401 is a rejected key, never a missing permission (the 2026-11-16 report:
+/// the status alone was read as "needs <permission>", and the guess named the wrong one).
 fn refusal(e: immich::Error, permission: &str) -> String {
     match e {
+        immich::Error::Refused { reason, .. } if !reason.is_empty() => {
+            format!("Immich refused: {reason}")
+        }
+        immich::Error::Refused { status, .. } => format!(
+            "Immich refused (HTTP {status}) — the Write key may lack the {permission} permission"
+        ),
         immich::Error::Unauthorized => {
-            format!("Immich refused: the Write key needs the {permission} permission")
+            "Immich rejected the Write key — check it in Settings → Immich".into()
         }
         other => format!("Immich: {other}"),
     }
@@ -513,7 +534,9 @@ mod tests {
     struct Recorder {
         calls: RefCell<Vec<String>>,
         refuse: HashSet<String>,
-        unauthorized_create: bool,
+        /// A refused create / add: the status and the reply body, read as the client reads them.
+        create_reply: Option<(u16, &'static str)>,
+        add_reply: Option<(u16, &'static str)>,
     }
 
     impl Recorder {
@@ -531,8 +554,8 @@ mod tests {
     impl Albums for Recorder {
         fn create(&self, name: &str) -> Result<String, immich::Error> {
             self.calls.borrow_mut().push(format!("create {name}"));
-            if self.unauthorized_create {
-                return Err(immich::Error::Unauthorized);
+            if let Some((code, body)) = self.create_reply {
+                return Err(immich::Error::from_reply(code, body));
             }
             Ok("al1".into())
         }
@@ -540,6 +563,9 @@ mod tests {
             self.calls
                 .borrow_mut()
                 .push(format!("add {album} {}", ids.join(",")));
+            if let Some((code, body)) = self.add_reply {
+                return Err(immich::Error::from_reply(code, body));
+            }
             Ok(self.answer(ids))
         }
         fn remove(
@@ -593,18 +619,60 @@ mod tests {
         );
     }
 
+    /// The reported bug (2026-11-16): adding to "analog" was refused and the status line named a permission
+    /// Rustroom guessed from the status alone. Immich says what is missing; the status line says it too.
     #[test]
-    fn a_refusal_names_the_permission() {
+    fn a_refusal_says_immichs_own_reason() {
         let r = Recorder {
-            unauthorized_create: true,
+            add_reply: Some((
+                403,
+                r#"{"message":"Missing required permission: albumAsset.create","statusCode":403}"#,
+            )),
+            ..Default::default()
+        };
+        let e = sync_album(
+            &r,
+            Some("al1"),
+            "analog",
+            &["n1".into()],
+            &HashMap::new(),
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(
+            e.why,
+            "Immich refused: Missing required permission: albumAsset.create"
+        );
+        assert_eq!(e.album.as_deref(), Some("al1"));
+    }
+
+    /// Without a reason in the reply, the step's permission is named as a LIKELY cause, not a fact.
+    #[test]
+    fn a_refusal_without_a_reason_names_the_likely_permission() {
+        let r = Recorder {
+            create_reply: Some((403, "")),
             ..Default::default()
         };
         let e = sync_album(&r, None, "Web", &[], &HashMap::new(), &[]).unwrap_err();
         assert_eq!(
             e.why,
-            "Immich refused: the Write key needs the album.create permission"
+            "Immich refused (HTTP 403) — the Write key may lack the album.create permission"
         );
         assert_eq!(e.album, None);
+    }
+
+    /// A 401 is a rejected key — never reported as a missing permission.
+    #[test]
+    fn a_rejected_key_is_not_called_a_missing_permission() {
+        let r = Recorder {
+            create_reply: Some((401, "")),
+            ..Default::default()
+        };
+        let e = sync_album(&r, None, "Web", &[], &HashMap::new(), &[]).unwrap_err();
+        assert_eq!(
+            e.why,
+            "Immich rejected the Write key — check it in Settings → Immich"
+        );
     }
 
     /// Review I6: an album made before the add failed is handed back, so a retry does not make another.
@@ -648,5 +716,30 @@ mod tests {
             "Published 5, 1 failed, removed 1, left 1 file changed since it was published"
         );
         assert_eq!(Outcome::default().summary(), "Published 0");
+    }
+
+    /// The reported bug (2026-11-16): 75 photos uploaded, the album step was refused, and the status line read
+    /// "Published 0, 75 failed" — as if nothing had reached Immich.
+    #[test]
+    fn uploads_left_out_of_the_album_are_said_as_such() {
+        let o = Outcome {
+            not_in_album: 75,
+            notes: vec!["Immich refused: Missing required permission: albumAsset.create".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            o.summary(),
+            "75 uploaded but not added to the album, \
+             Immich refused: Missing required permission: albumAsset.create"
+        );
+        let o = Outcome {
+            published: 3,
+            not_in_album: 2,
+            ..Default::default()
+        };
+        assert_eq!(
+            o.summary(),
+            "Published 3, 2 uploaded but not added to the album"
+        );
     }
 }

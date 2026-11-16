@@ -193,6 +193,25 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-16 — Found in use: a refused album step read "Published 0" and named a guessed permission (branch `fix-publish-album-refusal`)
+
+- **What the author saw:** publishing 75 photos to his own Immich album "analog" — every photo uploaded, yet the
+  status line said none were, "because the key cannot create albums", though the key was set correctly.
+- **What the catalog showed** (read-only): the service already held the album's id, so `create_album` was never
+  called; the refused call was `add_to_album` (`albumAsset.create`), and 75 members had 0 published rows — every retry
+  re-uploaded all 75. The likely cause is the old Write key lacking `albumAsset.create` (unconfirmable: the author has
+  since remade the key) — and **nothing in Rustroom ever said Publish needs it**.
+- **Fixed, each test watched failing first:** (1) the album calls read the refusal's body — `immich::Error::Refused
+  { status, reason }` via `Error::from_reply`, a one-request local server in `album_reply_tests.rs` (replies
+  CONSTRUCTED from Immich's source; a success and a 401 as positive controls) — and `publish_run::refusal` says
+  Immich's own words, names the step's permission only as a likely cause when there are none, and never calls a 401 a
+  missing permission; (2) uploads the album step could not place count as `Outcome.not_in_album` — "75 uploaded but not
+  added to the album", not "Published 0, 75 failed" (two flow tests, sabotaged red by restoring the old counting);
+  (3) the Write key's hover names Publish, and the README lists the key's permissions. Also `map_ureq`'s doc comment,
+  which had slipped onto `album_body`, moved back.
+- ⚠ Only the album calls read refusals; every other call still maps a status alone (`map_ureq` → `from_status`, which
+  reads 403 as `Unauthorized`). Widen it when another refusal misleads.
+
 ### 2026-11-16 — M11.3 merged: the README, AGENTS.md, ARCHITECTURE.md, CONTRIBUTING.md (branch `m11.3-docs`)
 
 ✅ **Merged 2026-11-16 at the author's word ("Merge it").** Spec `docs/superpowers/specs/2026-11-14-m11.3-readme-and-contributor-docs-design.md`,
