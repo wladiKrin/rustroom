@@ -1,0 +1,18 @@
+title: "Idea: "
+body:
+  - type: textarea
+    id: wish
+    attributes:
+      label: What would you like Rustroom to do?
+    validations:
+      required: true
+  - type: textarea
+    id: elsewhere
+    attributes:
+      label: How does Lightroom (or another app) do it?
+      description: If it does — what you like about it, and what you would change
+  - type: textarea
+    id: example
+    attributes:
+      label: An example photo or screenshot
+      description: Drag an image here if it helps explain the idea
