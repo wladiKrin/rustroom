@@ -1987,7 +1987,8 @@ The repository goes public once **all** of Phase 11 is done. The steps, from the
 0. **Re-read the README against what shipped.** Fill its marked spots (`<!-- fill at v0.1: … -->` —
    the file per OS, minimum OS versions, bundled libraries, signing, the graphics-card requirement;
    `CONTRIBUTING.md`'s Windows build steps); check every feature claim per OS (as of 2026-11-16:
-   printing on Windows is to a PDF only, tethering on Windows unproven); add plugins if M11.5 shipped
+   printing on Windows is to a PDF only, tethering on Windows unproven, printing to a printer never
+   seen working — the README offers PDF only until it is); add plugins if M11.5 shipped
    them; measure the test count again.
 1. **Rewrite the history once**, as the very last step, with `git-filter-repo`: the Immich server's
    hostname → `immich.example`, the home path → `~`, the author's email → his GitHub no-reply

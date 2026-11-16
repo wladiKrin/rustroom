@@ -16,8 +16,8 @@ merges, tethered shooting, a map, print and export. It runs on **macOS, Windows 
 
 - **Professional grade.** Edits happen in scene-referred linear light in a wide colour space, in
   32-bit floating point, so nothing clips or bands between steps. Camera colour comes from DCP
-  profiles — checked against Adobe's own DNG SDK — or from a look **learned from your own camera's
-  JPEGs**. The editing pipeline runs on your graphics card.
+  profiles — checked against Adobe's own DNG SDK — or, for Fujifilm cameras, from a look **learned
+  from your own camera's JPEGs**. The editing pipeline runs on your graphics card.
 - **Feature-rich.** Everything you reach for in Lightroom Classic's Library and Develop modules,
   listed [below](#what-it-does).
 - **Open source.** GPL-3.0-or-later. No subscription, no account, nothing to activate.
@@ -33,13 +33,16 @@ your folders.
 
 - **No account, no cloud, no telemetry.** Rustroom does not phone home.
 - **Every AI feature runs on your computer** — subject masks, removing objects and people, denoising,
-  recognising faces. The models are downloaded once, from their publishers on GitHub and Hugging
-  Face, and each one's licence is shown before it is fetched. No photo leaves your machine.
+  recognising faces. Each model is downloaded once, when you first use its feature — from GitHub or
+  Hugging Face, either its authors' own release or a public conversion of it — and its licence is
+  shown before it is fetched. The AI never sends a photo anywhere.
 - **Rustroom goes online only for what you ask of it:** the AI models above, the Map's tiles from
   OpenStreetMap, a place name you look up (through OpenStreetMap's Nominatim), and your Immich
-  server if you connect one. None of these receives your photos.
-- **Locations and people's names stay in Rustroom's catalog** — never written into your files, never
-  sent to a server.
+  server if you connect one. A photo leaves your computer only when you upload or publish it to
+  your own Immich server.
+- **Locations and people's names stay in Rustroom's catalog** — never written into your files or
+  uploaded. (Showing the Map does fetch the tiles for the area you look at — from OpenStreetMap, or
+  a tile server you choose in Settings.)
 
 ## Immich
 
@@ -121,7 +124,7 @@ opens in Develop.
 **Export and print** — JPEG, PNG, TIFF and DNG; 8 or 16 bits; sRGB, Display P3, Adobe RGB or
 ProPhoto; size in pixels, centimetres or inches, a file-size limit, renaming templates, text and
 image watermarks, output sharpening, and control over which metadata leaves with the file. Print
-single photos or contact sheets to a PDF or a printer.
+single photos or contact sheets to a PDF.
 
 <!-- shot 5: map — pins placed by hand -->
 
@@ -172,7 +175,8 @@ database, [libheif](https://github.com/strukturag/libheif) and libde265,
 [wgpu](https://wgpu.rs), [tract](https://github.com/sonos/tract) — and map data
 © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors.
 
-**The AI models**, each downloaded from its publisher when you first use the feature:
+**The AI models**, each downloaded when you first use its feature — every file's source and licence
+are listed in [`crates/ai-mask/src/registry.rs`](crates/ai-mask/src/registry.rs):
 
 | Feature | Model | Licence |
 |---|---|---|
