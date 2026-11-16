@@ -1,7 +1,7 @@
 //! What Auto Tone actually does to a real photograph.
 //!
 //! ⚠⚠ **The "done when" of M5.4a is a judgement about a photograph, which an agent must not sign
-//! off** (`docs/PARALLEL-WORK.md` §6). This produces the evidence instead: the three percentiles
+//! off** (`AGENTS.md`, *Where new code goes*). This produces the evidence instead: the three percentiles
 //! the decision was made from, the three values it chose, and a before/after pair to look at.
 //! `MEDIAN_TARGET`, `WHITE_TARGET` and `BLACK_TARGET` are starting values the user tunes from
 //! exactly this output.

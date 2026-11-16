@@ -40,7 +40,7 @@ pub(crate) fn rows(
     let mut out = None;
     marks.follow(view.open);
     // ⚠ Against EVERY catalog folder, not the visible rows: a collapse hides a mark, it does not drop
-    // it. A set, because this runs every frame (`CLAUDE.md`: nothing in the rail may grow per frame).
+    // it. A set, because this runs every frame (`AGENTS.md`: nothing in the rail may grow per frame).
     let exists: HashSet<&Path> = view.folders.iter().map(|f| f.path.as_path()).collect();
     marks.retain(|p| exists.contains(p));
     let nodes = rustroom_app::folder_tree::build(view.folders, collapsed);

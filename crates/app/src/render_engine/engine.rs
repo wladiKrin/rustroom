@@ -400,7 +400,7 @@ mod tests {
 
     const LONG: std::time::Duration = std::time::Duration::from_secs(120);
 
-    /// ⚠ A 120-s ceiling against a hang, never a time budget (CLAUDE.md): the old 1 s lost the race
+    /// ⚠ A 120-s ceiling against a hang, never a time budget (AGENTS.md): the old 1 s lost the race
     /// on a loaded full gate — `a_handed_off_frame_is_settled_by_a_download` takes 0.8 s alone.
     fn wait_for_frame(engine: &RenderEngine) -> RenderedFrame {
         let deadline = std::time::Instant::now() + LONG;

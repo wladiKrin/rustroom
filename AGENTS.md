@@ -86,14 +86,15 @@ oversized file here grew one reasonable-seeming addition at a time. `ls crates/`
 - **The bin-crate dead-code trap:** in a binary crate a `pub` item with no production caller is dead
   code and `clippy -D warnings` rejects it — an item lands in the same commit as its first caller.
 - **Append, never insert:** new `Edits` fields at the end of the struct and of every exhaustive fixture;
-  the same for `Command`, `EDIT_GROUP_NAMES`, the `DialogSize` array, `Mask`'s variants and the goldens.
+  the same for `Command`, the menus, `EDIT_GROUP_NAMES`, the `DialogSize` array, `Mask`'s variants and the goldens.
 - **A catalog migration is one change with the next version number**, never two branches each adding
   one: two `if from < N` migrations are data corruption on a real catalog, not a merge conflict.
 - **Headless first:** a canvas feature is model, stage and tests with no GUI, then the canvas UI — so
   a canvas bug can never be confused with a model bug.
 - **Never let an agent decide a question you would have wanted asked** — a background agent with an
   open design choice picks one silently and it ships. Settle design questions first; scope an agent
-  that needs evidence to measure and report.
+  that needs evidence to measure and report. Nor let one sign off a judgement about a photograph:
+  produce the evidence (a probe, a before/after) and leave the verdict to a person.
 - ⚠ **If a file you are editing already exceeds ~600 lines, say so in your report.**
 
 ## The gate

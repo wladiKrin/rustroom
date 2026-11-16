@@ -332,7 +332,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
-    /// ⚠ A ceiling against a hang, never a budget (CLAUDE.md).
+    /// ⚠ A ceiling against a hang, never a budget (AGENTS.md).
     const LONG: Duration = Duration::from_secs(120);
 
     /// A constructed row of M9.10 DNGs (`synth_pano`) in its own folder.

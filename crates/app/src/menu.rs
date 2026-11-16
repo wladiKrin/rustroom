@@ -499,7 +499,7 @@ fn view_items() -> Vec<Item> {
         ),
     ];
 
-    // ⚠⚠ **Appended, never inserted.** `PARALLEL-WORK.md` lists this menu among the surfaces any
+    // ⚠⚠ **Appended, never inserted.** `AGENTS.md`'s append rule covers this menu, one of the surfaces any
     // new dialog or shortcut contends for; appending is what keeps two tracks' additions from
     // colliding in the middle of a list.
     //

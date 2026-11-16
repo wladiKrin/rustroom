@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Instant;
 
 /// Holds a photo's export decode until the test releases it — so a test that asserts an in-between state
-/// (one photo written, the other not) can look before the run moves on (CLAUDE.md's held-job rule).
+/// (one photo written, the other not) can look before the run moves on (AGENTS.md's held-job rule).
 ///
 /// ⚠ Keyed on the file, which lives in the test's own directory: tests run in parallel and must not hold
 /// each other's photos.

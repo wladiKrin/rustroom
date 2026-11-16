@@ -148,7 +148,7 @@ mod tests {
     ///   (the control: merging must buy something).
     ///
     /// ⚠ Not "mean |error| < 1 %": the fixture's shot noise is ~5 % a pixel near the noise floor, so
-    /// that number measured the fixture (1.08 %), not the merge — `(d)` of CLAUDE.md's shapes.
+    /// that number measured the fixture (1.08 %), not the merge — `(d)` of AGENTS.md's shapes.
     #[test]
     fn radiance_is_recovered_where_any_frame_held_it() {
         let (w, h) = (320, 240);

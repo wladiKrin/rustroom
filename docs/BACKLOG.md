@@ -9,7 +9,7 @@ a hard question gets picked up as though it were a small job.
 
 Milestone-level work lives in the roadmap
 (`~/Documents/obsidian/private/rustroom/03-plan-of-action.md`); implementation detail
-lives in `CLAUDE.md`. This file is for things consciously left undone.
+lives in `AGENTS.md` and `ARCHITECTURE.md`. This file is for things consciously left undone.
 
 ---
 
@@ -81,7 +81,7 @@ done (`grep -n 'M10.7d' docs/JOURNAL.md`):
 
 ## ⚠⚠ 2026-09-01 — most of this file is now scheduled
 
-The roadmap was re-planned on 2026-09-01 (see `03-plan-of-action.md` and `PARALLEL-WORK.md`). Items
+The roadmap was re-planned on 2026-09-01 (see `03-plan-of-action.md`). Items
 below that were "deferred" are now **milestones with an order**, and this table is the map. An entry
 still carries the reasoning that matters — read the entry, then build it under its milestone number.
 
@@ -562,7 +562,7 @@ above. Only *anchoring* wants the forward map.
   secondary to the interpolator question above, which is why that one came first. ⚠⚠ **And that one
   is DONE: M7.3a shipped 2026-09-01**, so the 48%-of-a-single-pass win is already taken and this
   ~20% is what is actually left. Do not read the entry above as still-open work — it is struck
-  through for a reason, and `CLAUDE.md`'s own warning applies: verify a backlog item against what
+  through for a reason, and `AGENTS.md`'s own warning applies: verify a backlog item against what
   shipped before proposing it, since several were closed under another name. ⚠ The cost is
   that `FrameMap` must then invert a **homography** rather than a rotation, and its agreement test
   with `GeometryStage` is exactly what caught the rotation sign error in M3.1c-A. It also loses
@@ -1587,7 +1587,7 @@ the **path's own file name**, never `CatalogEntry::file_name`; `row_is_browsable
 actually cost time were not about originals at all: `GET /albums/{id}` returns **no `assets` field**,
 and a real server pages by **`nextPage`** while leaving `nextCursor` null. Neither is discoverable
 from the OpenAPI schema, and both were found by a real reply. **Before the next Immich slice, capture
-a real response for every endpoint it touches** — see the fixture lesson in `CLAUDE.md`'s standing
+a real response for every endpoint it touches** — see the fixture lesson in `AGENTS.md`'s standing
 lessons.
 
 ### ⛔ Two-way sync — DECLINED 2026-09-24 (the user's call, with reasons) → re-opened 2026-09-29 as M10.15d

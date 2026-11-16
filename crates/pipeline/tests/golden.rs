@@ -2338,7 +2338,7 @@ fn the_red_eye_golden_corrects_both_pupils_and_not_the_skin() {
 
 // ── M7.1b, colour range masks ────────────────────────────────────────────────────────────────
 //
-// ⚠ **Appended, never inserted** — PARALLEL-WORK.md rule 3, and another track adds goldens in this
+// ⚠ **Appended, never inserted** — `AGENTS.md`'s append rule, and another track adds goldens in this
 // same wave. A new case goes at the end of the file and its reference is a new PNG.
 
 /// The colour-mask golden, as a one-entry table.
