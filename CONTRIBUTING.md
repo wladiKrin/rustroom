@@ -21,14 +21,15 @@ part that matters most either way: **showing that your change works.**
 ## 2. Build and run
 
 You need [Rust](https://rustup.rs) (stable — `rustup` picks the right version from
-`rust-toolchain.toml`), a C++ compiler, and four system libraries: LittleCMS (colour), libheif (HEIC
-photos), libgphoto2 (tethering) and libraw.
+`rust-toolchain.toml`), a C++ compiler with libclang (two dependencies generate their bindings with
+it), and three system libraries: LittleCMS (colour), libheif (HEIC photos) and libgphoto2
+(tethering). LibRaw comes compiled in.
 
 **macOS** (with [Homebrew](https://brew.sh)):
 
 ```bash
 xcode-select --install
-brew install libraw little-cms2 libheif libgphoto2 pkgconf
+brew install little-cms2 libheif libgphoto2 pkgconf
 export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:/opt/homebrew/opt/little-cms2/lib/pkgconfig:$PKG_CONFIG_PATH"
 cargo run --release -p app
 ```
@@ -38,7 +39,7 @@ Put the `export` line in your shell profile, or repeat it in each new terminal.
 **Linux — Debian / Ubuntu:**
 
 ```bash
-sudo apt-get install -y build-essential libraw-dev liblcms2-dev libgphoto2-dev libheif-dev libheif-plugin-libde265 pkg-config
+sudo apt-get install -y build-essential libclang-dev liblcms2-dev libgphoto2-dev libheif-dev libheif-plugin-libde265 pkg-config
 cargo run --release -p app
 ```
 
@@ -48,7 +49,7 @@ cargo run --release -p app
 **Linux — Arch:**
 
 ```bash
-sudo pacman -S base-devel libraw lcms2 libheif libgphoto2 pkgconf
+sudo pacman -S base-devel clang lcms2 libheif libgphoto2 pkgconf
 cargo run --release -p app
 ```
 
@@ -70,7 +71,7 @@ cargo run --release -p rustroom -- render photo.RAF out.jpg --edits edits.json
 ```
 
 An `edits.json` is the same list of settings Rustroom saves beside every photo, for example
-`{ "exposure": 1.2, "contrast": 25, "shadows": 40, "white_balance": { "temp": 20 } }`.
+`{ "exposure": 1.2, "contrast": 25, "shadows": 40, "white_balance": { "kelvin": 5500 } }`.
 
 ## 3. Working with an AI assistant
 
@@ -90,7 +91,9 @@ watch the test go red. A test that stays green while the feature is broken is no
 
 ## 4. The checks
 
-These three must pass — CI runs them on every pull request:
+These three must pass. CI runs them on every pull request, and also runs clippy with
+`--all-features` (the test-only features included), so run that too before you send a change that
+touches a feature-gated file:
 
 ```bash
 cargo fmt --all -- --check

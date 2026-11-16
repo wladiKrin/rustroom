@@ -127,8 +127,11 @@ have not missed one.
 2. **Its group** in `EditGroups` (what copy/paste, presets and sync carry), and the destructure in
    `Edits::merge_from`.
 3. **The fixtures that set every field:** `edit_model`'s `all_nonneutral()`,
-   `pipeline::test_fixtures::all_edits()` and, for a tail stage, `gpu-pipeline`'s `every_tail_stage()`.
-   They build `Edits` without `..`, so the compiler points at each one.
+   `pipeline::test_fixtures::all_edits()` and the `rich` literal in `edit_clipboard`'s
+   `the_payload_survives_every_group` test. They build `Edits` without `..`, so the compiler points
+   at each one. ⚠ For a tail stage, also set the field in `gpu-pipeline`'s `every_tail_stage()` —
+   it ends in `..Edits::default()`, so the compiler cannot point at it, and a stage missing from it
+   silently splits the GPU tail.
 4. **The stage** that uses it, in `crates/pipeline/src/stages/`.
 5. **Its GPU twin** with a `REPLACEABLE` row in `gpu-pipeline` (every tail stage needs one).
 6. **The slider** in the Develop panel (`crates/app/src/develop/panel/`), with its default for
@@ -158,6 +161,7 @@ are appended at the end, so every existing sidecar still reads.
 
 The extension goes into `catalog`'s `RAW_EXTENSIONS` or `IMAGE_EXTENSIONS`; decoding into
 `raw-decode` or `image-decode` (returning the same linear image every other format does, with its
-orientation applied); the thumbnail path and the import survey's quick EXIF read
-(`image_decode::quick_look`) need it too. Add a small sample to the tests only if its licence allows
+orientation applied); the thumbnail path, the import survey's quick EXIF read
+(`image_decode::quick_look`), the Open dialog's list of extensions (`session_flow`'s `open_dialog`)
+and the Library's format filter (`crates/app/src/format_filter.rs`) need it too. Add a small sample to the tests only if its licence allows
 redistribution — otherwise a test reads it from a path you set locally, the way the RAW tests do.

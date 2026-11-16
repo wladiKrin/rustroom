@@ -15,9 +15,9 @@ photos, and **Develop** to edit them — with masks, AI selections, retouching, 
 merges, tethered shooting, a map, print and export. It runs on **macOS, Windows and Linux**.
 
 - **Professional grade.** Edits happen in scene-referred linear light in a wide colour space, in
-  32-bit floating point, so nothing clips or bands between steps. Camera colour comes from DCP
-  profiles — checked against Adobe's own DNG SDK — or, for Fujifilm cameras, from a look **learned
-  from your own camera's JPEGs**. The editing pipeline runs on your graphics card.
+  32-bit floating point, so nothing clips or bands between steps. Camera colour comes from the
+  DCP profiles you install — read exactly as Adobe's own DNG SDK reads them — or, for Fujifilm
+  cameras, from a look **learned from your own camera's JPEGs**. The editing pipeline runs on your graphics card.
 - **Feature-rich.** Everything you reach for in Lightroom Classic's Library and Develop modules,
   listed [below](#what-it-does).
 - **Open source.** GPL-3.0-or-later. No subscription, no account, nothing to activate.
@@ -40,9 +40,11 @@ your folders.
   OpenStreetMap, a place name you look up (through OpenStreetMap's Nominatim), and your Immich
   server if you connect one. A photo leaves your computer only when you upload or publish it to
   your own Immich server.
-- **Locations and people's names stay in Rustroom's catalog** — never written into your files or
-  uploaded. (Showing the Map does fetch the tiles for the area you look at — from OpenStreetMap, or
-  a tile server you choose in Settings.)
+- **Locations and people's names live in Rustroom's catalog**, never in your originals or their
+  sidecars, and people's names never leave Rustroom. A location does travel with an **export** — and
+  so with an upload or a published album — unless you set the export's metadata to *Copyright only*.
+  (Showing the Map fetches the tiles for the area you look at, from OpenStreetMap or a tile server
+  you choose in Settings.)
 
 ## Immich
 
@@ -59,8 +61,9 @@ your folders.
   favourites set in Immich fill in Rustroom's once, and never overwrite your own.
 - **Publish to an album:** a publish service keeps an Immich album in step with a set of photos.
 - **People from Immich** appear beside the faces Rustroom finds itself.
-- **Your keys stay in the system keychain**, not in a settings file. A read key and a separate write
-  key let you decide whether Rustroom may change anything at all.
+- **Your keys stay in the system keychain**, where the system has one (otherwise in Rustroom's own
+  settings file). A read key and a separate write key let you decide whether Rustroom may change
+  anything at all.
 
 And plainly what it never does: **Rustroom never deletes a photo from your server.** It writes to
 Immich only when you send marks, upload an export or publish an album.
@@ -73,8 +76,8 @@ Immich only when you send marks, upload an export or publish an album.
 
 - Import from a memory card into date folders, or work on folders in place; a folder tree that
   follows photos you move.
-- Stars, flags, colour labels and keywords (written to `.xmp` sidecars for other apps), descriptions,
-  batch rename.
+- Stars, flags, colour labels, keywords and descriptions; stars, labels and keywords are written to
+  an `.xmp` sidecar beside each RAW file, for other apps. Batch rename.
 - Collections, smart collections, stacks (RAW + JPEG pairs automatically, your own by hand), virtual
   copies, and Compare and Survey views.
 - **Map**: photos placed by their GPS, or by dropping them where they were taken.
@@ -93,7 +96,7 @@ Immich only when you send marks, upload an export or publish an album.
 - Noise reduction, and **AI denoise**; sharpening; lens corrections (distortion, vignetting,
   chromatic aberration) from the lensfun database; defringe.
 - Crop, straighten and perspective correction; vignette and grain.
-- Camera profiles and creative looks (3D LUTs); film negative conversion.
+- Camera profiles (DCP) and creative looks (3D LUTs) from your own files; film negative conversion.
 - History that survives a restart, snapshots, presets, copy and paste of settings, soft proofing.
 
 **Masks**
@@ -134,8 +137,8 @@ single photos or contact sheets to a PDF.
   collections and smart collections, stacks, publish services.
 - **Your Lightroom presets come with you:** `.xmp` presets, the older `.lrtemplate`, and `.zip`
   packs. Anything a preset sets that Rustroom does not have is named to you, never silently dropped.
-- **Stars, labels and keywords** that Lightroom wrote into `.xmp` sidecars are read when you open the
-  folder.
+- **Stars, labels and keywords** that Lightroom wrote into `.xmp` sidecars beside your RAW files are
+  read when you open the folder.
 - **What does not come across:** Rustroom does not read Lightroom catalogs (`.lrcat`), so edits made
   in Lightroom stay there — and a preset is an approximation, because the processing is Rustroom's own.
 
@@ -169,10 +172,12 @@ To build Rustroom yourself, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 ## Credits
 
 Rustroom stands on these open-source projects: [LibRaw](https://www.libraw.org) (LGPL-2.1 / CDDL),
-[Little CMS](https://www.littlecms.com) (MIT), [lensfun](https://lensfun.github.io) and its lens
-database, [libheif](https://github.com/strukturag/libheif) and libde265,
-[libgphoto2](http://www.gphoto.org), [egui](https://github.com/emilk/egui),
-[wgpu](https://wgpu.rs), [tract](https://github.com/sonos/tract) — and map data
+[Little CMS](https://www.littlecms.com) (MIT), [lensfun](https://lensfun.github.io) (LGPL-3.0) and
+its lens database (CC-BY-SA 3.0, by the LensFun contributors),
+[libheif](https://github.com/strukturag/libheif) and libde265 (LGPL-3.0),
+[libgphoto2](http://www.gphoto.org) (LGPL-2.1), [egui](https://github.com/emilk/egui) and
+[wgpu](https://wgpu.rs) (MIT / Apache-2.0), [tract](https://github.com/sonos/tract) (MIT / Apache-2.0)
+— and map data
 © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors.
 
 **The AI models**, each downloaded when you first use its feature — every file's source and licence

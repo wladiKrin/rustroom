@@ -1,10 +1,9 @@
 # AGENTS.md — Rustroom
 
-Guidance for anyone changing Rustroom's code — a person or a coding assistant. `CLAUDE.md` imports
-this file, so Claude Code reads it every session; other assistants read `AGENTS.md` directly. The
-long tour is [`ARCHITECTURE.md`](ARCHITECTURE.md); building, checking and sending a change is
-[`CONTRIBUTING.md`](CONTRIBUTING.md); the story behind every rule here is `docs/JOURNAL.md` — grep it,
-never read it whole (`grep -n '^### ' docs/JOURNAL.md` is the index). Things declined with numbers
+Guidance for anyone changing Rustroom's code — a person or a coding assistant. `CLAUDE.md` imports this file, so Claude Code
+reads it every session; other assistants read `AGENTS.md` directly. The long tour is [`ARCHITECTURE.md`](ARCHITECTURE.md);
+building, checking and sending a change is [`CONTRIBUTING.md`](CONTRIBUTING.md); the story behind every rule here is
+`docs/JOURNAL.md` — grep it, never read it whole (`grep -n '^### ' docs/JOURNAL.md` is the index). Things declined with numbers
 are in `docs/BACKLOG.md`: do not re-propose them from a list.
 
 ⚠ **Keep this file small: overwrite a rule in place when it changes, never append a superseded
@@ -50,18 +49,17 @@ TAIL:   scene offsets → white balance → exposure → tone (contrast/regions/
         camera rendering / look → output transform → encode
 ```
 
-**Geometry ends the capture corrections and precedes every adjustment**, so the tail works on the
-final cropped pixels (which also makes the vignette post-crop for free). It is ONE resample, after
-lens, NR, dehaze and spots, so a straighten or crop drag re-runs only that resample — a measured
-**speed** trade, not an image-quality win. Spots, eyes and brush strokes are **stored in decode
-space** and mapped by `pipeline::anchors::resolve` at each renderer's entry. **NR early, sharpening
-late:** denoising the source beats denoising grain that exposure and curves have amplified, and
-sharpening must not be stretched by a later stage.
+**Geometry ends the capture corrections and precedes every adjustment**, so the tail works on the final cropped pixels (which
+also makes the vignette post-crop for free). It is ONE resample, after lens, NR, dehaze and spots, so a straighten or crop drag
+re-runs only that resample — a measured **speed** trade, not an image-quality win. Spots, eyes and brush strokes are **stored in
+decode space** and mapped by `pipeline::anchors::resolve` at each renderer's entry. **NR early, sharpening late:** denoising the
+source beats denoising grain that exposure and curves have amplified, and sharpening must not be stretched by a later stage.
 
 ## Where new code goes
 
 **Decide placement before writing — never dump into `main.rs` and leave the split for later.** Every
-oversized file here grew one reasonable-seeming addition at a time. `ls crates/` is the inventory;
+oversized file here grew one reasonable-seeming addition at a time. Keep crates small and
+single-purpose. `ls crates/` is the inventory;
 `ARCHITECTURE.md` describes each crate.
 
 - **The crate boundary is a hard rule.** `pipeline`, `color`, `export`, `core-image`, `edit-model`,
@@ -109,6 +107,9 @@ commit; read each exit code from its own command). The whole gate is about 80 se
   `cargo test --workspace immich_source`. Clippy gets its own target directory for the same reason.
 - Goldens: `cargo test --workspace --test golden` — never abandon them; they made the GPU port safe.
 - Cargo never garbage-collects `target/`; if builds slow down, count its files (`find | head`), not `du`.
+  After moving the checkout, `touch crates/test-dir/src/lib.rs`: its sweeps bake in the old path.
+- On Linux, `gpu_pipeline`'s suite can stall inside a full run and `sources::reindex_tests` can fail
+  to exit (pre-existing) — run the remaining test binaries directly when it happens.
 
 ## Conventions
 
@@ -116,18 +117,20 @@ commit; read each exit code from its own command). The whole gate is about 80 se
   `rustroom-cli` (package `rustroom`), the app `Rustroom`. `no_two_binaries_share_a_name_but_for_case`.
 - **Anything a user can see follows `docs/DESIGN.md`:** four text sizes, nothing below 11 pt, one
   accent, one form per control, hover text instead of on-screen hints (one sentence, no full stop —
-  `every_hover_is_one_short_sentence`). A literal font size or `Color32` outside `theme.rs` is a defect.
+  `every_hover_is_one_short_sentence`); its §12 is the checklist for a new element. A literal font
+  size or `Color32` outside `theme.rs` is a defect.
 - **Colour correctness is first-class** — validate against references early.
-- **Avoid platform assumptions** (paths, file dialogs, GPU backend); CI runs on Linux.
+- **Avoid platform assumptions** (paths, file dialogs, GPU backend); CI runs on Linux. The system
+  libraries per OS are in `CONTRIBUTING.md`.
 - **Commit messages** describe the change; one feature per branch.
 
 ## The GPU
 
-Every **tail** stage has a GPU twin. The prefix stages without one — spot removal, red eye, the
-negative, AI denoise's blend and the removals' paste — were measured and declined, or wait; see
-`docs/BACKLOG.md`. Count twins by `impl PipelineStage for` and `impl (crate::)?GpuStage for`
-(exposure writes the `crate::` form). Debug switches: `RUSTROOM_DEBUG_GPU_TIME=1` (timestamps),
-`RUSTROOM_NO_FUSION=1`, `RUSTROOM_DEBUG_RENDER` (measure a drag through this, never a probe row).
+Every **tail** stage has a GPU twin. The prefix stages without one — spot removal, red eye, the negative, AI denoise's blend and
+the removals' paste — were measured and declined, or wait. Also declined with numbers (`docs/BACKLOG.md`): the prefix seams'
+download half, spot removal on the GPU, `MIN_GPU_BOX_PX`, the GPU-side coverage cache, one device for the window and the pipeline.
+Count twins by `impl PipelineStage for` and `impl (crate::)?GpuStage for` (exposure writes the `crate::` form). Switches:
+`RUSTROOM_DEBUG_GPU_TIME=1`, `RUSTROOM_NO_FUSION=1`, `RUSTROOM_DEBUG_RENDER` (measure a drag through it, never a probe row).
 ⚠ A geometry twin was once declined for pricing the compute and missing the transfers — price both.
 
 ## Warnings that outlive their milestone
@@ -287,14 +290,15 @@ Only what stays true after a milestone closes belongs here; each story is in `do
   - M9.13 — MobileSAM: use `low_res_masks`; the lens warp is done ONCE per map (`post_lens`).
   - M9.14 — untouched = `initial_edits(None)` OR `Edits::default()`, never `is_neutral`; the stand-in rule reads `view_region::needed_long`, never the rung.
   - M10.9c — what a Lightroom preset sets that Rustroom lacks is NAMED to the user, never dropped silently. M10.10 — export sizing applies to the CROPPED picture.
-  - M10.12c — `pipeline::anchors::resolve` runs once at EACH renderer's entry (engine, `export_one`, CLI): a new renderer calls it too.
+  - M10.12c — `pipeline::anchors::resolve` runs once at EACH renderer's entry (engine, `export_one`, CLI): a new renderer calls it too; the canvas works on `Session::anchored_view` and stores through `anchor_spot` / `anchor_eye` / `stroke_to_decode`.
   - M10.13d — a learned film picked from the menu REPLACES the photo's own (`camera_look::applied`); `camera/<name>` is the one look name with a separator (`looks::is_learned`).
   - M10.14f — a GPU twin's test asserts the GPU RAN (`apply_keeping_input`): `GpuChain::apply` falls back silently; inside a test a fallback PANICS (`strict-fallback`) unless wrapped in `fallback::allow`.
   - M10.14h — a GPU scene-offsets stage and its reading masks are ALL OR NOTHING (`accelerate::reference_plan`).
-  - M10.16a — the depth recipe is `depth:v2`; bump `DEPTH_QUERY` on any change. M10.16c2 — the dust search is pumped by Develop's body (`dust_flow`), never the panel.
+  - M10.16a — the depth recipe is `depth:v2`; bump `DEPTH_QUERY` on any change; `tract` needs the export's symbols BOUND per size and its shape annotations ignored. M10.16c2 — the dust search is pumped by Develop's body (`dust_flow`), never the panel.
+  - M10.17 — a merge result never lands in the Immich cache (`hdr_merge::out_folder`); HDR and panorama share one queue (`merge_queue`); a gesture over a dialog never reaches the Library behind it.
   - M10.18a — one thread owns the tethered camera; the card is only READ; on macOS a session holds `ptpcamerad` off (`tether::Hold`).
   - M10.18b — locations live in the CATALOG only (`photo_location`: hand > file > server), never a file or a sidecar.
-  - M10.18c — people's names live in Rustroom ONLY, never Immich or a file; every new `Library` takes `library_state::fresh_rev()`.
+  - M10.18c — people's names live in Rustroom ONLY, never Immich or a file; every new `Library` takes `library_state::fresh_rev()`; the Immich people and album DTOs are constructed, not captured — capture a real reply before trusting them.
   - M10.18d — publish state is keyed on `photos.id` and its fingerprint is pinned (`publish_state`). M10.18e — a printed page is the EXPORT's render; the PDF is hand-written (`print::pdf`).
   - M10.19a — a HEIC's colour profile is the libheif HANDLE's, never the decoded image's. M10.19c — folder marks are keyed by PATH.
   - M10.19d — in Retouch's Find task only `find_overlay` draws; the dust view's one writer is `pump_dust`.
@@ -302,7 +306,6 @@ Only what stays true after a milestone closes belongs here; each story is in `do
 ## Standing lessons
 
 The expensive ones — each cost a real bug; full stories in `docs/JOURNAL.md`.
-
 
 - **⚠⚠ A SOURCE SWEEP THAT READS "UP TO THE FIRST `#[cfg(test)]`" IS BLIND PAST ANY TEST ITEM PLACED
   MID-FILE** — three were, until M10.6b found a literal font size and three bare hovers behind one.

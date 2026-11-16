@@ -1991,7 +1991,8 @@ The repository goes public once **all** of Phase 11 is done. The steps, from the
    seen working — the README offers PDF only until it is); add plugins if M11.5 shipped
    them; measure the test count again.
 1. **Rewrite the history once**, as the very last step, with `git-filter-repo`: the Immich server's
-   hostname → `immich.example`, the home path → `~`, the author's email → his GitHub no-reply
+   hostname → `immich.example` — in BOTH forms, dotted and the underscore slug of a cache folder
+   (`https___…`, which M11.3's dotted search missed in four files), the home path → `~`, the author's email → his GitHub no-reply
    address. The replacement expressions file lives **outside** the repository and is never committed.
 2. **Remap the ~31 commit hashes** the docs quote, from filter-repo's old → new commit map.
 3. **Push to a newly created GitHub repository** rather than force-pushing the old one (verify against
