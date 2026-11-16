@@ -6,9 +6,9 @@
 [![Licence: GPL-3.0-or-later](https://img.shields.io/github/license/wladiKrin/rustroom)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/wladiKrin/rustroom)](https://github.com/wladiKrin/rustroom/releases/latest)
 
-<!-- shot 1: hero — Develop on DSCF8413.RAF, panel open -->
+![Rustroom's Develop view: a Fujifilm RAW of Sacré-Cœur at dusk, opened with the colour learned from the camera, and the edit panel beside it](docs/images/hero.png)
 
-<!-- shot 6: dehaze gif -->
+![Dragging the Dehaze slider clears the haze over a mountain range](docs/images/dehaze.gif)
 
 Rustroom is a complete darkroom for your RAW files: a **Library** to import, sort, rate and find your
 photos, and **Develop** to edit them — with masks, AI selections, retouching, HDR and panorama
@@ -21,7 +21,7 @@ merges, tethered shooting, a map, print and export. It runs on **macOS, Windows 
 - **Feature-rich.** Everything you reach for in Lightroom Classic's Library and Develop modules,
   listed [below](#what-it-does).
 - **Open source.** GPL-3.0-or-later. No subscription, no account, nothing to activate.
-- **Tested.** <!-- fill at Task 10: measured test count --> automated tests, including 94
+- **Tested.** Over 4,700 automated tests, including 94
   golden-image tests that pin exactly what the editing pipeline renders, run on every change. Every
   stage that runs on the graphics card is checked against its reference on the processor.
 
@@ -49,7 +49,7 @@ your folders.
 Rustroom works with a self-hosted [Immich](https://immich.app) server as a second library, beside
 your folders.
 
-<!-- shot 4: immich — the demo account's timeline and album -->
+![An Immich album open in the Library, with the server's timeline and albums in the sidebar](docs/images/immich.png)
 
 - **Browse your server** in the Library — its timeline by year and month, and its albums.
 - **Edit any server photo** in Develop. It is downloaded when you open it and kept, until you clear
@@ -82,7 +82,9 @@ Immich only when you send marks, upload an export or publish an album.
 - **Publish services** to a folder or an Immich album.
 - Fast at scale — tested with a catalog of 100,000 photos.
 
-<!-- shot 2: library — the grid with the rail -->
+![The Library: a folder of photos with stars and colour labels, and the sidebar with folders, Immich and a publish service](docs/images/library.png)
+
+![The Map: photos placed from Paris to Japan, with the three taken in Japan shown below the map](docs/images/map.png)
 
 **Develop**
 
@@ -101,7 +103,7 @@ Immich only when you send marks, upload an export or publish an album.
 - Combine them (add, subtract, intersect, invert); each mask has its own white balance, exposure,
   tone, colour, sharpening, noise reduction and dehaze.
 
-<!-- shot 3: mask — an AI Subject mask with its overlay -->
+![Select Subject: the AI finds the tower — antennas included — and shows the mask in red](docs/images/mask.png)
 
 **Retouch**
 
@@ -109,7 +111,6 @@ Immich only when you send marks, upload an export or publish an album.
 - **Remove** anything you paint over, filled in by AI; **find people** in the background and remove
   them; **find sensor dust** and heal every spot at once.
 
-<!-- shot 7 (optional): remove — the bicycles in front of the Walhalla -->
 
 **Lens Blur** — blur the background after the fact, from a depth map, with the bokeh shape of your
 choice.
@@ -126,7 +127,6 @@ ProPhoto; size in pixels, centimetres or inches, a file-size limit, renaming tem
 image watermarks, output sharpening, and control over which metadata leaves with the file. Print
 single photos or contact sheets to a PDF.
 
-<!-- shot 5: map — pins placed by hand -->
 
 ## Coming from Lightroom
 
