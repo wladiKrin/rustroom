@@ -42,6 +42,7 @@ and a pointer, not deleted.
 | **M10.19** found in use | HEIC/HEIF support (a, new 2026-10-01 — never an entry here; ✅ merged 2026-11-11, confirmed by use — a container-rotated real file unseen); *Move to folder left one thing out* (b, ✅ merged 2026-11-11, confirmed by use); marking several folders and forgetting them from a right-click menu (c, ✅ 2026-10-12 — found in use and built the same day at the author's request); **the Retouch panel as two tasks, Paint · Find** (d, new 2026-10-22 — the author, after c3: too many buttons in one place, patches and removals kept apart, drawing to look again invisible; his pick, option B of `https://claude.ai/artifact/7ACHJJ2zFpWPJ3WspdRYcC`; ✅ merged 2026-10-22, confirmed by use) |
 | **M11.2** Windows & Linux | *The in-window menu bar has never been run*; *Multi-monitor on Linux and Windows*; P-28 |
 | **M11.3** / **M11.5** | *Contributor-facing documentation* / *A plugin system* |
+| **Going public** (after M11.5) | *Going public* (recorded 2026-11-16 by M11.3) |
 
 ### Found by M10.17a (2026-10-26) — not in its scope, unscheduled
 
@@ -1977,6 +1978,36 @@ to an AI assistant, not to a contributor**, and it is enormous.
    guess), how to run and regenerate the goldens, and the sabotage-testing discipline, which is
    this project's most distinctive practice and completely invisible from outside.
 3. **Small labelled issues.** Several already exist in this file.
+
+## Going public (recorded 2026-11-16 by M11.3) → Phase 11's last step, after M11.5
+
+The repository goes public once **all** of Phase 11 is done. The steps, from the M11.3 spec
+(`docs/superpowers/specs/2026-11-14-m11.3-readme-and-contributor-docs-design.md`, *Going public*):
+
+0. **Re-read the README against what shipped.** Fill its marked spots (`<!-- fill at v0.1: … -->` —
+   the file per OS, minimum OS versions, bundled libraries, signing, the graphics-card requirement;
+   `CONTRIBUTING.md`'s Windows build steps); check every feature claim per OS (as of 2026-11-16:
+   printing on Windows is to a PDF only, tethering on Windows unproven); add plugins if M11.5 shipped
+   them; measure the test count again.
+1. **Rewrite the history once**, as the very last step, with `git-filter-repo`: the Immich server's
+   hostname → `immich.example`, the home path → `~`, the author's email → his GitHub no-reply
+   address. The replacement expressions file lives **outside** the repository and is never committed.
+2. **Remap the ~31 commit hashes** the docs quote, from filter-repo's old → new commit map.
+3. **Push to a newly created GitHub repository** rather than force-pushing the old one (verify against
+   GitHub's own guidance whether old commits stay reachable after a force-push). Every machine
+   re-clones afterwards.
+4. **Turn on Discussions** (categories Q&A and Ideas — the forms in `.github/` expect them), file the
+   starter issues (small, labelled — drafted at this step), and check the README's badges, the forms'
+   contact links and the Releases links resolve. Every link uses `wladiKrin/rustroom`; if the new
+   repository's name differs, replace it.
+
+**Gaps found while writing the README (2026-11-16), for v0.1:**
+- **The About window shows no version** (`modals::about` — one hint line), while the bug-report form
+  asks for one. The form now says "the version you downloaded, or `git log -1`".
+- **Only eight RAW extensions are scanned** (`catalog::RAW_EXTENSIONS`: CR2, CR3, NEF, ARW, RAF, DNG,
+  ORF, RW2), though the bundled LibRaw 0.21.3 knows 1,219 cameras — Pentax PEF, Nikon NRW, Samsung
+  SRW, Leica RWL, Hasselblad 3FR, Phase One IIQ and others never appear in the Library. The README
+  lists the eight honestly.
 
 ## ✅ ~~The whole-pipeline builders default `ProfileRendering` SILENTLY~~ — CLOSED 2026-09-18
 
