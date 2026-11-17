@@ -229,6 +229,30 @@ impl ImageBuf {
         out
     }
 
+    /// [`Self::to_rgba8`] with `f` applied to each pixel first — exactly `map_pixels(f).to_rgba8()`, without the
+    /// second float image between them (82 MB at 3200 × 2136). For the display conversion in `render_engine::pack`
+    /// (2026-11-18), where that image was most of the pass's cost.
+    pub fn to_rgba8_with<F: Fn([f32; 3]) -> [f32; 3] + Sync + Send>(&self, f: F) -> Vec<u8> {
+        let mut out = vec![0u8; self.width * self.height * 4];
+        out.par_chunks_mut(PACK_BLOCK_PX * 4)
+            .zip(self.data.par_chunks(PACK_BLOCK_PX * Self::CHANNELS))
+            .for_each(|(ob, sb)| {
+                for (dst, src) in ob
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(sb.as_chunks::<{ Self::CHANNELS }>().0)
+                {
+                    let c = f(*src);
+                    dst[0] = Self::quantize(c[0]);
+                    dst[1] = Self::quantize(c[1]);
+                    dst[2] = Self::quantize(c[2]);
+                    dst[3] = 255;
+                }
+            });
+        out
+    }
+
     /// The size [`Self::downscale_to`] makes of a `w` × `h` image: unchanged unless its long edge is
     /// over `max_dim`.
     ///
@@ -767,5 +791,25 @@ mod downscaled_dims_tests {
                 "{w}x{h} to {m}"
             );
         }
+    }
+
+    /// The fused display pass is exactly the two-step one it replaces, bit for bit — over more pixels than one block,
+    /// so the block boundaries are crossed.
+    #[test]
+    fn to_rgba8_with_is_map_pixels_then_to_rgba8() {
+        let (w, h) = (131, 71); // 9,301 px: more than one 8,192-px block
+        let mut img = ImageBuf::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                img.set_pixel(
+                    x,
+                    y,
+                    [x as f32 / 130.0, y as f32 / 70.0, 1.2 - x as f32 / 50.0],
+                );
+            }
+        }
+        let f = |c: [f32; 3]| [c[1] * 0.9, c[0].powf(0.8), 1.0 - c[2]];
+        assert_eq!(img.to_rgba8_with(f), img.map_pixels(f).to_rgba8());
+        assert_eq!(img.to_rgba8_with(|c| c), img.to_rgba8());
     }
 }

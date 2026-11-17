@@ -6,3 +6,6 @@ license.workspace = true
 
 [dependencies]
 serde = { workspace = true }
+# The display's own profile (`display`): an ICC profile or EDID primaries sampled through LittleCMS. Already in the
+# build through `export` and `image-decode`.
+lcms2 = { workspace = true }

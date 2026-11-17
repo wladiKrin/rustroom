@@ -5,6 +5,8 @@
 //! display output profiles are needed; see the Phase 1 plan's Scope note.)
 
 pub mod camera;
+pub mod display;
+pub mod edid;
 pub mod gamut;
 pub mod huesatmap;
 pub mod oklab;
@@ -12,6 +14,7 @@ pub mod output_space;
 pub mod robertson;
 pub mod spaces;
 pub mod wb;
+pub use display::{Display, DisplayProfile};
 pub use gamut::{GamutMap, RenderingIntent};
 pub use oklab::{linear_srgb_to_oklab, oklab_to_linear_srgb};
 /// ⚠ The two transfer constants are re-exported so a GPU shader can take them as uniforms rather
