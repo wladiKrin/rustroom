@@ -135,6 +135,27 @@ fn load_any(
         return Some(t);
     }
     load_with(req, resampler, store, looks, extract)
+        .or_else(|| unembedded_thumbnail(req, resampler, looks, decode))
+}
+
+/// A RAW with no embedded preview — an early compact's (a Canon PowerShot Pro70, a Minolta Dimage Z2, a Leica
+/// Digilux 2: libraw answers `NoThumbnail`) — thumbnailed from its half-size decode, as a negative is (v0.1).
+/// `None` for anything else. ⚠ Rendered through the photo's own rendering, or the camera's when it has none
+/// yet: unlike an embedded JPEG this source has not been rendered. Not cached on disk, as for a negative.
+fn unembedded_thumbnail(
+    req: &ThumbRequest,
+    resampler: pipeline::Resampler,
+    looks: Option<(&crate::looks::LookStore, &LookCache)>,
+    decode: &dyn Fn(&std::path::Path) -> Option<core_image::ImageBuf>,
+) -> Option<Thumbnail> {
+    if !catalog::is_raw(&req.id.path) {
+        return None;
+    }
+    let buf = decode(&req.id.path)?.downscale_to(NEGATIVE_EDGE);
+    let mut edits = req.edits.clone();
+    edits.rendering = edits.rendering.or(Some(edit_model::Rendering::Camera));
+    let look = look_for(&edits, looks.map(|l| l.0), looks.map(|l| l.1));
+    Some(render_buf(buf, &edits, resampler, look.as_ref()))
 }
 
 /// The long edge a RAW negative's thumbnail is rendered at.
@@ -634,6 +655,43 @@ mod tests {
 
     /// M10.11a: a RAW whose negative is active is thumbnailed from its raw decode, rendered with its
     /// own rendering — the base was measured on the raw data, not on the camera's JPEG.
+    /// v0.1: a RAW with no embedded preview — measured on a Canon PowerShot Pro70 CRW, a Minolta Dimage Z2
+    /// MRW and a Leica Digilux 2 RAW, where libraw answers `NoThumbnail` — is thumbnailed from its decode. The
+    /// grid used to stay blank for them. A JPEG is never decoded as a RAW.
+    #[test]
+    fn a_raw_without_an_embedded_preview_is_thumbnailed_from_its_decode() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DECODES: AtomicUsize = AtomicUsize::new(0);
+        fn decode(_p: &std::path::Path) -> Option<core_image::ImageBuf> {
+            DECODES.fetch_add(1, Ordering::SeqCst);
+            let mut img = core_image::ImageBuf::new(64, 32);
+            for y in 0..32 {
+                for x in 0..64 {
+                    img.set_pixel(x, y, [x as f32 / 63.0; 3]);
+                }
+            }
+            Some(img)
+        }
+        fn no_preview(_p: &std::path::Path) -> Option<Thumbnail> {
+            None
+        }
+        let req = |file: &str| ThumbRequest {
+            id: crate::photo_id::PhotoId::original(std::path::PathBuf::from(file)),
+            edits: Edits::default(),
+        };
+        DECODES.store(0, Ordering::SeqCst);
+        let r = pipeline::Resampler::default();
+        let got = load_any(&req("/old/a.CRW"), r, None, None, &no_preview, &decode)
+            .expect("a RAW without a preview is thumbnailed from its decode");
+        assert_eq!(DECODES.load(Ordering::SeqCst), 1);
+        assert!(got.width > 0 && got.height > 0);
+        assert!(
+            load_any(&req("/old/b.jpg"), r, None, None, &no_preview, &decode).is_none(),
+            "a JPEG without a thumbnail is not decoded as a RAW"
+        );
+        assert_eq!(DECODES.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn a_raw_negative_is_thumbnailed_from_its_decode() {
         use std::sync::atomic::{AtomicUsize, Ordering};

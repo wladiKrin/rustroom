@@ -193,6 +193,35 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-17 — M11.4 `v0.1` piece 1 merged: the version in About and 17 more RAW formats (branch `v0.1-gaps`)
+
+✅ **Merged 2026-11-17, confirmed by the author ("works, merge").** Spec `docs/superpowers/specs/2026-11-17-v0.1-gaps-design.md`,
+plan `docs/superpowers/plans/2026-11-17-v0.1-gaps.md`. Gate on the tip: fmt, clippy, **4,742** tests green (`--no-fail-fast`).
+`v0.1` is four pieces in this order (the author): (1) this; (2) Windows; (3) packaging; (4) signing and stores.
+
+- **What shipped:** About shows "Version 0.1.0 (commit)" (`rustroom_app::about`, `crates/app/build.rs`); 17 more RAW
+  extensions — the formats the bundled LibRaw 0.21.3 decodes as `rsraw-sys` builds it; Sigma X3F and GoPro GPR out
+  (`USE_X3FTOOLS`, `USE_GPRSDK` undefined); the Open dialog reads `catalog::supported_extensions()`.
+- ⚠⚠ **A sample check on the wrong path proves nothing about the right one.** Each new format was opened from a real
+  raw.pixls.us sample (CC0, not committed) — through `rustroom-cli decode`, i.e. `DecodeOptions::display()`, where libraw
+  converts the colour. The app decodes camera-native (`preview()`), and the author found at once that the Canon
+  PowerShot Pro70 (CMYG) failed "expected 3 colors" — so did the Sony DSC-F828 (RGBE). **Fixed:** a four-colour sensor
+  is libraw's to convert (`backend_rsraw::native_output`); merges refuse it (`decode_camera`). Test with
+  `RAW_FIXTURE_4COLOR`.
+- **The author also found** three RAWs with no grid thumbnail — the Pro70 CRW, a Leica Digilux 2 RAW and a Minolta
+  Dimage Z2 MRW embed none (`NoThumbnail`), and RAW thumbnails had no fallback. **Fixed:**
+  `thumb_loader::unembedded_thumbnail` renders one from the half-size decode, as for a negative.
+- **The final review found** (all fixed): `build.rs` watched a branch's loose ref file, which `git gc` deletes —
+  cargo then recompiled the whole `app` crate on EVERY build (now `HEAD`, the `refs/heads` directory and `packed-refs`,
+  verified in a throwaway repo after `git pack-refs --all`); a source archive built inside another repository reported
+  that repository's commit (now only when git's toplevel is this workspace); a non-camera `.raw` was read whole into
+  memory by every reader (now admitted only with the `IIU\0` header, `catalog::is_supported_file`); the About line moved
+  to the caption style (`docs/DESIGN.md` §8).
+- **Deferred minors:** the card-import survey and the face pass have no decode fallback for a RAW without a preview; a
+  missing capture date reads 1970-01-01 (`capture_of`, pre-existing — an import would file such a photo under 1970/);
+  a stale comment in `immich_source.rs` and an eight-extension list in a `format_filter` test; the bug form's
+  placeholder omits the commit.
+
 ### 2026-11-16 — Found in use: a refused album step read "Published 0" and named a guessed permission (branch `fix-publish-album-refusal`)
 
 - **What the author saw:** publishing 75 photos to his own Immich album "analog" — every photo uploaded, yet the

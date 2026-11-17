@@ -2003,13 +2003,12 @@ The repository goes public once **all** of Phase 11 is done. The steps, from the
    contact links and the Releases links resolve. Every link uses `wladiKrin/rustroom`; if the new
    repository's name differs, replace it.
 
-**Gaps found while writing the README (2026-11-16), for v0.1:**
-- **The About window shows no version** (`modals::about` — one hint line), while the bug-report form
-  asks for one. The form now says "the version you downloaded, or `git log -1`".
-- **Only eight RAW extensions are scanned** (`catalog::RAW_EXTENSIONS`: CR2, CR3, NEF, ARW, RAF, DNG,
-  ORF, RW2), though the bundled LibRaw 0.21.3 knows 1,219 cameras — Pentax PEF, Nikon NRW, Samsung
-  SRW, Leica RWL, Hasselblad 3FR, Phase One IIQ and others never appear in the Library. The README
-  lists the eight honestly.
+**Gaps found while writing the README (2026-11-16), for v0.1 — ✅ both closed 2026-11-17 (`v0.1-gaps`):**
+- ✅ **The About window shows the version** — "Version 0.1.0 (commit)" for a git build (`rustroom_app::about`,
+  the commit from `crates/app/build.rs`); the bug form asks for it.
+- ✅ **25 RAW extensions are scanned** — the 17 more the bundled LibRaw decodes, each opened from a real
+  raw.pixls.us sample (CC0, not committed); Sigma X3F and GoPro GPR stay out (their SDK flags are off in
+  `rsraw-sys`'s build). The Open dialog reads `catalog::supported_extensions()`.
 
 ## ✅ ~~The whole-pipeline builders default `ProfileRendering` SILENTLY~~ — CLOSED 2026-09-18
 

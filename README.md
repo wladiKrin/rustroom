@@ -156,9 +156,11 @@ Get Rustroom for your system from the
 
 <!-- fill at v0.1: the graphics card requirement -->
 
-**Cameras.** Raw files from Canon (CR2, CR3), Nikon (NEF), Sony (ARW), Fujifilm (RAF), OM System and
-Olympus (ORF) and Panasonic (RW2), and any DNG — decoded by [LibRaw](https://www.libraw.org), which
-knows over 1,200 camera models. JPEG, PNG, TIFF and HEIC/HEIF photos open too.
+**Cameras.** Raw files from Canon (CR2, CR3, CRW), Nikon (NEF, NRW), Sony (ARW, SR2, SRF), Fujifilm (RAF),
+OM System and Olympus (ORF), Panasonic (RW2, RAW), Pentax (PEF), Leica (RWL, RAW), Samsung (SRW), Hasselblad
+(3FR, FFF), Phase One (IIQ), Leaf (MOS), Mamiya (MEF), Minolta (MRW), Kodak (KDC, DCR) and Epson (ERF), and
+any DNG — decoded by [LibRaw](https://www.libraw.org), which knows over 1,200 camera models. Sigma's X3F
+and GoPro's GPR are not supported. JPEG, PNG, TIFF and HEIC/HEIF photos open too.
 
 To build Rustroom yourself, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 

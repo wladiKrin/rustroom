@@ -709,4 +709,28 @@ mod tests {
             "max clamped per-channel difference {max} exceeds the tolerance — the matrix is wrong"
         );
     }
+
+    /// v0.1 adds `.raw`, which other software uses too: a file that is not a camera's is an error, never a panic.
+    #[test]
+    fn a_file_that_is_not_a_raw_is_an_error_not_a_panic() {
+        let d = test_dir::TempDir::new("raw-junk");
+        let p = d.path().join("notes.raw");
+        std::fs::write(&p, b"not a camera file").unwrap();
+        assert!(decode_raw(&p, &DecodeOptions::default()).is_err());
+    }
+
+    /// v0.1: a four-colour sensor (a CMYG Canon PowerShot Pro70, an RGBE Sony DSC-F828) has no 3×3 camera
+    /// matrix, so the editing decode lets libraw convert it — it used to fail with "expected 3 colors". Set
+    /// `RAW_FIXTURE_4COLOR=/abs/path` to one such file to run it (camera files are not committed).
+    #[test]
+    fn a_four_colour_sensor_decodes_for_editing() {
+        let Ok(path) = std::env::var("RAW_FIXTURE_4COLOR") else {
+            eprintln!("skipping: set RAW_FIXTURE_4COLOR=/abs/path.crw to run this test");
+            return;
+        };
+        let d = decode_raw(Path::new(&path), &DecodeOptions::preview());
+        assert!(d.is_ok(), "{:?}", d.err());
+        let d = d.unwrap();
+        assert!(d.image.width() > 0 && d.image.height() > 0);
+    }
 }
