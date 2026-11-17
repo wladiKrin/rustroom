@@ -193,6 +193,46 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-18 — The display's own colours on Windows and Linux (branch `display-colour`)
+
+⏳ **Waiting on the author's look.** Gate on the code's tip (`08892f67`, Windows, `-j 2`): fmt, clippy, **4,765** passed,
+0 failed, 32 ignored. Spec `docs/superpowers/specs/2026-11-18-display-colour-design.md`, plan
+`docs/superpowers/plans/2026-11-18-display-colour.md`. The author asked for it and left the decisions to the builder
+("plan, spec and execute it yourself"); they are recorded in the spec with their reasons. Cut from
+`v0.1-packaging-windows` (piece 3a, waiting on the author), whose static runtime this machine now builds with.
+
+- **What was wrong:** on Windows and Linux nothing colour-matches the window, so sRGB drove the panel's native primaries.
+  The author's Gigabyte **M27Q** (EDID, captured): green at (0.209, 0.714) — beyond sRGB's (0.300, 0.600) and P3's;
+  Windows assigns it only the generic sRGB profile, and its Advanced Color is supported but OFF (`activeColorMode` SDR).
+  None of the manual setting's three spaces is that monitor.
+- **The profile** (`color::display`): an ICC profile, or EDID primaries + white, through LittleCMS into a table —
+  **33³, measured against LittleCMS itself: 17 → 0.56, 33 → 0.28, 65 → 0.07 8-bit steps at worst**. A P3 ICC through
+  the table agrees with the P3 matrix within one step; sRGB's primaries are the identity. ⚠ **An EDID profile keeps
+  sRGB's tone curve**: the EDID's one rounded gamma cannot say whether the panel follows sRGB's curve or a power, and
+  acting on it would move every shadow — only the primaries are corrected. Profiles are INTERNED (one per source), so
+  `color::Display` stays `Copy` like the `OutputSpace` it replaced on the display path.
+- **Detection** (`rustroom_app::display_detect`): the platform layer gathers facts, ONE pure `decide` chooses — the OS
+  matching colour → sRGB · an assigned profile → it · an EDID neither sRGB-flagged nor within 0.005 of sRGB → its
+  primaries · else sRGB. Windows by hand-declared FFI (the window's monitor → its device interface → its EDID in the
+  registry; Advanced Color's `activeColorMode`; `GetICMProfileW`, the generic sRGB profile counting as none); Linux the
+  connected outputs in `/sys/class/drm` (several that differ → sRGB). Re-gathered every 2 s (`display_flow`);
+  Settings → Display gains **Automatic** (the default) with a caption of what it found; a file that chose P3 or Adobe
+  RGB by hand keeps it (`parse_settings`).
+- **Found on the way:** the rendered-preview loader was never rebuilt on a display change, so a changed manual setting
+  reached rendered previews only after a restart — `apply_display` rebuilds it now.
+- **The cost, measured** (`display_pack_cost`, release, 3200 × 2136): sRGB 4.6–4.9 ms; today's P3 matrix 50.9–54.7 ms;
+  the M27Q table **46.1 → 19.7 ms** with the fused `ImageBuf::to_rgba8_with` (the 82 MB second float image was most of
+  it) → 19.4 with the corners fetched once (no real gain; kept for clarity). Plus the GPU fast paths any non-sRGB
+  display turns off (~5–7 ms, M8.3g). A GPU display transform that keeps them is the follow-up.
+- **By use** (`display_probe` on this machine): the EDID read through the registry, "M27Q's own colours"; sRGB red,
+  green and blue are driven as (0.857, 0.131, 0.064), (0.572, 0.986, 0.237), (0.084, 0.130, 0.977).
+- **Caught while building, each before it shipped:** an invented bound (green < 0.95) where the measurement is 0.986 —
+  rewritten around the measured value; an edit that put `parse_settings` between `keys_of` and its doc comment —
+  moved, and `git diff | grep '^-.*///'` is empty; the frame's pump read the REAL monitor inside tests — the gathering
+  is injected now (`display_gather`), empty in the test app.
+- ⚠ **Unverified:** Linux (its branch compiles only there — CI and the author's Arch), Windows' Auto Color Management
+  switched on and followed, two monitors.
+
 ### 2026-11-17 — M11.4 `v0.1` piece 3a: the icon, the Windows installer, the release workflow (branch `v0.1-packaging-windows`)
 
 ⏳ **Waiting on the author's try of the installer.** Gate on the code's tip (`e917dfc7`, on Windows): fmt, clippy,

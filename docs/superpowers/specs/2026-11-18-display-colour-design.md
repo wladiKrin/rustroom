@@ -27,9 +27,13 @@ three fixed spaces (sRGB, Display P3, Adobe RGB) — none of which is any real m
 ## What
 
 1. **A display profile, built with LittleCMS** (`color::display`, no GUI): from an ICC profile's bytes, or from EDID
-   primaries + white + gamma (`cmsCreateRGBProfile`); sampled once into a 3-D table from sRGB-encoded values to the
+   primaries + white (`cmsCreateRGBProfile`); sampled once into a 3-D table from sRGB-encoded values to the
    display's encoded values (relative colorimetric), applied by trilinear lookup. Its size is chosen by measuring it
    against LittleCMS's own transform, not guessed.
+   - ⚠ **An EDID profile keeps sRGB's tone curve**, not the EDID's gamma: that is one rounded number (2.2 here) which
+     cannot say whether the panel follows sRGB's curve or a pure power, and acting on it would move every shadow —
+     which is not what is wrong. Only the primaries are corrected; an EDID with sRGB's primaries is the identity. An
+     assigned ICC profile is used whole, its curves included.
 2. **`color::Display`** replaces `OutputSpace` on the display path only (session, frame request, `pack`, thumbnails,
    previews): a fixed space (today's three, unchanged) or a profile. `is_srgb()` keeps every fast-path gate exact.
    Exports, proofing and `OutputSpace` itself are untouched.
