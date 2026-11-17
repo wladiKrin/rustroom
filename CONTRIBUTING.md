@@ -53,7 +53,31 @@ sudo pacman -S base-devel clang lcms2 libheif libgphoto2 pkgconf
 cargo run --release -p app
 ```
 
-**Windows:** <!-- fill at M11.2: the Windows build steps -->
+**Windows** (in PowerShell, with [winget](https://learn.microsoft.com/windows/package-manager/winget/)):
+
+```powershell
+winget install Rustlang.Rustup LLVM.LLVM Kitware.CMake
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+git clone https://github.com/microsoft/vcpkg "$env:USERPROFILE\vcpkg"
+& "$env:USERPROFILE\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+& "$env:USERPROFILE\vcpkg\vcpkg.exe" install "libheif[core,libde265]:x64-windows-static-md"
+[Environment]::SetEnvironmentVariable("VCPKG_ROOT", "$env:USERPROFILE\vcpkg", "User")
+```
+
+Then, in a new terminal (so it sees `cargo` and `VCPKG_ROOT`), `cargo run --release -p app`.
+
+- **libheif comes from vcpkg** — on Windows the build reads it nowhere else. `[core,libde265]` is the HEIC
+  *decoder* only, and the triplet links it statically, so the app needs no DLL beside it. LittleCMS needs nothing:
+  its crate compiles a bundled copy. LibRaw is compiled in, as everywhere, from `vendor/rsraw-sys` (patched for
+  MSVC — see its `VENDORED.md`). LLVM is for bindgen, which finds it without `LIBCLANG_PATH`.
+- **Tethered capture is not available on Windows** (libgphoto2 has no Windows build here), and **printing
+  saves a PDF** — there is no CUPS.
+- **Rustroom is a GUI program on Windows** — no console window. Its debug output (`RUSTROOM_DEBUG_*`) reaches
+  the terminal `cargo run` was started from, or a file with `cargo run --release -p app 2> render.log`; a
+  shell's `Rustroom.exe > log` captures nothing.
+- ⚠ **A build that dies with `LNK1102`, `os error 1455` ("the paging file is too small") or `STATUS_STACK_BUFFER_OVERRUN`
+  is out of memory**, not broken code: a machine with no page file can commit only its RAM. Turn on a
+  system-managed page file, or build with fewer jobs (`$env:CARGO_BUILD_JOBS = "4"`).
 
 **Always use `--release` for real use.** RAW decoding, previews and thumbnails are many times faster
 than in a debug build.
@@ -100,6 +124,9 @@ cargo fmt --all -- --check
 CARGO_TARGET_DIR=target/clippy cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
+
+In PowerShell the clippy line is `$env:CARGO_TARGET_DIR = "target/clippy"; cargo clippy --workspace --all-targets -- -D warnings`
+(and `Remove-Item Env:CARGO_TARGET_DIR` before the tests).
 
 - **Run one test or a group by name**, never by package: `cargo test --workspace tone_curve`.
   Switching between `--workspace` and `-p <crate>` rebuilds everything each time.

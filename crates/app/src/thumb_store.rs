@@ -207,16 +207,9 @@ impl ThumbStore {
         }
     }
 
-    /// `<platform config dir>/rustroom/thumbs/`.
-    ///
-    /// ⚠ That is **not** `~/.config` everywhere — `dirs::config_dir()` follows each platform's own
-    /// convention: `~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` on Linux,
-    /// `%APPDATA%` on Windows. Falls back to a relative path, which keeps this infallible.
+    /// `thumbs/` beside the catalog, in `catalog::db::Catalog::library_dir` — Local AppData on Windows.
     fn user_dir() -> PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("rustroom")
-            .join("thumbs")
+        catalog::db::Catalog::library_dir().join("thumbs")
     }
 
     /// The local thumbnail cache.

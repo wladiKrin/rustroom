@@ -22,6 +22,7 @@ members = [
     "crates/tether",
     "crates/xmp",
 ]
+exclude = ["vendor"]
 
 [workspace.package]
 edition = "2021"
@@ -63,3 +64,8 @@ pollster = "0.4"
 bytemuck = "1"
 quick-xml = "0.41"
 ureq = "3"
+
+# ⚠ v0.1 (Windows): the published rsraw-sys 0.1.1 refuses MSVC; the vendored copy is that release plus
+# the patch in vendor/rsraw-sys/VENDORED.md, and behaves the same on macOS and Linux.
+[patch.crates-io]
+rsraw-sys = { path = "vendor/rsraw-sys" }

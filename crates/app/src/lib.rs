@@ -23,6 +23,7 @@ pub mod color_readout;
 pub mod command_help;
 pub mod compare_pair;
 pub mod composition_guides;
+pub mod console;
 pub mod contour;
 pub mod crop_tool;
 pub mod date_tree;

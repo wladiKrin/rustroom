@@ -37,7 +37,10 @@ impl RustroomApp {
         if self.settings.immich_enabled
             && self.settings_store.key_home() == rustroom_app::secrets::KeyHome::Unreadable
         {
-            self.status = "Couldn’t read your Immich keys from the keychain — they are still there; restart Rustroom and allow access".to_string();
+            self.status = format!(
+                "Couldn’t read your Immich keys from {} — they are still there; restart Rustroom and allow access",
+                rustroom_app::secrets::STORE
+            );
         }
     }
 

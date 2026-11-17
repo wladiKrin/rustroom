@@ -224,7 +224,7 @@ pub fn cell_menu(
         }
     }
     if ui
-        .add_enabled(single, egui::Button::new("Show in Finder"))
+        .add_enabled(single, egui::Button::new(rustroom_app::reveal::SHOW_LABEL))
         .on_disabled_hover_text("One photo at a time")
         .clicked()
     {

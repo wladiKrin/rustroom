@@ -1,0 +1,7 @@
+# ⚠ v0.1 (Windows): every checkout gets LF, whatever `core.autocrlf` says — Git for Windows installs with
+# `autocrlf=true`, which checked 1,297 files out as CRLF on the first Windows machine. Nothing is committed with CRLF;
+# a fixture or a pinned digest must read the same bytes on every system. Binary files are detected as before.
+* text=auto eol=lf
+# A vendored crate is kept byte for byte as published (LibRaw ships some CRLF sources), so its diff against the
+# release is its patch and nothing else — see vendor/rsraw-sys/VENDORED.md.
+vendor/** -text

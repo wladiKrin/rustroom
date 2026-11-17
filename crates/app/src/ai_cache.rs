@@ -13,9 +13,10 @@ pub fn dir() -> Option<PathBuf> {
 }
 
 /// Where downloaded models live — data, not cache: 45–225 MB each is not something to re-fetch
-/// because a cache was cleared.
+/// because a cache was cleared. ⚠ v0.1: the LOCAL data dir — `%LOCALAPPDATA%` on Windows, not the Roaming
+/// profile; the same folder as `data_dir()` on macOS and Linux.
 pub fn models_dir() -> Option<PathBuf> {
-    Some(dirs::data_dir()?.join("rustroom").join("models"))
+    Some(dirs::data_local_dir()?.join("rustroom").join("models"))
 }
 
 /// The cache key of `query` answered by `model` on `photo`.

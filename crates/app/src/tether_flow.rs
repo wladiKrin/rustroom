@@ -54,20 +54,29 @@ pub(crate) struct TetherState {
     pub(crate) run: Option<TetherRun>,
 }
 
-/// The first camera on the ports — `None` in a build without camera support.
+/// Why this build cannot tether — said in the dialog. ⚠ v0.1: Windows has no libgphoto2, so there the camera
+/// feature is a no-op (`tether`'s manifest) and the menu item stays, saying so.
+#[cfg(not(all(feature = "camera", not(windows))))]
+const NO_CAMERA: &str = if cfg!(windows) {
+    "Tethered capture is not available on Windows"
+} else {
+    "This build of Rustroom has no camera support"
+};
+
+/// The first camera on the ports — `None` when none is connected.
 fn detect() -> Result<Option<String>, String> {
-    #[cfg(feature = "camera")]
+    #[cfg(all(feature = "camera", not(windows)))]
     return tether::gphoto::detect();
-    #[cfg(not(feature = "camera"))]
-    Err("This build of Rustroom has no camera support".into())
+    #[cfg(not(all(feature = "camera", not(windows))))]
+    Err(NO_CAMERA.into())
 }
 
 /// Opens the first camera, on the session's thread.
 fn real_opener() -> Opener {
-    #[cfg(feature = "camera")]
+    #[cfg(all(feature = "camera", not(windows)))]
     return tether::gphoto::opener();
-    #[cfg(not(feature = "camera"))]
-    Box::new(|| Err("This build of Rustroom has no camera support".into()))
+    #[cfg(not(all(feature = "camera", not(windows))))]
+    Box::new(|| Err(NO_CAMERA.into()))
 }
 
 impl RustroomApp {
@@ -514,5 +523,15 @@ mod tests {
         let mut app = crate::test_app::for_test();
         app.shoot_tether();
         assert_eq!(app.status, "No tethered session is running");
+    }
+
+    /// v0.1: Windows has no libgphoto2 — with the camera feature on (the default), the dialog says so, never "no
+    /// camera support" nor a search that finds nothing.
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_tethering_says_it_is_not_available() {
+        let windows = Some("Tethered capture is not available on Windows".to_string());
+        assert_eq!(detect().err(), windows);
+        assert_eq!(real_opener()().err(), windows);
     }
 }

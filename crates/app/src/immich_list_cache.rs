@@ -384,10 +384,16 @@ mod tests {
         assert_eq!(got[0].id, "two");
     }
 
-    /// ⚠ An unwritable directory makes `store` a no-op, not a panic.
+    /// ⚠ An unwritable directory makes `store` a no-op, not a panic. ⚠ The directory is impossible because a FILE
+    /// stands where its parent should be — never an absolute path, which tests the host: on Windows
+    /// `/nonexistent-root-rustroom` is `C:\nonexistent-root-rustroom`, which a user may create (v0.1).
     #[test]
     fn storing_into_an_impossible_directory_does_nothing() {
-        let dir = Path::new("/nonexistent-root-rustroom/lists");
+        let root = temp_dir("impossible");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("a-file");
+        std::fs::write(&file, b"not a directory").unwrap();
+        let dir = &file.join("lists");
         store(
             dir,
             &Key::Album("abc".into()),

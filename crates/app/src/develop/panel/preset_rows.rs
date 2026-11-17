@@ -319,7 +319,7 @@ fn preset_row(
             act = Some(me(Act::Export));
             ui.close();
         }
-        if ui.button("Show in Finder").clicked() {
+        if ui.button(rustroom_app::reveal::SHOW_LABEL).clicked() {
             act = Some(me(Act::Reveal));
             ui.close();
         }
@@ -513,7 +513,7 @@ mod tests {
                 // egui marks a submenu with its own arrow.
                 "Move to ⏵",
                 "Export…",
-                "Show in Finder",
+                rustroom_app::reveal::SHOW_LABEL,
                 "Delete",
             ],
         );

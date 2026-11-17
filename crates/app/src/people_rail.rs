@@ -32,8 +32,11 @@ pub(crate) fn body(app: &mut RustroomApp, ui: &mut egui::Ui) -> Option<(PersonRo
                 meta: if p.immich_id.is_some() { "Immich" } else { "" },
                 selected,
                 indent: 0.0,
-                hover:
-                    "Shows this person's photos, or with ⌘ held narrows the current view to them",
+                hover: if cfg!(target_os = "macos") {
+                    "Shows this person's photos, or with ⌘ held narrows the current view to them"
+                } else {
+                    "Shows this person's photos, or with Ctrl held narrows the current view to them"
+                },
                 actions: &[],
             },
         );

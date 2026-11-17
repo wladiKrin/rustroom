@@ -228,7 +228,8 @@ impl StackDrag {
     pub fn label(self) -> &'static str {
         match self {
             StackDrag::Drag => "drag a photo",
-            StackDrag::AltDrag => "⌥ + drag a photo",
+            StackDrag::AltDrag if cfg!(target_os = "macos") => "⌥ + drag a photo",
+            StackDrag::AltDrag => "Alt + drag a photo",
         }
     }
 

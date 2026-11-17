@@ -15,7 +15,8 @@
 /// name would fix it at the cost of a directory nobody can read by hand, which is most of
 /// the point of one file per preset.
 pub fn sanitize(name: &str) -> String {
-    name.chars()
+    let out = name
+        .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == ' ' || c == '_' || c == '-' {
                 c
@@ -25,7 +26,30 @@ pub fn sanitize(name: &str) -> String {
         })
         .collect::<String>()
         .trim()
-        .to_string()
+        .to_string();
+    not_a_device(out)
+}
+
+/// `name` with a `_` after its stem when the stem is one of Windows' device names — `CON`, `PRN`, `AUX`, `NUL`,
+/// `COM0`–`COM9`, `LPT0`–`LPT9` (and `¹²³`), any case — which Windows refuses as a file or folder name with any
+/// extension (`nul.json`). On every system (v0.1), so one name always means one file.
+fn not_a_device(name: String) -> String {
+    let stem_len = name.find('.').unwrap_or(name.len());
+    let mut chars = name[..stem_len].chars();
+    let head = chars
+        .by_ref()
+        .take(3)
+        .collect::<String>()
+        .to_ascii_uppercase();
+    let rest: Vec<char> = chars.collect();
+    let device = (matches!(head.as_str(), "CON" | "PRN" | "AUX" | "NUL") && rest.is_empty())
+        || (matches!(head.as_str(), "COM" | "LPT")
+            && matches!(rest.as_slice(), [c] if c.is_ascii_digit() || matches!(c, '¹' | '²' | '³')));
+    if device {
+        format!("{}_{}", &name[..stem_len], &name[stem_len..])
+    } else {
+        name
+    }
 }
 
 /// Map `name` to a single folder name that cannot escape its parent — the import's subfolder.
@@ -33,12 +57,13 @@ pub fn sanitize(name: &str) -> String {
 /// ⚠ Gentler than [`sanitize`] on purpose, and beside it so the two guards are read together: a
 /// folder the user sees every day may be called "Köln 2026", which `sanitize` would turn into
 /// `K_ln 2026`. What makes a name *escape* is a separator, a drive colon, a control character, or
-/// being `.`/`..` — those are what this removes. Empty means "no subfolder".
+/// being `.`/`..` — those are what this removes. Empty means "no subfolder". ⚠ v0.1: also what Windows
+/// refuses in a name — `< > " | ? *` and its device names ([`not_a_device`]) — on every system.
 pub fn folder_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| {
-            if matches!(c, '/' | '\\' | ':') || c.is_control() {
+            if matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*') || c.is_control() {
                 '_'
             } else {
                 c
@@ -49,7 +74,7 @@ pub fn folder_name(name: &str) -> String {
     if t.chars().all(|c| c == '.') {
         String::new()
     } else {
-        t.to_string()
+        not_a_device(t.to_string())
     }
 }
 
@@ -120,6 +145,29 @@ mod tests {
                     && !n.contains('\\'),
                 "{hostile:?} → {n:?} is more than one component"
             );
+        }
+    }
+
+    /// v0.1: what Windows refuses in a name — `< > " | ? *` in a folder, and its device names in either guard,
+    /// with or without an extension.
+    #[test]
+    fn names_windows_refuses_are_made_safe() {
+        assert_eq!(
+            folder_name("What? <Best> \"of\" a|b*"),
+            "What_ _Best_ _of_ a_b_"
+        );
+        for device in ["CON", "con", "Nul", "AUX", "PRN", "COM1", "lpt9", "COM¹"] {
+            assert_eq!(folder_name(device), format!("{device}_"), "{device}");
+        }
+        assert_eq!(folder_name("nul.backup"), "nul_.backup");
+        assert_eq!(sanitize("CON"), "CON_");
+        assert_eq!(sanitize("com3"), "com3_");
+        // Near misses are names, not devices — the positive control.
+        for name in [
+            "CONSOLE", "Connie", "COM", "COM10", "LPT", "nullable", "aux2", "Con trip",
+        ] {
+            assert_eq!(folder_name(name), name, "{name}");
+            assert_eq!(sanitize(name), name, "{name}");
         }
     }
 }

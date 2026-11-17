@@ -40,7 +40,7 @@ and a pointer, not deleted.
 | **M10.17** merge | P-24 — HDR (a, ✅ merged 2026-10-27, confirmed by use); panorama (b, ✅ merged 2026-10-28, confirmed by use) |
 | **M10.18** new modules | P-25 (brought in by the author) — tethering (a, ✅ merged 2026-10-29, confirmed by use with the X-T4: "works"); GPS and a map (b, ✅ merged 2026-10-28, confirmed by use: "works"); people tagging (c, ✅ merged 2026-10-29, confirmed by use: "works"); publish services (d, ✅ merged 2026-11-03, confirmed by use: "okay that works"); print (e, ✅ merged 2026-11-04, Save PDF confirmed by use — a printer unseen) |
 | **M10.19** found in use | HEIC/HEIF support (a, new 2026-10-01 — never an entry here; ✅ merged 2026-11-11, confirmed by use — a container-rotated real file unseen); *Move to folder left one thing out* (b, ✅ merged 2026-11-11, confirmed by use); marking several folders and forgetting them from a right-click menu (c, ✅ 2026-10-12 — found in use and built the same day at the author's request); **the Retouch panel as two tasks, Paint · Find** (d, new 2026-10-22 — the author, after c3: too many buttons in one place, patches and removals kept apart, drawing to look again invisible; his pick, option B of `https://claude.ai/artifact/7ACHJJ2zFpWPJ3WspdRYcC`; ✅ merged 2026-10-22, confirmed by use) |
-| **M11.2** Windows & Linux | *The in-window menu bar has never been run*; *Multi-monitor on Linux and Windows*; P-28 |
+| **M11.2** Windows & Linux | *The in-window menu bar has never been run*; *Multi-monitor on Linux and Windows*; P-28 — ✅ Windows: builds, gate green, runs (`v0.1` piece 2, merged 2026-11-17, confirmed by the author) |
 | **M11.3** / **M11.5** | *Contributor-facing documentation* (✅ merged 2026-11-16) / *A plugin system* |
 | **Going public** (after M11.5) | *Going public* (recorded 2026-11-16 by M11.3) |
 
@@ -181,7 +181,8 @@ reviews measured so the deletion loses nothing. Ids are the professional review'
   sizing **M10.10b** ✅, Grain **M10.11b** ✅ (all merged 2026-10-02 – 10-12); content-aware remove **M10.16c** complete (c1 the Remove brush ✅ merged 2026-10-19, c2 Remove dust ✅ 2026-10-21, c3 Find people ✅ 2026-10-22; c4 Reflections ⛔ declined on a spike 2026-10-22). As recorded: text-only watermark; rename one photo at a time (the import
   template exists); export resizes by pixel long edge only (no cm/in, PPI or file-size target); no
   content-aware remove; no Grain slider.
-- **P-28 · Cross-platform is a promise so far** — the GUI has only run on this Mac; **M11.2** (was M10.2).
+- **P-28 · Cross-platform is a promise so far** — the GUI has run on the Mac, on Linux (Arch/X11, 2026-10-27) and
+  on Windows (2026-11-17, `v0.1` piece 2); Wayland and multi-monitor unchecked; **M11.2** (was M10.2).
 - **P-29 / P-30 · Decisions, recorded not disputed:** the tool panel is exclusive (Masks hides the
   global sliders; tried the other way and reversed 2026-08-24), and the panel groups follow the edit
   groups rather than Lightroom's Basic panel (consistent with Sync and Paste, the stated reason).

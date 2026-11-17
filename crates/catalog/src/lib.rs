@@ -500,12 +500,31 @@ mod tests {
         }
         #[cfg(unix)]
         std::os::unix::fs::symlink(&root, root.join("a/loop")).unwrap();
+        // v0.1: Windows' own loop — a directory junction, which needs no administrator (a symlink does).
+        #[cfg(windows)]
+        assert!(std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(root.join("a").join("loop"))
+            .arg(&root)
+            .output()
+            .unwrap()
+            .status
+            .success());
 
         let tree = scan_tree(&root).unwrap();
         let _ = std::fs::remove_dir_all(&root);
+        // Components joined by `/`, so one expectation reads the same on every system.
         let folders: Vec<String> = tree
             .iter()
-            .map(|(d, e)| format!("{}:{}", d.strip_prefix(&root).unwrap().display(), e.len()))
+            .map(|(d, e)| {
+                let rel: Vec<String> = d
+                    .strip_prefix(&root)
+                    .unwrap()
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect();
+                format!("{}:{}", rel.join("/"), e.len())
+            })
             .collect();
         assert_eq!(folders, vec![":1", "a:1", "a/b:1"], "{folders:?}");
     }
