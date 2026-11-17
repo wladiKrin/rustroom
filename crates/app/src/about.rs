@@ -32,16 +32,30 @@ mod tests {
         assert_eq!(version_line("0.1.0", ""), "Version 0.1.0");
     }
 
-    /// The build script really delivers the commit: in a git checkout (CI's included) it is never `unknown`. A
-    /// build from a source archive has no `.git`, and skips the check.
+    /// The build script really delivers the commit: whenever git itself can see this checkout as its own (CI's
+    /// included) it is never `unknown`. Where it cannot — a source archive, no `git`, a container's "dubious
+    /// ownership" — the build script cannot either, and this skips (the review's point: it used to test the host).
     #[test]
     fn a_checkout_build_knows_its_commit() {
-        let git = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.git");
-        if git.exists() {
-            let c = option_env!("RUSTROOM_COMMIT").unwrap_or("unknown");
-            assert!(c != "unknown" && c.len() >= 7, "{c}");
-            assert!(current().ends_with(&format!("({c})")), "{}", current());
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let top = std::process::Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .current_dir(manifest)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok());
+        let ours = top.is_some_and(|t| {
+            std::fs::canonicalize(t.trim()).ok()
+                == std::fs::canonicalize(manifest.join("../..")).ok()
+        });
+        if !ours {
+            eprintln!("skipping: git does not see this checkout");
+            return;
         }
+        let c = option_env!("RUSTROOM_COMMIT").unwrap_or("unknown");
+        assert!(c != "unknown" && c.len() >= 7, "{c}");
+        assert!(current().ends_with(&format!("({c})")), "{}", current());
     }
 
     #[test]
