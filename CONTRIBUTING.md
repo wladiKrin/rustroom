@@ -60,14 +60,16 @@ winget install Rustlang.Rustup LLVM.LLVM Kitware.CMake
 winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 git clone https://github.com/microsoft/vcpkg "$env:USERPROFILE\vcpkg"
 & "$env:USERPROFILE\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
-& "$env:USERPROFILE\vcpkg\vcpkg.exe" install "libheif[core,libde265]:x64-windows-static-md"
+& "$env:USERPROFILE\vcpkg\vcpkg.exe" install "libheif[core,libde265]:x64-windows-static"
 [Environment]::SetEnvironmentVariable("VCPKG_ROOT", "$env:USERPROFILE\vcpkg", "User")
 ```
 
 Then, in a new terminal (so it sees `cargo` and `VCPKG_ROOT`), `cargo run --release -p app`.
 
 - **libheif comes from vcpkg** — on Windows the build reads it nowhere else. `[core,libde265]` is the HEIC
-  *decoder* only, and the triplet links it statically, so the app needs no DLL beside it. LittleCMS needs nothing:
+  *decoder* only, and `x64-windows-static` matches the C++ runtime the workspace links into the exe
+  (`.cargo/config.toml`), so the app needs no DLL beside it — not even Microsoft's runtime. ⚠ A `RUSTFLAGS`
+  environment variable replaces that setting, and the build then asks vcpkg for a triplet you did not install. LittleCMS needs nothing:
   its crate compiles a bundled copy. LibRaw is compiled in, as everywhere, from `vendor/rsraw-sys` (patched for
   MSVC — see its `VENDORED.md`). LLVM is for bindgen, which finds it without `LIBCLANG_PATH`.
 - **Tethered capture is not available on Windows** (libgphoto2 has no Windows build here), and **printing
@@ -75,9 +77,17 @@ Then, in a new terminal (so it sees `cargo` and `VCPKG_ROOT`), `cargo run --rele
 - **Rustroom is a GUI program on Windows** — no console window. Its debug output (`RUSTROOM_DEBUG_*`) reaches
   the terminal `cargo run` was started from, or a file with `cargo run --release -p app 2> render.log`; a
   shell's `Rustroom.exe > log` captures nothing.
-- ⚠ **A build that dies with `LNK1102`, `os error 1455` ("the paging file is too small") or `STATUS_STACK_BUFFER_OVERRUN`
+- ⚠ **A build that dies with `LNK1102`, `LNK1201`, `os error 1455` ("the paging file is too small") or `STATUS_STACK_BUFFER_OVERRUN`
   is out of memory**, not broken code: a machine with no page file can commit only its RAM. Turn on a
   system-managed page file, or build with fewer jobs (`$env:CARGO_BUILD_JOBS = "4"`).
+- **The installer** (`target\installer\Rustroom-<version>-windows-x64-setup.exe`) is built by one script, the same
+  one the release workflow runs:
+
+  ```powershell
+  winget install JRSoftware.InnoSetup --scope user
+  cargo install cargo-about --locked --features cli
+  powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
+  ```
 
 **Always use `--release` for real use.** RAW decoding, previews and thumbnails are many times faster
 than in a debug build.

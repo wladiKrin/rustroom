@@ -141,7 +141,8 @@ Only what stays true after a milestone closes belongs here; each story is in `do
   `display_colorspace`) is gated at EVERY reference, its `use` lines included** — one ungated import in
   `bootstrap.rs` kept the app from compiling off macOS for four weeks, invisible to a gate run only on macOS.
   Development now happens on Linux and Windows too; a change to such a module is built on each before it merges.
-- ⚠ Big data lives in `Catalog::library_dir` (`%LOCALAPPDATA%` on Windows, never Roaming); settings in `config_dir()`.
+- ⚠ Big data lives in `Catalog::library_dir` (`%LOCALAPPDATA%` on Windows, never Roaming). A package is built by its
+  `packaging/<os>/` script (the release workflow only calls it); icons come from `rustroom.svg` via `render.py`; ⚠⚠ the installer's `AppId` never changes.
 - ⚠⚠ **A test's directory comes from `test_dir::TempDir` (deleted on drop) or `test_dir::path` (kept,
   swept by the next run)** — unique per test and per run under `rustroom-tests/<pid>/`. A sweep in
   `test-dir` fails on `env::temp_dir()` anywhere else; the export staging directory is the one allowed

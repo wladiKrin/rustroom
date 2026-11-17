@@ -1986,8 +1986,9 @@ The repository goes public once **all** of Phase 11 is done. The steps, from the
 (`docs/superpowers/specs/2026-11-14-m11.3-readme-and-contributor-docs-design.md`, *Going public*):
 
 0. **Re-read the README against what shipped.** Fill its marked spots (`<!-- fill at v0.1: … -->` —
-   the file per OS, minimum OS versions, bundled libraries, signing, the graphics-card requirement;
-   `CONTRIBUTING.md`'s Windows build steps); check every feature claim per OS (as of 2026-11-16:
+   the file per OS, minimum OS versions, bundled libraries, signing, the graphics-card requirement —
+   ✅ Windows' row and CONTRIBUTING's Windows steps filled by `v0.1` pieces 2 and 3a, 2026-11-17; the Mac and Linux
+   rows wait for 3b and 3c); check every feature claim per OS (as of 2026-11-16:
    printing on Windows is to a PDF only, tethering on Windows unproven, printing to a printer never
    seen working — the README offers PDF only until it is); add plugins if M11.5 shipped
    them; measure the test count again.

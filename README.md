@@ -151,8 +151,11 @@ Get Rustroom for your system from the
 | System | Download | Requires |
 |---|---|---|
 | macOS | <!-- fill at v0.1: file and signing --> | <!-- fill at v0.1: minimum macOS version --> |
-| Windows | <!-- fill at v0.1: installer --> | <!-- fill at v0.1: minimum Windows version --> |
+| Windows | `Rustroom-<version>-windows-x64-setup.exe` — installs for you alone, no administrator needed | Windows 10 or 11, 64-bit |
 | Linux | <!-- fill at v0.1: package format --> | <!-- fill at v0.1: distributions, bundled libraries --> |
+
+The Windows installer is not signed yet: Windows says "Windows protected your PC" — choose **More info**, then
+**Run anyway**.
 
 <!-- fill at v0.1: the graphics card requirement -->
 
