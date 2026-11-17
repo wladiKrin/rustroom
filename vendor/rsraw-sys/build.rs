@@ -8,12 +8,14 @@ fn main() {
 
 fn build(out_dir: impl AsRef<Path>) {
     let mut libraw = cc::Build::new();
-    let compiler = libraw.get_compiler();
-    if compiler.is_like_msvc() {
-        panic!("MSVC is not supported");
-    }
+    // Rustroom: LibRaw builds with MSVC (given LIBRAW_NODLL below); the published crate refused it here.
+    let msvc = libraw.get_compiler().is_like_msvc();
 
     libraw.cpp(true);
+    if msvc {
+        // Rustroom: a static library — without this, LibRaw's headers declare every function dllimport on MSVC
+        libraw.define("LIBRAW_NODLL", None);
+    }
     libraw.include("LibRaw/");
 
     libraw.file("LibRaw/src/decoders/canon_600.cpp");
@@ -104,7 +106,9 @@ fn build(out_dir: impl AsRef<Path>) {
     libraw.flag_if_supported("-Wno-format-overflow");
 
     // thread safety
-    libraw.flag("-pthread");
+    if !msvc {
+        libraw.flag("-pthread");
+    }
     libraw.compile("raw");
 
     println!(
@@ -144,6 +148,8 @@ fn bindings(out_dir: impl AsRef<Path>) {
         .size_t_is_usize(true)
         // these are never part of the API
         .blocklist_function("_.*")
+        // Rustroom: the C runtime's own, which Windows' headers declare and rustc warns about
+        .blocklist_function("memcmp|memcpy|memmove|memset|strlen")
         // consts creating duplications
         .blocklist_item("FP_NAN")
         .blocklist_item("FP_INFINITE")
