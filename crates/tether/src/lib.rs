@@ -8,7 +8,7 @@
 
 #[cfg(any(test, feature = "testing"))]
 pub mod fake;
-#[cfg(feature = "gphoto2")]
+#[cfg(all(feature = "gphoto2", not(windows)))]
 pub mod gphoto;
 pub mod hold;
 pub mod name;
