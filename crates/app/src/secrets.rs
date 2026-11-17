@@ -46,22 +46,55 @@ pub enum KeyKind {
     Upload,
 }
 
+/// The credential store as the sentences name it (v0.1) — a macro, so each sentence stays one `&'static str`.
+#[cfg(target_os = "macos")]
+macro_rules! store {
+    () => {
+        "your keychain"
+    };
+}
+#[cfg(windows)]
+macro_rules! store {
+    () => {
+        "Credential Manager"
+    };
+}
+#[cfg(not(any(target_os = "macos", windows)))]
+macro_rules! store {
+    () => {
+        "your keyring"
+    };
+}
+
+/// Where the keys are kept, as a sentence names it — "your keychain" on macOS, "Credential Manager" (Windows' own
+/// name for it) on Windows, "your keyring" on Linux. ⚠ The longest decides the hovers' 110-character limit.
+pub const STORE: &str = store!();
+
 /// The key fields' hover sentence, saying where the key is kept.
 pub fn key_hover(kind: KeyKind, home: KeyHome) -> &'static str {
     match (kind, home) {
-        (KeyKind::Browse, KeyHome::Keychain) => "A read-only Immich API key, kept in your keychain",
+        (KeyKind::Browse, KeyHome::Keychain) => {
+            concat!("A read-only Immich API key, kept in ", store!())
+        }
         (KeyKind::Browse, KeyHome::File) => {
             "A read-only Immich API key, kept in plain text in settings.json"
         }
         (KeyKind::Upload, KeyHome::Keychain) => {
-            "An optional Immich key for Export, Send marks and Publish, kept in your keychain"
+            concat!(
+                "An optional Immich key for Export, Send marks and Publish, kept in ",
+                store!()
+            )
         }
-        (KeyKind::Browse, KeyHome::Unreadable) => {
-            "A read-only Immich API key, in the keychain, which could not be read — restart Rustroom and allow access"
-        }
-        (KeyKind::Upload, KeyHome::Unreadable) => {
-            "The keychain's Write key for Export, Send marks and Publish could not be read — restart and allow access"
-        }
+        (KeyKind::Browse, KeyHome::Unreadable) => concat!(
+            "A read-only Immich API key in ",
+            store!(),
+            " that could not be read — restart Rustroom and allow access"
+        ),
+        (KeyKind::Upload, KeyHome::Unreadable) => concat!(
+            "The Write key (Export, Send marks, Publish) in ",
+            store!(),
+            " is unreadable — restart and allow access"
+        ),
         (KeyKind::Upload, KeyHome::File) => {
             "An optional Immich key for Export, Send marks and Publish, kept in settings.json"
         }
@@ -111,7 +144,7 @@ impl Keychain {
 
 /// The item's text as keys — a malformed item is a read failure, never a panic.
 fn decode(text: &str) -> Result<Keys, SecretError> {
-    serde_json::from_str(text).map_err(|e| SecretError(format!("an unreadable keychain item: {e}")))
+    serde_json::from_str(text).map_err(|e| SecretError(format!("an unreadable stored key: {e}")))
 }
 
 /// An in-memory store for tests, which can be made to fail.
@@ -234,7 +267,7 @@ mod tests {
     fn every_key_hover_is_one_short_sentence() {
         for kind in [KeyKind::Browse, KeyKind::Upload] {
             for (home, place) in [
-                (KeyHome::Keychain, "keychain"),
+                (KeyHome::Keychain, STORE),
                 (KeyHome::File, "settings.json"),
                 (KeyHome::Unreadable, "allow access"),
             ] {
