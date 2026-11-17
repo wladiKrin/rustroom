@@ -124,6 +124,24 @@ pub fn supported_extensions() -> Vec<&'static str> {
         .collect()
 }
 
+/// [`is_supported`] for a file on disk: a `.raw` only with a camera's `IIU\0` header (Panasonic and Leica write
+/// it). ⚠ The extension is also other software's — a disk image, an instrument dump — and every reader loads a
+/// file whole, so a gigabyte that is not a photo would be read by each before failing (v0.1's review). Reads 4
+/// bytes, and only for `.raw`.
+pub fn is_supported_file(path: &Path) -> bool {
+    if !is_supported(path) {
+        return false;
+    }
+    if !has_ext(path, &["raw"]) {
+        return true;
+    }
+    let mut head = [0u8; 4];
+    std::fs::File::open(path)
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
+        .is_ok()
+        && head == *b"IIU\0"
+}
+
 /// Scan a single folder (non-recursive) for supported images, sorted by file name.
 ///
 /// ⚠ **Case-insensitively.** A plain byte comparison puts every capital before every lowercase
@@ -138,7 +156,7 @@ pub fn scan_folder(dir: &Path) -> std::io::Result<Vec<CatalogEntry>> {
     for dirent in std::fs::read_dir(dir)? {
         let dirent = dirent?;
         let path = dirent.path();
-        if path.is_file() && is_supported(&path) {
+        if path.is_file() && is_supported_file(&path) {
             let file_name = path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -524,5 +542,24 @@ mod tests {
             assert_eq!(all.iter().filter(|x| *x == e).count(), 1, "{e}");
         }
         assert_eq!(all.len(), RAW_EXTENSIONS.len() + IMAGE_EXTENSIONS.len());
+    }
+
+    /// v0.1 (review): `.raw` is also other software's extension — a disk image, an instrument dump — and every
+    /// reader loads a file whole. Only a file with a camera's `IIU\0` header (Panasonic, Leica) is admitted.
+    #[test]
+    fn a_raw_without_a_camera_header_is_not_scanned() {
+        let dir = temp_dir("raw-header");
+        std::fs::write(dir.join("cam.RAW"), b"IIU\0rest of a camera file").unwrap();
+        std::fs::write(dir.join("disk.raw"), b"\0\0\0\0not a camera file").unwrap();
+        touch(&dir, "a.pef");
+        let names: Vec<_> = scan_folder(&dir)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.file_name)
+            .collect();
+        assert_eq!(names, vec!["a.pef", "cam.RAW"]);
+        assert!(is_supported_file(&dir.join("cam.RAW")));
+        assert!(!is_supported_file(&dir.join("disk.raw")));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

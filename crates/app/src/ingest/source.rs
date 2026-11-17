@@ -98,7 +98,7 @@ fn walk(dir: &Path, out: &mut Vec<Candidate>) {
         let Ok(md) = e.metadata() else { continue };
         if md.is_dir() {
             walk(&p, out);
-        } else if catalog::is_supported(&p) {
+        } else if catalog::is_supported_file(&p) {
             let mtime = md
                 .modified()
                 .ok()
