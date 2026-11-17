@@ -648,7 +648,8 @@ mod tests {
             ),
             asset(
                 "33333333-3333-4333-8333-333333333333",
-                "P1000003.PEF",
+                // ⚠ A Sigma X3F: still unsupported (v0.1 made Pentax PEF, this test's old example, supported).
+                "SDIM0003.X3F",
                 immich::AssetType::Image,
             ),
             asset(
