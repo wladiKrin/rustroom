@@ -98,22 +98,28 @@ impl Settings {
             })
     }
 
-    /// The space the *renderer* should convert into.
+    /// The display the *renderer* converts into: under Automatic (`display_auto`) the monitor's own colours as
+    /// `detected` (2026-11-18), otherwise the manual space.
     ///
-    /// ⚠⚠ Every read of `display_space` in the render path must go through here. When the
-    /// operating system is colour-matching the window for us — macOS, once the `CAMetalLayer`
-    /// carries a colorspace — converting as well would be a **double conversion**: we would
-    /// produce P3 and Core Animation would then treat it as sRGB and convert again, leaving the
-    /// preview undersaturated and varying per monitor. Returning `Srgb` here makes that
-    /// unrepresentable rather than something to remember.
+    /// ⚠⚠ Every read of the display on the render path goes through here. When the operating system is
+    /// colour-matching the window for us — macOS once the `CAMetalLayer` carries a colorspace (`os_managed`), Windows'
+    /// Auto Color Management or HDR (`Detected::OsManaged`) — converting as well would be a **double conversion**,
+    /// leaving the preview undersaturated and varying per monitor. Returning sRGB here makes that unrepresentable
+    /// rather than something to remember — whatever the manual setting says.
     ///
-    /// ⚠ The stored value is deliberately left alone, so a settings file shared with a Linux
-    /// machine keeps a sensible choice for it.
-    pub fn effective_display_space(&self, os_managed: bool) -> color::OutputSpace {
-        if os_managed {
-            color::OutputSpace::Srgb
+    /// ⚠ The stored values are deliberately left alone, so a settings file shared with a Linux machine keeps a
+    /// sensible choice for it.
+    pub fn effective_display(
+        &self,
+        os_managed: bool,
+        detected: &crate::display_detect::Detected,
+    ) -> color::Display {
+        if os_managed || *detected == crate::display_detect::Detected::OsManaged {
+            color::Display::SRGB
+        } else if self.display_auto {
+            detected.display()
         } else {
-            self.display_space
+            color::Display::Space(self.display_space)
         }
     }
 }
@@ -166,20 +172,43 @@ mod tests {
         assert_eq!(w(2), 2.min(cores));
     }
 
+    /// A detected wide monitor, for the rules below.
+    fn wide() -> crate::display_detect::Detected {
+        let p = color::edid::Primaries {
+            red: (0.68, 0.32),
+            green: (0.21, 0.71),
+            blue: (0.15, 0.06),
+            white: (0.3127, 0.3290),
+            gamma: 2.2,
+        };
+        let profile = color::DisplayProfile::from_primaries("wide", &p).expect("a profile");
+        crate::display_detect::Detected::Profile(profile, crate::display_detect::Source::Edid)
+    }
+
     #[test]
     fn the_os_managing_colour_overrides_the_manual_setting() {
         // ⚠⚠ The property that makes double conversion unrepresentable. If both were live we
         // would convert sRGB→P3 ourselves and Core Animation would then treat *that* as sRGB and
         // convert again — visibly undersaturated, and varying per monitor.
         let mut s = Settings::default();
-        for space in color::OutputSpace::DISPLAYS {
-            s.display_space = space;
-            assert_eq!(
-                s.effective_display_space(true),
-                color::OutputSpace::Srgb,
-                "{} should be ignored while the OS is managing colour",
-                space.label()
-            );
+        let os = crate::display_detect::Detected::OsManaged;
+        for auto in [true, false] {
+            s.display_auto = auto;
+            for space in color::OutputSpace::DISPLAYS {
+                s.display_space = space;
+                assert_eq!(
+                    s.effective_display(true, &wide()),
+                    color::Display::SRGB,
+                    "macOS: {} should be ignored while the OS is managing colour",
+                    space.label()
+                );
+                assert_eq!(
+                    s.effective_display(false, &os),
+                    color::Display::SRGB,
+                    "Windows: {} should be ignored while the OS is managing colour",
+                    space.label()
+                );
+            }
         }
     }
 
@@ -187,23 +216,43 @@ mod tests {
     fn without_the_os_managing_the_manual_setting_is_used() {
         // ⚠ The fallback, and it is not a formality: if tagging the layer ever fails, this is
         // what stops macOS being left *uncorrected* — worse than what piece D shipped.
-        let mut s = Settings::default();
+        let mut s = Settings {
+            display_auto: false,
+            ..Settings::default()
+        };
         for space in color::OutputSpace::DISPLAYS {
             s.display_space = space;
-            assert_eq!(s.effective_display_space(false), space);
+            assert_eq!(
+                s.effective_display(false, &wide()),
+                color::Display::Space(space),
+                "a manual choice wins over what is detected"
+            );
         }
+    }
+
+    /// Automatic is the default (2026-11-18), and follows the detection.
+    #[test]
+    fn automatic_follows_the_monitor() {
+        let s = Settings::default();
+        assert!(s.display_auto);
+        assert_eq!(s.effective_display(false, &wide()), wide().display());
+        assert!(!s.effective_display(false, &wide()).is_srgb());
+        let none = crate::display_detect::Detected::Srgb(crate::display_detect::Why::NoData);
+        assert_eq!(s.effective_display(false, &none), color::Display::SRGB);
     }
 
     #[test]
     fn the_stored_setting_survives_the_os_taking_over() {
-        // ⚠ `effective_display_space` must not *write*. A settings file shared between a Mac and
+        // ⚠ `effective_display` must not *write*. A settings file shared between a Mac and
         // a Linux machine has to keep a sensible value for the latter.
         let s = Settings {
             display_space: color::OutputSpace::AdobeRgb,
+            display_auto: false,
             ..Default::default()
         };
-        let _ = s.effective_display_space(true);
+        let _ = s.effective_display(true, &wide());
         assert_eq!(s.display_space, color::OutputSpace::AdobeRgb);
+        assert!(!s.display_auto);
     }
 
     /// ⚠⚠ **The default is `Camera`, and the value is what is asserted rather than the

@@ -99,7 +99,7 @@ pub struct FrameSpec {
     pub region: Option<RegionRect>,
     /// ⚠ Applied in `pack`, *after* the pipeline — never as a pipeline stage, or the histogram
     /// becomes display-referred. See the spec.
-    pub display_space: color::OutputSpace,
+    pub display_space: color::Display,
     /// The canvas's rendering intent (M6.4c). ⚠ Per request, for `resampler`'s reason below; a
     /// tail-only property, so in no `PrefixStepKey`.
     pub intent: color::RenderingIntent,
@@ -169,7 +169,7 @@ impl FrameSpec {
         Self {
             max_dim,
             region: None,
-            display_space: color::OutputSpace::Srgb,
+            display_space: color::Display::SRGB,
             intent: color::RenderingIntent::default(),
             resampler: pipeline::Resampler::default(),
             // ⚠ The CPU path is the reference, so a test fixture takes it unless it says

@@ -122,6 +122,13 @@ pub fn for_test() -> RustroomApp {
         grid_scroll: 0.0,
         survey_scroll: 0.0,
         os_manages_colour: false,
+        display_detected: rustroom_app::display_detect::Detected::Srgb(
+            rustroom_app::display_detect::Why::NoData,
+        ),
+        display_facts: Default::default(),
+        display_checked: None,
+        window_handle: None,
+        display_gather: |_| Default::default(),
         view: AppView::Develop,
         // ⚠ The grid, not `Default::default()` spelled out — a test that has not said otherwise
         // is looking at the ordinary Library.
@@ -139,10 +146,11 @@ pub fn for_test() -> RustroomApp {
         ghost_store: rustroom_app::thumb_store::ThumbStore::new(dir.0.join("thumbs"), u64::MAX),
         previews: rustroom_app::preview_loader::PreviewLoader::with_loader(
             std::sync::Arc::new(|_: &rustroom_app::preview_loader::PreviewRequest| None),
-            color::OutputSpace::Srgb,
+            color::Display::SRGB,
             8192,
             || {},
         ),
+        preview_max_side: 8192,
         preview_textures: rustroom_app::thumb_cache::ThumbCache::new(crate::PREVIEW_TEXTURE_BUDGET),
         preview_store: rustroom_app::preview_store::PreviewStore::new(
             dir.0.join("previews"),
@@ -329,7 +337,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         // ⚠ The fit cap, as a real session starts. `render_max_dim` returns this now, so a
         // zero here would make every panel-driven render ask for nothing.
         render_rung: w.max(h).min(crate::PREVIEW_MAX_DIM),
-        display_space: color::OutputSpace::Srgb,
+        display_space: color::Display::SRGB,
         canvas_intent: color::RenderingIntent::default(),
         resampler: pipeline::Resampler::default(),
         gpu_tail: false,
@@ -395,7 +403,7 @@ pub fn library_of_names(names: &[&str]) -> Library {
         people_rev: None,
         selection: Selection::default(),
         // ⚠ No limit: a test must never evict, or its own fixtures could vanish mid-run.
-        loader: ThumbLoader::new(color::OutputSpace::Srgb, u64::MAX, u64::MAX, || {}),
+        loader: ThumbLoader::new(color::Display::SRGB, u64::MAX, u64::MAX, || {}),
         visible: Vec::new(),
         marks: std::collections::HashMap::new(),
         captures: std::collections::HashMap::new(),

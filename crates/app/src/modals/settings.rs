@@ -52,7 +52,8 @@ pub struct SettingsDraft {
     parametric_drag: ParametricDrag,
     stack_drag: rustroom_app::settings::StackDrag,
     drag_quality: DragQuality,
-    display_space: color::OutputSpace,
+    /// Settings → Display: `None` is Automatic (2026-11-18), else a fixed space.
+    display: Option<color::OutputSpace>,
     stacking: rustroom_app::stack::Stacking,
     layout: rustroom_app::layout::Layout,
     pub(super) immich_enabled: bool,
@@ -135,7 +136,7 @@ impl SettingsDraft {
             parametric_drag: s.parametric_drag,
             stack_drag: s.stack_drag,
             drag_quality: s.drag_quality,
-            display_space: s.display_space,
+            display: (!s.display_auto).then_some(s.display_space),
             stacking: s.stacking.clone(),
             layout: s.layout,
             immich_enabled: s.immich_enabled,
@@ -391,8 +392,9 @@ impl SettingsDraft {
         if self.resampler != app.settings.resampler {
             app.apply_resampler(self.resampler);
         }
-        if self.display_space != app.settings.display_space {
-            app.apply_display_space(self.display_space, ctx);
+        if self.display != (!app.settings.display_auto).then_some(app.settings.display_space) {
+            let space = self.display.unwrap_or(app.settings.display_space);
+            app.apply_display_choice(self.display.is_none(), space, ctx);
         }
     }
 }
@@ -413,6 +415,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         .take()
         .unwrap_or_else(|| SettingsDraft::from_settings(&app.settings));
     let os_manages_colour = app.os_manages_colour;
+    let display_caption = app.display_detected.caption();
     // ⚠ Before the dialog: it closes on an Escape it sees first, and here Escape stops a recording.
     d.keyboard.take_escape(ctx);
 
@@ -645,16 +648,20 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         ui.horizontal(|ui| {
                             ui.label("Display");
                             egui::ComboBox::from_id_salt("display_space_pick")
-                                .selected_text(d.display_space.label())
+                                .selected_text(d.display.map_or("Automatic", |s| s.label()))
                                 .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut d.display, None, "Automatic");
                                     for s in color::OutputSpace::DISPLAYS {
-                                        ui.selectable_value(&mut d.display_space, s, s.label());
+                                        ui.selectable_value(&mut d.display, Some(s), s.label());
                                     }
                                 })
                                 .response
                                 .hover(
-                                    "Sets your monitor's colour primaries so the preview shows colours correctly",
+                                    "Converts the preview into your monitor's colours, or sRGB if the monitor runs its own sRGB mode",
                                 );
+                            if d.display.is_none() {
+                                ui.label(&display_caption);
+                            }
                         });
                     }
                 }

@@ -127,7 +127,7 @@ impl SettingsStore {
     pub fn load(&self) -> Settings {
         let mut s: Settings = std::fs::read_to_string(&self.path)
             .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
+            .and_then(|t| parse_settings(&t))
             .unwrap_or_default();
         let Some(store) = &self.secrets else {
             return s;
@@ -267,6 +267,22 @@ fn write_file(path: &Path, s: &Settings, blank_keys: bool) -> Result<(), Setting
     };
     std::fs::write(path, text)?;
     Ok(())
+}
+
+/// A settings file's text as `Settings`. ⚠ 2026-11-18: Automatic is the new default for the display — but a file from
+/// before it that chose P3 or Adobe RGB by hand keeps that choice, which the container default would otherwise
+/// override.
+pub(super) fn parse_settings(text: &str) -> Option<Settings> {
+    let mut s: Settings = serde_json::from_str(text).ok()?;
+    if s.display_space != color::OutputSpace::Srgb
+        && serde_json::from_str::<serde_json::Value>(text)
+            .ok()?
+            .get("display_auto")
+            .is_none()
+    {
+        s.display_auto = false;
+    }
+    Some(s)
 }
 
 /// The two keys a settings value carries.

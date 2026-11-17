@@ -350,8 +350,8 @@ fn render_buf(
 ///
 /// ⚠ 8-bit → 8-bit here, unlike the canvas, which converts in float before quantizing. A
 /// thumbnail is a camera JPEG with no float behind it, so there is no precision to preserve.
-pub fn convert_thumb(thumb: &mut Thumbnail, space: color::OutputSpace) {
-    if space == color::OutputSpace::Srgb {
+pub fn convert_thumb(thumb: &mut Thumbnail, space: color::Display) {
+    if space.is_srgb() {
         return;
     }
     for px in thumb.rgba.as_chunks_mut::<4>().0 {
@@ -380,7 +380,7 @@ pub struct ThumbLoader {
 impl ThumbLoader {
     /// `on_progress` is called after each thumbnail (e.g. `ctx.request_repaint`).
     pub fn new(
-        display_space: color::OutputSpace,
+        display_space: color::Display,
         thumb_budget_bytes: u64,
         immich_budget_bytes: u64,
         on_progress: impl Fn() + Send + Sync + 'static,
@@ -450,7 +450,7 @@ impl ThumbLoader {
     pub fn with_loader(
         load: LoadFn,
         threads: usize,
-        display_space: color::OutputSpace,
+        display_space: color::Display,
         on_progress: impl Fn() + Send + Sync + 'static,
     ) -> Self {
         let (tx, rx) = channel::<ThumbResult>();
@@ -914,7 +914,12 @@ mod tests {
     #[test]
     fn streams_results_keyed_by_path_even_on_failure() {
         // Non-existent files fail extraction -> thumb is None, but a result still streams.
-        let loader = ThumbLoader::new(color::OutputSpace::Srgb, u64::MAX, u64::MAX, || {});
+        let loader = ThumbLoader::new(
+            color::Display::Space(color::OutputSpace::Srgb),
+            u64::MAX,
+            u64::MAX,
+            || {},
+        );
         loader.want(&paths(2));
         let results = collect(&loader, 2);
         assert_eq!(results.len(), 2);
@@ -928,7 +933,7 @@ mod tests {
         let loader = ThumbLoader::with_loader(
             Arc::new(|_: &ThumbRequest| None),
             4,
-            color::OutputSpace::Srgb,
+            color::Display::Space(color::OutputSpace::Srgb),
             || {},
         );
         loader.want(&paths(50));
@@ -947,7 +952,7 @@ mod tests {
         let loader = ThumbLoader::with_loader(
             Arc::new(|_: &ThumbRequest| None),
             2,
-            color::OutputSpace::Srgb,
+            color::Display::Space(color::OutputSpace::Srgb),
             || {},
         );
         thread::sleep(std::time::Duration::from_millis(30));
@@ -970,7 +975,12 @@ mod tests {
             None
         }
         STARTED.store(0, Ordering::SeqCst);
-        let loader = ThumbLoader::with_loader(Arc::new(slow), 2, color::OutputSpace::Srgb, || {});
+        let loader = ThumbLoader::with_loader(
+            Arc::new(slow),
+            2,
+            color::Display::Space(color::OutputSpace::Srgb),
+            || {},
+        );
         loader.want(&paths(200));
         thread::sleep(std::time::Duration::from_millis(10));
         let keep = vec![ThumbRequest {
@@ -1021,7 +1031,12 @@ mod tests {
         STARTS.store(0, Ordering::SeqCst);
         RELEASE.store(0, Ordering::SeqCst);
         let one = paths(1);
-        let loader = ThumbLoader::with_loader(Arc::new(gated), 4, color::OutputSpace::Srgb, || {});
+        let loader = ThumbLoader::with_loader(
+            Arc::new(gated),
+            4,
+            color::Display::Space(color::OutputSpace::Srgb),
+            || {},
+        );
         for _ in 0..20 {
             loader.want(&one);
             thread::sleep(std::time::Duration::from_millis(2));
@@ -1062,8 +1077,12 @@ mod tests {
             LIVE.fetch_sub(1, Ordering::SeqCst);
             None
         }
-        let loader =
-            ThumbLoader::with_loader(Arc::new(gated), PAR, color::OutputSpace::Srgb, || {});
+        let loader = ThumbLoader::with_loader(
+            Arc::new(gated),
+            PAR,
+            color::Display::Space(color::OutputSpace::Srgb),
+            || {},
+        );
         loader.want(&paths(PAR));
         assert_eq!(collect(&loader, PAR).len(), PAR);
         assert_eq!(
@@ -1086,8 +1105,12 @@ mod tests {
             None
         }
         STARTED.store(0, Ordering::SeqCst);
-        let loader =
-            ThumbLoader::with_loader(Arc::new(counted), 2, color::OutputSpace::Srgb, || {});
+        let loader = ThumbLoader::with_loader(
+            Arc::new(counted),
+            2,
+            color::Display::Space(color::OutputSpace::Srgb),
+            || {},
+        );
         loader.want(&paths(500));
         thread::sleep(std::time::Duration::from_millis(30));
         drop(loader);
@@ -1117,7 +1140,7 @@ mod tests {
         let loader = ThumbLoader::with_loader(
             Arc::new(|_: &ThumbRequest| None),
             3,
-            color::OutputSpace::Srgb,
+            color::Display::Space(color::OutputSpace::Srgb),
             || {},
         );
         // Nothing is wanted, so every worker parks immediately.
@@ -1145,7 +1168,7 @@ mod tests {
         let loader = ThumbLoader::with_loader(
             Arc::new(|_: &ThumbRequest| None),
             32,
-            color::OutputSpace::Srgb,
+            color::Display::Space(color::OutputSpace::Srgb),
             || {},
         );
         loader.want(&paths(2));
@@ -1178,7 +1201,7 @@ mod tests {
             height: 1,
             rgba: vec![255, 0, 0, 255],
         };
-        convert_thumb(&mut t, color::OutputSpace::DisplayP3);
+        convert_thumb(&mut t, color::Display::Space(color::OutputSpace::DisplayP3));
         assert!(t.rgba[0] < 255, "P3 red should be below 255: {}", t.rgba[0]);
         assert!(
             t.rgba[1] > 0 && t.rgba[2] > 0,
@@ -1197,7 +1220,7 @@ mod tests {
             height: 1,
             rgba: original.clone(),
         };
-        convert_thumb(&mut t, color::OutputSpace::Srgb);
+        convert_thumb(&mut t, color::Display::Space(color::OutputSpace::Srgb));
         assert_eq!(t.rgba, original);
     }
 
@@ -1213,7 +1236,7 @@ mod tests {
                 None
             }),
             1,
-            color::OutputSpace::Srgb,
+            color::Display::Space(color::OutputSpace::Srgb),
             || {},
         );
         loader.want(&[ThumbRequest {
@@ -1239,7 +1262,7 @@ mod tests {
                 None
             }),
             1,
-            color::OutputSpace::Srgb,
+            color::Display::Space(color::OutputSpace::Srgb),
             || {},
         );
         let id = PhotoId::original(path_of(0));

@@ -307,7 +307,7 @@ pub struct Session {
     /// ⚠ Held here rather than reached through the app because `Session::request` — which every
     /// render goes through — has no access to `RustroomApp`. `apply_display_space` writes it on
     /// the open session so a change takes effect without reopening the photo.
-    pub(crate) display_space: color::OutputSpace,
+    pub(crate) display_space: color::Display,
     /// The canvas's rendering intent, copied from `Settings` when the session opens — held here
     /// for `display_space`'s reason. `apply_canvas_intent` writes it on the open session.
     pub(crate) canvas_intent: color::RenderingIntent,

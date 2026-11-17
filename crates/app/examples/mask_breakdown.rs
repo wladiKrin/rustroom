@@ -184,7 +184,7 @@ fn main() {
                 edits,
                 RUNG,
                 scale,
-                color::OutputSpace::Srgb,
+                color::Display::SRGB,
                 pipeline::Resampler::default(),
                 None,
             )
@@ -203,7 +203,7 @@ fn main() {
                 &e,
                 RUNG,
                 scale,
-                color::OutputSpace::Srgb,
+                color::Display::SRGB,
                 pipeline::Resampler::default(),
                 None,
             )
@@ -216,7 +216,7 @@ fn main() {
                 &bare,
                 RUNG,
                 scale,
-                color::OutputSpace::Srgb,
+                color::Display::SRGB,
                 pipeline::Resampler::default(),
                 None,
             )

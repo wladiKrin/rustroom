@@ -39,7 +39,7 @@ fn main() {
         &neutral,
         1600,
         0.5,
-        color::OutputSpace::Srgb,
+        color::Display::SRGB,
         pipeline::Resampler::default(),
         None,
     );
@@ -48,7 +48,7 @@ fn main() {
         &graded,
         1600,
         0.5,
-        color::OutputSpace::Srgb,
+        color::Display::SRGB,
         pipeline::Resampler::default(),
         None,
     );

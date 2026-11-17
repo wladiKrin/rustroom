@@ -22,7 +22,7 @@ pub fn ghost_decoded(thumb: &Thumbnail, max_dim: usize) -> Arc<Decoded> {
         &Edits::default(),
         max_dim,
         1.0,
-        color::OutputSpace::Srgb,
+        color::Display::SRGB,
         pipeline::Resampler::default(),
         None,
     );

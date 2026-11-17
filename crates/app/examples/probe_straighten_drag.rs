@@ -70,7 +70,7 @@ fn main() {
             FrameSpec {
                 max_dim: rung,
                 region: None,
-                display_space: color::OutputSpace::Srgb,
+                display_space: color::Display::SRGB,
                 intent: color::RenderingIntent::default(),
                 // ⚠ `PROBE_BILINEAR=1` isolates the gather's arithmetic: 2x2 taps against 4x4.
                 resampler: if std::env::var_os("PROBE_BILINEAR").is_some() {
@@ -142,7 +142,7 @@ fn main() {
             FrameSpec {
                 max_dim: rung,
                 region: None,
-                display_space: color::OutputSpace::Srgb,
+                display_space: color::Display::SRGB,
                 intent: color::RenderingIntent::default(),
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: true,

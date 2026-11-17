@@ -53,6 +53,7 @@ mod denoise_flow;
 mod develop;
 #[cfg(target_os = "macos")]
 mod display_colorspace;
+mod display_flow;
 mod dust_flow;
 mod export_flow;
 mod face_ops;

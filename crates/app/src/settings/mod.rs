@@ -496,6 +496,11 @@ pub struct Settings {
     /// Byte budget for the rendered-preview cache, in megabytes. No field-level `serde(default)`,
     /// for `thumb_budget_mb`'s reason: `u32`'s own default is 0, a cache that deletes what it writes.
     pub preview_budget_mb: u32,
+    /// Settings → Display's **Automatic** (2026-11-18, the default): the preview follows the monitor's own colours
+    /// as `display_detect` finds them, rather than [`Self::display_space`]. No field-level default: the container's
+    /// gives `true` — and a file from before that chose P3 or Adobe RGB by hand is put back to manual on load
+    /// (`SettingsStore`), so nobody's choice is overridden.
+    pub display_auto: bool,
 }
 
 /// How many photos a batch export decodes at once, out of the box.
@@ -593,6 +598,7 @@ impl Default for Settings {
             reopen_last: true,
             show_welcome: true,
             last_place: None,
+            display_auto: true,
         }
     }
 }

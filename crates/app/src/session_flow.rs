@@ -669,9 +669,7 @@ impl RustroomApp {
             FrameSpec {
                 max_dim: fit_cap,
                 region: None,
-                display_space: self
-                    .settings
-                    .effective_display_space(self.os_manages_colour),
+                display_space: self.display(),
                 intent: self.settings.canvas_intent,
                 resampler: self.settings.resampler,
                 gpu_tail: self.settings.gpu_tail,
@@ -687,9 +685,7 @@ impl RustroomApp {
         let buffer_is_full_res = !catalog::is_raw(&path);
 
         self.session = Some(Session {
-            display_space: self
-                .settings
-                .effective_display_space(self.os_manages_colour),
+            display_space: self.display(),
             canvas_intent: self.settings.canvas_intent,
             resampler: self.settings.resampler,
             gpu_tail: self.settings.gpu_tail,

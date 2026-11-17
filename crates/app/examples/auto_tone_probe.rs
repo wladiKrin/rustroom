@@ -70,7 +70,7 @@ fn main() {
                 edits,
                 1600,
                 0.5,
-                color::OutputSpace::Srgb,
+                color::Display::SRGB,
                 pipeline::Resampler::default(),
                 None,
             );

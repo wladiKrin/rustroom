@@ -218,7 +218,7 @@ impl DecodeWorker {
                     &Edits::default(),
                     req.max_dim,
                     source_scale,
-                    color::OutputSpace::Srgb,
+                    color::Display::SRGB,
                     // ⚠ The kernel is irrelevant here and provably so, not merely by
                     // assumption: `Edits::default()` activates no geometry, no perspective and
                     // no lens correction, so `build_prefix_steps` produces no resampling stage

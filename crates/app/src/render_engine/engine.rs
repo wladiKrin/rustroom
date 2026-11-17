@@ -685,7 +685,7 @@ mod tests {
             &a,
             8,
             1.0,
-            color::OutputSpace::Srgb,
+            color::Display::SRGB,
             pipeline::Resampler::default(),
             None,
         );
@@ -697,7 +697,7 @@ mod tests {
                     other,
                     8,
                     1.0,
-                    color::OutputSpace::Srgb,
+                    color::Display::SRGB,
                     pipeline::Resampler::default(),
                     None,
                 )
@@ -723,7 +723,7 @@ mod tests {
                 ed,
                 8,
                 1.0,
-                color::OutputSpace::Srgb,
+                color::Display::SRGB,
                 pipeline::Resampler::default(),
                 None,
             );
@@ -785,7 +785,7 @@ mod tests {
         let spec = || FrameSpec {
             max_dim: 64,
             region: None,
-            display_space: color::OutputSpace::Srgb,
+            display_space: color::Display::SRGB,
             intent: color::RenderingIntent::default(),
             resampler: pipeline::Resampler::default(),
             gpu_tail: false,
