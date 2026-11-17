@@ -193,9 +193,9 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
-### 2026-11-17 — M11.4 `v0.1` piece 2: Windows — it builds, the gate is green, it runs (branch `v0.1-windows`)
+### 2026-11-17 — M11.4 `v0.1` piece 2 merged: Windows — it builds, the gate is green, it runs (branch `v0.1-windows`)
 
-⏳ **Waiting on the author's try in the app.** Gate on the tip (`f555e88f`, on Windows): fmt, clippy, **4,743** passed,
+✅ **Merged 2026-11-17, confirmed by the author ("works, merge and delete the branch").** Gate on the tip (`f555e88f`, on Windows): fmt, clippy, **4,743** passed,
 0 failed, 32 ignored in 188 s (`--no-fail-fast`, `-j 4`). Spec `docs/superpowers/specs/2026-11-17-v0.1-windows-design.md`, plan
 `docs/superpowers/plans/2026-11-17-v0.1-windows.md`, from the brief written on the Mac. The first session on the author's
 Windows machine: Windows 11, i5-13400F (16 threads), RTX 3060 Ti, 16 GB, **no page file**.
