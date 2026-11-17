@@ -28,6 +28,9 @@
 //! egui lives in the bin modules only — `theme`, `modals`, `develop`, `library`, `filmstrip`,
 //! `thumb`, `shell`. Anything testable without a window belongs in the lib (`lib.rs`).
 
+// v0.1: a GUI program on Windows — no console window beside it (`rustroom_app::console`).
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use eframe::egui;
 use rustroom_app::photo_id::PhotoId;
 use std::time::{Duration, Instant};
@@ -147,6 +150,7 @@ const BUFFER_CACHE_CAP: usize = 3;
 const PREVIEW_TEXTURE_BUDGET: usize = 6 * 52 * 1024 * 1024;
 
 fn main() -> eframe::Result<()> {
+    rustroom_app::console::attach_to_parent();
     let mut native_options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
