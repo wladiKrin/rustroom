@@ -11,8 +11,8 @@ use std::time::SystemTime;
 /// `rsraw-sys` builds it (v0.1 added the 17 after `rw2`). ⚠ Not Sigma `x3f` nor GoPro `gpr`: their decoders need
 /// `USE_X3FTOOLS` / `USE_GPRSDK`, which that build does not define. Append, never insert.
 pub const RAW_EXTENSIONS: &[&str] = &[
-    "cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2", "pef", "nrw", "srw", "rwl", "raw", "3fr", "fff",
-    "iiq", "mos", "mef", "erf", "sr2", "srf", "mrw", "crw", "kdc", "dcr",
+    "cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2", "pef", "nrw", "srw", "rwl", "raw",
+    "3fr", "fff", "iiq", "mos", "mef", "erf", "sr2", "srf", "mrw", "crw", "kdc", "dcr",
 ];
 
 /// Non-RAW image extensions Rustroom can edit (lowercase, without the dot). HEIC/HEIF since M10.19a — an
@@ -496,8 +496,9 @@ mod tests {
     #[test]
     fn every_raw_format_the_bundled_libraw_decodes_is_raw() {
         for ext in [
-            "pef", "nrw", "srw", "rwl", "raw", "3fr", "fff", "iiq", "mos", "mef", "erf", "sr2", "srf", "mrw",
-            "crw", "kdc", "dcr", "cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2",
+            "pef", "nrw", "srw", "rwl", "raw", "3fr", "fff", "iiq", "mos", "mef", "erf", "sr2",
+            "srf", "mrw", "crw", "kdc", "dcr", "cr2", "cr3", "nef", "arw", "raf", "dng", "orf",
+            "rw2",
         ] {
             assert!(is_raw(Path::new(&format!("a.{ext}"))), "{ext}");
             assert!(

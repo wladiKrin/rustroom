@@ -700,7 +700,8 @@ mod tests {
         app.modal = Modal::About;
         let all = labels(&ctx, &mut app);
         assert!(
-            all.iter().any(|l| l.contains("open-source RAW photo editor")),
+            all.iter()
+                .any(|l| l.contains("open-source RAW photo editor")),
             "positive control: {all:?}"
         );
         let line = rustroom_app::about::current();
