@@ -1,0 +1,31 @@
+# v0.1 (piece 3a): the third-party licence list every package carries — `cargo about generate packaging/about.hbs`,
+# run by `packaging/windows/build.ps1` (and pieces 3b/3c). Only these licences are accepted: a crate under any other
+# fails the generation, which is the point. For an `OR` expression the first accepted licence in this list is shown.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "MIT-0",
+    "Unlicense",
+    "CC0-1.0",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "BlueOak-1.0.0",
+    "MPL-2.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "LGPL-2.1-only",
+    "LGPL-3.0-or-later",
+    "GPL-3.0-or-later",
+]
+# What any of the three packages links — a little more than one of them needs, never less.
+targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
+# Build scripts and tests are not in the binary.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
