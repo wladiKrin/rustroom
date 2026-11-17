@@ -671,6 +671,7 @@ fn about(app: &mut RustroomApp, ctx: &egui::Context) {
         Footer::close("Close"),
         |ui| {
             theme::hint(ui, "An open-source RAW photo editor.");
+            ui.label(rustroom_app::about::current());
         },
     );
     if out.dismissed {
@@ -689,6 +690,21 @@ mod tests {
             .into_iter()
             .map(|(l, _)| l)
             .collect()
+    }
+
+    /// v0.1: the About window says which build this is — a bug report asks for exactly this line.
+    #[test]
+    fn about_shows_the_version_line() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        app.modal = Modal::About;
+        let all = labels(&ctx, &mut app);
+        assert!(
+            all.iter().any(|l| l.contains("open-source RAW photo editor")),
+            "positive control: {all:?}"
+        );
+        let line = rustroom_app::about::current();
+        assert!(all.iter().any(|l| l.contains(&line)), "{line} in {all:?}");
     }
 
     /// ⚠ The tabs must not lose a setting: every control the single page had is reachable on
