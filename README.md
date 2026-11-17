@@ -123,8 +123,8 @@ choice.
 **panoramas** (spherical, cylindrical or perspective, with automatic crop and filled edges), each
 saved as a new raw file you can keep editing.
 
-**Tethered shooting** — shoot with your camera on a USB cable; each frame lands in the Library and
-opens in Develop.
+**Tethered shooting** (macOS and Linux) — shoot with your camera on a USB cable; each frame lands in the
+Library and opens in Develop.
 
 **Export and print** — JPEG, PNG, TIFF and DNG; 8 or 16 bits; sRGB, Display P3, Adobe RGB or
 ProPhoto; size in pixels, centimetres or inches, a file-size limit, renaming templates, text and

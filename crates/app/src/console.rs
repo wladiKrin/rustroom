@@ -5,8 +5,10 @@
 //! ⚠ A lib module that is a no-op off Windows, so its one call in `main` needs no `cfg` (the lesson of the
 //! macOS-only modules, `AGENTS.md`).
 
-/// Attach to the console of the process that started this one, when it has one. A redirected output
-/// (`Rustroom.exe > log`) keeps its file: a handle already set is not replaced.
+/// Attach to the console of the process that started this one, when it has one. Checked on Windows 11 (v0.1) with a
+/// probe of these same two pieces: the output reaches a terminal it is started from, and `cargo run`'s, and a
+/// redirect cargo or `Start-Process -RedirectStandardError` makes keeps its file — a handle already set is not
+/// replaced. ⚠ A shell's own `Rustroom.exe > log` captures nothing: a shell gives a GUI program no handles.
 pub fn attach_to_parent() {
     #[cfg(windows)]
     {
