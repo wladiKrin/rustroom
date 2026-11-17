@@ -146,6 +146,16 @@ pub(crate) struct Facts {
     pub rgb_cam: [[f32; 3]; 3],
     pub metadata: RawMetadata,
     pub capture: Capture,
+    /// The samples are the camera's own colours (libraw converted nothing). ⚠ `false` for a four-colour
+    /// sensor even when camera-native was asked — libraw converted it to ProPhoto itself ([`native_output`]).
+    pub native: bool,
+}
+
+/// Whether libraw hands back camera-native colours: when asked, and only for a three-colour sensor. ⚠ A
+/// four-colour one (a CMYG Canon PowerShot Pro70, an RGBE Sony DSC-F828) has no 3×3 camera matrix for us to
+/// apply, so libraw converts it into ProPhoto itself — it used to fail with "expected 3 colors" (v0.1).
+pub(crate) fn native_output(asked: bool, sensor_colours: i32) -> bool {
+    asked && sensor_colours == 3
 }
 
 /// Open, unpack and process `bytes` per `opts`, handing libraw's 16-bit camera-space output to
@@ -164,6 +174,7 @@ pub(crate) fn process<T>(
     raw.unpack()
         .map_err(|e| DecodeError::Backend(format!("unpack: {e:?}")))?;
     raw.set_use_camera_wb(opts.camera_wb);
+    let native = native_output(opts.camera_native, raw.as_ref().idata.colors);
 
     {
         // Poke libraw output params directly (rsraw's high-level API doesn't expose these).
@@ -177,7 +188,7 @@ pub(crate) fn process<T>(
         // ⚠ 0 = camera-native, 4 = ProPhoto. At 0 libraw still demosaics and still applies the
         // camera white balance; only the colour-space conversion is skipped, which is the step
         // we take over — see `DecodeOptions::camera_native`.
-        params.output_color = if opts.camera_native { 0 } else { 4 };
+        params.output_color = if native { 0 } else { 4 };
         params.no_auto_bright = i32::from(opts.no_auto_bright);
         // ⚠ Without this libraw uses its own default of 3 (AHD), its slowest — which is what
         // every decode silently inherited before this existed.
@@ -277,6 +288,7 @@ pub(crate) fn process<T>(
             rgb_cam,
             metadata,
             capture,
+            native,
         },
     ))
 }
@@ -289,7 +301,7 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, D
             .collect::<Vec<f32>>()
     })?;
 
-    let image = if opts.camera_native {
+    let image = if f.native {
         let (m, hue_sat) = match opts
             .camera_profile
             .as_deref()
@@ -329,6 +341,12 @@ pub(crate) fn decode_camera(
         ..opts.clone()
     };
     let (samples, f) = process(bytes, &opts, <[u16]>::to_vec)?;
+    if !f.native {
+        // A four-colour sensor: libraw converted it, so these are not the camera's colours a merge needs.
+        return Err(DecodeError::Format(
+            "a four-colour sensor has no camera-space frame".into(),
+        ));
+    }
     // ⚠ libraw leaves `cam_xyz` empty for a DNG — it builds `rgb_cam` from the file's matrix directly
     // (found by M10.17a's DNG-bracket test: the merge wrote an all-zero ColorMatrix1). Derived back
     // from `rgb_cam`, it gives the same matrix through dcraw's step.
@@ -431,6 +449,14 @@ mod tests {
     /// than being an arbitrary matrix — and whose multipliers are equal. Its neutral is then
     /// sRGB's own white, D65. ⚠ It is what makes the fallback for a file with no usable
     /// multipliers a *right answer* rather than a degraded one.
+    /// v0.1: only a three-colour sensor stays camera-native; a four-colour one is libraw's to convert.
+    #[test]
+    fn only_a_three_colour_sensor_stays_camera_native() {
+        assert!(native_output(true, 3));
+        assert!(!native_output(true, 4));
+        assert!(!native_output(false, 3));
+    }
+
     fn srgb_camera() -> [[f32; 3]; 3] {
         color::camera::invert(&color::spaces::SRGB_TO_XYZ).expect("invertible")
     }
