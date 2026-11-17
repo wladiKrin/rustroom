@@ -336,12 +336,14 @@ mod tests {
             .unwrap();
         let rows = cat.all_photos().unwrap();
         assert_eq!(rows.len(), 3);
-        let mut paths: Vec<String> = rows
-            .iter()
-            .map(|r| r.path.to_string_lossy().to_string())
-            .collect();
+        let mut paths: Vec<PathBuf> = rows.iter().map(|r| r.path.clone()).collect();
         paths.sort();
-        assert_eq!(paths, ["/a/one.RAF", "/a/two.RAF", "/b/three.RAF"]);
+        // ⚠ Joined, not spelled `/a/one.RAF`: Windows joins with `\` (v0.1).
+        let (a, b) = (Path::new("/a"), Path::new("/b"));
+        assert_eq!(
+            paths,
+            [a.join("one.RAF"), a.join("two.RAF"), b.join("three.RAF")]
+        );
     }
 
     #[test]
