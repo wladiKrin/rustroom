@@ -116,15 +116,23 @@ impl Catalog {
         Self::prepare(Connection::open_in_memory()?)
     }
 
-    /// Where the one catalog lives.
-    ///
-    /// ⚠ Through `dirs`, like `SettingsStore::user_default`, so it lands in the platform's own
-    /// convention — `~/Library/Application Support/rustroom/` on macOS, **not** `~/.config`.
+    /// Where the one catalog lives — in [`Self::library_dir`].
     pub fn user_default_path() -> PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("rustroom")
-            .join("catalog.db")
+        Self::library_dir().join("catalog.db")
+    }
+
+    /// Where the catalog lives, and the thumbnails and previews beside it — the ONE answer, so the three cannot
+    /// part: `<config dir>/rustroom` on macOS (`~/Library/Application Support/rustroom/`, **not** `~/.config`) and
+    /// Linux; `%LOCALAPPDATA%\rustroom` on Windows (v0.1), where `config_dir()` is the ROAMING profile, which a
+    /// managed domain copies at every sign-in — no place for gigabytes of thumbnails. Settings and presets stay in
+    /// `config_dir()` everywhere.
+    pub fn library_dir() -> PathBuf {
+        let base = if cfg!(windows) {
+            dirs::data_local_dir()
+        } else {
+            dirs::config_dir()
+        };
+        base.unwrap_or_else(|| PathBuf::from(".")).join("rustroom")
     }
 
     fn prepare(conn: Connection) -> Result<Self, CatalogError> {
@@ -267,5 +275,27 @@ mod tests {
             .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
             .unwrap();
         assert_eq!(on, 1);
+    }
+
+    /// v0.1: on Windows the catalog leaves the Roaming profile for Local AppData; elsewhere nothing moves.
+    #[test]
+    fn the_catalog_lives_in_local_appdata_on_windows_and_where_it_always_did_elsewhere() {
+        let config = dirs::config_dir()
+            .expect("this platform has a config dir")
+            .join("rustroom");
+        let dir = Catalog::library_dir();
+        if cfg!(windows) {
+            let local = dirs::data_local_dir().expect("Windows has a Local AppData");
+            assert_ne!(
+                local,
+                dirs::config_dir().unwrap(),
+                "Local and Roaming must differ to tell"
+            );
+            assert_ne!(dir, config, "not the Roaming profile");
+            assert_eq!(dir, local.join("rustroom"));
+        } else {
+            assert_eq!(dir, config, "unchanged on macOS and Linux");
+        }
+        assert_eq!(Catalog::user_default_path(), dir.join("catalog.db"));
     }
 }

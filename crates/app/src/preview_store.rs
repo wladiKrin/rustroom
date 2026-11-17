@@ -35,13 +35,10 @@ impl PreviewStore {
         }
     }
 
-    /// `<platform config dir>/rustroom/previews/`, beside `thumbs`.
+    /// `previews/` beside the catalog and `thumbs`, in `catalog::db::Catalog::library_dir`.
     pub fn user_default(budget_bytes: u64) -> Self {
         Self::new(
-            dirs::config_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("rustroom")
-                .join("previews"),
+            catalog::db::Catalog::library_dir().join("previews"),
             budget_bytes,
         )
     }
