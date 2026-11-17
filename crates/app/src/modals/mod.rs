@@ -671,7 +671,7 @@ fn about(app: &mut RustroomApp, ctx: &egui::Context) {
         Footer::close("Close"),
         |ui| {
             theme::hint(ui, "An open-source RAW photo editor.");
-            ui.label(rustroom_app::about::current());
+            theme::hint(ui, &rustroom_app::about::current());
         },
     );
     if out.dismissed {
