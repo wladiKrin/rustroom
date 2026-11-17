@@ -41,3 +41,29 @@ jobs:
       - name: Disk after
         if: always()
         run: df -h / && du -sh target || true
+
+  # ⚠ v0.1: nothing else builds Windows, and the Linux build was once broken for four weeks unseen. This keeps it
+  # compiling and linking — clippy and a build only: Windows minutes count double on a private repository, and the
+  # tests run on the author's Windows machine. LLVM (libclang, for bindgen) comes with the runner image.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # `libheif-sys` reads libheif from vcpkg on MSVC, unconditionally: the runner's own vcpkg, decoder only
+      # (CONTRIBUTING.md). The key is fixed, so a newer runner vcpkg rebuilds it until the key is bumped.
+      - name: Point the vcpkg crate at the runner's vcpkg
+        run: '"VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append'
+      - uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-libheif-x64-windows-static-md-v1
+      - name: Install libheif
+        run: '& "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "libheif[core,libde265]:x64-windows-static-md"'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Build
+        run: cargo build --all
