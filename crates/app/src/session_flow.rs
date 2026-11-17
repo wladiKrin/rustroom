@@ -978,13 +978,7 @@ impl RustroomApp {
 
     pub(crate) fn open_dialog(&mut self, ctx: &egui::Context) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter(
-                "Images",
-                &[
-                    "cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2", "jpg", "jpeg", "png",
-                    "tif", "tiff", "heic", "heif", "hif",
-                ],
-            )
+            .add_filter("Images", &catalog::supported_extensions())
             .pick_file()
         else {
             return;

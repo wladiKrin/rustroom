@@ -709,4 +709,13 @@ mod tests {
             "max clamped per-channel difference {max} exceeds the tolerance — the matrix is wrong"
         );
     }
+
+    /// v0.1 adds `.raw`, which other software uses too: a file that is not a camera's is an error, never a panic.
+    #[test]
+    fn a_file_that_is_not_a_raw_is_an_error_not_a_panic() {
+        let d = test_dir::TempDir::new("raw-junk");
+        let p = d.path().join("notes.raw");
+        std::fs::write(&p, b"not a camera file").unwrap();
+        assert!(decode_raw(&p, &DecodeOptions::default()).is_err());
+    }
 }

@@ -7,8 +7,13 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// Known RAW file extensions (lowercase, without the dot).
-pub const RAW_EXTENSIONS: &[&str] = &["cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2"];
+/// Known RAW file extensions (lowercase, without the dot) — every format the bundled LibRaw 0.21.3 decodes as
+/// `rsraw-sys` builds it (v0.1 added the 17 after `rw2`). ⚠ Not Sigma `x3f` nor GoPro `gpr`: their decoders need
+/// `USE_X3FTOOLS` / `USE_GPRSDK`, which that build does not define. Append, never insert.
+pub const RAW_EXTENSIONS: &[&str] = &[
+    "cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2", "pef", "nrw", "srw", "rwl", "raw", "3fr", "fff",
+    "iiq", "mos", "mef", "erf", "sr2", "srf", "mrw", "crw", "kdc", "dcr",
+];
 
 /// Non-RAW image extensions Rustroom can edit (lowercase, without the dot). HEIC/HEIF since M10.19a — an
 /// iPhone's `.heic`, the generic `.heif`, a camera's `.hif` — read through libheif (`image_decode::heif`).
@@ -107,6 +112,16 @@ pub fn is_raw(path: &Path) -> bool {
 /// True if Rustroom can open `path` (RAW or supported non-RAW image).
 pub fn is_supported(path: &Path) -> bool {
     has_ext(path, RAW_EXTENSIONS) || has_ext(path, IMAGE_EXTENSIONS)
+}
+
+/// Every extension the Library opens — RAW first, then the other images — for a file dialog's filter. One list,
+/// so a dialog can never offer what the scan skips, or the reverse.
+pub fn supported_extensions() -> Vec<&'static str> {
+    RAW_EXTENSIONS
+        .iter()
+        .chain(IMAGE_EXTENSIONS)
+        .copied()
+        .collect()
 }
 
 /// Scan a single folder (non-recursive) for supported images, sorted by file name.
@@ -475,5 +490,38 @@ mod tests {
             .map(|(d, e)| format!("{}:{}", d.strip_prefix(&root).unwrap().display(), e.len()))
             .collect();
         assert_eq!(folders, vec![":1", "a:1", "a/b:1"], "{folders:?}");
+    }
+
+    /// v0.1: every format the bundled LibRaw decodes reaches the Library, upper case as cameras write it.
+    #[test]
+    fn every_raw_format_the_bundled_libraw_decodes_is_raw() {
+        for ext in [
+            "pef", "nrw", "srw", "rwl", "raw", "3fr", "fff", "iiq", "mos", "mef", "erf", "sr2", "srf", "mrw",
+            "crw", "kdc", "dcr", "cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2",
+        ] {
+            assert!(is_raw(Path::new(&format!("a.{ext}"))), "{ext}");
+            assert!(
+                is_raw(Path::new(&format!("A.{}", ext.to_uppercase()))),
+                "{ext} upper"
+            );
+        }
+    }
+
+    /// Built without their SDKs (`USE_X3FTOOLS`, `USE_GPRSDK`): offering them would offer photos that never open.
+    #[test]
+    fn sigma_and_gopro_raws_stay_out() {
+        assert!(is_raw(Path::new("a.pef")), "positive control");
+        for ext in ["x3f", "gpr"] {
+            assert!(!is_supported(Path::new(&format!("a.{ext}"))), "{ext}");
+        }
+    }
+
+    #[test]
+    fn the_open_dialog_list_is_every_supported_extension_once() {
+        let all = supported_extensions();
+        for e in RAW_EXTENSIONS.iter().chain(IMAGE_EXTENSIONS) {
+            assert_eq!(all.iter().filter(|x| *x == e).count(), 1, "{e}");
+        }
+        assert_eq!(all.len(), RAW_EXTENSIONS.len() + IMAGE_EXTENSIONS.len());
     }
 }
