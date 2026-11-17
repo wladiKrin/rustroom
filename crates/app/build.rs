@@ -7,6 +7,10 @@
 //! worktree's `.git` is a file. So: the checkout's own `HEAD`, the shared `refs/heads` DIRECTORY (cargo scans a
 //! directory recursively, and a commit writes a loose ref there again even after packing) and `packed-refs`
 //! when present. Every new commit rebuilds `app` once — the price of the commit in About.
+//!
+//! And on Windows (v0.1, piece 3a) the exe's own icon and version information — what Explorer, the taskbar and
+//! Properties show — from `packaging/icons/rustroom.ico`. A failure there is a warning, never a failed build: a
+//! development build without the icon still runs, and `packaging/windows/build.ps1` refuses a release without it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -61,4 +65,25 @@ fn main() {
     })()
     .unwrap_or_else(|| "unknown".into());
     println!("cargo:rustc-env=RUSTROOM_COMMIT={commit}");
+
+    #[cfg(windows)]
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        windows_resources(&workspace.join("packaging/icons/rustroom.ico"));
+    }
+}
+
+/// The icon and VERSIONINFO, compiled into the exe by `rc.exe`.
+#[cfg(windows)]
+fn windows_resources(icon: &Path) {
+    println!("cargo:rerun-if-changed={}", icon.display());
+    let mut res = winresource::WindowsResource::new();
+    res.set_icon(&icon.to_string_lossy())
+        .set("ProductName", "Rustroom")
+        .set("FileDescription", "Rustroom")
+        .set("InternalName", "Rustroom")
+        .set("OriginalFilename", "Rustroom.exe")
+        .set("LegalCopyright", "GPL-3.0-or-later");
+    if let Err(e) = res.compile() {
+        println!("cargo:warning=no icon or version information in the exe: {e}");
+    }
 }
