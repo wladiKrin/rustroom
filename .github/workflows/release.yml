@@ -1,0 +1,79 @@
+name: Release
+# v0.1 (piece 3a): a `v*` tag builds every package and opens a DRAFT GitHub release with them and SHA256SUMS — the
+# author publishes it. A manual run (Actions → Release → Run workflow) builds the same packages without a release, to
+# try the workflow without tagging. Each package is built by its own script under `packaging/`, which a local build
+# runs too — never a second recipe here. Pieces 3b (macOS) and 3c (Linux) add their jobs beside `windows`.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+jobs:
+  version:
+    # ⚠ The tag must be the app's version — v0.1.0 for 0.1.0 — or nothing is built.
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          version=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name == "app") | .version')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::the tag $GITHUB_REF_NAME is not the app's version, v$version"
+            exit 1
+          fi
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # libheif from the runner's own vcpkg, decoder only, with the static C runtime (`.cargo/config.toml`).
+      - name: Point the vcpkg crate at the runner's vcpkg
+        run: '"VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append'
+      - uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-libheif-x64-windows-static-v1
+      - name: Install libheif
+        run: '& "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "libheif[core,libde265]:x64-windows-static"'
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-about
+        run: cargo install cargo-about --locked --features cli
+      - name: Build the installer
+        run: ./packaging/windows/build.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: target/installer/Rustroom-*-windows-x64-setup.exe
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [version, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" * --draft --generate-notes \
+            --title "Rustroom $VERSION" --repo "$GITHUB_REPOSITORY"
