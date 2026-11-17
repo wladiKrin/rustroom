@@ -193,6 +193,57 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-17 — M11.4 `v0.1` piece 2: Windows — it builds, the gate is green, it runs (branch `v0.1-windows`)
+
+⏳ **Waiting on the author's try in the app.** Spec `docs/superpowers/specs/2026-11-17-v0.1-windows-design.md`, plan
+`docs/superpowers/plans/2026-11-17-v0.1-windows.md`, from the brief written on the Mac. The first session on the author's
+Windows machine: Windows 11, i5-13400F (16 threads), RTX 3060 Ti, 16 GB, **no page file**.
+
+- **The toolchain** (winget): Rust 1.100, Visual Studio 2022 Build Tools (C++), LLVM 23, CMake; vcpkg in classic mode,
+  `libheif[core,libde265]:x64-windows-static-md` — the decoder only (the port's default adds x265, a GPL-2 encoder), the
+  triplet the `vcpkg` crate picks, no DLL to ship; 1.3 min. `libheif-sys` reads vcpkg on MSVC unconditionally;
+  `lcms2-sys` compiles its bundled LittleCMS; bindgen finds LLVM without `LIBCLANG_PATH` (built with it unset).
+- ⚠⚠ **`rsraw-sys` 0.1.1 refused MSVC on purpose** (`panic!("MSVC is not supported")`). Vendored byte for byte (all
+  107 files checked against the registry copy by blob hash; `vendor/** -text`), then ONE patch: no refusal,
+  `LIBRAW_NODLL`, `-pthread` off MSVC, five CRT functions blocklisted. ⚠ **Twice my own claim was wrong and the build or a
+  grep said so:** I dropped `LIBRAW_NODLL` from the scratch patch as "harmless" (LibRaw's `DllDef` looked gated on
+  `LIBRAW_WIN32_DLLDEFS`) — three files failed C2491, because `libraw.h` line 61 defines that for any `_MSC_VER`; and
+  `VENDORED.md` first said the five functions were "never generated" off Windows — the crate's own glibc bindings have
+  them (lines 631–801); on Windows their sizes come out `u64`, which is what rustc warns about.
+- **Tethering is `cfg(not(windows))`** — `tether`'s `gphoto2` dependency under a target table, the code on
+  `all(feature, not(windows))`: a default build (and CI's `--all-features`) compiles, and the dialog says "Tethered
+  capture is not available on Windows" (the author's choice over hiding the item).
+- **Big data in Local AppData on Windows** — `Catalog::library_dir`, the ONE answer for the catalog, thumbnails and
+  previews (`config_dir()` elsewhere, unchanged); the models in `data_local_dir()` (the same folder as `data_dir()` on
+  macOS and Linux). No migration: the author's first trial catalog stays in Roaming, his to delete.
+- **No console window:** `windows_subsystem = "windows"` + `AttachConsole(ATTACH_PARENT_PROCESS)` (`rustroom_app::console`,
+  a lib no-op elsewhere). Checked with a probe of the same two pieces: a terminal and `cargo run` show the output,
+  `cargo run > f 2> g` and `Start-Process -Redirect…` fill their files (a set handle is kept). ⚠ **A shell's own
+  `exe > log` captures NOTHING for a GUI program** — `cmd` and PowerShell both; CONTRIBUTING says `cargo run … 2> log`.
+- **Each platform's words:** Show in Explorer / file manager; the key store as Credential Manager / your keyring;
+  Ctrl and Alt in two sentences. ⚠ "Windows Credential Manager" broke the 110-character hover rule
+  (`every_key_hover_is_one_short_sentence`, the only failure of mine) — the longest platform word decides, all twelve
+  sentences measured (≤107). **Names Windows refuses:** `< > " | ? *` in `folder_name`, device names (`CON`, `nul.json`,
+  `COM¹`) in both guards, on every system.
+- **Line endings:** Git for Windows installs with `core.autocrlf=true` — 1,297 files checked out CRLF, none committed so.
+  `.gitattributes` `* text=auto eol=lf`; the checkout renormalised (0 CRLF after).
+- **The gate's first full run on Windows: 4,739 passed, 4 failed, 32 ignored, 218 s at `-j 4`**; the 94 goldens green;
+  the GPU suites RAN (no `SKIPPED`; wgpu picks **Vulkan** on the RTX 3060 Ti, not DX12). Besides my hover: three tests
+  that assumed Unix, no code bug. ⚠⚠ `storing_into_an_impossible_directory_does_nothing` used
+  `/nonexistent-root-rustroom/lists` — on Windows `C:\nonexistent-root-rustroom`, which a user CAN create, so the test
+  WROTE THERE (shape (e) of `AGENTS.md`'s tests that cannot fail, again); now a file stands where the parent should be.
+  The stray folder is left for the author — the session may not delete at a drive root. Two tests spelled paths with
+  `/` (Windows joins with `\`). The folder scan's loop test now also builds a junction on Windows (`mklink /J`, no admin).
+- ⚠⚠ **No page file means the commit limit IS the RAM**, and an out-of-memory build fails with nonsense: at 16 jobs,
+  `link.exe` LNK1102, `STATUS_STACK_BUFFER_OVERRUN`, "only metadata stub found for `core`", "can't find crate for
+  `icu_normalizer`"; at 4 jobs with the trial app open (1.8 GB), "the paging file is too small" (os error 1455). With
+  the app closed, `-j 4` fits. CONTRIBUTING names the symptoms. Timings at `-j 4`: the release app cold 6 min 10 s, a
+  release rebuild 98 s; clippy into `target/clippy` cold 96 s.
+- **CI:** a `windows-latest` job, clippy (`--all-targets --all-features`) and a build — ⚠ unverified until the author
+  pushes. Linux keeps fmt and the tests.
+- **Left for the author's try:** a double-click from Explorer opens no console; Immich keys survive a restart in
+  Credential Manager; the Map's tiles; Export; HEIC; Save PDF; anything that looks wrong on Windows.
+
 ### 2026-11-17 — M11.4 `v0.1` piece 1 merged: the version in About and 17 more RAW formats (branch `v0.1-gaps`)
 
 ✅ **Merged 2026-11-17, confirmed by the author ("works, merge").** Spec `docs/superpowers/specs/2026-11-17-v0.1-gaps-design.md`,

@@ -18,7 +18,7 @@ retouching, merges) — for macOS, Linux and Windows from one Rust codebase, GPL
 
 | Concern | Choice |
 |---|---|
-| RAW decode | libraw via `rsraw` (`rsraw-sys` vendored, patched for MSVC); floating-point DNGs by our own reader (`raw_decode::float_dng`) |
+| RAW decode | libraw via `rsraw` (`rsraw-sys` vendored byte for byte + ONE MSVC patch, `VENDORED.md`); floating-point DNGs by our own reader (`raw_decode::float_dng`) |
 | Other formats | `image` (JPEG/PNG/TIFF), libheif (HEIC/HEIF) |
 | Colour | LittleCMS (`lcms2`), DCP camera profiles, learned camera looks |
 | Lens corrections | lensfun's database via the pure-Rust `lensfun` crate |
@@ -120,10 +120,8 @@ commit; read each exit code from its own command). The whole gate is about 80 se
   `every_hover_is_one_short_sentence`); its §12 is the checklist for a new element. A literal font
   size or `Color32` outside `theme.rs` is a defect.
 - **Colour correctness is first-class** — validate against references early.
-- **Avoid platform assumptions** (paths, file dialogs, GPU backend); CI tests on Linux and builds Windows
-  (clippy + build). The system libraries per OS are in `CONTRIBUTING.md`. A platform-only branch goes in a
-  **lib** module as `cfg!`/`#[cfg]` inside a function that is a no-op elsewhere (`console`, `reveal::SHOW_LABEL`),
-  so no reference needs gating. A word naming one OS's tool (Finder, ⌘, keychain) is chosen per platform.
+- **Avoid platform assumptions** (paths, dialogs, GPU backend, words like Finder/⌘/keychain); CI tests Linux and
+  builds Windows; libraries per OS in `CONTRIBUTING.md`. A platform branch is a lib no-op elsewhere (`console`).
 - **Commit messages** describe the change; one feature per branch.
 
 ## The GPU
@@ -143,10 +141,7 @@ Only what stays true after a milestone closes belongs here; each story is in `do
   `display_colorspace`) is gated at EVERY reference, its `use` lines included** — one ungated import in
   `bootstrap.rs` kept the app from compiling off macOS for four weeks, invisible to a gate run only on macOS.
   Development now happens on Linux and Windows too; a change to such a module is built on each before it merges.
-- ⚠⚠ **`vendor/rsraw-sys` is the published 0.1.1 byte for byte plus ONE patch** (v0.1: MSVC) — never edit it
-  beyond that; a new release follows its `VENDORED.md`. ⚠ **The catalog, thumbnails and previews live in
-  `Catalog::library_dir`** — `%LOCALAPPDATA%` on Windows, never the Roaming profile; a new store of big data
-  joins them, settings and presets stay in `config_dir()`.
+- ⚠ Big data lives in `Catalog::library_dir` (`%LOCALAPPDATA%` on Windows, never Roaming); settings in `config_dir()`.
 - ⚠⚠ **A test's directory comes from `test_dir::TempDir` (deleted on drop) or `test_dir::path` (kept,
   swept by the next run)** — unique per test and per run under `rustroom-tests/<pid>/`. A sweep in
   `test-dir` fails on `env::temp_dir()` anywhere else; the export staging directory is the one allowed
