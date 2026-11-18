@@ -133,7 +133,7 @@ Count twins by `impl PipelineStage for` and `impl (crate::)?GpuStage for` (expos
 `RUSTROOM_DEBUG_GPU_TIME=1`, `RUSTROOM_NO_FUSION=1`, `RUSTROOM_DEBUG_RENDER` (measure a drag through it, never a probe row).
 ⚠ A geometry twin was once declined for pricing the compute and missing the transfers — price both.
 ⚠⚠ **A NaN test in WGSL is on the BITS** (`quantize.rs`'s `is_nan`), never `v != v`: Metal compiles with fast math, which
-folds it away — a guard green on Vulkan let a NaN pixel through on the Mac (2026-11-18). A GPU change is tested on Metal too.
+may fold it away — a guard green on Vulkan let a NaN pixel through on the Mac (2026-11-18). A GPU change is tested on Metal too.
 
 ## Warnings that outlive their milestone
 

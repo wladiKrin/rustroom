@@ -15,7 +15,7 @@ use crate::{GpuContext, GpuImage};
 /// saturating `as u8` cast — `f32::clamp` returns NaN for NaN — so the shader tests for it
 /// explicitly, ⚠⚠ **on the BITS** (`is_nan`: exponent all ones, a mantissa). wgpu compiles Metal
 /// shaders with Metal's default fast math, which lets the compiler assume no float is NaN and fold
-/// a self-comparison — on a Mac the display plane's `all(c == c)` guard was compiled away and a NaN pixel came
+/// a self-comparison — on a Mac the display plane's `all(c == c)` guard let a NaN through and the pixel came
 /// out green (2026-11-18; Vulkan on Windows kept it). Integer operations carry no such assumption.
 ///
 /// ⚠ `pack4x8unorm` was considered and not used: its rounding is specified as the same
