@@ -193,6 +193,42 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-18 — M11.4 `v0.1` piece 3b: the Mac app (branch `v0.1-packaging-mac`)
+
+⏳ **Built and checked here; waiting for the author's try.** Gate on the code's tip (`08e694a4`): fmt, clippy, **4,779 passed**,
+0 failed, 32 ignored, no GPU test skipped, 382 s. Spec `docs/superpowers/specs/2026-11-18-v0.1-packaging-mac-design.md`
+(from the brief, with the author: macOS 15 and later, bundle id `io.github.wladikrin.Rustroom` — fixed forever — our own
+script, Apple Silicon only, Homebrew's libheif as it is, a plain `.dmg`), plan `docs/superpowers/plans/2026-11-18-v0.1-packaging-mac.md`.
+
+- **`packaging/macos/build.sh`** makes `target/macos/Rustroom.app` and `Rustroom-0.1.0-macos-arm64.dmg` (32 MB; the
+  app 79 MB): the binary, **14 Homebrew libraries** (16.9 MB) found by walking `otool -L` from the binary and the
+  drivers, **17 camera drivers and 4 port drivers** in `Contents/PlugIns/libgphoto2` — the four that are no camera
+  (`ax203`, `st2205`, `tp6801`, `docupen`) stay out: they alone linked libgd and a dozen more — every reference
+  rewritten to `@rpath/`, every Homebrew rpath deleted, `Info.plist` from a committed template (six purpose strings),
+  the icon through `iconutil`, 20 licence texts (a map from library to text: libtool's `COPYING.LIB` for libltdl and
+  libintl), ad hoc signed inside out. `codesign --verify --deep --strict` seals the loose `.so` drivers as nested code.
+- **The floor is measured**, never declared: the highest `minos` of the 36 Mach-O files. **26.0 here** — Homebrew
+  builds for the macOS it runs on — so `--floor 15.0` **refuses on this Mac** (naming `libaom`), which is the check's
+  positive control; the release job runs it on `macos-15`, where it should read 15.0 (⚠ unmeasured until that run).
+- **`rustroom_app::app_bundle`** — the first line of `main`, a no-op off macOS and outside a bundle — sets `CAMLIBS`,
+  `IOLIBS` and `LIBHEIF_PLUGIN_PATH` (an empty folder: Homebrew's libheif loads plugins from `/opt/homebrew/lib/libheif`
+  otherwise) unless already set, through a symlink to the real executable. ⚠ `ps eww` cannot show it worked — it reads
+  the environment the process was started with (positive control: `HOME`, `PATH` present).
+- ⚠ **This Mac's PATH puts Anaconda's (and MacPorts') cctools first** — their `install_name_tool` wrote "fake
+  signatures". The script calls `/usr/bin/otool` and `/usr/bin/install_name_tool`.
+- **Checked:** the app starts from `target/macos` and from the mounted image, its 12 startup libraries from the
+  bundle, none from `/opt/homebrew` (`lsof`); a second run from `/tmp` gives the same 50 files. **Sabotages:** a
+  `libjpeg` reference left unrewritten → the outside-path check names `camlibs/jl2005c.so`; its licence line dropped →
+  `no licence text for libjpeg.8.dylib`. Gatekeeper rejects the ad hoc app (`spctl`), as expected until notarisation.
+- **The final review** (a fresh reviewer): no Critical; two Minors re-graded and fixed — a symlinked launch missed
+  the bundle's folders (`a_symlink_to_the_executable_still_finds_the_bundle`, red then green), and an exported
+  `CARGO_TARGET_DIR` made the script package an old binary (now `--target-dir` the checkout's `target/`). Nine minors
+  deferred (the plan's ledger): among them `--floor` compared as text, `hdiutil`'s occasional "Resource busy" on CI.
+- **The release workflow** has a `macos` job (`macos-15`, `build.sh --floor 15.0`); the release needs it. ⚠ Unrun.
+- **Left for the author's try:** the Dock's icon and name, a RAW and a HEIC, export, the map, the Immich keys' prompt,
+  **tethering with the X-T4 from the installed app** (`lsof` must list the bundle's `ptp2.so`), and a quarantined copy —
+  the real first-launch dialogs, for the README's paragraph (written from Apple's announced macOS 15 steps).
+
 ### 2026-11-18 — On the Mac: a NaN pixel came out green on Metal (branch `fix-metal-nan-guard`)
 
 ✅ **Merged 2026-11-18 (`1be03aea`) at the author's word ("yes, merge it").** The merge's tree is the gated tip's

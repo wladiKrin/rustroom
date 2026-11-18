@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- v0.1 (piece 3b): the template packaging/macos/build.sh fills — @VERSION@ is the app crate's version, @MIN_MACOS@
+     the highest minimum macOS of every file in the bundle, measured by the script. ⚠ CFBundleIdentifier is fixed
+     forever, like the Windows installer's AppId. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.wladikrin.Rustroom</string>
+	<key>CFBundleName</key>
+	<string>Rustroom</string>
+	<key>CFBundleDisplayName</key>
+	<string>Rustroom</string>
+	<key>CFBundleExecutable</key>
+	<string>Rustroom</string>
+	<key>CFBundleIconFile</key>
+	<string>rustroom</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>@MIN_MACOS@</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.photography</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>© The Rustroom contributors. GPL-3.0-or-later.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Rustroom opens and saves the photos you keep on your Desktop.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Rustroom opens and saves the photos you keep in Documents.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Rustroom opens and saves the photos you keep in Downloads.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>Rustroom imports photos from your camera's card.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>Rustroom opens and saves photos on network drives.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Rustroom connects to your Immich server on your home network.</string>
+</dict>
+</plist>

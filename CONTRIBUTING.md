@@ -36,6 +36,15 @@ cargo run --release -p app
 
 Put the `export` line in your shell profile, or repeat it in each new terminal.
 
+**The Mac app** (`target/macos/Rustroom-<version>-macos-arm64.dmg`) is built by one script, the same one the release
+workflow runs. Its minimum macOS is that of your Homebrew's libraries — Homebrew builds for the macOS it runs on — so
+the release is built on macOS 15:
+
+```bash
+cargo install cargo-about --locked --features cli
+packaging/macos/build.sh
+```
+
 **Linux — Debian / Ubuntu:**
 
 ```bash
