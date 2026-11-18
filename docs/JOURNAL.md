@@ -193,6 +193,22 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-18 — piece 3c: libgphoto2 without USB permission, CAPTURED on Arch (branch `v0.1-appimage`)
+
+Captured, not constructed — the author's X-T4 (`04cb:02e6`, interface class `060101`) on Arch, libgphoto2 2.5.32,
+the camera's node stripped of its ACL (`setfacl -b`, then `root:root 0664`, checked NOT writable before reading):
+
+- `gphoto2 --auto-detect` still **lists** it (`Fuji Fujifilm X-T4  usb:002,007`, exit 0) — listing opens nothing.
+- Opening it (`--summary`) fails with **`-7 'I/O problem'`**; only `--debug` shows the cause, libusb's
+  `libusb_open … failed: Access denied (insufficient permissions) (-3)`. Rustroom's `tether::gphoto::say` mapped
+  `ErrorKind::Io` to "The camera was disconnected" — false for this case. So the cause is read from the NODE
+  (`tether::usb_access`), never from libgphoto2's text, which does not carry it.
+- ⚠ **On a systemd desktop a PTP camera is reachable WITHOUT libgphoto2's rules:** systemd's `70-uaccess.rules`
+  tags any `*:060101:*` interface `uaccess` (line 14), which is where the author's `user:me:rw-` came from. The
+  permission sentence is for distributions without it, non-PTP cameras, and seatless (SSH) sessions.
+- ⚠ The X-T4 re-enumerates (a new device number) every ~2 min with auto power off on — two first attempts stripped
+  a node that no longer existed, and a `[ -w ]` on the missing file read as "not writable". Assert the node EXISTS.
+
 ### 2026-11-18 — The Mac part closed: a hand-off for the Arch machine
 
 Tethering from the installed app seen (the entry below), the release workflow's first run green, `build.sh` hardened,
