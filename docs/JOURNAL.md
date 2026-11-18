@@ -196,8 +196,12 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 ### 2026-11-18 — M11.4 `v0.1` piece 3b: the Mac app (branch `v0.1-packaging-mac`)
 
 ✅ **Merged 2026-11-18 (`4571ec4d`) at the author's word ("yes, merge it"), confirmed by use** — installed from the
-`.dmg`, everything he tried works. ⚠ **Still unseen: tethering from the installed app** (no camera at hand) — the one
-proof that `app_bundle`'s folders reach libgphoto2.
+`.dmg`, everything he tried works. ✅ **Tethering from the installed app** confirmed by the author with his X-T4
+(2026-11-18), and the bundle's drivers shown in use: with File → Tethered capture… open, the app had mapped the
+bundle's `libusb-1.0.0.dylib`, which only the bundle's own `iolibs/usb1.so` links (`@rpath`), and NOTHING from
+`/opt/homebrew` (`lsof`; positive control: 13 bundled libraries open) — so `IOLIBS` pointed inside the bundle, and
+`CAMLIBS` with it (one loop sets both). The camera drivers themselves are opened, read and closed by libgphoto2's
+search, so `lsof` cannot catch one without a connected camera.
 - **The release workflow's first run** (manual, 2026-11-18, `44321165127`, all green — the `windows` job's installer too,
   53 min cold): the `macos` job green on `macos-15` in 10 min —
   Homebrew poured its `arm64_sequoia` bottles and the script measured **"The bundle needs macOS 15.0"** (35 files; the
