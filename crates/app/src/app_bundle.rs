@@ -55,6 +55,14 @@ pub fn to_set(dirs: &RuntimeDirs, is_set: impl Fn(&str) -> bool) -> Vec<(&'stati
     .collect()
 }
 
+/// The bundle's folders for the running executable `exe`, as `std::env::current_exe` gives it — through a symlink
+/// to the file it points at, as dyld resolves it (a path that cannot be resolved is read as it is). A translocated
+/// app's path is a real one and stays as it is.
+pub fn dirs_for_running(exe: &Path) -> Option<RuntimeDirs> {
+    let real = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+    runtime_dirs(&real)
+}
+
 /// On macOS, inside a bundle, points libgphoto2 and libheif at the bundle's own folders; anything else does nothing.
 ///
 /// ⚠ **The first line of `main`, before any thread starts:** `std::env::set_var` is not thread-safe — another thread
@@ -65,7 +73,7 @@ pub fn point_libraries_inside() {
         let Ok(exe) = std::env::current_exe() else {
             return;
         };
-        let Some(dirs) = runtime_dirs(&exe) else {
+        let Some(dirs) = dirs_for_running(&exe) else {
             return;
         };
         for (name, dir) in to_set(&dirs, |k| std::env::var_os(k).is_some()) {
@@ -115,6 +123,29 @@ mod tests {
         for exe in cases {
             assert_eq!(runtime_dirs(&exe), None, "{exe:?}");
         }
+    }
+
+    /// ⚠ macOS hands `current_exe` "a path" to the executable — a symlink to it stays a symlink — while dyld finds
+    /// `Frameworks` from the real one: a link in `~/bin` would run the app with Homebrew's drivers (the review of
+    /// piece 3b). The folders follow the file the link points at.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_the_executable_still_finds_the_bundle() {
+        let d = test_dir::TempDir::new("app-bundle-link");
+        let app = d.join("Rustroom.app");
+        let macos = app.join("Contents").join("MacOS");
+        std::fs::create_dir_all(&macos).unwrap();
+        std::fs::write(macos.join("Rustroom"), b"").unwrap();
+        std::fs::create_dir_all(d.join("bin")).unwrap();
+        let link = d.join("bin").join("rustroom");
+        std::os::unix::fs::symlink(macos.join("Rustroom"), &link).unwrap();
+        // The premise: the link's own path names no bundle.
+        assert_eq!(runtime_dirs(&link), None);
+        let real = std::fs::canonicalize(&app).unwrap();
+        assert_eq!(dirs_for_running(&link), Some(folders(&real)));
+        // And an executable that does not exist is still answered from its path.
+        let gone = Path::new("/Applications").join("Rustroom.app");
+        assert_eq!(dirs_for_running(&exe_in(&gone)), Some(folders(&gone)));
     }
 
     #[test]
