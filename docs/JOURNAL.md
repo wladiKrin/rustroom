@@ -195,7 +195,8 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ### 2026-11-18 — No test writes into the user's own cache (branch `fix-test-user-cache`)
 
-Found on Windows: an empty `%LOCALAPPDATA%\rustroom\immich\https___example_invalid` in the author's cache, and an
+✅ **Merged 2026-11-18 (`d239d241`) at the author's word ("merge it"); `main` re-gated: 4,773 passed, the leftover
+not back.** Found on Windows: an empty `%LOCALAPPDATA%\rustroom\immich\https___example_invalid` in the author's cache, and an
 empty `C:\cache\immich\host` at the drive root, both made at 17:52:36 on 2026-11-17 by a gate. ⚠ The first happens on
 EVERY system (`~/Library/Caches`, `~/.cache`) — unnoticed because it stays empty.
 
