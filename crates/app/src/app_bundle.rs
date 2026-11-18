@@ -1,10 +1,11 @@
-//! The libraries' run-time folders inside the Mac app (v0.1, piece 3b). `Rustroom.app` carries libgphoto2's camera and
-//! port drivers and an empty plugin folder for libheif (`packaging/macos/build.sh`); both libraries otherwise look in
-//! the folders Homebrew compiled into them, which a user's Mac may not have — or may have with other versions. So at
-//! startup, inside a bundle, Rustroom names its own folders through the variables the libraries read.
+//! The libraries' run-time folders inside the Mac app (v0.1, piece 3b) and the Linux AppImage (piece 3c). Each carries
+//! libgphoto2's camera and port drivers and a plugin folder for libheif (`packaging/macos/build.sh`,
+//! `packaging/linux/build.sh`); both libraries otherwise look in the folders their build compiled into them, which a
+//! user's computer may not have — or may have with other versions. So at startup, inside a package, Rustroom names its
+//! own folders through the variables the libraries read.
 //!
-//! ⚠ A lib module that is a no-op off macOS and outside a bundle, so its one call in `main` needs no `cfg` (the lesson
-//! of the macOS-only modules, `AGENTS.md`; `console`'s pattern).
+//! ⚠ A lib module that is a no-op on Windows and outside a package, so its one call in `main` needs no `cfg` (the
+//! lesson of the macOS-only modules, `AGENTS.md`; `console`'s pattern).
 
 use std::path::{Path, PathBuf};
 
@@ -63,17 +64,44 @@ pub fn dirs_for_running(exe: &Path) -> Option<RuntimeDirs> {
     runtime_dirs(&real)
 }
 
-/// On macOS, inside a bundle, points libgphoto2 and libheif at the bundle's own folders; anything else does nothing.
+/// The AppImage's folders (v0.1, piece 3c) when `exe` lies inside `appdir`, the AppImage's mounted tree
+/// (`packaging/linux/build.sh` lays it out), else `None`. Both paths as the caller resolved them; nothing is read from
+/// the disk. ⚠ Compared by components: `/tmp/.mount_X-other` is not inside `/tmp/.mount_X`.
+pub fn appimage_dirs(appdir: &Path, exe: &Path) -> Option<RuntimeDirs> {
+    if !exe.starts_with(appdir) {
+        return None;
+    }
+    let lib = appdir.join("usr").join("lib");
+    Some(RuntimeDirs {
+        camlibs: lib.join("libgphoto2").join("camlibs"),
+        iolibs: lib.join("libgphoto2").join("iolibs"),
+        heif_plugins: lib.join("libheif").join("plugins"),
+    })
+}
+
+/// Inside the Mac app or an AppImage, points libgphoto2 and libheif at the package's own folders; anything else does
+/// nothing. An AppImage is known by its runtime's `APPIMAGE` AND `APPDIR` with the executable under `APPDIR` — a stray
+/// `APPDIR` in a developer's shell must not redirect a `cargo run`.
 ///
 /// ⚠ **The first line of `main`, before any thread starts:** `std::env::set_var` is not thread-safe — another thread
 /// reading the environment meanwhile (libgphoto2's camera search, a decode's libheif) is undefined behaviour.
 pub fn point_libraries_inside() {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         let Ok(exe) = std::env::current_exe() else {
             return;
         };
-        let Some(dirs) = dirs_for_running(&exe) else {
+        #[cfg(target_os = "macos")]
+        let dirs = dirs_for_running(&exe);
+        #[cfg(target_os = "linux")]
+        let dirs = match (std::env::var_os("APPIMAGE"), std::env::var_os("APPDIR")) {
+            (Some(_), Some(appdir)) => {
+                let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+                appimage_dirs(&real(Path::new(&appdir)), &real(&exe))
+            }
+            _ => None,
+        };
+        let Some(dirs) = dirs else {
             return;
         };
         for (name, dir) in to_set(&dirs, |k| std::env::var_os(k).is_some()) {
@@ -148,8 +176,56 @@ mod tests {
         assert_eq!(dirs_for_running(&exe_in(&gone)), Some(folders(&gone)));
     }
 
+    fn appimage_folders(appdir: &Path) -> RuntimeDirs {
+        let lib = appdir.join("usr").join("lib");
+        RuntimeDirs {
+            camlibs: lib.join("libgphoto2").join("camlibs"),
+            iolibs: lib.join("libgphoto2").join("iolibs"),
+            heif_plugins: lib.join("libheif").join("plugins"),
+        }
+    }
+
+    #[test]
+    fn an_appimage_executable_finds_its_folders_inside_the_appdir() {
+        for mount in [
+            Path::new("/tmp").join(".mount_RustrXYZ"),
+            // A space in the path — the runtime mounts under $TMPDIR, which may be anything.
+            Path::new("/home/x").join("My Temp").join(".mount_RustrXYZ"),
+        ] {
+            let exe = mount.join("usr").join("bin").join("Rustroom");
+            assert_eq!(appimage_dirs(&mount, &exe), Some(appimage_folders(&mount)));
+        }
+    }
+
+    #[test]
+    fn an_executable_outside_the_appdir_has_none() {
+        let mount = Path::new("/tmp").join(".mount_RustrXYZ");
+        let cases = [
+            Path::new("/usr").join("bin").join("Rustroom"),
+            // A prefix of the mount's STRING, not of its path.
+            Path::new("/tmp")
+                .join(".mount_RustrXYZ-other")
+                .join("usr")
+                .join("bin")
+                .join("Rustroom"),
+        ];
+        for exe in cases {
+            assert_eq!(appimage_dirs(&mount, &exe), None, "{exe:?}");
+        }
+    }
+
     #[test]
     fn a_variable_already_set_is_never_replaced() {
+        // The same rule for an AppImage's folders as for the Mac app's.
+        let ai = appimage_folders(Path::new("/tmp/.mount_RustrXYZ"));
+        let ai_set = to_set(&ai, |k| k == "CAMLIBS");
+        assert_eq!(
+            ai_set,
+            vec![
+                ("IOLIBS", ai.iolibs.clone()),
+                ("LIBHEIF_PLUGIN_PATH", ai.heif_plugins.clone()),
+            ]
+        );
         let dirs = folders(&Path::new("/Applications").join("Rustroom.app"));
         let names =
             |set: &[(&'static str, PathBuf)]| set.iter().map(|(k, _)| *k).collect::<Vec<_>>();
