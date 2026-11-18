@@ -2,7 +2,7 @@ name: Release
 # v0.1 (piece 3a): a `v*` tag builds every package and opens a DRAFT GitHub release with them and SHA256SUMS — the
 # author publishes it. A manual run (Actions → Release → Run workflow) builds the same packages without a release, to
 # try the workflow without tagging. Each package is built by its own script under `packaging/`, which a local build
-# runs too — never a second recipe here. Pieces 3b (macOS) and 3c (Linux) add their jobs beside `windows`.
+# runs too — never a second recipe here. Piece 3c (Linux) adds its job beside `windows` and `macos` (3b).
 on:
   push:
     tags: ['v*']
@@ -57,9 +57,30 @@ jobs:
           path: target/installer/Rustroom-*-windows-x64-setup.exe
           if-no-files-found: error
 
+  macos:
+    # v0.1 (piece 3b): Apple Silicon, built from Homebrew's macOS 15 libraries — the app's floor. `--floor 15.0` fails
+    # the build the day Homebrew stops building for macOS 15, rather than shipping an app that will not open there.
+    needs: version
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the libraries
+        run: brew install little-cms2 libheif libgphoto2 pkgconf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-about
+        run: cargo install cargo-about --locked --features cli
+      - name: Build the disk image
+        run: packaging/macos/build.sh --floor 15.0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: target/macos/Rustroom-*-macos-arm64.dmg
+          if-no-files-found: error
+
   release:
     if: github.ref_type == 'tag'
-    needs: [version, windows]
+    needs: [version, windows, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
