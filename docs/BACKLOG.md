@@ -2009,6 +2009,16 @@ The repository goes public once **all** of Phase 11 is done. The steps, from the
    contact links and the Releases links resolve. Every link uses `wladiKrin/rustroom`; if the new
    repository's name differs, replace it.
 
+**`v0.1` piece 4 — the Mac's Developer ID and notarisation: kept for piece 4 by the author (2026-11-18), after he saw
+a downloaded `.dmg` blocked** (`grep -n 'piece 3b' docs/JOURNAL.md`). Do not re-propose it before piece 4. What it needs,
+for then: the **Apple Developer Program** (individual, 99 USD a year; the author enrols and pays) — ⚠ the certificate
+reads "Developer ID Application: <legal name> (<team id>)", **public in every copy's signature** (a company name needs
+a D-U-N-S number); `build.sh` signs with it, the hardened runtime and a timestamp, sends the `.dmg` to `notarytool`
+and staples the ticket; the release job takes the certificate and an App Store Connect API key as secrets, in a
+throwaway keychain. It ends the Open Anyway detour (a one-click "downloaded from the Internet" question remains) and
+the keychain's password prompt after every update (the Team ID; M10.15a). Not a fix: a self-made certificate,
+Homebrew's main casks (notarised apps only since September 2026), telling users to `xattr -dr com.apple.quarantine`.
+
 **Gaps found while writing the README (2026-11-16), for v0.1 — ✅ both closed 2026-11-17 (`v0.1-gaps`):**
 - ✅ **The About window shows the version** — "Version 0.1.0 (commit)" for a git build (`rustroom_app::about`,
   the commit from `crates/app/build.rs`); the bug form asks for it.
