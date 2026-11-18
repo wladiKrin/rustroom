@@ -198,7 +198,8 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 ✅ **Merged 2026-11-18 (`4571ec4d`) at the author's word ("yes, merge it"), confirmed by use** — installed from the
 `.dmg`, everything he tried works. ⚠ **Still unseen: tethering from the installed app** (no camera at hand) — the one
 proof that `app_bundle`'s folders reach libgphoto2.
-- **The release workflow's first run** (manual, 2026-11-18, `44321165127`): the `macos` job green on `macos-15` —
+- **The release workflow's first run** (manual, 2026-11-18, `44321165127`, all green — the `windows` job's installer too,
+  53 min cold): the `macos` job green on `macos-15` in 10 min —
   Homebrew poured its `arm64_sequoia` bottles and the script measured **"The bundle needs macOS 15.0"** (35 files; the
   binary 11.0): the floor the design expected, now measured. The artifact `macos`, 31.5 MB.
 - **A downloaded copy's first launch, seen** (that artifact through Safari, on macOS 26.6): "“Rustroom” Not Opened —
@@ -422,7 +423,8 @@ plan `docs/superpowers/plans/2026-11-17-v0.1-packaging-windows.md`. Piece 3 is s
   Inter and Phosphor from `assets/`) — never a copy kept in the repository.
 - **The release workflow** (`.github/workflows/release.yml`): a `v*` tag must equal the app's version, then the
   Windows job runs `build.ps1` and a `release` job opens a DRAFT release with the installer and `SHA256SUMS`; a manual
-  run builds without releasing. ⚠ Unverified until the author's first tag or manual run. CI's Windows job moved to the
+  run builds without releasing. ✅ First run 2026-11-18 (manual, `44321165127`): all green, the installer 17.3 MB in 53 min
+  cold (libheif 11, cargo-about 5, the build 34), the `release` job skipped as designed. CI's Windows job moved to the
   static triplet.
 
 ### 2026-11-17 — M11.4 `v0.1` piece 2 merged: Windows — it builds, the gate is green, it runs (branch `v0.1-windows`)
