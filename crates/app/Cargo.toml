@@ -20,6 +20,8 @@ path = "src/main.rs"
 [features]
 default = ["camera"]
 camera = ["tether/gphoto2"]
+# v0.1 (piece 3c): the AppImage's build — libheif compiled in (`image-decode`'s `embedded-libheif`).
+appimage = ["image-decode/embedded-libheif"]
 
 [dependencies]
 camera-profile = { path = "../camera-profile" }

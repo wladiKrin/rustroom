@@ -16,6 +16,17 @@ chrono = "0.4.45"
 libheif-rs = { version = "3", default-features = false, features = ["v1_17"] }
 lcms2 = { workspace = true }
 
+[features]
+# v0.1 (piece 3c): libheif compiled in from `libheif-sys`'s own source (static, plugin loading off, libde265 linked
+# in) — for the AppImage alone, built on Ubuntu 22.04, which ships libheif 1.12 where we bind 1.17. Only
+# `packaging/linux/build.sh` turns it on (through `app`'s `appimage`); every other build keeps the system libheif.
+# ⚠ Linux only, like `tether`'s `gphoto2` off Windows: elsewhere a no-op, so CI's `--all-features` still builds on
+# Windows' vcpkg. On Linux it needs `cmake` and `libde265-dev` (CI's clippy compiles it).
+embedded-libheif = ["dep:libheif-sys"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libheif-sys = { version = "5", optional = true, default-features = false, features = ["embedded-libheif"] }
+
 [dev-dependencies]
 # M10.7c: every test directory comes from here — unique per test and per run, and cleaned up.
 test-dir = { path = "../test-dir" }
