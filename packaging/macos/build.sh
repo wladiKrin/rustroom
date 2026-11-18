@@ -48,7 +48,9 @@ version="${pkgid##*[#@]}"
 [ -n "$version" ] || fail "no version for the app crate"
 echo "Rustroom $version"
 
-cargo build --release -p app || fail "cargo build failed"
+# ⚠ Into THIS checkout's target/, whatever CARGO_TARGET_DIR says: the bundle is made from target/release/Rustroom,
+# and a build elsewhere would leave an old binary there to be packaged without a word (the review of piece 3b).
+cargo build --release -p app --target-dir "$root/target" || fail "cargo build failed"
 
 out="$root/target/macos"
 app="$out/Rustroom.app"
