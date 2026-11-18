@@ -193,6 +193,13 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-18 — The Mac part closed: a hand-off for the Arch machine
+
+Tethering from the installed app seen (the entry below), the release workflow's first run green, `build.sh` hardened,
+`main` pushed at the author's word. The next session, on Arch, starts from
+`docs/superpowers/specs/2026-11-18-handoff-from-mac.md`: the gate first (the NaN fix's WGSL has run on Metal only),
+then piece 3c, then the `v0.1.0` tag.
+
 ### 2026-11-18 — M11.4 `v0.1` piece 3b: the Mac app (branch `v0.1-packaging-mac`)
 
 ✅ **Merged 2026-11-18 (`4571ec4d`) at the author's word ("yes, merge it"), confirmed by use** — installed from the
