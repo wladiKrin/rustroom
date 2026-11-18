@@ -29,7 +29,8 @@ floor=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --floor)
-            [ $# -ge 2 ] || fail "--floor needs a macOS version, such as 15.0"
+            [ $# -ge 2 ] && [[ "$2" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] ||
+                fail "--floor needs a macOS version such as 15.0, not '${2:-}'"
             floor="$2"
             shift 2
             ;;
@@ -179,6 +180,20 @@ while IFS= read -r m; do
     done < <(own_id "$m"; references "$m"; rpaths "$m")
 done < <(machos)
 
+# A macOS version as three numbers, so that 15, 15.0 and 15.0.0 are one version to `sort -V` (which puts 15 before 15.0).
+three() {
+    local a b c
+    IFS=. read -r a b c <<<"$1"
+    echo "${a:-0}.${b:-0}.${c:-0}"
+}
+# Whether macOS $1 is later than $2.
+newer() {
+    local x y
+    x="$(three "$1")"
+    y="$(three "$2")"
+    [ "$x" != "$y" ] && [ "$(printf '%s\n%s\n' "$x" "$y" | sort -V | tail -1)" = "$x" ]
+}
+
 # The floor, measured: the highest minimum macOS any file in the bundle was built for.
 min_macos() {
     otool -l "$1" | awk '
@@ -190,15 +205,15 @@ needers=""
 while IFS= read -r m; do
     v="$(min_macos "$m")"
     [ -n "$v" ] || fail "${m#"$app"/} names no minimum macOS"
-    if [ -z "$need" ] || [ "$(printf '%s\n%s\n' "$need" "$v" | sort -V | tail -1)" != "$need" ]; then
+    if [ -z "$need" ] || newer "$v" "$need"; then
         need="$v"
         needers="$(basename "$m")"
-    elif [ "$v" = "$need" ]; then
+    elif [ "$(three "$v")" = "$(three "$need")" ]; then
         needers="$needers $(basename "$m")"
     fi
 done < <(machos)
 echo "The bundle needs macOS $need ($(echo "$needers" | wc -w | tr -d ' ') files, among them $(echo "$needers" | cut -d' ' -f1-3))"
-if [ -n "$floor" ] && [ "$(printf '%s\n%s\n' "$floor" "$need" | sort -V | tail -1)" != "$floor" ]; then
+if [ -n "$floor" ] && newer "$need" "$floor"; then
     fail "the bundle needs macOS $need ($(echo "$needers" | cut -d' ' -f1)), more than the required $floor"
 fi
 
