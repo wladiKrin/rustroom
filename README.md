@@ -150,12 +150,15 @@ Get Rustroom for your system from the
 
 | System | Download | Requires |
 |---|---|---|
-| macOS | <!-- fill at v0.1: file and signing --> | <!-- fill at v0.1: minimum macOS version --> |
+| macOS | `Rustroom-<version>-macos-arm64.dmg` — open it and drag Rustroom into Applications | macOS 15 or later, Apple Silicon |
 | Windows | `Rustroom-<version>-windows-x64-setup.exe` — installs for you alone, no administrator needed | Windows 10 or 11, 64-bit |
 | Linux | <!-- fill at v0.1: package format --> | <!-- fill at v0.1: distributions, bundled libraries --> |
 
 The Windows installer is not signed yet: Windows says "Windows protected your PC" — choose **More info**, then
 **Run anyway**.
+
+The Mac app is not notarised yet: the first time you open it, macOS says it cannot verify Rustroom — choose **Done**,
+then open **System Settings → Privacy & Security** and choose **Open Anyway** beside Rustroom.
 
 <!-- fill at v0.1: the graphics card requirement -->
 
