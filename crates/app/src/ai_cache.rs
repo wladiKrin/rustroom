@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 /// The map cache's directory.
 pub fn dir() -> Option<PathBuf> {
-    Some(dirs::cache_dir()?.join("rustroom").join("ai_masks"))
+    Some(crate::user_cache::base()?.join("rustroom").join("ai_masks"))
 }
 
 /// Where downloaded models live — data, not cache: 45–225 MB each is not something to re-fetch

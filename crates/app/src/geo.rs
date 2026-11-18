@@ -89,7 +89,7 @@ pub fn tile_url(template: &str, t: TileId) -> String {
 /// Where a tile server's tiles are cached: `<cache>/rustroom/tiles/<host>`.
 pub fn tile_cache_root(template: &str) -> Option<PathBuf> {
     Some(
-        dirs::cache_dir()?
+        crate::user_cache::base()?
             .join("rustroom")
             .join("tiles")
             .join(crate::immich_source::host_slug(template)),

@@ -36,8 +36,16 @@ pub struct TestDir(pub std::path::PathBuf);
 
 impl TestDir {
     pub fn new(tag: &str) -> Self {
+        user_cache_away();
         Self(test_dir::path(&format!("testapp-{tag}")))
     }
+}
+
+/// ⚠⚠ Every per-user cache path of this process — Immich's downloads and lists, the map's tiles — into a test folder
+/// (`rustroom_app::user_cache`), before any test can derive one: a test app once created
+/// `<cache>/rustroom/immich/https___example_invalid` in the author's own cache (2026-11-18).
+fn user_cache_away() {
+    rustroom_app::user_cache::redirect_for_tests(|| test_dir::path("user-cache"));
 }
 
 impl Drop for TestDir {
