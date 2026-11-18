@@ -7,6 +7,7 @@ pub mod ai_coverage;
 pub mod ai_denoise;
 pub mod ai_space;
 pub mod ai_worker;
+pub mod app_icon;
 pub mod auto_tone_tool;
 pub mod bar_plan;
 pub mod batch_export;

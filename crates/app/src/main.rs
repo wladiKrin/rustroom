@@ -151,8 +151,14 @@ const PREVIEW_TEXTURE_BUDGET: usize = 6 * 52 * 1024 * 1024;
 
 fn main() -> eframe::Result<()> {
     rustroom_app::console::attach_to_parent();
+    let (rgba, width, height) = rustroom_app::app_icon::rgba();
     let mut native_options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
+        viewport: egui::ViewportBuilder::default().with_icon(egui::IconData {
+            rgba,
+            width,
+            height,
+        }),
         ..Default::default()
     };
     // ⚠ MEASUREMENT SWITCH (2026-09-29): `RUSTROOM_DEBUG_WINDOW=1440x875` opens the window at that
@@ -163,7 +169,8 @@ fn main() -> eframe::Result<()> {
         .ok()
         .and_then(|v| rustroom_app::bar_plan::parse_size(&v))
     {
-        native_options.viewport = egui::ViewportBuilder::default()
+        native_options.viewport = native_options
+            .viewport
             .with_inner_size([w, h])
             .with_position([0.0, 25.0]);
     }

@@ -193,6 +193,40 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-17 — M11.4 `v0.1` piece 3a: the icon, the Windows installer, the release workflow (branch `v0.1-packaging-windows`)
+
+⏳ **Waiting on the author's try of the installer.** Gate on the code's tip (`e917dfc7`, on Windows): fmt, clippy,
+**4,744** passed, 0 failed, 32 ignored in 317 s — ⚠ at `-j 2`: at `-j 4` the static runtime's relink of every test
+binary and example ran out of memory on this page-file-less machine (LNK1102, and LNK1201 "error writing to program
+database"), and no test ran. Spec `docs/superpowers/specs/2026-11-17-v0.1-packaging-windows-design.md`,
+plan `docs/superpowers/plans/2026-11-17-v0.1-packaging-windows.md`. Piece 3 is split by machine (the author): **3a** here,
+**3b** the Mac app and **3c** the AppImage on their machines, from the briefs `…-packaging-mac-brief.md` and
+`…-packaging-linux-brief.md` in the specs folder.
+
+- **The icon: the aperture** — the author's pick of three concepts (aperture, tone curve, crop frame) drawn at 16–256 px
+  on dark and light taskbars. `packaging/icons/rustroom.svg` is the master; `render.py` (resvg, Python's standard
+  library) writes the committed PNGs (16–1024) and `rustroom.ico` (PNG images, 16–256). The window shows it on every
+  system (`rustroom_app::app_icon`, the 256 px PNG, decoded in the lib); the exe carries it with VERSIONINFO
+  (`winresource` in `build.rs`, Windows only, a warning — never a failure — if `rc.exe` is missing; `build.ps1`
+  refuses an exe without its version).
+- **The C++ runtime linked in** (`+crt-static` in `.cargo/config.toml`, libheif's `x64-windows-static`): every C
+  dependency is `cc`-built, none by CMake, so all of them follow; `dumpbin /dependents` lists no `MSVCP140`,
+  `VCRUNTIME140*` or `api-ms-win-crt-*` after it. ⚠ A `RUSTFLAGS` variable replaces the config's flags.
+- **The installer: per user, Inno Setup 6.7** (`packaging/windows/rustroom.iss`, `AppId` 240EB815-…, ⚠ fixed
+  forever) — 17 MB, built by `packaging/windows/build.ps1` (release exe → licences → `iscc` → SHA-256) in 141 s here.
+  **Checked by running it, with no admin rights:** a silent install into a scratch folder, its Start-menu entry and
+  Apps entry ("Rustroom 0.1.0"), the installed app starting, a silent uninstall removing all three — and the catalog
+  (`%LOCALAPPDATA%\rustroom`) and settings (`%APPDATA%\rustroom`) still there.
+- **Licences:** `cargo-about` 0.9.3 (⚠ installs its binary only with `--features cli`) writes
+  `THIRD-PARTY-LICENSES.html` — 560 crates under 16 licences; `about.toml` had to name `GPL-3.0-or-later`,
+  `LGPL-3.0-or-later` and `LGPL-2.1-only` exactly. Nine native texts are copied from their sources at build time
+  (LibRaw from `vendor/`, libheif and libde265 from vcpkg's `share/`, LittleCMS and LensFun's notice from their crates,
+  Inter and Phosphor from `assets/`) — never a copy kept in the repository.
+- **The release workflow** (`.github/workflows/release.yml`): a `v*` tag must equal the app's version, then the
+  Windows job runs `build.ps1` and a `release` job opens a DRAFT release with the installer and `SHA256SUMS`; a manual
+  run builds without releasing. ⚠ Unverified until the author's first tag or manual run. CI's Windows job moved to the
+  static triplet.
+
 ### 2026-11-17 — M11.4 `v0.1` piece 2 merged: Windows — it builds, the gate is green, it runs (branch `v0.1-windows`)
 
 ✅ **Merged 2026-11-17, confirmed by the author ("works, merge and delete the branch").** Gate on the tip (`f555e88f`, on Windows): fmt, clippy, **4,743** passed,

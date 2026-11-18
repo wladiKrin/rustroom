@@ -6,3 +6,10 @@ runner = "scripts/macos-run.sh"
 
 [target.x86_64-apple-darwin]
 runner = "scripts/macos-run.sh"
+
+# ⚠ v0.1 (piece 3a): on Windows the C++ runtime is linked INTO the exe, so it runs on a machine without Microsoft's
+# redistributable and the installer never needs an admin prompt for it. Every C dependency is built through `cc`,
+# which follows this; libheif comes from vcpkg's matching `x64-windows-static` triplet (CONTRIBUTING.md). A `RUSTFLAGS`
+# environment variable REPLACES this — the build then asks vcpkg for the `-static-md` triplet instead.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
