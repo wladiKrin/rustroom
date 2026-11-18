@@ -100,8 +100,11 @@ is_excluded() { grep -qxF "$1" <<<"$excluded"; }
 elves() {
     local f
     while IFS= read -r -d '' f; do
-        [ "$(head -c 4 "$f" | od -An -c | tr -d ' ')" = '177ELF' ] && echo "$f"
+        if [ "$(head -c 4 "$f" | od -An -c | tr -d ' ')" = '177ELF' ]; then echo "$f"; fi
     done < <(find "$appdir" -type f -print0)
+    # ⚠ Explicitly: the loop's status is its last test's, which a non-ELF file found last would make a failure (a
+    # sabotage found it, 2026-11-18).
+    return 0
 }
 
 # `ldd`'s answer for one file: "name path" per resolved library, "name not-found" for a missing one. ⚠ The whole
@@ -159,17 +162,23 @@ all="$(elves)" || fail "cannot list the AppDir"
 [ "$(wc -l <<<"$all")" -gt 2 ] || fail "the AppDir holds almost no ELF files - the walk went wrong"
 
 # Nothing may point outside the AppDir but at the excluded system libraries: resolved with an empty environment,
-# every library is found inside it or is on the list.
+# each file's OWN needs are found inside it or are on the list. ⚠ Own needs, as in the walk: what an excluded library
+# needs in turn (the system's libusb its libudev) is the system's; every bundled file is checked, so the closure
+# inside is covered.
 check_inside() {
-    local f deps name path
+    local f deps names name path
     while IFS= read -r f; do
-        deps="$(resolved "$f")" || fail "ldd could not read ${f#"$appdir"/}"
-        while read -r name path; do
+        names="$(needed "$f")" || fail "readelf could not read ${f#"$1"/}"
+        deps="$(resolved "$f")" || fail "ldd could not read ${f#"$1"/}"
+        while IFS= read -r name; do
             [ -n "$name" ] || continue
-            [ "$path" != not-found ] || fail "${f#"$appdir"/}: $name not found"
+            path="$(awk -v n="$name" '$1 == n { print $2; exit }' <<<"$deps")"
             case "$path" in "$1"/*) continue ;; esac
-            is_excluded "$name" || fail "${f#"$appdir"/} reaches outside the AppImage: $name => $path"
-        done <<<"$deps"
+            # The system's (the loader, which ldd names without an arrow, among them).
+            is_excluded "$name" && continue
+            [ -n "$path" ] && [ "$path" != not-found ] || fail "${f#"$1"/}: $name not found"
+            fail "${f#"$1"/} reaches outside the AppImage: $name => $path"
+        done <<<"$names"
     done <<<"$2"
 }
 check_inside "$appdir" "$all"
@@ -262,9 +271,15 @@ for f in "$lib"/*.so*; do
     case "$name" in
         libde265.so.*) pkg=libde265-0 ;;
         libexif.so.*) pkg=libexif12 ;;
-        libgphoto2.so.* | libgphoto2_port.so.*) pkg=libgphoto2-6 ;;
+        libgphoto2.so.*) pkg=libgphoto2-6 ;;
+        libgphoto2_port.so.*) pkg=libgphoto2-port12 ;;
+        # ICU through libxml2, which ptp2 — the PTP driver most cameras use — needs.
+        libicudata.so.* | libicuuc.so.*) pkg=libicu70 ;;
+        libjpeg.so.*) pkg=libjpeg-turbo8 ;;
         liblcms2.so.*) pkg=liblcms2-2 ;;
         libltdl.so.*) pkg=libltdl7 ;;
+        liblzma.so.*) pkg=liblzma5 ;;
+        libxml2.so.*) pkg=libxml2 ;;
         *) fail "no licence text for $name" ;;
     esac
     notice "${name%%.so*}-copyright.txt" "/usr/share/doc/$pkg/copyright"
