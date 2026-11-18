@@ -4,10 +4,12 @@
 #
 #     packaging/macos/build.sh [--floor <macOS version>]
 #
-# Needs: Homebrew's little-cms2, libheif, libgphoto2 and pkgconf; macOS's own otool, install_name_tool, codesign,
-# iconutil, plutil. Writes target/macos/Rustroom.app. The app's minimum macOS is MEASURED — the highest any file in the
-# bundle needs, which is that of the machine's Homebrew — and `--floor` refuses a bundle that needs more (the release
-# passes 15.0). Every step that fails stops the script. Design: docs/superpowers/specs/2026-11-18-v0.1-packaging-mac-design.md.
+# Needs: Homebrew's little-cms2, libheif, libgphoto2 and pkgconf; cargo-about (cargo install cargo-about --locked
+# --features cli); macOS's own otool, install_name_tool, codesign, iconutil, plutil, hdiutil. Writes
+# target/macos/Rustroom.app and target/macos/Rustroom-<version>-macos-arm64.dmg with its .sha256, and prints both. The
+# app's minimum macOS is MEASURED — the highest any file in the bundle needs, which is that of the machine's Homebrew —
+# and `--floor` refuses a bundle that needs more (the release passes 15.0). Every step that fails stops the script.
+# Design: docs/superpowers/specs/2026-11-18-v0.1-packaging-mac-design.md.
 set -euo pipefail
 
 fail() {
@@ -271,4 +273,15 @@ done < <(machos)
 codesign --force --sign - --timestamp=none "$app" || fail "codesign failed on the app"
 codesign --verify --deep --strict --verbose=2 "$app" || fail "the app's signature does not verify"
 
-echo "$app"
+# The disk image: the app and an Applications link to drag it onto — plain, no background picture.
+dmg="$out/Rustroom-$version-macos-arm64.dmg"
+stage="$out/dmg"
+mkdir -p "$stage"
+ditto "$app" "$stage/Rustroom.app"
+ln -s /Applications "$stage/Applications"
+hdiutil create -volname Rustroom -srcfolder "$stage" -format UDZO -ov "$dmg" >/dev/null || fail "hdiutil create failed"
+rm -rf "$stage"
+hash="$(shasum -a 256 "$dmg" | cut -d' ' -f1)"
+echo "$hash  $(basename "$dmg")" >"$dmg.sha256"
+echo "$dmg"
+echo "SHA-256 $hash"
