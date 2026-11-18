@@ -193,6 +193,48 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-18 — The display's colours on the GPU, and the table spaced by a square root (branch `display-gpu`)
+
+⏳ **Waiting on the author's look.** Gate on the code's tip (`da4440d7`, Windows, `-j 2`): fmt, clippy, **4,771** passed,
+0 failed, 32 ignored, no GPU test skipped. Asked for when the display's own colours merged ("then start on the GPU
+display transform for monitor profiles"). Spec `docs/superpowers/specs/2026-11-18-display-gpu-design.md`, plan
+`docs/superpowers/plans/2026-11-18-display-gpu.md`.
+
+- **What it cost before, measured** (`probe_straighten_drag`, new `PROBE_DISPLAY=m27q|p3`, an X-T4 RAF at the 3200 rung,
+  `RUSTROOM_DEBUG_RENDER`): a Straighten drag frame **13.3 ms on sRGB, 149.5 on the M27Q, 184.7 on P3** — far beyond
+  the morning's estimate (+15–20 ms), because a non-sRGB display turned off BOTH fast paths: geometry downloaded its
+  82 MB (43 ms here), the tail downloaded its float (~47 ms), and `pack` converted on the CPU (32 ms). On this PC's
+  PCIe GPU the downloads, not the conversion, were most of it.
+- **The design:** the GPU's last dispatch (`gpu_pipeline::quantize`) writes a SECOND plane — the same float pixel
+  through the display's table, line for line `DisplayProfile::lookup` — beside the sRGB plane the histogram and the
+  readout read; one buffer, one download (`GpuChain::run_rgba8*` take the table, return `Rgba8 { srgb, display }`).
+  `Packed::Rgba8.display` is the texture; `render.rs`'s `float_needed` and `handoff_ok` no longer look at the display.
+  A fixed space's table for the GPU is sampled from its exact formula (`Display::gpu_table`); the CPU keeps the formula.
+- **After:** **M27Q 24.7 ms, P3 24.6, sRGB 11.6**; tail frames after release 87 → 15 ms. The 13 ms left over sRGB is
+  the second plane's transfer (`RUSTROOM_DEBUG_XFER`: submit 4.7 → 10.0 ms, `to_vec` 3.9 → 8.5) — the shader is 0.35 ms
+  against 0.27–0.30 (`RUSTROOM_DEBUG_GPU_TIME`). ⛔ A cached table upload was tried and taken out: 0.64 → 0.52 ms,
+  within noise.
+- ⚠⚠ **Found on the way — a defect in the CPU path merged that morning: the table's grid was spaced EVENLY, and a
+  display curve that rises steeply from black cannot be followed by straight lines 1/32 apart.** A monitor ICC profile
+  with a gamma-2.2 curve was **4.66 steps** off LittleCMS near black, Adobe RGB's table 4.66 off its formula. The
+  points now sit at `(i/32)²` and a lookup indexes by `√x` (CPU and shader alike). Measured at 33 points, worst 8-bit
+  steps, even → root: identity 0.00 → 0.06, P3 0.26 → 0.13, Adobe RGB 4.66 → 0.27, ProPhoto 1.02 → 0.26, M27Q 0.28 →
+  0.14, gamma-2.2 ICC 4.66 → 0.28; the CPU lookup 19.4 → 20.9 ms a 3200 frame. ⛔ Raising the entries to 2.2 instead was
+  measured and refused: it fixed the gamma curves and broke sRGB's straight toe (P3 2.10, M27Q 1.56). ⚠ The test
+  samples gained near-black probes (the even spread held few) — what exposed it.
+- ⚠ **Known limit, not chased:** a display NARROWER than sRGB with a gamma curve stays 10–18 steps off in the near-zero
+  channel of colours at its gamut's edge under every spacing tried (even, 1.5, root; 33–65 points) — LittleCMS clips
+  there, so the kink is in the transform; on a gamma curve those steps are a sliver of light in a colour the panel
+  cannot show. Unclipped table entries changed nothing (LittleCMS already returns them clipped).
+- **The bounds, measured:** the GPU's display plane against the CPU — **M27Q 0 of 17,412 bytes differ**, P3 and Adobe
+  RGB ≤ 1 level (their CPU path is the exact formula); a render's texture GPU vs the CPU path ≤ 1 level (the sRGB frame's
+  own bound); the sRGB plane byte for byte. **Sabotages:** the even grid back → both table tests red (4.66); the shader
+  without its `sqrt` → the GPU test and the app's render test red (64 levels).
+- **Caught while building:** a test reference built from the in-memory ICC profile while the table read its bytes —
+  0.8 steps of pure file precision, so the reference reads the same bytes; an invented ¼-step bound the P3 table missed
+  (0.255) — replaced by the measured numbers; `R` is PowerShell's alias for `Invoke-History`, so a scripted edit helper
+  silently did nothing.
+
 ### 2026-11-18 — The display's own colours on Windows and Linux (branch `display-colour`)
 
 ✅ **Merged 2026-11-18 (`3627b754`), confirmed by the author ("works, merge both").** Gate on the code's tip (`08892f67`, Windows, `-j 2`): fmt, clippy, **4,765** passed,

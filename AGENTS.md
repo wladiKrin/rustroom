@@ -142,7 +142,7 @@ Only what stays true after a milestone closes belongs here; each story is in `do
   `bootstrap.rs` kept the app from compiling off macOS for four weeks, invisible to a gate run only on macOS.
   Development now happens on Linux and Windows too; a change to such a module is built on each before it merges.
 - ⚠⚠ The preview converts into a `color::Display` (a fixed space or a monitor's interned profile), chosen in ONE place,
-  `Settings::effective_display` — the OS matching colour itself → sRGB, never twice; `Display::is_srgb()` is the fast paths' one gate.
+  `Settings::effective_display` (the OS matching colour → sRGB); the GPU converts through `Display::gpu_table()` into the texture's own plane, the sRGB plane staying the histogram's; ⚠ a table's grid is spaced by a SQUARE ROOT, CPU and shader alike (evenly, a gamma-2.2 profile was 4.66 steps off).
 - ⚠ Big data lives in `Catalog::library_dir` (`%LOCALAPPDATA%` on Windows, never Roaming). A package is built by its
   `packaging/<os>/` script (the release workflow only calls it); icons come from `rustroom.svg` via `render.py`; ⚠⚠ the installer's `AppId` never changes.
 - ⚠⚠ **A test's directory comes from `test_dir::TempDir` (deleted on drop) or `test_dir::path` (kept,
