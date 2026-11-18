@@ -3,7 +3,7 @@
 //! ⚠ A Fujifilm body sends its shots only in **USB TETHER SHOOTING AUTO** (Set up → Connection
 //! setting → PC Connection Mode); as a card reader it lists its files but raises no events.
 
-use crate::trouble::{sentence, Trouble};
+use crate::trouble::{cause, sentence, Trouble};
 use crate::{Camera, CameraFile, Opener};
 use gphoto2::camera::CameraEvent;
 use gphoto2::error::ErrorKind;
@@ -23,6 +23,7 @@ fn say(e: gphoto2::Error) -> String {
         ErrorKind::CameraBusy | ErrorKind::NotSupported => Trouble::Refused,
         _ => Trouble::Other,
     };
+    let t = cause(t, || crate::usb_access::blocked_camera_here().is_some());
     sentence(t, &e.to_string())
 }
 
