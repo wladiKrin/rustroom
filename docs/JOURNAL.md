@@ -195,6 +195,9 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ### 2026-11-18 — On the Mac: a NaN pixel came out green on Metal (branch `fix-metal-nan-guard`)
 
+✅ **Merged 2026-11-18 (`1be03aea`) at the author's word ("yes, merge it").** The merge's tree is the gated tip's
+(`f1ebfc89`): fmt, clippy, **4,775 passed**, 0 failed, 32 ignored, no GPU test skipped, 877 s.
+
 The hand-off's first gate on the Mac (macOS 26.6, Apple Silicon): fmt and clippy green — the macOS-only modules still
 compile — and **4,774 passed, 1 failed**, 32 ignored, no GPU test skipped, in 648 s. The failure:
 `quantize::tests::the_display_plane_is_what_the_cpu_would_have_converted`, **252 levels** on the M27Q profile —
