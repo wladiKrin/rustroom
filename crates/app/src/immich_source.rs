@@ -28,9 +28,9 @@ pub fn host_slug(base_url: &str) -> String {
     }
 }
 
-/// Where this server's originals are cached.
+/// Where this server's originals are cached — under [`crate::user_cache::base`], never a test's user cache.
 pub fn cache_root(base_url: &str) -> PathBuf {
-    dirs::cache_dir()
+    crate::user_cache::base()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("rustroom")
         .join("immich")

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 /// The fills' directory.
 pub fn dir() -> Option<PathBuf> {
-    Some(dirs::cache_dir()?.join("rustroom").join("removals"))
+    Some(crate::user_cache::base()?.join("rustroom").join("removals"))
 }
 
 /// The file's first bytes, then its version.

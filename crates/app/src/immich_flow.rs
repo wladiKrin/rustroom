@@ -923,7 +923,10 @@ mod tests {
         let mut app = crate::test_app::for_test();
         app.settings.immich_url = "https://example.invalid".to_string();
         app.settings.immich_key = "k".to_string();
-        let root = std::path::Path::new("/cache/immich/host");
+        // ⚠ A test folder, never a literal like `/cache/immich/host`: the worker creates a download's folder before
+        // it fetches, and on Windows that literal is `C:\cache\…` — this test made it there (2026-11-18).
+        let dir = crate::test_app::TestDir::new("download_skip");
+        let root = dir.0.join("immich");
         let here = root.join("aaa.jpg");
         let missing = root.join("bbb.jpg");
         app.immich_present.insert("aaa.jpg".into());
@@ -942,12 +945,33 @@ mod tests {
         app.settings.immich_url = "https://example.invalid".to_string();
         app.settings.immich_key = "k".to_string();
         app.immich_present.insert("aaa.jpg".into());
+        let dir = crate::test_app::TestDir::new("download_present");
 
-        app.download_assets(&[std::path::PathBuf::from("/cache/immich/host/aaa.jpg")]);
+        app.download_assets(&[dir.0.join("immich").join("aaa.jpg")]);
 
         assert_eq!(app.immich_download_total, 0);
         assert!(app.immich_download_pending.is_empty());
         assert!(app.status.contains("already downloaded"), "{}", app.status);
+    }
+
+    /// ⚠⚠ The test app's Immich cache lies in the run's test folder, never the user's own cache — a test here once
+    /// created `<cache>/rustroom/immich/https___example_invalid` in the author's (2026-11-18). Asserted on the path
+    /// the code derives, against the folder `test_dir` made (`AGENTS.md`: never a host's absolute path).
+    #[test]
+    fn the_test_apps_immich_cache_is_in_the_test_folder() {
+        let mut app = crate::test_app::for_test();
+        app.settings.immich_url = "https://example.invalid".to_string();
+        let root = app.immich_cache_root().expect("a URL gives a cache root");
+        let probe = test_dir::path("probe");
+        let run = probe
+            .parent()
+            .expect("a test folder sits in its run's folder");
+        assert!(
+            root.starts_with(run),
+            "{} is outside {}",
+            root.display(),
+            run.display()
+        );
     }
 
     /// ⚠ The progress line is empty when nothing is running, so the toolbar has nothing to draw.

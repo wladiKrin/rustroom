@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 /// The denoise cache's directory.
 pub fn dir() -> Option<PathBuf> {
-    Some(dirs::cache_dir()?.join("rustroom").join("denoise"))
+    Some(crate::user_cache::base()?.join("rustroom").join("denoise"))
 }
 
 /// The cache key of `photo` decoded at `tier`, denoised by `net` — its model and its recipe

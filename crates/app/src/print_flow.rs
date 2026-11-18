@@ -119,7 +119,7 @@ impl RustroomApp {
             return;
         }
         let root = self.print.staging_root.clone().unwrap_or_else(|| {
-            dirs::cache_dir()
+            rustroom_app::user_cache::base()
                 .unwrap_or_else(std::env::temp_dir)
                 .join("rustroom")
                 .join("print")
