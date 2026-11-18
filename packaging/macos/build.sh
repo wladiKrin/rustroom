@@ -311,7 +311,8 @@ done
 # Signing, ad hoc: Apple Silicon runs no unsigned code. Every library and driver first, then the app.
 while IFS= read -r m; do
     [ "$m" = "$contents/MacOS/Rustroom" ] && continue
-    codesign --force --sign - --timestamp=none "$m" 2>/dev/null || fail "codesign failed on ${m#"$app"/}"
+    # codesign says "replacing existing signature" on success, and its reason on failure — kept for the message.
+    err="$(codesign --force --sign - --timestamp=none "$m" 2>&1)" || fail "codesign failed on ${m#"$app"/}: $err"
 done <<<"$all"
 codesign --force --sign - --timestamp=none "$app" || fail "codesign failed on the app"
 codesign --verify --deep --strict --verbose=2 "$app" || fail "the app's signature does not verify"
@@ -322,7 +323,17 @@ stage="$out/dmg"
 mkdir -p "$stage"
 ditto "$app" "$stage/Rustroom.app"
 ln -s /Applications "$stage/Applications"
-hdiutil create -volname Rustroom -srcfolder "$stage" -format UDZO -ov "$dmg" >/dev/null || fail "hdiutil create failed"
+# ⚠ hdiutil is reported to fail now and then on CI's macOS runners ("Resource busy") — five tries, five seconds apart.
+made=""
+for try in 1 2 3 4 5; do
+    if err="$(hdiutil create -volname Rustroom -srcfolder "$stage" -format UDZO -ov "$dmg" 2>&1)"; then
+        made=1
+        break
+    fi
+    echo "build.sh: hdiutil create failed (try $try of 5): $err" >&2
+    [ "$try" -eq 5 ] || sleep 5
+done
+[ -n "$made" ] || fail "hdiutil create failed five times"
 rm -rf "$stage"
 hash="$(shasum -a 256 "$dmg" | cut -d' ' -f1)"
 echo "$hash  $(basename "$dmg")" >"$dmg.sha256"
