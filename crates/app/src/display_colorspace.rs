@@ -12,7 +12,7 @@
 //! resize and surface rebuild.
 //!
 //! ⚠ Deliberately thin, because none of it can be unit tested — it needs a live window and a real
-//! Metal layer. The decision it feeds is a pure function; see `Settings::effective_display_space`.
+//! Metal layer. The decision it feeds is a pure function; see `Settings::effective_display`.
 
 use objc2::rc::Retained;
 use objc2::Message;

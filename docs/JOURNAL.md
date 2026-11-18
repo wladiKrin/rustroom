@@ -193,6 +193,15 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-18 — The Windows part closed: `main` pushed, a hand-off for the next machine
+
+The author clicked through the in-window menu bar on Windows — fine (M11.2's *"never been run"*, ✅; on Windows it is
+the only menu); there is no second monitor at the Windows PC, so multi-monitor stays open. `main` pushed at his word,
+carrying `v0.1` pieces 2 and 3a, the display's own colours and their GPU transform, and the test-cache fix — none built
+on the Mac or Arch yet. ⚠ The hand-off says to run the whole gate there FIRST: the display path's types changed, and the
+macOS-only modules have not been compiled since 2026-11-16. Hand-off: `docs/superpowers/specs/2026-11-18-handoff-from-windows.md`.
+Also: `display_colorspace.rs`'s doc named `Settings::effective_display_space`, renamed that morning — fixed.
+
 ### 2026-11-18 — No test writes into the user's own cache (branch `fix-test-user-cache`)
 
 ✅ **Merged 2026-11-18 (`d239d241`) at the author's word ("merge it"); `main` re-gated: 4,773 passed, the leftover

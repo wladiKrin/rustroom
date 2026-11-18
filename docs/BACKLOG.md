@@ -40,7 +40,7 @@ and a pointer, not deleted.
 | **M10.17** merge | P-24 — HDR (a, ✅ merged 2026-10-27, confirmed by use); panorama (b, ✅ merged 2026-10-28, confirmed by use) |
 | **M10.18** new modules | P-25 (brought in by the author) — tethering (a, ✅ merged 2026-10-29, confirmed by use with the X-T4: "works"); GPS and a map (b, ✅ merged 2026-10-28, confirmed by use: "works"); people tagging (c, ✅ merged 2026-10-29, confirmed by use: "works"); publish services (d, ✅ merged 2026-11-03, confirmed by use: "okay that works"); print (e, ✅ merged 2026-11-04, Save PDF confirmed by use — a printer unseen) |
 | **M10.19** found in use | HEIC/HEIF support (a, new 2026-10-01 — never an entry here; ✅ merged 2026-11-11, confirmed by use — a container-rotated real file unseen); *Move to folder left one thing out* (b, ✅ merged 2026-11-11, confirmed by use); marking several folders and forgetting them from a right-click menu (c, ✅ 2026-10-12 — found in use and built the same day at the author's request); **the Retouch panel as two tasks, Paint · Find** (d, new 2026-10-22 — the author, after c3: too many buttons in one place, patches and removals kept apart, drawing to look again invisible; his pick, option B of `https://claude.ai/artifact/7ACHJJ2zFpWPJ3WspdRYcC`; ✅ merged 2026-10-22, confirmed by use) |
-| **M11.2** Windows & Linux | *The in-window menu bar has never been run*; *Multi-monitor on Linux and Windows*; P-28 — ✅ Windows: builds, gate green, runs (`v0.1` piece 2, merged 2026-11-17, confirmed by the author) |
+| **M11.2** Windows & Linux | ✅ *The in-window menu bar* — clicked through on Windows by the author (2026-11-18); *Multi-monitor on Linux and Windows* (no second monitor at the Windows PC); P-28 — ✅ Windows: builds, gate green, runs (`v0.1` piece 2, merged 2026-11-17, confirmed by the author) |
 | **M11.3** / **M11.5** | *Contributor-facing documentation* (✅ merged 2026-11-16) / *A plugin system* |
 | **Going public** (after M11.5) | *Going public* (recorded 2026-11-16 by M11.3) |
 
@@ -111,7 +111,7 @@ still carries the reasoning that matters — read the entry, then build it under
 | Decode a full-size JPEG at 1/8 scale for thumbnails | ⛔ **MEASURED AND REJECTED, 2026-09-10 — and this entry's own earlier claim was wrong.** It said DCT-scaled decode was "the only lever that moves the cold folder open", implying a large win. Measured: **1.6×** (222.3 → 143.2 ms), not the ~8× the framing suggested. Three reasons, each checked rather than argued. **(1) Entropy decoding is irreducible** — Huffman work is proportional to the compressed data, not the output size, so DCT scaling skips only the IDCT, upsampling and colour convert. Of a 26 Mpx camera JPEG's 226.9 ms, decode is **178.1 ms (78%)** and the resize only 43.8 ms. **(2) `image` 0.25 cannot do it at all** — its backend is `zune-jpeg`, whose 1×1/4×4 IDCT paths are a sparse-coefficient optimisation producing full-size blocks, not an output-scale knob. The only Rust crate that offers `scale()` is `jpeg-decoder`, which is a **slower decoder than the one already in the tree**, eating much of the gain. **(3) The embedded EXIF thumbnail is 160×120** — far too small for a 512 px cell, so the trick that makes RAW cheap does not transfer. ⚠⚠ **And M8.2 removed most of the motive**: the cold open now happens **once per folder, ever**, so this would spend a second JPEG decoder in the tree to turn a one-off ~26 s into ~19 s. Reopen only if a faster scaled decoder appears in `image` itself. |
 | Replace libraw's demosaic | ✅ **M8.4, 2026-09-10 — decided OUT of scope**, and the default tier moved `Fast` → `Better` instead. `Better` sits within 0.22–0.30 of an 8-bit level of `Best` on foliage and is indistinguishable from it at 4×, so a Markesteijn/AMaZE-class reimplementation buys nothing measurable. ⚠ Costs ~2.9 s → ~7.5 s per photo opened. `specs/2026-09-10-demosaic-decision.md` |
 | `main.rs` is too large | ✅ **W0, 2026-09-01** — 4,375 → 681 (917 as of 2026-09-08); `canvas.rs` 1,890 → 7 modules |
-| The in-window menu bar has never been run | **M11.2** (was M9.2, then M10.2) |
+| The in-window menu bar has never been run | ✅ **M11.2** — clicked through on Windows by the author, 2026-11-18 |
 | Immich integration | **M9.1** |
 | Contributor-facing documentation | **M11.3** (was M9.3, then M10.3) |
 | A plugin system | **M11.5** (was M9.5, then M10.5) |
@@ -1467,8 +1467,8 @@ is the only thing to trust here.
 ## App and UI
 
 - ✅ **`main.rs` — split by W0 on 2026-09-01**, 4,375 → 681, 917 as of 2026-09-08. ⚠ The files now over the ~600 marker are `settings.rs`, `edit-model/src/lib.rs`, `catalog/src/db.rs`, `batch_export.rs`, `panel/geometry.rs` and `library.rs`; `CLAUDE.md` names each when touched.
-- **The in-window menu bar has never been run** → **M11.2** — only unit-tested — there is no Linux machine here
-  and macOS never shows it. Flip the `!cfg!(target_os = "macos")` guard in `shell.rs` to look at it.
+- ✅ **The in-window menu bar has been run** — clicked through on Windows by the author (2026-11-18), where it is the
+  only menu; as recorded: only unit-tested, no Linux machine here and macOS never shows it. Flip the `!cfg!(target_os = "macos")` guard in `shell.rs` to look at it.
   Relatedly, **`native_menu.rs` can rot silently**, since CI never compiles it.
 - ~~**No user-defined keyboard shortcuts.**~~ ✅ **M10.9b, 2026-10-10.**
 - ~~**The accent colour reaches only egui's own widgets.**~~ ✅ **Settled by the design language** (`DESIGN.md`
@@ -1991,7 +1991,7 @@ The repository goes public once **all** of Phase 11 is done. The steps, from the
    the file per OS, minimum OS versions, bundled libraries, signing, the graphics-card requirement —
    ✅ Windows' row and CONTRIBUTING's Windows steps filled by `v0.1` pieces 2 and 3a, 2026-11-17; the Mac and Linux
    rows wait for 3b and 3c); check every feature claim per OS (as of 2026-11-16:
-   printing on Windows is to a PDF only, tethering on Windows unproven, printing to a printer never
+   printing on Windows is to a PDF only, tethering not on Windows (switched off there, and it says so), printing to a printer never
    seen working — the README offers PDF only until it is); add plugins if M11.5 shipped
    them; measure the test count again.
 1. **Rewrite the history once**, as the very last step, with `git-filter-repo`: the Immich server's
