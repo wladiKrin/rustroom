@@ -237,7 +237,13 @@ script, Apple Silicon only, Homebrew's libheif as it is, a plain `.dmg`), plan `
 - **The final review** (a fresh reviewer): no Critical; two Minors re-graded and fixed — a symlinked launch missed
   the bundle's folders (`a_symlink_to_the_executable_still_finds_the_bundle`, red then green), and an exported
   `CARGO_TARGET_DIR` made the script package an old binary (now `--target-dir` the checkout's `target/`). Nine minors
-  deferred (the plan's ledger): among them `--floor` compared as text, `hdiutil`'s occasional "Resource busy" on CI.
+  deferred; **four fixed the same day on branch `harden-macos-build`**, each shown failing first by a sabotaged copy of
+  the script: `--floor` is a version or refused (`abc` had passed every bundle) and compared as three numbers (`26`
+  had refused a bundle measured at `26.0`); every `otool` read is captured and a failure stops the script naming the
+  file (a failing `otool` had ended it with NO message, past the outside-path check); the floor's `awk` reads the
+  captured answer (its `exit` on a pipe gave 141 under `pipefail`, shown on a 300,000-line answer); `hdiutil create`
+  gets five tries (one failure had ended the build); `codesign`'s own reason is in the message. Left deferred: files
+  picked by extension, the untested `@rpath` branch, the header's tool list.
 - **The release workflow** has a `macos` job (`macos-15`, `build.sh --floor 15.0`); the release needs it. ⚠ Unrun.
 - **Left for the author's try:** the Dock's icon and name, a RAW and a HEIC, export, the map, the Immich keys' prompt,
   **tethering with the X-T4 from the installed app** (`lsof` must list the bundle's `ptp2.so`), and a quarantined copy —

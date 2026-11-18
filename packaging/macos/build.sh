@@ -29,7 +29,8 @@ floor=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --floor)
-            [ $# -ge 2 ] || fail "--floor needs a macOS version, such as 15.0"
+            [ $# -ge 2 ] && [[ "$2" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] ||
+                fail "--floor needs a macOS version such as 15.0, not '${2:-}'"
             floor="$2"
             shift 2
             ;;
@@ -83,15 +84,28 @@ done
 cp "$io_src"/*.so "$iolibs/"
 chmod u+w "$camlibs"/*.so "$iolibs"/*.so
 
-# A Mach-O's own install name (a library's), its references, its LC_RPATH entries.
-own_id() { otool -D "$1" | tail -n +2; }
+# A Mach-O's own install name (a library's), its references, its LC_RPATH entries. ⚠ Each reads otool's whole answer
+# into a variable first and returns 1 if otool fails, and every caller takes the result through `x="$(…)" || fail`:
+# a failure inside `< <(…)` or a pipeline is lost, and an empty answer would pass the outside-path check (the review
+# of piece 3b; a sabotaged otool once ended the script with no message at all).
+own_id() {
+    local out
+    out="$(otool -D "$1")" || return 1
+    tail -n +2 <<<"$out"
+}
 references() {
-    local id
-    id="$(own_id "$1")"
-    otool -L "$1" | tail -n +2 | sed -E 's/^[[:space:]]+//; s/ \(compatibility version.*$//' |
+    local id out
+    id="$(own_id "$1")" || return 1
+    out="$(otool -L "$1")" || return 1
+    tail -n +2 <<<"$out" | sed -E 's/^[[:space:]]+//; s/ \(compatibility version.*$//' |
         while IFS= read -r ref; do [ "$ref" = "$id" ] || echo "$ref"; done
 }
-rpaths() { otool -l "$1" | awk '/cmd LC_RPATH/ { r = 1 } r && $1 == "path" { print $2; r = 0 }'; }
+rpaths() {
+    local out
+    out="$(otool -l "$1")" || return 1
+    awk '/cmd LC_RPATH/ { r = 1 } r && $1 == "path" { print $2; r = 0 }' <<<"$out"
+}
+unreadable() { fail "otool could not read ${1#"$app"/}"; }
 is_system() {
     case "$1" in /System/* | /usr/lib/*) return 0 ;; *) return 1 ;; esac
 }
@@ -99,17 +113,19 @@ is_system() {
 # Where a reference made by SOURCE (the file's ORIGINAL place, which its @loader_path means) points.
 resolve() {
     local ref="$1" source="$2"
-    local dir rp
+    local dir rp rps
     dir="$(dirname "$source")"
     case "$ref" in
         @rpath/*)
+            rps="$(rpaths "$source")" || unreadable "$source"
             while IFS= read -r rp; do
+                [ -n "$rp" ] || continue
                 rp="${rp/@loader_path/$dir}"
                 if [ -e "$rp/${ref#@rpath/}" ]; then
                     echo "$rp/${ref#@rpath/}"
                     return
                 fi
-            done < <(rpaths "$source")
+            done <<<"$rps"
             fail "$source: cannot resolve $ref through its rpaths"
             ;;
         @loader_path/*) echo "$dir/${ref#@loader_path/}" ;;
@@ -127,16 +143,18 @@ i=0
 while [ $i -lt ${#sources[@]} ]; do
     source="${sources[$i]}"
     i=$((i + 1))
+    refs="$(references "$source")" || unreadable "$source"
     while IFS= read -r ref; do
+        [ -n "$ref" ] || continue
         is_system "$ref" && continue
         name="$(basename "$ref")"
         [ -e "$frameworks/$name" ] && continue
-        target="$(resolve "$ref" "$source")"
+        target="$(resolve "$ref" "$source")" || exit 1
         [ -e "$target" ] || fail "$source needs $ref, which does not exist"
         cp -L "$target" "$frameworks/$name"
         chmod u+w "$frameworks/$name"
         sources+=("$target")
-    done < <(references "$source")
+    done <<<"$refs"
 done
 
 machos() {
@@ -154,51 +172,74 @@ relink() {
 }
 
 # The rewrite: every reference to @rpath/<name>, every old rpath gone, one new rpath per kind of file.
+all="$(machos)" || fail "could not list the bundle's files"
 while IFS= read -r m; do
     args=()
     case "$m" in *.dylib) args+=(-id "@rpath/$(basename "$m")") ;; esac
+    refs="$(references "$m")" || unreadable "$m"
+    rps="$(rpaths "$m")" || unreadable "$m"
     while IFS= read -r ref; do
+        [ -n "$ref" ] || continue
         is_system "$ref" || args+=(-change "$ref" "@rpath/$(basename "$ref")")
-    done < <(references "$m")
-    while IFS= read -r rp; do args+=(-delete_rpath "$rp"); done < <(rpaths "$m")
+    done <<<"$refs"
+    while IFS= read -r rp; do [ -z "$rp" ] || args+=(-delete_rpath "$rp"); done <<<"$rps"
     [ ${#args[@]} -eq 0 ] || relink "${args[@]}" "$m"
     case "$m" in
         "$contents/MacOS/"*) relink -add_rpath "@executable_path/../Frameworks" "$m" ;;
         "$frameworks/"*) relink -add_rpath "@loader_path" "$m" ;;
         *) relink -add_rpath "@loader_path/../../../Frameworks" "$m" ;;
     esac
-done < <(machos)
+done <<<"$all"
 
 # Nothing may point outside the bundle and the system.
 while IFS= read -r m; do
+    named="$(own_id "$m" && references "$m" && rpaths "$m")" || unreadable "$m"
     while IFS= read -r p; do
         case "$p" in
-            /System/* | /usr/lib/* | @rpath/* | @executable_path/* | @loader_path | @loader_path/*) ;;
+            '' | /System/* | /usr/lib/* | @rpath/* | @executable_path/* | @loader_path | @loader_path/*) ;;
             *) fail "${m#"$app"/} still names $p" ;;
         esac
-    done < <(own_id "$m"; references "$m"; rpaths "$m")
-done < <(machos)
+    done <<<"$named"
+done <<<"$all"
+
+# A macOS version as three numbers, so that 15, 15.0 and 15.0.0 are one version to `sort -V` (which puts 15 before 15.0).
+three() {
+    local a b c
+    IFS=. read -r a b c <<<"$1"
+    echo "${a:-0}.${b:-0}.${c:-0}"
+}
+# Whether macOS $1 is later than $2.
+newer() {
+    local x y
+    x="$(three "$1")"
+    y="$(three "$2")"
+    [ "$x" != "$y" ] && [ "$(printf '%s\n%s\n' "$x" "$y" | sort -V | tail -1)" = "$x" ]
+}
 
 # The floor, measured: the highest minimum macOS any file in the bundle was built for.
+# ⚠ awk reads the captured answer, never a pipe from otool: its `exit` closing a pipe that otool still writes to ends
+# otool with SIGPIPE, and under pipefail the script with it — silently.
 min_macos() {
-    otool -l "$1" | awk '
+    local out
+    out="$(otool -l "$1")" || return 1
+    awk '
         /cmd LC_BUILD_VERSION/ { b = 1 } b && $1 == "minos" { print $2; exit }
-        /cmd LC_VERSION_MIN_MACOSX/ { v = 1 } v && $1 == "version" { print $2; exit }'
+        /cmd LC_VERSION_MIN_MACOSX/ { v = 1 } v && $1 == "version" { print $2; exit }' <<<"$out"
 }
 need=""
 needers=""
 while IFS= read -r m; do
-    v="$(min_macos "$m")"
+    v="$(min_macos "$m")" || unreadable "$m"
     [ -n "$v" ] || fail "${m#"$app"/} names no minimum macOS"
-    if [ -z "$need" ] || [ "$(printf '%s\n%s\n' "$need" "$v" | sort -V | tail -1)" != "$need" ]; then
+    if [ -z "$need" ] || newer "$v" "$need"; then
         need="$v"
         needers="$(basename "$m")"
-    elif [ "$v" = "$need" ]; then
+    elif [ "$(three "$v")" = "$(three "$need")" ]; then
         needers="$needers $(basename "$m")"
     fi
-done < <(machos)
+done <<<"$all"
 echo "The bundle needs macOS $need ($(echo "$needers" | wc -w | tr -d ' ') files, among them $(echo "$needers" | cut -d' ' -f1-3))"
-if [ -n "$floor" ] && [ "$(printf '%s\n%s\n' "$floor" "$need" | sort -V | tail -1)" != "$floor" ]; then
+if [ -n "$floor" ] && newer "$need" "$floor"; then
     fail "the bundle needs macOS $need ($(echo "$needers" | cut -d' ' -f1)), more than the required $floor"
 fi
 
@@ -270,8 +311,9 @@ done
 # Signing, ad hoc: Apple Silicon runs no unsigned code. Every library and driver first, then the app.
 while IFS= read -r m; do
     [ "$m" = "$contents/MacOS/Rustroom" ] && continue
-    codesign --force --sign - --timestamp=none "$m" 2>/dev/null || fail "codesign failed on ${m#"$app"/}"
-done < <(machos)
+    # codesign says "replacing existing signature" on success, and its reason on failure — kept for the message.
+    err="$(codesign --force --sign - --timestamp=none "$m" 2>&1)" || fail "codesign failed on ${m#"$app"/}: $err"
+done <<<"$all"
 codesign --force --sign - --timestamp=none "$app" || fail "codesign failed on the app"
 codesign --verify --deep --strict --verbose=2 "$app" || fail "the app's signature does not verify"
 
@@ -281,7 +323,17 @@ stage="$out/dmg"
 mkdir -p "$stage"
 ditto "$app" "$stage/Rustroom.app"
 ln -s /Applications "$stage/Applications"
-hdiutil create -volname Rustroom -srcfolder "$stage" -format UDZO -ov "$dmg" >/dev/null || fail "hdiutil create failed"
+# ⚠ hdiutil is reported to fail now and then on CI's macOS runners ("Resource busy") — five tries, five seconds apart.
+made=""
+for try in 1 2 3 4 5; do
+    if err="$(hdiutil create -volname Rustroom -srcfolder "$stage" -format UDZO -ov "$dmg" 2>&1)"; then
+        made=1
+        break
+    fi
+    echo "build.sh: hdiutil create failed (try $try of 5): $err" >&2
+    [ "$try" -eq 5 ] || sleep 5
+done
+[ -n "$made" ] || fail "hdiutil create failed five times"
 rm -rf "$stage"
 hash="$(shasum -a 256 "$dmg" | cut -d' ' -f1)"
 echo "$hash  $(basename "$dmg")" >"$dmg.sha256"
