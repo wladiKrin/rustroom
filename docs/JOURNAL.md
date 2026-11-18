@@ -195,7 +195,11 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ### 2026-11-18 — The display's colours on the GPU, and the table spaced by a square root (branch `display-gpu`)
 
-⏳ **Waiting on the author's look.** Gate on the code's tip (`da4440d7`, Windows, `-j 2`): fmt, clippy, **4,771** passed,
+✅ **Merged 2026-11-18 (`54027179`), the author: "works, merge".** ⚠ His session ran with Windows' Auto Color
+Management ON (switched on since the morning), so Automatic chose sRGB — "The system matches the colours", the
+OS-managed branch seen working for the first time (210 of 210 frames packed `Space(Srgb)`, `display_probe`:
+`os_managed: true`). The GPU path itself was therefore seen only through the probe and the tests, not in his GUI
+session. Gate on the code's tip (`da4440d7`, Windows, `-j 2`): fmt, clippy, **4,771** passed,
 0 failed, 32 ignored, no GPU test skipped. Asked for when the display's own colours merged ("then start on the GPU
 display transform for monitor profiles"). Spec `docs/superpowers/specs/2026-11-18-display-gpu-design.md`, plan
 `docs/superpowers/plans/2026-11-18-display-gpu.md`.
@@ -272,8 +276,9 @@ display transform for monitor profiles"). Spec `docs/superpowers/specs/2026-11-1
   rewritten around the measured value; an edit that put `parse_settings` between `keys_of` and its doc comment —
   moved, and `git diff | grep '^-.*///'` is empty; the frame's pump read the REAL monitor inside tests — the gathering
   is injected now (`display_gather`), empty in the test app.
-- ⚠ **Unverified:** Linux (its branch compiles only there — CI and the author's Arch), Windows' Auto Color Management
-  switched on and followed, two monitors.
+- ⚠ **Unverified:** Linux (its branch compiles only there — CI and the author's Arch), two monitors. Windows' Auto
+  Color Management ON is detected at startup (seen 2026-11-18, the GPU entry above); switching it while Rustroom
+  runs is still unseen.
 
 ### 2026-11-17 — M11.4 `v0.1` piece 3a: the icon, the Windows installer, the release workflow (branch `v0.1-packaging-windows`)
 
