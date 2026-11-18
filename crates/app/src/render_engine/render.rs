@@ -99,16 +99,16 @@ pub(super) fn render_cached_with(
     let ai_maps = brush_cache.ai.read().expect("ai maps").clone();
     let walk = super::prefix::plan(edits, buffer, lens, scale, &spec, cache, &ai_maps);
     let debug_steps = walk.debug_steps;
-    // ⚠⚠ **When the last step may run WITHOUT a download.** A whole-frame render, sRGB display,
-    // and none of the views that need float pixels (proof, visualize, grade range). Its output
-    // then lives only as the resident final; the tail runs from it, and the settle downloads it.
+    // ⚠⚠ **When the last step may run WITHOUT a download.** A whole-frame render and none of the
+    // views that need float pixels (proof, visualize, grade range). Its output then lives only as
+    // the resident final; the tail runs from it, and the settle downloads it. ⚠ ANY display since
+    // 2026-11-18: the GPU converts the texture through the display's table (`TailRun::display`).
     let handoff_ok = handoff
         && gpu_tail
         && region.is_none()
         && grade_view.is_none()
         && visualize.is_none()
-        && soft_proof.is_none()
-        && display_space.is_srgb();
+        && soft_proof.is_none();
     let (start, img) = super::prefix::resume(&walk, buffer, buffer_long, cache);
     let (scoped, was_scoped) = super::scoped::scope(&walk, region, start, &img);
     let super::prefix::PrefixOut {
@@ -168,16 +168,17 @@ pub(super) fn render_cached_with(
             t_cov.elapsed().as_secs_f64() * 1000.0
         );
     }
-    // ⚠⚠ **M8.3g's gate, derived ONCE and passed down rather than re-derived.** Three things
-    // downstream need the float image, and each is a view mode or a setting:
+    // ⚠⚠ **M8.3g's gate, derived ONCE and passed down rather than re-derived.** Two things
+    // downstream need the float image, and each is a view mode:
     //
-    //   1. a **non-sRGB display space** — `pack` converts from the float deliberately, because an
-    //      8-bit → 8-bit conversion costs roughly 0.8 bits and bands a smooth sky. ⚠ Opt-in and
-    //      Linux/Windows-only: on macOS `tag_as_srgb` succeeds, so `effective_display_space`
-    //      returns `Srgb` whatever the dropdown says.
-    //   2. **Visualize Spots** — `edge_image` is computed from the float.
-    //   3. **soft proofing** — the ProPhoto run is decoded back to the working space to test the
+    //   1. **Visualize Spots** — `edge_image` is computed from the float.
+    //   2. **soft proofing** — the ProPhoto run is decoded back to the working space to test the
     //      gamut, which an 8-bit round trip cannot support.
+    //
+    // ⚠ A **non-sRGB display** was a third until 2026-11-18 — `pack` converted from the float,
+    // because an 8-bit → 8-bit conversion bands a smooth sky. The GPU's last dispatch now converts
+    // from the same float, through the display's table, into a second plane (`quantize.rs`); the
+    // CPU conversion in `pack` stays for a frame the GPU did not render.
     //
     // ⚠ The **grade range view** is a fourth and needs nothing: it bypasses `accelerate` entirely,
     // building its own halves through `build_pipeline_split_tapped`.
@@ -185,7 +186,7 @@ pub(super) fn render_cached_with(
     // ⚠ A four-part condition spanning two crates is the shape this project's record says goes
     // wrong silently, so the other half — "is this chain last, and does it end in
     // `output_transform`" — is answered by construction inside `accelerate` rather than here.
-    let float_needed = !display_space.is_srgb() || visualize.is_some() || soft_proof.is_some();
+    let float_needed = visualize.is_some() || soft_proof.is_some();
     let tail = super::tail::TailSpec {
         edits,
         scale,
@@ -238,6 +239,7 @@ pub(super) fn render_cached_with(
         walk: &walk,
         tail_key: &tail_key,
         refused,
+        display: display_space,
     };
     let (input, from_resident, k) =
         super::tail::resolve_input(run, input, pw, ph, (&img, img_step), cache);
@@ -1156,13 +1158,25 @@ mod tests {
     /// A Straighten frame whose tail is one GPU chain (`hsl_edits` clears the cost gate), which is
     /// what a handoff needs, rendered with the handoff on or off.
     fn handed(angle: f32, handoff: bool, cache: &mut PrefixCache) -> (RenderedFrame, Ran) {
+        handed_for(angle, handoff, color::Display::SRGB, true, cache)
+    }
+
+    /// [`handed`] for a display, with the GPU tail on or off.
+    fn handed_for(
+        angle: f32,
+        handoff: bool,
+        display_space: color::Display,
+        gpu_tail: bool,
+        cache: &mut PrefixCache,
+    ) -> (RenderedFrame, Ran) {
         let mut e = hsl_edits();
         e.geometry.angle = angle;
         render_cached_with(
             &hazy_buffer(),
             &e,
             FrameSpec {
-                gpu_tail: true,
+                gpu_tail,
+                display_space,
                 ..FrameSpec::fit(200)
             },
             1.0,
@@ -1207,6 +1221,66 @@ mod tests {
         );
         assert_eq!(a.rgba, b.rgba, "the handoff must not change a byte");
         assert_eq!(a.hist, b.hist);
+    }
+
+    /// ⚠⚠ **A monitor's profile keeps both fast paths (2026-11-18)** — the frame hands off and downloads bytes, where
+    /// a profile used to turn both off and cost a Straighten drag 150 ms a frame instead of 13 at the 3200 rung. Its
+    /// sRGB channel and histogram are an sRGB display's frame byte for byte; its texture is what the CPU path shows,
+    /// within the GPU tail's bound (`the_byte_path_and_the_float_path_produce_the_same_frame`) and the GPU lookup's
+    /// (`quantize.rs`).
+    #[test]
+    fn a_monitors_profile_keeps_the_fast_paths_and_shows_what_the_cpu_shows() {
+        if gpu_pipeline::shared().is_none() {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        }
+        let e = color::edid::parse(include_bytes!("../../../color/testdata/m27q.edid")).unwrap();
+        let m27q = color::Display::Profile(
+            color::DisplayProfile::from_primaries("M27Q", &e.primaries).unwrap(),
+        );
+        let (fast, ran) = handed_for(3.0, true, m27q, true, &mut PrefixCache::default());
+        assert!(ran.handoff, "a profile hands off too");
+        assert!(ran.bytes, "and its tail downloads bytes");
+        let (srgb, ran) = handed_for(
+            3.0,
+            true,
+            color::Display::SRGB,
+            true,
+            &mut PrefixCache::default(),
+        );
+        assert!(
+            ran.handoff && ran.bytes,
+            "fixture check: the sRGB frame is on the same path"
+        );
+        assert_eq!(
+            fast.srgb, srgb.srgb,
+            "the photograph's bytes follow no monitor"
+        );
+        assert_eq!(fast.hist, srgb.hist, "nor does the histogram");
+        let moved = fast
+            .rgba
+            .iter()
+            .zip(fast.srgb.iter())
+            .filter(|(a, b)| a.abs_diff(**b) > 5)
+            .count();
+        assert!(
+            moved > 100,
+            "premise: the profile moves the texture ({moved})"
+        );
+        let (cpu, ran) = handed_for(3.0, false, m27q, false, &mut PrefixCache::default());
+        assert!(!ran.bytes, "fixture check: the CPU path converts in `pack`");
+        let worst = fast
+            .rgba
+            .iter()
+            .zip(cpu.rgba.iter())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        // ⚠ Measured: 1 level (2026-11-18, Windows) — the sRGB frame's own bound.
+        assert!(
+            worst <= 1,
+            "the texture differs from the CPU path's by {worst} levels"
+        );
     }
 
     /// ⚠ A handoff frame whose tail cannot run from the resident must fall back, not fail — and
@@ -1513,19 +1587,24 @@ mod tests {
         assert!(ran.bytes, "the tail's last chain must download RGBA8");
     }
 
-    /// ⚠ `pack` converts to a non-sRGB display space from the **float**, because an 8-bit → 8-bit
-    /// conversion costs roughly 0.8 bits and bands a smooth sky.
+    /// ⚠ A non-sRGB display space takes the byte path too (2026-11-18): the GPU converts from the same float the CPU
+    /// used to, so the 8-bit → 8-bit banding that once kept it on the float path cannot arise. Was
+    /// `a_non_srgb_display_space_keeps_the_float_path`.
     #[test]
-    fn a_non_srgb_display_space_keeps_the_float_path() {
+    fn a_non_srgb_display_space_takes_the_byte_path_too() {
         if gpu_pipeline::shared().is_none() {
             return;
         }
-        let (_, ran) = rendered(FrameSpec {
+        let (frame, ran) = rendered(FrameSpec {
             display_space: color::Display::Space(color::OutputSpace::DisplayP3),
             intent: color::RenderingIntent::default(),
             ..byte_spec()
         });
-        assert!(!ran.bytes);
+        assert!(ran.bytes);
+        assert!(
+            !Arc::ptr_eq(&frame.rgba, &frame.srgb),
+            "the texture is the display's own plane"
+        );
     }
 
     /// ⚠ The edge view is computed from the float.

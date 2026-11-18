@@ -22,8 +22,16 @@ cannot hand its output to the tail (`handoff_ok`). So every Develop frame on suc
    arithmetic (`DisplayProfile::lookup`, line for line). Never a second sampling.
 3. **A fixed space (P3, Adobe RGB) gets a table of the same size for the GPU**, sampled from its exact conversion and
    interned like a profile. The CPU path keeps the exact formula. ⚠ The table's error against the formula is
-   MEASURED (`a_fixed_spaces_table_is_within_a_third_of_a_step`) — a third of a step is the bound the profile table
-   was chosen by. One mechanism on the GPU rather than a matrix kernel beside a table kernel.
+   MEASURED (`a_fixed_spaces_table_is_within_a_third_of_a_step`: P3 0.13, Adobe RGB 0.27, ProPhoto 0.26 steps). One
+   mechanism on the GPU rather than a matrix kernel beside a table kernel.
+3a. **Found while measuring 3 — the table is spaced by a square root.** Evenly spaced, Adobe RGB's table was 4.66
+   steps off its formula near black, and so was a monitor ICC profile with a gamma-2.2 curve against LittleCMS — a
+   defect in the CPU path merged that morning, not only the GPU's. Its points now sit at `(i/32)²` and a lookup
+   indexes by `√x`: every case measured improved (the M27Q 0.28 → 0.14, the gamma profile 4.66 → 0.28), the CPU lookup
+   costs 1.5 ms more a 3200 frame. ⛔ Raising the entries to 2.2 instead was measured and refused (it broke sRGB-curve
+   displays: P3 0.26 → 2.10). ⚠ Known limit: a display NARROWER than sRGB with a gamma curve stays 10–18 steps off in
+   the near-zero channel of colours at its gamut's edge, under every spacing — LittleCMS clips there, the kink is in
+   the transform; on a gamma curve those steps are a sliver of light in a colour the panel cannot show.
 4. **Both fast paths open again for every display.** The three float consumers stay exactly as they are: Visualize
    Spots, soft proofing, the grade range view. `Packed::Rgba8` carries the display plane beside the sRGB one; on a
    GPU failure the frame falls back to the float path and `pack`'s CPU conversion, unchanged.

@@ -96,8 +96,17 @@ enum Download {
     None,
     /// The resident f32 image: `w * h * 12` bytes.
     Float,
-    /// Packed RGBA8, quantized by a final dispatch: `w * h * 4` bytes.
-    Rgba8,
+    /// Packed RGBA8, quantized by a final dispatch: `w * h * 4` bytes — and as many again, the display's own plane,
+    /// when a display's table is given (`quantize::DISPLAY_SHADER`).
+    Rgba8(Option<&'static color::DisplayProfile>),
+}
+
+/// A byte download: the sRGB plane — the histogram's, the readout's — and, for a display that is not sRGB, the
+/// display's own plane, which is what the texture shows (2026-11-18).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rgba8 {
+    pub srgb: Vec<u8>,
+    pub display: Option<Vec<u8>>,
 }
 
 /// What a run hands back beside its download.
@@ -325,7 +334,7 @@ impl GpuChain {
     pub fn apply_from(&self, resident: &GpuImage) -> Option<ImageBuf> {
         let (w, h) = self.output_dims(resident.width(), resident.height());
         crate::guarded(|| self.run_with(Input::Resident(resident), Download::Float, Keep::Nothing))
-            .map(|(data, _)| ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()))
+            .map(|(data, _, _)| ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()))
     }
 
     /// Run the chain and hand its OUTPUT back as a GPU image, downloaded too or not at all.
@@ -350,29 +359,45 @@ impl GpuChain {
         } else {
             Download::None
         };
-        let (data, kept) = crate::guarded(|| self.run_with(input, mode, Keep::Output))?;
+        let (data, _, kept) = crate::guarded(|| self.run_with(input, mode, Keep::Output))?;
         let out = download.then(|| ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()));
         Some((out, kept?))
     }
 
-    /// Run the chain on an image already on the GPU, quantised to 8-bit: the tail on a hit.
-    pub fn run_rgba8_from(&self, resident: &GpuImage) -> Option<Vec<u8>> {
+    /// Run the chain on an image already on the GPU, quantised to 8-bit: the tail on a hit. `display`: the display's
+    /// table for its own plane, as [`Self::run_rgba8`].
+    pub fn run_rgba8_from(
+        &self,
+        resident: &GpuImage,
+        display: Option<&'static color::DisplayProfile>,
+    ) -> Option<Rgba8> {
         if self.stages.is_empty() {
             return None;
         }
-        crate::guarded(|| self.run_with(Input::Resident(resident), Download::Rgba8, Keep::Nothing))
-            .map(|(d, _)| d)
+        crate::guarded(|| {
+            self.run_with(
+                Input::Resident(resident),
+                Download::Rgba8(display),
+                Keep::Nothing,
+            )
+        })
+        .map(|(srgb, display, _)| Rgba8 { srgb, display })
     }
 
     /// [`Self::run_rgba8`], also handing back the PRISTINE input as a GPU image: the tail on a
     /// miss, which keeps what it uploaded for the next frame.
-    pub fn run_rgba8_keeping_input(&self, image: &ImageBuf) -> Option<(Vec<u8>, GpuImage)> {
+    pub fn run_rgba8_keeping_input(
+        &self,
+        image: &ImageBuf,
+        display: Option<&'static color::DisplayProfile>,
+    ) -> Option<(Rgba8, GpuImage)> {
         if self.stages.is_empty() {
             return None;
         }
-        let (d, kept) =
-            crate::guarded(|| self.run_with(Input::Cpu(image), Download::Rgba8, Keep::Input))?;
-        Some((d, kept?))
+        let (srgb, display, kept) = crate::guarded(|| {
+            self.run_with(Input::Cpu(image), Download::Rgba8(display), Keep::Input)
+        })?;
+        Some((Rgba8 { srgb, display }, kept?))
     }
 
     /// [`PipelineStage::apply`] with the pristine input handed back too: the float tail on a
@@ -383,7 +408,7 @@ impl GpuChain {
         }
         let (w, h) = self.output_dims(image.width(), image.height());
         match crate::guarded(|| self.run_with(Input::Cpu(&image), Download::Float, Keep::Input)) {
-            Some((data, kept)) => (
+            Some((data, _, kept)) => (
                 ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()),
                 kept,
             ),
@@ -412,24 +437,33 @@ impl GpuChain {
     /// ⚠ `None` on any GPU failure, like the float path. The caller falls back through
     /// [`PipelineStage::apply`], which retries once and then takes the CPU path — one wasted
     /// attempt on a path that is rare, rather than a second fallback implementation here.
-    pub fn run_rgba8(&self, image: &ImageBuf) -> Option<Vec<u8>> {
+    ///
+    /// `display`: a display's table (`color::Display::gpu_table`) — its plane is converted from the same float pixel
+    /// before quantizing and comes back beside the sRGB one; `None` downloads the sRGB plane alone.
+    pub fn run_rgba8(
+        &self,
+        image: &ImageBuf,
+        display: Option<&'static color::DisplayProfile>,
+    ) -> Option<Rgba8> {
         if self.stages.is_empty() {
             return None;
         }
         // ⚠ Guarded for the same reason `apply` is — this one's `None` reaches a caller that
         // retries through `apply`, so a panic here would otherwise kill the worker just the same.
-        crate::guarded(|| self.run_with(Input::Cpu(image), Download::Rgba8, Keep::Nothing))
-            .map(|(d, _)| d)
+        crate::guarded(|| self.run_with(Input::Cpu(image), Download::Rgba8(display), Keep::Nothing))
+            .map(|(srgb, display, _)| Rgba8 { srgb, display })
     }
 
     /// The GPU path, or `None` on any failure at all. Returns the download (empty in
-    /// [`Download::None`]) and whatever `keep` asked for.
+    /// [`Download::None`]), the display's plane when [`Download::Rgba8`] carried a table, and whatever `keep` asked
+    /// for.
+    #[allow(clippy::type_complexity)]
     fn run_with(
         &self,
         input: Input<'_>,
         mode: Download,
         keep: Keep,
-    ) -> Option<(Vec<u8>, Option<GpuImage>)> {
+    ) -> Option<(Vec<u8>, Option<Vec<u8>>, Option<GpuImage>)> {
         let (iw, ih) = match input {
             Input::Cpu(image) => (image.width(), image.height()),
             Input::Resident(r) => (r.width(), r.height()),
@@ -548,14 +582,19 @@ impl GpuChain {
         // ⚠ The packed target is allocated only in bytes mode. Measured, an 82 MB buffer costs
         // 0.05 ms to create and a 27 MB one proportionally less, so this is not worth caching —
         // unlike the staging buffer, whose cost was `mapped_at_creation` rather than allocation.
-        let packed = match mode {
-            Download::Float | Download::None => None,
-            Download::Rgba8 => Some(device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("chain-packed"),
-                size: (ow * oh * 4) as u64,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            })),
+        // ⚠ Two planes with a display's table: the sRGB plane, then the display's.
+        let (packed, display) = match mode {
+            Download::Float | Download::None => (None, None),
+            Download::Rgba8(display) => {
+                let planes = if display.is_some() { 2 } else { 1 };
+                let b = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("chain-packed"),
+                    size: (ow * oh * 4 * planes) as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                });
+                (Some(b), display)
+            }
         };
         match rec.as_mut() {
             None => {
@@ -582,7 +621,7 @@ impl GpuChain {
                 // ⚠ Inside the **same** pass, so it sees every stage's writes under the in-pass
                 // barrier this chain already depends on and measures.
                 if let Some(p) = &packed {
-                    crate::quantize::encode(ctx, &mut pass, &img, p);
+                    crate::quantize::encode(ctx, &mut pass, &img, p, display);
                 }
             }
             Some(r) => {
@@ -619,7 +658,7 @@ impl GpuChain {
                         label: Some("quantise"),
                         timestamp_writes: Some(r.pass_writes(p)),
                     });
-                    crate::quantize::encode(ctx, &mut pass, &img, pk);
+                    crate::quantize::encode(ctx, &mut pass, &img, pk, display);
                 }
             }
         }
@@ -680,11 +719,11 @@ impl GpuChain {
                     d_memcpy.as_secs_f64() * 1e3,
                 );
             }
-            return Some((Vec::new(), kept));
+            return Some((Vec::new(), None, kept));
         }
         let t_submit = std::time::Instant::now();
         let (src, out_bytes) = match &packed {
-            Some(p) => (p, (ow * oh * 4) as u64),
+            Some(p) => (p, p.size()),
             None => (&img.buffer, img.bytes()),
         };
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
@@ -744,7 +783,17 @@ impl GpuChain {
             }
             kept_input
         };
-        let out: Vec<u8> = slice.get_mapped_range().to_vec();
+        // ⚠ The two planes copied straight out of the mapped range — never one `to_vec` split afterwards, which would
+        // copy the display's 27 MB (at the 3200 rung) a second time.
+        let mapped = slice.get_mapped_range();
+        let (out, second) = match display {
+            Some(_) => {
+                let half = ow * oh * 4;
+                (mapped[..half].to_vec(), Some(mapped[half..].to_vec()))
+            }
+            None => (mapped.to_vec(), None),
+        };
+        drop(mapped);
         readback.unmap();
         self.downloads.fetch_add(1, Ordering::Relaxed);
         if std::env::var("RUSTROOM_DEBUG_XFER").is_ok() {
@@ -771,7 +820,7 @@ impl GpuChain {
         if let Some(st) = staging {
             ctx.cache.put_staging(st);
         }
-        Some((out, kept))
+        Some((out, second, kept))
     }
 }
 
@@ -788,7 +837,7 @@ impl PipelineStage for GpuChain {
         }
         let (w, h) = self.output_dims(image.width(), image.height());
         match crate::guarded(|| self.run_with(Input::Cpu(&image), Download::Float, Keep::Nothing)) {
-            Some((data, _)) => ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()),
+            Some((data, _, _)) => ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()),
             None => self.cpu_fallback(image),
         }
     }
@@ -845,8 +894,9 @@ mod tests {
         );
         let want = chain.apply(img.clone()).to_rgba8();
         let got = chain
-            .run_rgba8(&img)
-            .expect("the GPU path must be available here");
+            .run_rgba8(&img, None)
+            .expect("the GPU path must be available here")
+            .srgb;
         assert_eq!(got.len(), want.len(), "byte count");
         let bad: Vec<(usize, u8, u8)> = got
             .iter()
@@ -1422,7 +1472,7 @@ mod tests {
         }
         assert_eq!(c.output_dims(32, 20), (32, 10));
 
-        let bytes = chain().run_rgba8(&src).expect("the GPU path");
+        let bytes = chain().run_rgba8(&src, None).expect("the GPU path").srgb;
         assert_eq!(bytes.len(), 32 * 10 * 4);
 
         let mut offering = chain();
@@ -1470,11 +1520,11 @@ mod tests {
     fn a_timed_run_produces_the_untimed_bytes() {
         let Some(ctx) = timing_ctx() else { return };
         let img = ramp(64, 48);
-        let want = three_stages(&ctx).run_rgba8(&img).expect("gpu");
-        assert_ne!(want, img.to_rgba8(), "the fixture must move pixels");
+        let want = three_stages(&ctx).run_rgba8(&img, None).expect("gpu");
+        assert_ne!(want.srgb, img.to_rgba8(), "the fixture must move pixels");
         let mut timed = three_stages(&ctx);
         timed.set_timing(true);
-        let got = timed.run_rgba8(&img).expect("gpu");
+        let got = timed.run_rgba8(&img, None).expect("gpu");
         assert_eq!(got, want, "one pass per stage must change no byte");
     }
 
@@ -1485,7 +1535,7 @@ mod tests {
         let Some(ctx) = timing_ctx() else { return };
         let mut chain = three_stages(&ctx);
         chain.set_timing(true);
-        chain.run_rgba8(&ramp(64, 48)).expect("gpu");
+        chain.run_rgba8(&ramp(64, 48), None).expect("gpu");
         let t = chain
             .last_timings()
             .expect("a timed run keeps its readings");
@@ -1545,9 +1595,9 @@ mod tests {
         let Some(ctx) = ctx() else { return };
         let img = ramp(40, 30);
         let chain = three_stages(&ctx);
-        let (bytes, kept) = chain.run_rgba8_keeping_input(&img).expect("gpu");
+        let (bytes, kept) = chain.run_rgba8_keeping_input(&img, None).expect("gpu");
         assert_eq!(chain.transfer_counts().0, 1, "the miss uploads once");
-        let plain = chain.run_rgba8(&img).expect("gpu");
+        let plain = chain.run_rgba8(&img, None).expect("gpu");
         assert_eq!(bytes, plain, "keeping the input must not change a byte");
         let back = kept.download(&ctx).expect("download");
         assert_eq!(
@@ -1556,7 +1606,7 @@ mod tests {
             "the kept image is the input, untouched"
         );
         let again = three_stages(&ctx);
-        let hit = again.run_rgba8_from(&kept).expect("gpu");
+        let hit = again.run_rgba8_from(&kept, None).expect("gpu");
         assert_eq!(
             again.transfer_counts().0,
             0,
@@ -1643,7 +1693,7 @@ mod tests {
     fn an_untimed_run_keeps_no_timings() {
         let Some(ctx) = ctx() else { return };
         let chain = three_stages(&ctx);
-        chain.run_rgba8(&ramp(16, 16)).expect("gpu");
+        chain.run_rgba8(&ramp(16, 16), None).expect("gpu");
         assert!(chain.last_timings().is_none());
     }
 
@@ -1734,7 +1784,7 @@ mod tests {
         let mut chain = three_stages(&ctx);
         chain.set_fusion(true);
         chain.set_timing(true);
-        chain.run_rgba8(&ramp(32, 32)).expect("gpu");
+        chain.run_rgba8(&ramp(32, 32), None).expect("gpu");
         let t = chain.last_timings().expect("timed");
         let names: Vec<&str> = t.entries.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["exposure+contrast+exposure", "quantise"]);
