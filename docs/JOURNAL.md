@@ -195,7 +195,13 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ### 2026-11-18 — M11.4 `v0.1` piece 3b: the Mac app (branch `v0.1-packaging-mac`)
 
-⏳ **Built and checked here; waiting for the author's try.** Gate on the code's tip (`08e694a4`): fmt, clippy, **4,779 passed**,
+✅ **Merged 2026-11-18 (`4571ec4d`) at the author's word ("yes, merge it"), confirmed by use** — installed from the
+`.dmg`, everything he tried works. ⚠ **Still unseen:** tethering from the installed app (no camera at hand) — the one
+proof that `app_bundle`'s folders reach libgphoto2 — and a **downloaded** copy's first launch: his hand-made quarantine
+mark (`xattr -w com.apple.quarantine "0081;…;Safari;"`) did NOT trigger Gatekeeper — the app opened as usual although
+`spctl --assess` answers "rejected" and the mark is present. Unknown which: the mark is not what a browser writes, or
+macOS remembers that exact app from its earlier runs here. The real test: the release workflow's manual run, its
+artifact downloaded in Safari (a build this Mac never ran) — which also measures the macOS 15 floor. Gate on the code's tip (`08e694a4`): fmt, clippy, **4,779 passed**,
 0 failed, 32 ignored, no GPU test skipped, 382 s. Spec `docs/superpowers/specs/2026-11-18-v0.1-packaging-mac-design.md`
 (from the brief, with the author: macOS 15 and later, bundle id `io.github.wladikrin.Rustroom` — fixed forever — our own
 script, Apple Silicon only, Homebrew's libheif as it is, a plain `.dmg`), plan `docs/superpowers/plans/2026-11-18-v0.1-packaging-mac.md`.
