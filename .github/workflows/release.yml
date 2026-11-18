@@ -2,7 +2,7 @@ name: Release
 # v0.1 (piece 3a): a `v*` tag builds every package and opens a DRAFT GitHub release with them and SHA256SUMS — the
 # author publishes it. A manual run (Actions → Release → Run workflow) builds the same packages without a release, to
 # try the workflow without tagging. Each package is built by its own script under `packaging/`, which a local build
-# runs too — never a second recipe here. Piece 3c (Linux) adds its job beside `windows` and `macos` (3b).
+# runs too — never a second recipe here. `windows` (3a), `macos` (3b) and `linux` (3c) each build one package.
 on:
   push:
     tags: ['v*']
@@ -78,9 +78,32 @@ jobs:
           path: target/macos/Rustroom-*-macos-arm64.dmg
           if-no-files-found: error
 
+  linux:
+    # v0.1 (piece 3c): the AppImage, built on Ubuntu 22.04 — its glibc, 2.35, is the floor, and `--floor 2.35` fails
+    # the build if anything bundled asks for more. The packages are deps.txt's, the list the local Docker build uses.
+    needs: version
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the libraries and tools
+        run: sudo apt-get update && grep -v '^#' packaging/linux/deps.txt | xargs sudo apt-get install -y --no-install-recommends
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-about
+        run: cargo install cargo-about --locked --features cli
+      - name: Build the AppImage
+        run: packaging/linux/build.sh --floor 2.35
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            target/linux/Rustroom-*-linux-x86_64.AppImage
+            target/linux/Rustroom-*-linux-x86_64.AppImage.zsync
+          if-no-files-found: error
+
   release:
     if: github.ref_type == 'tag'
-    needs: [version, windows, macos]
+    needs: [version, windows, macos, linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
