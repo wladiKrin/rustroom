@@ -193,6 +193,27 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-18 — No test writes into the user's own cache (branch `fix-test-user-cache`)
+
+Found on Windows: an empty `%LOCALAPPDATA%\rustroom\immich\https___example_invalid` in the author's cache, and an
+empty `C:\cache\immich\host` at the drive root, both made at 17:52:36 on 2026-11-17 by a gate. ⚠ The first happens on
+EVERY system (`~/Library/Caches`, `~/.cache`) — unnoticed because it stays empty.
+
+- **How:** the Immich worker creates a download's folder before it fetches (`run_download`), and the test app's
+  fetcher only panics after that. `a_download_that_was_an_open_still_opens` finished a download under the REAL cache
+  root (`immich_cache_root()` derives it from the URL and `dirs::cache_dir()`), whose open asked for the missing photo
+  again; `a_download_skips_what_is_already_present` downloaded to the literal `/cache/immich/host` — `C:\cache` on
+  Windows, an unwritable root elsewhere.
+- **The fix:** every per-user cache path — Immich's downloads, lists and stacks, the map's tiles, the AI-mask,
+  denoise and removal caches, print's staging — goes through ONE function, `rustroom_app::user_cache::base`. The
+  lib's own tests get a test folder from it by themselves; the app binary's tests point it into one on their first
+  `TestDir` (`test_app::user_cache_away`, the first call wins). The two literal paths are test folders now.
+- **Guards:** `the_test_apps_immich_cache_is_in_the_test_folder` (bin) and
+  `this_librarys_tests_cache_inside_the_test_folder` (lib), on the path the code derives against `test_dir`'s run
+  folder. Sabotaged — the redirect out, the lib's test default back to `dirs::cache_dir()` — both red, printing the
+  author's real path. ✅ **And by the whole suite:** the leftover removed, a full gate (4,773 passed) did not bring it
+  back, and `C:\cache` kept its timestamp. `C:\cache` is left for the author to delete (a drive root).
+
 ### 2026-11-18 — The display's colours on the GPU, and the table spaced by a square root (branch `display-gpu`)
 
 ✅ **Merged 2026-11-18 (`54027179`), the author: "works, merge".** ⚠ His session ran with Windows' Auto Color
