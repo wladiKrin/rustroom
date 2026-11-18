@@ -44,7 +44,7 @@ fn spec(max_dim: usize, region: Option<RegionRect>) -> FrameSpec {
     FrameSpec {
         max_dim,
         region,
-        display_space: color::OutputSpace::Srgb,
+        display_space: color::Display::SRGB,
         intent: color::RenderingIntent::default(),
         resampler: pipeline::Resampler::default(),
         gpu_tail: true,

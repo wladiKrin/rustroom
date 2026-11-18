@@ -186,7 +186,7 @@ fn main() {
                 &edits,
                 PREVIEW_MAX_DIM,
                 scale,
-                color::OutputSpace::Srgb,
+                color::Display::SRGB,
                 pipeline::Resampler::default(),
                 None,
             );

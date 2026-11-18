@@ -93,7 +93,7 @@ fn a_capped_panorama_decodes_renders_and_exports() {
         &edit_model::Edits::default(),
         2560,
         0.5,
-        color::OutputSpace::Srgb,
+        color::Display::SRGB,
         pipeline::Resampler::CatmullRom,
         None,
     );
@@ -107,7 +107,7 @@ fn a_capped_panorama_decodes_renders_and_exports() {
         &edit_model::Edits::default(),
         2_400,
         1.0,
-        color::OutputSpace::Srgb,
+        color::Display::SRGB,
         pipeline::Resampler::CatmullRom,
         None,
     );

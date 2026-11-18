@@ -352,9 +352,7 @@ impl RustroomApp {
         );
         let n = entries.len();
         let ctx2 = ctx.clone();
-        let space = self
-            .settings
-            .effective_display_space(self.os_manages_colour);
+        let space = self.display();
         let budget = self.settings.thumb_budget_mb as u64 * 1024 * 1024;
         let immich_budget = self.settings.immich_thumb_budget_mb as u64 * 1024 * 1024;
         let loader = ThumbLoader::new(space, budget, immich_budget, move || ctx2.request_repaint());

@@ -118,6 +118,8 @@ impl RustroomApp {
 
     /// Advance the decode, full-resolution and preview loaders.
     fn pump_loaders(&mut self, ctx: &egui::Context) {
+        // First: a monitor whose colours changed rebuilds the loaders below before they are asked for more.
+        self.pump_display(ctx);
         self.pump_decodes(ctx);
         self.maybe_request_full_res(ctx);
         self.pump_full_res(ctx);

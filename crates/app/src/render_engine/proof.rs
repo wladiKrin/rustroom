@@ -113,7 +113,7 @@ mod tests {
                 // pixel — the texture is read back by index below.
                 max_dim: 3,
                 region: None,
-                display_space: color::OutputSpace::Srgb,
+                display_space: color::Display::SRGB,
                 intent,
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: false,
@@ -255,7 +255,7 @@ mod tests {
             &Edits::default(),
             3,
             1.0,
-            color::OutputSpace::Srgb,
+            color::Display::SRGB,
             pipeline::Resampler::default(),
             None,
         );

@@ -148,7 +148,7 @@ fn main() {
             edits,
             max_dim,
             scale,
-            color::OutputSpace::Srgb,
+            color::Display::SRGB,
             pipeline::Resampler::default(),
             None,
         )

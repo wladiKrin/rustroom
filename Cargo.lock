@@ -1100,6 +1100,7 @@ dependencies = [
 name = "color"
 version = "0.1.0"
 dependencies = [
+ "lcms2",
  "serde",
 ]
 

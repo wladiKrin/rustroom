@@ -32,7 +32,7 @@ fn main() {
             .collect();
         let mut cache: ThumbCache<usize> = ThumbCache::with_default_budget();
         let t = Instant::now();
-        let loader = ThumbLoader::new(color::OutputSpace::Srgb, u64::MAX, u64::MAX, || {});
+        let loader = ThumbLoader::new(color::Display::SRGB, u64::MAX, u64::MAX, || {});
         loader.want(&wanted);
         let mut got = 0usize;
         while got < window && t.elapsed().as_secs() < 300 {

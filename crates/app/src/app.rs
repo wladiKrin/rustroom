@@ -61,6 +61,16 @@ pub(crate) struct RustroomApp {
     /// ⚠ Runtime, not `#[cfg]`: a macOS build where tagging failed has to take the manual path,
     /// and keeping it a value means both branches compile on every platform.
     pub(crate) os_manages_colour: bool,
+    /// What `display_detect` found for the monitor holding the window (2026-11-18), and the facts it came from —
+    /// re-gathered every two seconds by `pump_display`, decided again only when they change.
+    pub(crate) display_detected: rustroom_app::display_detect::Detected,
+    pub(crate) display_facts: rustroom_app::display_detect::Facts,
+    pub(crate) display_checked: Option<std::time::Instant>,
+    /// The window's Win32 handle, so `display_detect` finds its monitor — `None` off Windows.
+    pub(crate) window_handle: Option<isize>,
+    /// How the facts are gathered: `display_detect::facts` in the app, nothing in a test — so no test reads the
+    /// monitor of the machine it runs on.
+    pub(crate) display_gather: fn(Option<isize>) -> rustroom_app::display_detect::Facts,
     pub(crate) view: AppView,
     /// Which Library layout is on screen — the grid, Compare or Survey.
     pub(crate) library_mode: LibraryMode,
@@ -122,6 +132,8 @@ pub(crate) struct RustroomApp {
     pub(crate) ghost_store: rustroom_app::thumb_store::ThumbStore,
     /// M9.14: the preview worker — the camera's JPEG or a rendered preview, one thread.
     pub(crate) previews: rustroom_app::preview_loader::PreviewLoader,
+    /// The GPU's texture limit the preview loader caps to — kept so a display change can rebuild the loader.
+    pub(crate) preview_max_side: usize,
     /// Preview textures on the GPU, pinned by the on-screen window exactly as thumbnails are.
     /// ⚠ Three 26-Mpx RGBA pictures fit the budget; the window never holds more than Compare's two.
     pub(crate) preview_textures: rustroom_app::thumb_cache::ThumbCache<(

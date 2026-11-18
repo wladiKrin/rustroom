@@ -38,6 +38,7 @@ pub mod depth_map;
 pub mod depth_tool;
 pub mod depth_view;
 pub mod description;
+pub mod display_detect;
 pub mod dust_tool;
 pub mod edit_clipboard;
 pub mod edit_history;

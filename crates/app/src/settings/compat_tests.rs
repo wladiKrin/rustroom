@@ -491,6 +491,8 @@ fn settings_round_trip_carries_the_export_options() {
         },
         // Non-default, so a re-defaulted field cannot pass.
         ai_subject_model: ai_mask::SubjectModel::BiRefNetLite,
+        // Non-default: Automatic is on unless chosen otherwise (2026-11-18).
+        display_auto: false,
     };
     store.save(&s).unwrap();
     assert_eq!(store.load(), s);
@@ -1105,4 +1107,25 @@ fn an_unreadable_place_costs_only_the_place() {
         serde_json::from_str(json).expect("an unreadable place must not fail the file");
     assert!(!s.auto_advance, "every other setting survives");
     assert!(s.last_place.is_none());
+}
+
+/// 2026-11-18: Automatic is the display's new default — but a file from before it that chose a wide space by hand
+/// keeps that choice, and a file that has the field is read as written.
+#[test]
+fn a_manual_display_space_from_before_automatic_is_kept() {
+    let old = super::store::parse_settings(r#"{"display_space":"DisplayP3"}"#).unwrap();
+    assert_eq!(old.display_space, color::OutputSpace::DisplayP3);
+    assert!(!old.display_auto, "a hand-picked P3 must not be overridden");
+    let untouched = super::store::parse_settings(r#"{"confirm_preset_delete":true}"#).unwrap();
+    assert!(
+        untouched.display_auto,
+        "a file that never chose follows the monitor"
+    );
+    let written =
+        super::store::parse_settings(r#"{"display_space":"DisplayP3","display_auto":true}"#)
+            .unwrap();
+    assert!(
+        written.display_auto,
+        "a file with the field is read as written"
+    );
 }

@@ -108,7 +108,7 @@ pub(super) fn render_cached_with(
         && grade_view.is_none()
         && visualize.is_none()
         && soft_proof.is_none()
-        && display_space == color::OutputSpace::Srgb;
+        && display_space.is_srgb();
     let (start, img) = super::prefix::resume(&walk, buffer, buffer_long, cache);
     let (scoped, was_scoped) = super::scoped::scope(&walk, region, start, &img);
     let super::prefix::PrefixOut {
@@ -185,8 +185,7 @@ pub(super) fn render_cached_with(
     // ⚠ A four-part condition spanning two crates is the shape this project's record says goes
     // wrong silently, so the other half — "is this chain last, and does it end in
     // `output_transform`" — is answered by construction inside `accelerate` rather than here.
-    let float_needed =
-        display_space != color::OutputSpace::Srgb || visualize.is_some() || soft_proof.is_some();
+    let float_needed = !display_space.is_srgb() || visualize.is_some() || soft_proof.is_some();
     let tail = super::tail::TailSpec {
         edits,
         scale,
@@ -329,7 +328,7 @@ pub fn render_once(
     edits: &Edits,
     max_dim: usize,
     source_scale: f32,
-    display_space: color::OutputSpace,
+    display_space: color::Display,
     resampler: pipeline::Resampler,
     lens: Option<lens_profile::LensShot>,
 ) -> RenderedFrame {
@@ -436,7 +435,7 @@ mod tests {
                 FrameSpec {
                     max_dim: 32,
                     region: None,
-                    display_space: color::OutputSpace::Srgb,
+                    display_space: color::Display::SRGB,
                     intent: color::RenderingIntent::default(),
                     resampler: k,
                     gpu_tail: false,
@@ -489,7 +488,7 @@ mod tests {
                 &Edits::default(),
                 max_dim,
                 1.0,
-                color::OutputSpace::Srgb,
+                color::Display::SRGB,
                 pipeline::Resampler::default(),
                 None,
             )
@@ -1522,7 +1521,7 @@ mod tests {
             return;
         }
         let (_, ran) = rendered(FrameSpec {
-            display_space: color::OutputSpace::DisplayP3,
+            display_space: color::Display::Space(color::OutputSpace::DisplayP3),
             intent: color::RenderingIntent::default(),
             ..byte_spec()
         });
@@ -1826,7 +1825,7 @@ mod tests {
                 &without,
                 8,
                 1.0,
-                color::OutputSpace::Srgb,
+                color::Display::SRGB,
                 pipeline::Resampler::default(),
                 None,
             )
@@ -2114,7 +2113,7 @@ mod tests {
             FrameSpec {
                 max_dim: n,
                 region: Some(RegionRect { x, y, w, h }),
-                display_space: color::OutputSpace::Srgb,
+                display_space: color::Display::SRGB,
                 intent: color::RenderingIntent::default(),
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: false,
@@ -2237,7 +2236,7 @@ mod tests {
                     w: 999,
                     h: 999,
                 }),
-                display_space: color::OutputSpace::Srgb,
+                display_space: color::Display::SRGB,
                 intent: color::RenderingIntent::default(),
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: false,
@@ -2263,7 +2262,7 @@ mod tests {
             &Edits::default(),
             4,
             1.0,
-            color::OutputSpace::Srgb,
+            color::Display::SRGB,
             pipeline::Resampler::default(),
             None,
         );
@@ -2324,7 +2323,7 @@ mod tests {
             FrameSpec {
                 max_dim: buf.width().max(buf.height()),
                 region,
-                display_space: color::OutputSpace::Srgb,
+                display_space: color::Display::SRGB,
                 intent: color::RenderingIntent::default(),
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: false,

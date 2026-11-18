@@ -38,6 +38,21 @@ impl RustroomApp {
         };
         #[cfg(not(target_os = "macos"))]
         let os_manages_colour = false;
+        // The display's own colours (2026-11-18): the window's Win32 handle finds its monitor; elsewhere `None`.
+        let window_handle = {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            cc.window_handle().ok().and_then(|h| match h.as_raw() {
+                RawWindowHandle::Win32(w) => Some(w.hwnd.get()),
+                _ => None,
+            })
+        };
+        let display_facts = rustroom_app::display_detect::facts(window_handle);
+        let display_detected = rustroom_app::display_detect::decide(&display_facts);
+        let preview_max_side = cc
+            .wgpu_render_state
+            .as_ref()
+            .map(|s| s.device.limits().max_texture_dimension_2d as usize)
+            .unwrap_or(8192);
         let ctx2 = ctx.clone();
         let preset_store = PresetStore::user_default();
         let preset_list = preset_store.list();
@@ -110,6 +125,11 @@ impl RustroomApp {
             }),
             camera_profiles_cache: Vec::new(),
             os_manages_colour,
+            display_detected,
+            display_facts,
+            display_checked: None,
+            window_handle,
+            display_gather: rustroom_app::display_detect::facts,
             view: AppView::default(),
             library_mode: LibraryMode::default(),
             compare_candidate: None,
@@ -138,21 +158,17 @@ impl RustroomApp {
             ),
             previews: {
                 let ctx3 = ctx.clone();
-                // ⚠ The device's own limit, not a constant: an X-T4's 4416 px fits any GPU this
-                // targets, but a 61 Mpx sensor's rendered preview must be shrunk to what the
-                // texture upload accepts, and only the device knows that number.
-                let max_side = cc
-                    .wgpu_render_state
-                    .as_ref()
-                    .map(|s| s.device.limits().max_texture_dimension_2d as usize)
-                    .unwrap_or(8192);
+                // ⚠ The device's own limit, not a constant (`preview_max_side`): an X-T4's 4416 px fits any
+                // GPU this targets, but a 61 Mpx sensor's rendered preview must be shrunk to what the texture
+                // upload accepts, and only the device knows that number.
                 rustroom_app::preview_loader::PreviewLoader::new(
                     preview_store.clone(),
-                    settings.effective_display_space(os_manages_colour),
-                    max_side,
+                    settings.effective_display(os_manages_colour, &display_detected),
+                    preview_max_side,
                     move || ctx3.request_repaint(),
                 )
             },
+            preview_max_side,
             preview_textures: rustroom_app::thumb_cache::ThumbCache::new(PREVIEW_TEXTURE_BUDGET),
             preview_store,
             preview_want: Vec::new(),

@@ -33,7 +33,7 @@ fn main() {
                 }
             }),
             threads,
-            color::OutputSpace::Srgb,
+            color::Display::SRGB,
             || {},
         );
         loader.want(&paths);

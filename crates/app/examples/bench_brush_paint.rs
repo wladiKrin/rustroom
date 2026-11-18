@@ -56,7 +56,7 @@ fn main() {
             let spec = FrameSpec {
                 max_dim: bw.max(bh),
                 region: Some(region),
-                display_space: color::OutputSpace::Srgb,
+                display_space: color::Display::SRGB,
                 intent: color::RenderingIntent::default(),
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: gpu,

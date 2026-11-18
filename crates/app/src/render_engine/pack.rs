@@ -50,7 +50,7 @@ pub(super) fn pack(
     proofed: Option<(ImageBuf, Proof)>,
     region: Option<Region>,
     max_dim: usize,
-    display_space: color::OutputSpace,
+    display_space: color::Display,
     visualize: Option<f32>,
 ) -> RenderedFrame {
     let (out, width, height, pre) = match packed {
@@ -121,24 +121,12 @@ pub(super) fn pack(
         // effect — which is also why the spec says the thing to look at is the *difference*
         // between proof and no proof, not the absolute colour.
         Some((proof_out, proof)) => Arc::new(proof_texture(&proof_out, proof)),
-        None if display_space == color::OutputSpace::Srgb => shown,
+        None if display_space.is_srgb() => shown,
         None => {
             // ⚠ Converted from the **float** image, not from `shown`. An 8-bit → 8-bit conversion
             // compresses the range and costs roughly 0.8 bits, which shows as banding on a smooth
             // sky. The extra quantization pass is paid only when a display space is actually set.
-            Arc::new(
-                float(&out)
-                    .map_pixels(move |c| {
-                        let lin = c.map(color::srgb_to_linear);
-                        let conv = display_space.from_srgb(lin);
-                        [
-                            display_space.encode(conv[0]),
-                            display_space.encode(conv[1]),
-                            display_space.encode(conv[2]),
-                        ]
-                    })
-                    .to_rgba8(),
-            )
+            Arc::new(float(&out).to_rgba8_with(move |c| display_space.convert(c)))
         }
     };
 
@@ -202,7 +190,7 @@ mod tests {
             &Edits::default(),
             2,
             1.0,
-            color::OutputSpace::Srgb,
+            color::Display::Space(color::OutputSpace::Srgb),
             pipeline::Resampler::default(),
             None,
         );
@@ -211,7 +199,7 @@ mod tests {
             &Edits::default(),
             2,
             1.0,
-            color::OutputSpace::DisplayP3,
+            color::Display::Space(color::OutputSpace::DisplayP3),
             pipeline::Resampler::default(),
             None,
         );
@@ -243,7 +231,7 @@ mod tests {
             &Edits::default(),
             2,
             1.0,
-            color::OutputSpace::Srgb,
+            color::Display::Space(color::OutputSpace::Srgb),
             pipeline::Resampler::default(),
             None,
         );
@@ -252,7 +240,7 @@ mod tests {
             &Edits::default(),
             2,
             1.0,
-            color::OutputSpace::DisplayP3,
+            color::Display::Space(color::OutputSpace::DisplayP3),
             pipeline::Resampler::default(),
             None,
         );
@@ -270,7 +258,7 @@ mod tests {
     /// The fixture `the_histogram_is_unaffected_by_the_display_space` uses, reused rather than
     /// re-invented: a two-pixel buffer with a saturated red and a mid green, which is what makes
     /// the display transform actually move something.
-    fn render_for_test(space: color::OutputSpace) -> RenderedFrame {
+    fn render_for_test(space: color::Display) -> RenderedFrame {
         let mut buf = ImageBuf::new(2, 1);
         buf.set_pixel(0, 0, color::srgb_to_prophoto([0.95, 0.15, 0.1]));
         buf.set_pixel(1, 0, color::srgb_to_prophoto([0.2, 0.6, 0.3]));
@@ -292,8 +280,8 @@ mod tests {
     /// asserted here too, so the two instrument channels cannot drift apart.
     #[test]
     fn the_srgb_channel_is_unaffected_by_the_display_space() {
-        let a = render_for_test(color::OutputSpace::Srgb);
-        let b = render_for_test(color::OutputSpace::DisplayP3);
+        let a = render_for_test(color::Display::Space(color::OutputSpace::Srgb));
+        let b = render_for_test(color::Display::Space(color::OutputSpace::DisplayP3));
         assert_eq!(
             *a.srgb, *b.srgb,
             "the sRGB channel moved with the display space"
@@ -310,11 +298,31 @@ mod tests {
     /// structurally rather than by measuring.
     #[test]
     fn the_srgb_case_shares_one_allocation() {
-        let f = render_for_test(color::OutputSpace::Srgb);
+        let f = render_for_test(color::Display::Space(color::OutputSpace::Srgb));
         assert!(
             Arc::ptr_eq(&f.rgba, &f.srgb),
             "sRGB rendered two buffers where one would do"
         );
+    }
+
+    /// A monitor's own profile (2026-11-18) reaches the texture like a fixed space does — and, like it, never the
+    /// histogram or the sRGB channel. A wide panel's profile drives the saturated red DOWN, not up.
+    #[test]
+    fn a_monitors_profile_moves_the_texture_and_nothing_else() {
+        let wide = color::edid::Primaries {
+            red: (0.68, 0.32),
+            green: (0.21, 0.71),
+            blue: (0.15, 0.06),
+            white: (0.3127, 0.3290),
+            gamma: 2.2,
+        };
+        let profile = color::DisplayProfile::from_primaries("wide", &wide).expect("a profile");
+        let a = render_for_test(color::Display::SRGB);
+        let b = render_for_test(color::Display::Profile(profile));
+        assert_ne!(*a.rgba, *b.rgba, "the profile did not reach the texture");
+        assert!(b.rgba[0] < a.rgba[0], "red {} vs {}", b.rgba[0], a.rgba[0]);
+        assert_eq!(*a.srgb, *b.srgb, "the sRGB channel moved with the monitor");
+        assert_eq!(a.hist, b.hist, "the histogram moved with the monitor");
     }
 
     /// ⚠⚠ The two arms of [`Packed`] must produce the **same frame**, because the GPU's
@@ -331,7 +339,7 @@ mod tests {
             None,
             None,
             16,
-            color::OutputSpace::Srgb,
+            color::Display::Space(color::OutputSpace::Srgb),
             None,
         );
         let got = pack(
@@ -343,7 +351,7 @@ mod tests {
             None,
             None,
             16,
-            color::OutputSpace::Srgb,
+            color::Display::Space(color::OutputSpace::Srgb),
             None,
         );
         assert_eq!(*got.rgba, *want.rgba, "texture");
@@ -375,7 +383,7 @@ mod tests {
             None,
             None,
             16,
-            color::OutputSpace::Srgb,
+            color::Display::Space(color::OutputSpace::Srgb),
             None,
         );
         let vis = pack(
@@ -383,7 +391,7 @@ mod tests {
             None,
             None,
             16,
-            color::OutputSpace::Srgb,
+            color::Display::Space(color::OutputSpace::Srgb),
             Some(12.0),
         );
         assert_ne!(
@@ -415,7 +423,7 @@ mod tests {
             None,
             None,
             16,
-            color::OutputSpace::Srgb,
+            color::Display::Space(color::OutputSpace::Srgb),
             None,
         );
         let vis = pack(
@@ -423,7 +431,7 @@ mod tests {
             None,
             None,
             16,
-            color::OutputSpace::Srgb,
+            color::Display::Space(color::OutputSpace::Srgb),
             Some(12.0),
         );
         assert_ne!(

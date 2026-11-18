@@ -182,7 +182,7 @@ fn main() {
             let spec = FrameSpec {
                 max_dim,
                 region: None,
-                display_space: color::OutputSpace::Srgb,
+                display_space: color::Display::SRGB,
                 intent: color::RenderingIntent::default(),
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: gpu,
@@ -247,7 +247,7 @@ fn main() {
                 w: (bw / 3).min(1600),
                 h: (bh / 3).min(1000),
             }),
-            display_space: color::OutputSpace::Srgb,
+            display_space: color::Display::SRGB,
             intent: color::RenderingIntent::default(),
             resampler: pipeline::Resampler::default(),
             gpu_tail: true,

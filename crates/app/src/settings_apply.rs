@@ -65,20 +65,41 @@ impl RustroomApp {
         theme::apply(ctx, &self.settings);
     }
 
-    /// Adopt a new display space: persist it, reload the thumbnails so the filmstrip agrees
-    /// with the canvas, and re-render the open photo so the change is visible immediately.
-    ///
-    /// ⚠ Thumbnails are converted **at load**, so the loader has to be rebuilt and the cached
-    /// thumbnails dropped. They reload in parallel and cost about 41 ms each, which is why this
-    /// is affordable to do eagerly rather than deferring to the next folder open.
-    pub(crate) fn apply_display_space(&mut self, space: color::OutputSpace, ctx: &egui::Context) {
+    /// Adopt a new Settings → Display choice — Automatic, or a fixed space — persist it, and convert into the
+    /// display it means.
+    pub(crate) fn apply_display_choice(
+        &mut self,
+        auto: bool,
+        space: color::OutputSpace,
+        ctx: &egui::Context,
+    ) {
+        self.settings.display_auto = auto;
         self.settings.display_space = space;
         self.save_settings();
-        // ⚠ The *effective* value from here on: if the OS is managing colour this is `Srgb`
-        // whatever the dropdown said, so the two can never both convert.
-        let space = self
-            .settings
-            .effective_display_space(self.os_manages_colour);
+        self.apply_display(ctx);
+    }
+
+    /// Convert into the display in effect now (`display()`): reload the thumbnails and rendered previews so the
+    /// filmstrip agrees with the canvas, and re-render the open photo so the change is visible immediately. On a
+    /// Settings change, and when the monitor's colours change under Automatic (`pump_display`).
+    ///
+    /// ⚠ Thumbnails and previews are converted **at load**, so their loaders are rebuilt and what they cached is
+    /// dropped. Thumbnails reload in parallel and cost about 41 ms each, which is why this is affordable to do
+    /// eagerly rather than deferring to the next folder open. (The previews' loader was not rebuilt before
+    /// 2026-11-18: a changed manual setting reached them only after a restart.)
+    pub(crate) fn apply_display(&mut self, ctx: &egui::Context) {
+        // ⚠ The *effective* value: if the OS is managing colour this is sRGB whatever the setting says, so the two
+        // can never both convert.
+        let space = self.display();
+        let ctx3 = ctx.clone();
+        self.previews = rustroom_app::preview_loader::PreviewLoader::new(
+            self.preview_store.clone(),
+            space,
+            self.preview_max_side,
+            move || ctx3.request_repaint(),
+        );
+        self.preview_textures.clear();
+        self.preview_want.clear();
         if let Some(lib) = self.library.as_mut() {
             let ctx2 = ctx.clone();
             lib.loader = ThumbLoader::new(

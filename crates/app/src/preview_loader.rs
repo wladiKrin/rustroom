@@ -130,7 +130,7 @@ pub struct PreviewLoader {
 impl PreviewLoader {
     pub fn new(
         store: PreviewStore,
-        display_space: color::OutputSpace,
+        display_space: color::Display,
         max_side: usize,
         on_progress: impl Fn() + Send + Sync + 'static,
     ) -> Self {
@@ -147,7 +147,7 @@ impl PreviewLoader {
     /// will be shown — the thumbnails' rule, for the same reason.
     pub fn with_loader(
         load: PreviewLoadFn,
-        display_space: color::OutputSpace,
+        display_space: color::Display,
         max_side: usize,
         on_progress: impl Fn() + Send + Sync + 'static,
     ) -> Self {
@@ -316,7 +316,7 @@ mod tests {
         let r = req(&d.0, true);
         let loader = PreviewLoader::with_loader(
             Arc::new(|_r: &PreviewRequest| Some((pixels(5, 5), PreviewSource::Camera))),
-            color::OutputSpace::Srgb,
+            color::Display::SRGB,
             8192,
             || {},
         );
