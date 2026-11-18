@@ -195,11 +195,11 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ### 2026-11-18 — The display's own colours on Windows and Linux (branch `display-colour`)
 
-⏳ **Waiting on the author's look.** Gate on the code's tip (`08892f67`, Windows, `-j 2`): fmt, clippy, **4,765** passed,
+✅ **Merged 2026-11-18 (`3627b754`), confirmed by the author ("works, merge both").** Gate on the code's tip (`08892f67`, Windows, `-j 2`): fmt, clippy, **4,765** passed,
 0 failed, 32 ignored. Spec `docs/superpowers/specs/2026-11-18-display-colour-design.md`, plan
 `docs/superpowers/plans/2026-11-18-display-colour.md`. The author asked for it and left the decisions to the builder
 ("plan, spec and execute it yourself"); they are recorded in the spec with their reasons. Cut from
-`v0.1-packaging-windows` (piece 3a, waiting on the author), whose static runtime this machine now builds with.
+`v0.1-packaging-windows` (piece 3a), whose static runtime this machine now builds with.
 
 - **What was wrong:** on Windows and Linux nothing colour-matches the window, so sRGB drove the panel's native primaries.
   The author's Gigabyte **M27Q** (EDID, captured): green at (0.209, 0.714) — beyond sRGB's (0.300, 0.600) and P3's;
@@ -235,7 +235,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ### 2026-11-17 — M11.4 `v0.1` piece 3a: the icon, the Windows installer, the release workflow (branch `v0.1-packaging-windows`)
 
-⏳ **Waiting on the author's try of the installer.** Gate on the code's tip (`e917dfc7`, on Windows): fmt, clippy,
+✅ **Merged 2026-11-18 (`4cd215bb`), confirmed by the author ("works, merge both").** Gate on the code's tip (`e917dfc7`, on Windows): fmt, clippy,
 **4,744** passed, 0 failed, 32 ignored in 317 s — ⚠ at `-j 2`: at `-j 4` the static runtime's relink of every test
 binary and example ran out of memory on this page-file-less machine (LNK1102, and LNK1201 "error writing to program
 database"), and no test ran. Spec `docs/superpowers/specs/2026-11-17-v0.1-packaging-windows-design.md`,

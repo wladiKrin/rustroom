@@ -327,8 +327,10 @@ Seeded from the recorded follow-ups formerly in `CLAUDE.md`; **the sections are 
   note's *"a profile carrying one renders as though it were the identity"* described a case that
   cannot occur. Re-open only if Rustroom ever reads a DNG's own embedded profile.
 - **Multi-monitor on Linux and Windows.** → **M11.2**. macOS hands the preview to Core Animation, which handles
-  a display change for free. Elsewhere `display_space` is one global setting and nothing reacts to
-  moving the window between monitors. Wayland's colour-management protocol is the eventual answer.
+  a display change for free. 🟡 Since 2026-11-18 (`grep -n "display's own colours" docs/JOURNAL.md`) Settings →
+  Display → Automatic follows the WINDOW's monitor on Windows (re-read every 2 s); on Linux several connected outputs
+  that differ fall back to sRGB, because sysfs cannot say which one holds the window. Two monitors are unchecked on
+  both. Wayland's colour-management protocol is the eventual answer.
 
 ---
 
