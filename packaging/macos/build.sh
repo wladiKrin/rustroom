@@ -212,6 +212,57 @@ done
 iconutil -c icns -o "$contents/Resources/rustroom.icns" "$iconset" || fail "iconutil failed"
 rm -rf "$iconset"
 
+# The licences: the GPL, every crate's (cargo-about, as MIT and Apache-2.0 require for a binary), and the native
+# libraries' and fonts' own texts — each from its source, never a copy kept in the repository (as build.ps1 does).
+resources="$contents/Resources"
+licenses="$resources/licenses"
+mkdir -p "$licenses"
+cp "$root/LICENSE" "$resources/LICENSE"
+command -v cargo-about >/dev/null || fail "cargo-about not found (cargo install cargo-about --locked --features cli)"
+cargo about generate --manifest-path crates/app/Cargo.toml packaging/about.hbs -o "$resources/THIRD-PARTY-LICENSES.html" ||
+    fail "cargo about failed - is every crate's licence in about.toml?"
+lensfun_dir="$(cargo metadata --format-version 1 --filter-platform aarch64-apple-darwin | /usr/bin/python3 -c '
+import json, os, sys
+ps = [p for p in json.load(sys.stdin)["packages"] if p["name"] == "lensfun"]
+print(os.path.dirname(ps[0]["manifest_path"]) if ps else "")')"
+[ -n "$lensfun_dir" ] || fail "no lensfun in the dependency graph"
+notice() {
+    [ -f "$2" ] || fail "missing licence text: $2"
+    cp "$2" "$licenses/$1"
+}
+notice LibRaw-LICENSE.LGPL.txt "$root/vendor/rsraw-sys/LibRaw/LICENSE.LGPL"
+notice LibRaw-LICENSE.CDDL.txt "$root/vendor/rsraw-sys/LibRaw/LICENSE.CDDL"
+notice LibRaw-COPYRIGHT.txt "$root/vendor/rsraw-sys/LibRaw/COPYRIGHT"
+notice LensFun-NOTICE.txt "$lensfun_dir/NOTICE"
+notice Inter-LICENSE.txt "$root/crates/app/assets/Inter-LICENSE"
+notice Phosphor-LICENSE.txt "$root/crates/app/assets/Phosphor-LICENSE"
+
+# Each bundled Homebrew library's own text. ⚠ A keg's COPYING is not always its library's licence: libtool's is the
+# GPL while libltdl's is COPYING.LIB, and gettext's is the GPL-3 of its tools while libintl is LGPL-2.1-or-later with
+# no text in the keg — so libintl carries libtool's copy of the LGPL-2.1. A library this map does not know stops the
+# build: a new one needs its text found by a person.
+for lib in "$frameworks"/*.dylib; do
+    name="$(basename "$lib")"
+    case "$name" in
+        libaom.*.dylib) formula=aom file=LICENSE ;;
+        libde265.*.dylib) formula=libde265 file=COPYING ;;
+        libexif.*.dylib) formula=libexif file=COPYING ;;
+        libgphoto2.*.dylib | libgphoto2_port.*.dylib) formula=libgphoto2 file=COPYING ;;
+        libheif.*.dylib) formula=libheif file=COPYING ;;
+        libintl.*.dylib) formula=libtool file=share/libtool/COPYING.LIB ;;
+        libjpeg.*.dylib) formula=jpeg-turbo file=LICENSE.md ;;
+        liblcms2.*.dylib) formula=little-cms2 file=LICENSE ;;
+        libltdl.*.dylib) formula=libtool file=share/libtool/COPYING.LIB ;;
+        libsharpyuv.*.dylib) formula=webp file=COPYING ;;
+        libusb-*.dylib) formula=libusb file=COPYING ;;
+        libvmaf.*.dylib) formula=libvmaf file=LICENSE ;;
+        libx265.*.dylib) formula=x265 file=COPYING ;;
+        *) fail "no licence text for $name" ;;
+    esac
+    stem="${name%%.*}"
+    notice "${stem%%-*}-$(basename "$file").txt" "$(brew --prefix "$formula")/$file"
+done
+
 # Signing, ad hoc: Apple Silicon runs no unsigned code. Every library and driver first, then the app.
 while IFS= read -r m; do
     [ "$m" = "$contents/MacOS/Rustroom" ] && continue
