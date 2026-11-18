@@ -12,8 +12,17 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
 
 /// Grid points per axis of a profile's table. ⚠ Chosen by measurement against LittleCMS's own transform
-/// (`the_table_matches_littlecms`: 17 → 0.56, 33 → 0.28, 65 → 0.07 8-bit steps at worst on the M27Q), never by feel.
+/// (`the_table_matches_littlecms`: 17 → 0.55, 33 → 0.14, 65 → 0.04 8-bit steps at worst on the M27Q, root-spaced),
+/// never by feel.
 pub const GRID: usize = 33;
+
+// ⚠⚠ **The grid is spaced by a SQUARE ROOT** — its points sit at `(i / (n − 1))²` on each axis and a lookup indexes by
+// `√x` — measured into existence (2026-11-18). A display curve that rises steeply from black (Adobe RGB's pure 2.2
+// power, the many monitor ICC profiles with a gamma curve) cannot be followed by straight lines between points 1/32
+// apart: evenly spaced, an Adobe RGB table was **4.66 steps** off its formula and a gamma-2.2 ICC profile 4.66 off
+// LittleCMS. Spaced by the root, at the same 33 points: 0.32 and 0.32, and better in every other case measured too
+// (P3 0.26 → 0.13, the M27Q 0.28 → 0.14). ⛔ Raising the entries to 2.2 instead was measured and refused: it fixed the
+// gamma curves and broke sRGB's (P3 0.26 → 2.10), whose straight toe it made steep.
 
 /// The display the preview is converted for.
 ///
@@ -47,6 +56,17 @@ impl Display {
         }
     }
 
+    /// The table the GPU converts through (2026-11-18): a profile's own, or a fixed space's sampled from its exact
+    /// conversion; `None` for sRGB, which converts nothing. ⚠ The CPU keeps a fixed space's exact formula — the table
+    /// is within a quarter of a step of it (`a_fixed_spaces_table_is_within_a_quarter_of_a_step`).
+    pub fn gpu_table(&self) -> Option<&'static DisplayProfile> {
+        match *self {
+            Display::Profile(p) => Some(p),
+            Display::Space(OutputSpace::Srgb) => None,
+            Display::Space(s) => DisplayProfile::for_space(s),
+        }
+    }
+
     /// One 8-bit sRGB pixel in, the display's 8-bit pixel out — for thumbnails, which have no float behind them.
     pub fn convert_srgb8(&self, c: [u8; 3]) -> [u8; 3] {
         match self {
@@ -75,6 +95,8 @@ impl PartialEq for DisplayProfile {
         self.id == other.id
     }
 }
+
+impl Eq for DisplayProfile {}
 
 /// A monitor's profile as a table from sRGB-encoded values to the monitor's encoded values.
 pub struct DisplayProfile {
@@ -113,7 +135,8 @@ impl DisplayProfile {
             v.0.to_bits().hash(&mut h);
             v.1.to_bits().hash(&mut h);
         }
-        Self::interned(name, h.finish(), &dst)
+        let id = h.finish();
+        Self::interned(id, || Self::sample(name, id, &dst, GRID))
     }
 
     /// From an ICC profile's bytes, used whole. `None` if LittleCMS cannot read it or cannot transform into it.
@@ -122,18 +145,37 @@ impl DisplayProfile {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         "icc".hash(&mut h);
         bytes.hash(&mut h);
-        Self::interned(name, h.finish(), &dst)
+        let id = h.finish();
+        Self::interned(id, || Self::sample(name, id, &dst, GRID))
     }
 
-    /// The process's one profile for this source: sampled the first time, found the next (the name of the first
-    /// build is kept — one source, one table).
-    fn interned(name: &str, id: u64, dst: &lcms2::Profile) -> Option<&'static Self> {
+    /// A fixed space as a table, sampled from its exact conversion — for the GPU, which converts every display through
+    /// a table ([`Display::gpu_table`]).
+    fn for_space(s: OutputSpace) -> Option<&'static Self> {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        "space".hash(&mut h);
+        s.hash(&mut h);
+        let id = h.finish();
+        let exact = Display::Space(s);
+        Self::interned(id, || {
+            Self::filled(
+                &format!("{s:?}"),
+                id,
+                GRID,
+                grid(GRID).into_iter().map(|c| exact.convert(c)).collect(),
+            )
+        })
+    }
+
+    /// The process's one profile for this source: built the first time, found the next (the name of the first build
+    /// is kept — one source, one table).
+    fn interned(id: u64, build: impl FnOnce() -> Option<Self>) -> Option<&'static Self> {
         static ALL: OnceLock<Mutex<HashMap<u64, &'static DisplayProfile>>> = OnceLock::new();
         let all = ALL.get_or_init(|| Mutex::new(HashMap::new()));
         if let Some(p) = all.lock().expect("display profiles").get(&id) {
             return Some(p);
         }
-        let p: &'static Self = Box::leak(Box::new(Self::sample(name, id, dst, GRID)?));
+        let p: &'static Self = Box::leak(Box::new(build()?));
         Some(*all.lock().expect("display profiles").entry(id).or_insert(p))
     }
 
@@ -148,17 +190,14 @@ impl DisplayProfile {
             lcms2::Intent::RelativeColorimetric,
         )
         .ok()?;
-        let step = 1.0 / (n - 1) as f32;
-        let mut input = Vec::with_capacity(n * n * n);
-        for b in 0..n {
-            for g in 0..n {
-                for r in 0..n {
-                    input.push([r as f32 * step, g as f32 * step, b as f32 * step]);
-                }
-            }
-        }
+        let input = grid(n);
         let mut table = vec![[0.0f32; 3]; input.len()];
         t.transform_pixels(&input, &mut table);
+        Self::filled(name, id, n, table)
+    }
+
+    /// A sampled table, checked and clipped.
+    fn filled(name: &str, id: u64, n: usize, mut table: Vec<[f32; 3]>) -> Option<Self> {
         if table.iter().flatten().any(|v| !v.is_finite()) {
             return None;
         }
@@ -174,14 +213,14 @@ impl DisplayProfile {
         })
     }
 
-    /// Trilinear lookup; inputs outside `[0, 1]` clamp to the table's edge.
+    /// Trilinear lookup on the root-spaced grid; inputs outside `[0, 1]` clamp to the table's edge.
     pub fn lookup(&self, rgb: [f32; 3]) -> [f32; 3] {
         let n = self.n;
         let last = n - 1;
         let mut lo = [0usize; 3];
         let mut fr = [0f32; 3];
         for c in 0..3 {
-            let x = rgb[c].clamp(0.0, 1.0) * last as f32;
+            let x = rgb[c].clamp(0.0, 1.0).sqrt() * last as f32;
             let i = (x.floor() as usize).min(last - 1);
             lo[c] = i;
             fr[c] = x - i as f32;
@@ -202,6 +241,31 @@ impl DisplayProfile {
             lerp(lerp(x00, x10, fr[1]), lerp(x01, x11, fr[1]), fr[2])
         })
     }
+
+    /// The `n³` entries at the root-spaced grid points, red varying fastest — what the GPU uploads and looks up as
+    /// [`Self::lookup`] does.
+    pub fn table(&self) -> &[[f32; 3]] {
+        &self.table
+    }
+
+    /// Points per axis of [`Self::table`].
+    pub fn n(&self) -> usize {
+        self.n
+    }
+}
+
+/// The table's inputs, `n` points per axis over `[0, 1]` at `(i / (n - 1))²`, red varying fastest.
+fn grid(n: usize) -> Vec<[f32; 3]> {
+    let step = 1.0 / (n - 1) as f32;
+    let mut input = Vec::with_capacity(n * n * n);
+    for b in 0..n {
+        for g in 0..n {
+            for r in 0..n {
+                input.push([r, g, b].map(|i| (i as f32 * step).powi(2)));
+            }
+        }
+    }
+    input
 }
 
 /// sRGB's own curve as LittleCMS's parametric type 4 — the same one `export` builds its sRGB profile with.
@@ -214,7 +278,9 @@ fn srgb_curve() -> lcms2::ToneCurve {
 mod tests {
     use super::*;
 
-    /// A deterministic spread of sRGB-encoded samples, corners and edges included.
+    /// A deterministic spread of sRGB-encoded samples, corners and edges included — and ⚠ as many again NEAR BLACK
+    /// (all three channels under 0.08, or one under 0.05), where a steep display curve is hardest to follow: the even
+    /// spread alone holds few of them.
     fn samples() -> Vec<[f32; 3]> {
         let mut s: u32 = 12345;
         let mut next = || {
@@ -222,6 +288,10 @@ mod tests {
             (s >> 8) as f32 / (1u32 << 24) as f32
         };
         let mut v: Vec<[f32; 3]> = (0..4096).map(|_| [next(), next(), next()]).collect();
+        for _ in 0..2048 {
+            v.push([next() * 0.08, next() * 0.08, next() * 0.08]);
+            v.push([next() * 0.05, next(), next()]);
+        }
         v.extend([
             [0.0; 3],
             [1.0; 3],
@@ -240,14 +310,54 @@ mod tests {
     }
 
     /// The largest difference, in 8-bit steps, between two conversions over the samples.
+    ///
+    /// ⚠ NaN wins the fold (`AGENTS.md`: `f32::max` ignores NaN, so a plain fold would read a NaN conversion as
+    /// a perfect 0) — every `err < bound` below then fails on a non-finite value.
     fn max_steps(a: impl Fn([f32; 3]) -> [f32; 3], b: impl Fn([f32; 3]) -> [f32; 3]) -> f32 {
+        let worst = |m: f32, v: f32| {
+            if m.is_nan() || v.is_nan() {
+                f32::NAN
+            } else {
+                m.max(v)
+            }
+        };
         samples()
             .into_iter()
             .map(|c| {
                 let (x, y) = (a(c), b(c));
-                (0..3).map(|k| (x[k] - y[k]).abs()).fold(0.0f32, f32::max) * 255.0
+                (0..3).map(|k| (x[k] - y[k]).abs()).fold(0.0f32, worst) * 255.0
             })
-            .fold(0.0f32, f32::max)
+            .fold(0.0f32, worst)
+    }
+
+    /// ⚠ Measured, then pinned: a fixed space's GPU table against the exact formula the CPU keeps, for every space
+    /// but sRGB (which has no table), clipped as the quantizer clips.
+    #[test]
+    fn a_fixed_spaces_table_is_within_a_third_of_a_step() {
+        assert!(Display::SRGB.gpu_table().is_none(), "sRGB converts nothing");
+        for s in OutputSpace::ALL
+            .into_iter()
+            .filter(|s| *s != OutputSpace::Srgb)
+        {
+            let exact = Display::Space(s);
+            assert!(
+                max_steps(|c| exact.convert(c), |c| c) > 5.0,
+                "fixture check: {s:?} must move something"
+            );
+            let table = exact.gpu_table().expect("a table");
+            assert!(std::ptr::eq(table, exact.gpu_table().unwrap()), "interned");
+            let err = max_steps(
+                |c| table.lookup(c),
+                |c| exact.convert(c).map(|v| v.clamp(0.0, 1.0)),
+            );
+            eprintln!("{s:?}: the table is {err:.3} steps from the formula");
+            assert!(err < 1.0 / 3.0, "{s:?}: {err:.3} steps");
+        }
+        let m = DisplayProfile::from_primaries("M27Q", &m27q()).unwrap();
+        assert!(
+            std::ptr::eq(Display::Profile(m).gpu_table().unwrap(), m),
+            "a profile's GPU table is its own"
+        );
     }
 
     /// ⚠ The size measured, not guessed: the table at GRID against LittleCMS's own float transform, on the M27Q.
@@ -285,6 +395,43 @@ mod tests {
         let table = DisplayProfile::from_primaries("m27q", &p).unwrap();
         let err = max_steps(|c| table.lookup(c), exact);
         assert!(err < 0.5, "GRID {GRID}: {err:.3} steps from LittleCMS");
+    }
+
+    /// ⚠⚠ The case the root-spaced grid exists for: a monitor's ICC profile with a pure gamma-2.2 curve (Adobe RGB's primaries),
+    /// against LittleCMS's own transform into it — the curve that rises steeply from black.
+    #[test]
+    fn a_gamma_profile_matches_littlecms_near_black() {
+        let xy = |(x, y): (f64, f64)| lcms2::CIExyY { x, y, Y: 1.0 };
+        let prim = lcms2::CIExyYTRIPLE {
+            Red: xy((0.64, 0.33)),
+            Green: xy((0.21, 0.71)),
+            Blue: xy((0.15, 0.06)),
+        };
+        let curve = lcms2::ToneCurve::new(2.2);
+        let icc = lcms2::Profile::new_rgb(&xy((0.3127, 0.3290)), &prim, &[&curve, &curve, &curve])
+            .unwrap()
+            .icc()
+            .unwrap();
+        // ⚠ The reference reads the SAME bytes the table does: the file stores the gamma and the primaries at its own
+        // precision, and against the in-memory profile that alone measured 0.8 steps.
+        let dst = lcms2::Profile::new_icc(&icc).unwrap();
+        let t: lcms2::Transform<[f32; 3], [f32; 3]> = lcms2::Transform::new(
+            &lcms2::Profile::new_srgb(),
+            lcms2::PixelFormat::RGB_FLT,
+            &dst,
+            lcms2::PixelFormat::RGB_FLT,
+            lcms2::Intent::RelativeColorimetric,
+        )
+        .unwrap();
+        let exact = |c: [f32; 3]| {
+            let mut o = [[0.0f32; 3]];
+            t.transform_pixels(&[c], &mut o);
+            o[0].map(|v| v.clamp(0.0, 1.0))
+        };
+        let table = DisplayProfile::from_icc("gamma 2.2", &icc).unwrap();
+        let err = max_steps(|c| table.lookup(c), exact);
+        eprintln!("gamma 2.2 profile: the table is {err:.3} steps from LittleCMS");
+        assert!(err < 1.0 / 3.0, "{err:.3} steps from LittleCMS");
     }
 
     /// sRGB's own primaries are the identity — the spec's promise that only the primaries are corrected.
