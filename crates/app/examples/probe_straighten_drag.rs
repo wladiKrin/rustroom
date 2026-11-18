@@ -9,7 +9,7 @@
 //!
 //! Run: `RUSTROOM_DEBUG_RENDER=1 cargo run --release -p app --example probe_straighten_drag <raw> [rung]`
 //! `PROBE_ANGLE_STEP=1.1` sweeps ~0.5°→43°, the range a real drag reaches; the default 0.05 stays
-//! under 2.45°, the cheapest corner (M10.14d).
+//! under 2.45°, the cheapest corner (M10.14d). `PROBE_DISPLAY=m27q` or `p3` renders for that display (2026-11-18).
 //! With `RUSTROOM_DEBUG_GPU_TIME=1` as well, every chain prints a `GPUTIME` block: the GPU time of
 //! each stage's pass and the quantise, the GPU span, and the wall's remainder as `copies+latency`.
 //! ⚠ A timed run opens one pass per stage, so quote its wall only beside the untimed one.
@@ -24,6 +24,8 @@ fn main() {
         .next()
         .expect("usage: probe_straighten_drag <raw> [rung]");
     let rung: usize = args.next().map_or(3200, |r| r.parse().expect("rung"));
+    let display = probe_display();
+    eprintln!("display {display:?}");
     let path = std::path::Path::new(&path);
     // ⚠ The FULL decode: the app hands over to it after opening, and a rung of 3200 is then a
     // downscale of the 6246 px buffer rather than an upscale of the preview.
@@ -70,7 +72,7 @@ fn main() {
             FrameSpec {
                 max_dim: rung,
                 region: None,
-                display_space: color::Display::SRGB,
+                display_space: display,
                 intent: color::RenderingIntent::default(),
                 // ⚠ `PROBE_BILINEAR=1` isolates the gather's arithmetic: 2x2 taps against 4x4.
                 resampler: if std::env::var_os("PROBE_BILINEAR").is_some() {
@@ -142,7 +144,7 @@ fn main() {
             FrameSpec {
                 max_dim: rung,
                 region: None,
-                display_space: color::Display::SRGB,
+                display_space: display,
                 intent: color::RenderingIntent::default(),
                 resampler: pipeline::Resampler::default(),
                 gpu_tail: true,
@@ -167,6 +169,21 @@ fn main() {
             .collect::<Vec<_>>()
             .join(" ")
     );
+}
+
+/// `PROBE_DISPLAY` (2026-11-18): `m27q` — the author's monitor, from its captured EDID — or `p3`; else sRGB.
+fn probe_display() -> color::Display {
+    match std::env::var("PROBE_DISPLAY").as_deref() {
+        Ok("m27q") => {
+            let e =
+                color::edid::parse(include_bytes!("../../color/testdata/m27q.edid")).expect("edid");
+            color::Display::Profile(
+                color::DisplayProfile::from_primaries("M27Q", &e.primaries).expect("a profile"),
+            )
+        }
+        Ok("p3") => color::Display::Space(color::OutputSpace::DisplayP3),
+        _ => color::Display::SRGB,
+    }
 }
 
 /// A window-like GPU load on its OWN device: one texture of the frame's size rewritten and
