@@ -41,7 +41,7 @@ and a pointer, not deleted.
 | **M10.18** new modules | P-25 (brought in by the author) — tethering (a, ✅ merged 2026-10-29, confirmed by use with the X-T4: "works"); GPS and a map (b, ✅ merged 2026-10-28, confirmed by use: "works"); people tagging (c, ✅ merged 2026-10-29, confirmed by use: "works"); publish services (d, ✅ merged 2026-11-03, confirmed by use: "okay that works"); print (e, ✅ merged 2026-11-04, Save PDF confirmed by use — a printer unseen) |
 | **M10.19** found in use | HEIC/HEIF support (a, new 2026-10-01 — never an entry here; ✅ merged 2026-11-11, confirmed by use — a container-rotated real file unseen); *Move to folder left one thing out* (b, ✅ merged 2026-11-11, confirmed by use); marking several folders and forgetting them from a right-click menu (c, ✅ 2026-10-12 — found in use and built the same day at the author's request); **the Retouch panel as two tasks, Paint · Find** (d, new 2026-10-22 — the author, after c3: too many buttons in one place, patches and removals kept apart, drawing to look again invisible; his pick, option B of `https://claude.ai/artifact/7ACHJJ2zFpWPJ3WspdRYcC`; ✅ merged 2026-10-22, confirmed by use) |
 | **M11.2** Windows & Linux | ✅ *The in-window menu bar* — clicked through on Windows by the author (2026-11-18); *Multi-monitor on Linux and Windows* (no second monitor at the Windows PC); P-28 — ✅ Windows: builds, gate green, runs (`v0.1` piece 2, merged 2026-11-17, confirmed by the author) |
-| **M11.4** polish & `v0.1` | the start page (✅ 2026-11-13); `v0.1` pieces 1 and 2 (✅ 2026-11-17), 3a the icon, the Windows installer and the release workflow (✅ 2026-11-18), **3b the Mac app** (✅ merged 2026-11-18, confirmed by the author — tethering from the bundle and a downloaded copy's first launch unseen), 3c the AppImage, 4 signing and stores |
+| **M11.4** polish & `v0.1` | the start page (✅ 2026-11-13); `v0.1` pieces 1 and 2 (✅ 2026-11-17), 3a the icon, the Windows installer and the release workflow (✅ 2026-11-18), **3b the Mac app** (✅ merged 2026-11-18, confirmed by the author, a downloaded copy's first launch seen and the macOS 15 floor measured on CI — tethering from the bundle unseen), 3c the AppImage, 4 signing and stores |
 | **M11.3** / **M11.5** | *Contributor-facing documentation* (✅ merged 2026-11-16) / *A plugin system* |
 | **Going public** (after M11.5) | *Going public* (recorded 2026-11-16 by M11.3) |
 
@@ -1991,8 +1991,8 @@ The repository goes public once **all** of Phase 11 is done. The steps, from the
 0. **Re-read the README against what shipped.** Fill its marked spots (`<!-- fill at v0.1: … -->` —
    the file per OS, minimum OS versions, bundled libraries, signing, the graphics-card requirement —
    ✅ Windows' row and CONTRIBUTING's Windows steps filled by `v0.1` pieces 2 and 3a, 2026-11-17; ✅ the Mac row and
-   CONTRIBUTING's Mac build by 3b, 2026-11-18 — its first-launch paragraph written from Apple's announced steps, to
-   check against a real download; the Linux row waits for 3c); check every feature claim per OS (as of 2026-11-16:
+   CONTRIBUTING's Mac build by 3b, 2026-11-18 — its first-launch paragraph checked against a real download; the Linux
+   row waits for 3c); check every feature claim per OS (as of 2026-11-16:
    printing on Windows is to a PDF only, tethering not on Windows (switched off there, and it says so), printing to a printer never
    seen working — the README offers PDF only until it is); add plugins if M11.5 shipped
    them; measure the test count again.

@@ -196,12 +196,19 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 ### 2026-11-18 — M11.4 `v0.1` piece 3b: the Mac app (branch `v0.1-packaging-mac`)
 
 ✅ **Merged 2026-11-18 (`4571ec4d`) at the author's word ("yes, merge it"), confirmed by use** — installed from the
-`.dmg`, everything he tried works. ⚠ **Still unseen:** tethering from the installed app (no camera at hand) — the one
-proof that `app_bundle`'s folders reach libgphoto2 — and a **downloaded** copy's first launch: his hand-made quarantine
-mark (`xattr -w com.apple.quarantine "0081;…;Safari;"`) did NOT trigger Gatekeeper — the app opened as usual although
-`spctl --assess` answers "rejected" and the mark is present. Unknown which: the mark is not what a browser writes, or
-macOS remembers that exact app from its earlier runs here. The real test: the release workflow's manual run, its
-artifact downloaded in Safari (a build this Mac never ran) — which also measures the macOS 15 floor. Gate on the code's tip (`08e694a4`): fmt, clippy, **4,779 passed**,
+`.dmg`, everything he tried works. ⚠ **Still unseen: tethering from the installed app** (no camera at hand) — the one
+proof that `app_bundle`'s folders reach libgphoto2.
+- **The release workflow's first run** (manual, 2026-11-18, `44321165127`): the `macos` job green on `macos-15` —
+  Homebrew poured its `arm64_sequoia` bottles and the script measured **"The bundle needs macOS 15.0"** (35 files; the
+  binary 11.0): the floor the design expected, now measured. The artifact `macos`, 31.5 MB.
+- **A downloaded copy's first launch, seen** (that artifact through Safari, on macOS 26.6): "“Rustroom” Not Opened —
+  Apple could not verify “Rustroom” is free of malware…", **Done** / **Move to Bin** (British English; Move to Trash in
+  US English) → System Settings → Privacy & Security → **Open Anyway** → "An administrator's Touch ID or password is
+  required to allow this" (**Use Password…** / Cancel) → the keychain asked for the login password **twice** (the
+  Immich keys; a new code identity — the design expected once) → it opened. The README says so now — ⚠ a user who is
+  not an administrator cannot open it alone. ⚠ The author's hand-made quarantine mark (`xattr -w com.apple.quarantine
+  "0081;…;Safari;"`) had NOT triggered any of this on a copy already run here, though `spctl` answered "rejected" —
+  test a first launch with a real download, never a hand-made mark. Gate on the code's tip (`08e694a4`): fmt, clippy, **4,779 passed**,
 0 failed, 32 ignored, no GPU test skipped, 382 s. Spec `docs/superpowers/specs/2026-11-18-v0.1-packaging-mac-design.md`
 (from the brief, with the author: macOS 15 and later, bundle id `io.github.wladikrin.Rustroom` — fixed forever — our own
 script, Apple Silicon only, Homebrew's libheif as it is, a plain `.dmg`), plan `docs/superpowers/plans/2026-11-18-v0.1-packaging-mac.md`.

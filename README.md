@@ -157,8 +157,9 @@ Get Rustroom for your system from the
 The Windows installer is not signed yet: Windows says "Windows protected your PC" — choose **More info**, then
 **Run anyway**.
 
-The Mac app is not notarised yet: the first time you open it, macOS says it cannot verify Rustroom — choose **Done**,
-then open **System Settings → Privacy & Security** and choose **Open Anyway** beside Rustroom.
+The Mac app is not notarised yet: the first time you open it, macOS says "“Rustroom” Not Opened" — choose **Done**,
+then open **System Settings → Privacy & Security**, choose **Open Anyway** beside Rustroom, and confirm with an
+administrator's Touch ID or password. From then on it opens as usual.
 
 <!-- fill at v0.1: the graphics card requirement -->
 
