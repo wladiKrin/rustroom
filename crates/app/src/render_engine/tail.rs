@@ -119,6 +119,8 @@ pub(super) struct TailRun<'a> {
     pub(super) walk: &'a Walk<'a>,
     pub(super) tail_key: &'a TailKey,
     pub(super) refused: bool,
+    /// What the texture is converted into — on the GPU, through its table, when the frame downloads bytes.
+    pub(super) display: color::Display,
 }
 
 /// What the tail phases report.
@@ -144,6 +146,7 @@ pub(super) fn resolve_input(
         walk,
         tail_key,
         refused,
+        display,
     } = t;
     let Walk {
         ref steps,
@@ -167,10 +170,11 @@ pub(super) fn resolve_input(
                     let (pipe, chain) = tail.build(color::OutputSpace::Srgb);
                     let chain = chain.filter(|_| pipe.stage_names().is_empty())?;
                     let r = cache.resident_final(tail_key)?;
-                    let bytes = chain.run_rgba8_from(r)?;
+                    let b = chain.run_rgba8_from(r, display.gpu_table())?;
                     tail_uploads += chain.transfer_counts().0;
                     Some(Packed::Rgba8 {
-                        bytes,
+                        bytes: b.srgb,
+                        display: b.display,
                         w: pw,
                         h: ph,
                     })
@@ -235,6 +239,7 @@ pub(super) fn run(
         walk,
         tail_key,
         refused,
+        display: _,
     } = t;
     let Walk { debug_steps, .. } = *walk;
     let mut tail_uploads = 0usize;
@@ -273,8 +278,8 @@ pub(super) fn run(
                         resident_final_hit |= s.resident_final_hit;
                         packed
                     }
-                    // ⚠ The float path keeps the tail's input too, when the tail is one chain: a
-                    // non-sRGB display, Visualize Spots, or the proof's sRGB run.
+                    // ⚠ The float path keeps the tail's input too, when the tail is one chain:
+                    // Visualize Spots, or the proof's sRGB run.
                     Some(c) if pipe.stage_names().is_empty() => {
                         let hit = match cache.resident_final(tail_key).filter(|_| !refused) {
                             Some(r) => {
@@ -371,8 +376,12 @@ fn byte_tail(
         walk,
         tail_key,
         refused,
+        display,
         ..
     } = t;
+    // ⚠ The display's table, when it is not sRGB: the GPU's last dispatch writes the texture's plane beside the sRGB
+    // one (2026-11-18), so a monitor's profile keeps this path rather than downloading the float.
+    let table = display.gpu_table();
     let Walk { debug_steps, .. } = *walk;
     let mut tail_uploads = 0usize;
     let mut resident_final_hit = false;
@@ -401,14 +410,14 @@ fn byte_tail(
             (Some(s), _) => match cache.resident_final(tail_key).filter(|_| !refused) {
                 Some(r) => {
                     resident_final_hit = true;
-                    c.run_rgba8_from(r)
+                    c.run_rgba8_from(r, table)
                 }
-                None => c.run_rgba8_keeping_input(s).map(|(b, kept)| {
+                None => c.run_rgba8_keeping_input(s, table).map(|(b, kept)| {
                     cache.keep_resident_final(tail_key.clone(), kept);
                     b
                 }),
             },
-            (None, Some(m)) => c.run_rgba8(m),
+            (None, Some(m)) => c.run_rgba8(m, table),
             (None, None) => None,
         };
         tail_uploads += c.transfer_counts().0;
@@ -420,7 +429,15 @@ fn byte_tail(
             );
         }
         match got {
-            Some(b) => (Packed::Rgba8 { bytes: b, w, h }, None),
+            Some(b) => (
+                Packed::Rgba8 {
+                    bytes: b.srgb,
+                    display: b.display,
+                    w,
+                    h,
+                },
+                None,
+            ),
             // ⚠ A GPU failure falls back through `apply`, which retries once and then
             // takes the CPU path. One wasted attempt on a rare path beats a second
             // fallback implementation here that could drift from the first.

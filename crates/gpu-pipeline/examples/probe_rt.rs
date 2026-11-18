@@ -72,7 +72,7 @@ fn main() {
                 ))],
             );
             let t = Instant::now();
-            let out = chain.run_rgba8(&img);
+            let out = chain.run_rgba8(&img, None);
             let ms = t.elapsed().as_secs_f64() * 1000.0;
             assert!(out.is_some(), "the byte path must be available");
             std::hint::black_box(&out);

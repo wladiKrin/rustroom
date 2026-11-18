@@ -12,18 +12,28 @@ use std::sync::Arc;
 /// histogram already comes from the quantized bytes, and `srgb` and `rgba` become one shared
 /// allocation — precisely the existing `display_space == Srgb` branch.
 ///
-/// ⚠ It is constructible **only where M8.3g's gate held**. Three things downstream need the float
-/// — a non-sRGB display space, Visualize Spots and soft proofing — and on this arm they are
-/// unrepresentable rather than guarded against.
+/// ⚠ It is constructible **only where M8.3g's gate held**. Two things downstream need the float
+/// — Visualize Spots and soft proofing — and on this arm they are unrepresentable rather than
+/// guarded against.
+///
+/// ⚠⚠ `display` is the texture's own plane for a non-sRGB display (2026-11-18), converted on the
+/// GPU from the same float pixel before quantizing; `bytes` stays the sRGB plane the histogram and
+/// the readout read. The tail fills it from the same `color::Display` this frame's `pack` gets, so
+/// a non-sRGB display with no plane cannot be built — if one reached `pack`, `float` would say so.
 pub enum Packed {
     Float(ImageBuf),
-    Rgba8 { bytes: Vec<u8>, w: usize, h: usize },
+    Rgba8 {
+        bytes: Vec<u8>,
+        display: Option<Vec<u8>>,
+        w: usize,
+        h: usize,
+    },
 }
 
 /// The float image, on the paths that need it.
 ///
 /// ⚠ Every caller is on a path [`Packed::Rgba8`] cannot reach, because the gate that builds it
-/// excludes exactly those three. The message is the documentation of that invariant — if it ever
+/// excludes exactly those. The message is the documentation of that invariant — if it ever
 /// fires, the gate and this function have come to disagree, which is the one thing the enum is
 /// shaped to prevent.
 fn float(out: &Option<ImageBuf>) -> &ImageBuf {
@@ -53,12 +63,17 @@ pub(super) fn pack(
     display_space: color::Display,
     visualize: Option<f32>,
 ) -> RenderedFrame {
-    let (out, width, height, pre) = match packed {
+    let (out, width, height, pre, converted) = match packed {
         Packed::Float(out) => {
             let (w, h) = (out.width(), out.height());
-            (Some(out), w, h, None)
+            (Some(out), w, h, None, None)
         }
-        Packed::Rgba8 { bytes, w, h } => (None, w, h, Some(bytes)),
+        Packed::Rgba8 {
+            bytes,
+            display,
+            w,
+            h,
+        } => (None, w, h, Some(bytes), display),
     };
     // ⚠ Quantized to sRGB *first*, and the histogram taken from that. The histogram describes
     // the image; the texture describes what this monitor must be driven with. Deriving one from
@@ -112,7 +127,7 @@ pub(super) fn pack(
         );
     }
 
-    let rgba = match proofed {
+    let rgba = match (proofed, converted) {
         // ⚠⚠ The proof **replaces** the display transform for the texture rather than composing
         // with it. That is the original architecture of this feature, kept through the amendment
         // that changed where the data comes from: soft proofing points the space `pack` converts
@@ -120,12 +135,15 @@ pub(super) fn pack(
         // spec rather than discovered later: while proofing, the display-profile setting has no
         // effect — which is also why the spec says the thing to look at is the *difference*
         // between proof and no proof, not the absolute colour.
-        Some((proof_out, proof)) => Arc::new(proof_texture(&proof_out, proof)),
-        None if display_space.is_srgb() => shown,
-        None => {
+        (Some((proof_out, proof)), _) => Arc::new(proof_texture(&proof_out, proof)),
+        (None, _) if display_space.is_srgb() => shown,
+        // ⚠ Converted on the GPU already, from the same float (`quantize.rs`'s display plane).
+        (None, Some(converted)) => Arc::new(converted),
+        (None, None) => {
             // ⚠ Converted from the **float** image, not from `shown`. An 8-bit → 8-bit conversion
             // compresses the range and costs roughly 0.8 bits, which shows as banding on a smooth
-            // sky. The extra quantization pass is paid only when a display space is actually set.
+            // sky. Paid only for a frame the GPU did not render (no adapter, the GPU tail off, a
+            // fallback) — the byte path brings the display's plane with it.
             Arc::new(float(&out).to_rgba8_with(move |c| display_space.convert(c)))
         }
     };
@@ -345,6 +363,7 @@ mod tests {
         let got = pack(
             Packed::Rgba8 {
                 bytes: buf.to_rgba8(),
+                display: None,
                 w: 2,
                 h: 1,
             },
@@ -362,6 +381,34 @@ mod tests {
             Arc::ptr_eq(&got.rgba, &got.srgb),
             "the two must be one allocation, as on the float sRGB path"
         );
+    }
+
+    /// ⚠ A display's plane from the GPU (2026-11-18) IS the texture, and the sRGB bytes beside it stay the
+    /// photograph's — the histogram and the readout — exactly as the float path's CPU conversion leaves them.
+    #[test]
+    fn a_display_plane_from_the_gpu_is_the_texture_and_nothing_else() {
+        let buf = ImageBuf::from_vec(2, 1, vec![0.0, 0.5, 1.0, 0.8, 0.25, 0.1]);
+        let p3 = color::Display::Space(color::OutputSpace::DisplayP3);
+        let want = pack(Packed::Float(buf.clone()), None, None, 16, p3, None);
+        let plane = buf.to_rgba8_with(move |c| p3.convert(c));
+        assert_ne!(plane, buf.to_rgba8(), "premise: P3 moves these pixels");
+        let got = pack(
+            Packed::Rgba8 {
+                bytes: buf.to_rgba8(),
+                display: Some(plane.clone()),
+                w: 2,
+                h: 1,
+            },
+            None,
+            None,
+            16,
+            p3,
+            None,
+        );
+        assert_eq!(*got.rgba, plane, "the texture is the display's plane");
+        assert_eq!(*got.rgba, *want.rgba, "as the float path converts it");
+        assert_eq!(*got.srgb, *want.srgb, "the photograph's own bytes");
+        assert_eq!(got.hist, want.hist, "histogram");
     }
 
     /// ⚠⚠ `srgb` is taken **before** Visualize Spots replaces the image, so the readout reports

@@ -133,7 +133,7 @@ pub fn max_tile_dabs() -> u32 {
         brush_wgsl::capacity_for(c.device.limits().max_compute_workgroup_storage_size)
     })
 }
-pub use chain::{GpuChain, GpuStage, Input, Slot};
+pub use chain::{GpuChain, GpuStage, Input, Rgba8, Slot};
 pub use context::{shared, GpuContext};
 pub use contrast::GpuContrastStage;
 pub use creative_look::GpuCreativeLookStage;
