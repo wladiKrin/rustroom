@@ -193,6 +193,29 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-18 — On the Mac: a NaN pixel came out green on Metal (branch `fix-metal-nan-guard`)
+
+The hand-off's first gate on the Mac (macOS 26.6, Apple Silicon): fmt and clippy green — the macOS-only modules still
+compile — and **4,774 passed, 1 failed**, 32 ignored, no GPU test skipped, in 648 s. The failure:
+`quantize::tests::the_display_plane_is_what_the_cpu_would_have_converted`, **252 levels** on the M27Q profile —
+3 of 17,412 bytes, all of pixel 255, the fixture's NaN pixel: the CPU black, the GPU (146, 252, 60).
+
+- **The cause:** wgpu creates Metal libraries with `MTLCompileOptions::new()`, whose default is fast math, and fast
+  math lets the compiler assume no float is NaN — so the display shader's guard `all(c == c)` became `true`, and the
+  pixel went through the table with `clamp(NaN)` read as a number. Vulkan on Windows kept the comparison (0 of 17,412
+  there). The sRGB plane's scalar `select(v, 0.0, v != v)` passed on the Mac (`chain.rs`'s
+  `the_gpu_bytes_are_what_the_cpu_would_have_quantized` carries a NaN too) — whether its guard or Metal's `clamp` made
+  the 0 was not found out; it tests the bits now as well, so it no longer matters which.
+- **The fix:** both shaders test the bits — `is_nan` (`(bitcast<u32>(v) & 0x7fffffff) > 0x7f800000`) and `is_nan3`;
+  integer operations carry no fast-math assumption. On the Mac now: M27Q **0 of 17,412** bytes differ, Display P3 and
+  Adobe RGB ≤ 1 level (808 and 560 bytes) — the bounds Windows measured. The old guard is the sabotage: red at 252.
+  Only `quantize.rs` used a self-comparison as a NaN test (grepped). `AGENTS.md`'s GPU section carries the rule.
+- **Also seen, not changed:** clippy prints one warning from the vendored `rsraw-sys` on macOS —
+  `suspicious_runtime_symbol_definitions` on `bcmp`, which bindgen declares from macOS's `strings.h`. Vendoring made
+  it a path dependency, so its warnings are no longer capped; it is harmless and not under `-D warnings`.
+- **CI** (`gh run list`): the hand-off's push green — the Linux job and CI's first **Windows** job (clippy and a
+  build). The release workflow's manual run is still to start (the Actions tab).
+
 ### 2026-11-18 — The Windows part closed: `main` pushed, a hand-off for the next machine
 
 The author clicked through the in-window menu bar on Windows — fine (M11.2's *"never been run"*, ✅; on Windows it is

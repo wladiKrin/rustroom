@@ -13,7 +13,10 @@ use crate::{GpuContext, GpuImage};
 ///
 /// ⚠ **NaN must reach 0, and `clamp` is not what does it.** On the CPU that happens through the
 /// saturating `as u8` cast — `f32::clamp` returns NaN for NaN — so the shader tests for it
-/// explicitly. `v != v` is true only for NaN.
+/// explicitly, ⚠⚠ **on the BITS** (`is_nan`: exponent all ones, a mantissa). wgpu compiles Metal
+/// shaders with Metal's default fast math, which lets the compiler assume no float is NaN and fold
+/// a self-comparison — on a Mac the display plane's `all(c == c)` guard was compiled away and a NaN pixel came
+/// out green (2026-11-18; Vulkan on Windows kept it). Integer operations carry no such assumption.
 ///
 /// ⚠ `pack4x8unorm` was considered and not used: its rounding is specified as the same
 /// `floor(0.5 + 255 × clamp(..))`, but writing the rule out is what lets a reader check it against
@@ -29,8 +32,12 @@ struct Params {
 @group(0) @binding(1) var<uniform> params: Params;
 @group(0) @binding(2) var<storage, read_write> dst: array<u32>;
 
+fn is_nan(v: f32) -> bool {
+    return (bitcast<u32>(v) & 0x7fffffffu) > 0x7f800000u;
+}
+
 fn q(v: f32) -> u32 {
-    let x = select(v, 0.0, v != v);
+    let x = select(v, 0.0, is_nan(v));
     return u32(floor(clamp(x, 0.0, 1.0) * 255.0 + 0.5));
 }
 
@@ -49,7 +56,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 /// ⚠⚠ The lookup is `color::DisplayProfile::lookup` LINE FOR LINE: clamp, the square root the grid is spaced by,
 /// `floor` capped at `n − 2`, the eight corners, `a + (b − a) · t` along red, green, blue. ⚠ A NaN in any channel makes
 /// the CPU's fractions NaN in all three outputs, which quantize to 0 — so a pixel holding a NaN is black here, by an
-/// explicit test (`all(c == c)`), never by whatever `clamp` does with a NaN on this GPU.
+/// explicit test on its bits (`any(is_nan3(c))`, [`SHADER`]'s note says why never `c == c`), never by whatever `clamp`
+/// does with a NaN on this GPU.
 const DISPLAY_SHADER: &str = r#"
 struct Params {
     pixels: u32,
@@ -62,8 +70,16 @@ struct Params {
 @group(0) @binding(2) var<storage, read_write> dst: array<u32>;
 @group(0) @binding(3) var<storage, read> table: array<f32>;
 
+fn is_nan(v: f32) -> bool {
+    return (bitcast<u32>(v) & 0x7fffffffu) > 0x7f800000u;
+}
+
+fn is_nan3(c: vec3<f32>) -> vec3<bool> {
+    return (bitcast<vec3<u32>>(c) & vec3<u32>(0x7fffffffu)) > vec3<u32>(0x7f800000u);
+}
+
 fn q(v: f32) -> u32 {
-    let x = select(v, 0.0, v != v);
+    let x = select(v, 0.0, is_nan(v));
     return u32(floor(clamp(x, 0.0, 1.0) * 255.0 + 0.5));
 }
 
@@ -109,7 +125,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let c = vec3<f32>(src[p], src[p + 1u], src[p + 2u]);
     dst[pixel] = pack(c);
     var d = vec3<f32>(0.0);
-    if (all(c == c)) { d = lookup(c); }
+    if (!any(is_nan3(c))) { d = lookup(c); }
     dst[params.pixels + pixel] = pack(d);
 }
 "#;
