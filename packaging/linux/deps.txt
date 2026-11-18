@@ -1,0 +1,19 @@
+# The Ubuntu 22.04 packages the AppImage is built from (v0.1, piece 3c) — read by packaging/linux/Dockerfile and the
+# release workflow's linux job, so a local build and a release cannot differ. One package per line.
+# ⚠ No codec's -dev package but libde265-dev: libheif-sys's own build links every codec cmake finds.
+appstream
+build-essential
+ca-certificates
+clang
+cmake
+curl
+desktop-file-utils
+file
+git
+libde265-dev
+libgphoto2-dev
+liblcms2-dev
+patchelf
+pkg-config
+python3
+zsync

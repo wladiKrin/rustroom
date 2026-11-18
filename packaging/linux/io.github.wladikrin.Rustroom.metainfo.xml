@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Rustroom's AppStream metadata (v0.1, piece 3c): in the AppImage now, and what Flathub will read (piece 4). -->
+<component type="desktop-application">
+  <id>io.github.wladikrin.Rustroom</id>
+  <name>Rustroom</name>
+  <summary>A RAW photo editor with a catalog</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer id="io.github.wladikrin">
+    <name>wladiKrin</name>
+  </developer>
+  <description>
+    <p>
+      Rustroom is a complete darkroom for your RAW files: a Library to import, sort, rate and find your photos, and
+      Develop to edit them — with masks, AI selections, retouching, HDR and panorama merges, tethered shooting, a map,
+      print and export.
+    </p>
+    <p>
+      Your files are never changed: edits are kept separately beside them. Open source, no subscription, no account.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.wladikrin.Rustroom.desktop</launchable>
+  <url type="homepage">https://github.com/wladiKrin/rustroom</url>
+  <url type="bugtracker">https://github.com/wladiKrin/rustroom/issues</url>
+  <categories>
+    <category>Graphics</category>
+    <category>Photography</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-18"/>
+  </releases>
+</component>
