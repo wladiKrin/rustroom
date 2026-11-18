@@ -151,6 +151,7 @@ const BUFFER_CACHE_CAP: usize = 3;
 const PREVIEW_TEXTURE_BUDGET: usize = 6 * 52 * 1024 * 1024;
 
 fn main() -> eframe::Result<()> {
+    rustroom_app::app_bundle::point_libraries_inside();
     rustroom_app::console::attach_to_parent();
     let (rgba, width, height) = rustroom_app::app_icon::rgba();
     let mut native_options = eframe::NativeOptions {
