@@ -8,4 +8,4 @@ Icon=io.github.wladikrin.Rustroom
 Terminal=false
 Categories=Graphics;Photography;
 Keywords=RAW;photo;editor;catalog;darkroom;
-StartupWMClass=Rustroom
+StartupWMClass=io.github.wladikrin.Rustroom
