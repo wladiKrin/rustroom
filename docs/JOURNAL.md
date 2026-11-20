@@ -201,6 +201,10 @@ ubuntu-22.04 image ships OpenJPEG's `-dev` among its preinstalled packages. ⚠�
 `in-docker.sh`'s clean image (`fix-release-linux`, `543a483c`) — never on the runner itself. The second
 (`44729546617`) green: linux 30 min (the image built first), windows 25, macos 5; "needs glibc 2.35", "HEIC decoded
 through the AppImage's libheif and libde265: 10 tests"; `release` skipped (no tag).
+✅ **Its downloaded AppImage started** (`gh run download`, sha256 `351273e5…`, 41 MB): the update line embedded, 15
+camlibs, nothing "not found" under `env -i ldd`; launched over SSH onto the author's i3 session (`:0`, the session's
+own `XAUTHORITY`) with nobody at the screen — the window mapped and focused, the process on the AppImage's mount,
+libde265 and LittleCMS from it, NVIDIA's Vulkan from the system; closed through i3, the mount gone. Not seen by eye.
 
 ✅ **Merged 2026-11-20 (`17f4cc3c`), the author: "works, merge and push".** Gate on the tip (`5f99dac0`, Arch):
 fmt, clippy, **4,785** passed, 0 failed, 32 ignored. The final review (a fresh reviewer): no critical; two important
