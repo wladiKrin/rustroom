@@ -1983,7 +1983,7 @@ to an AI assistant, not to a contributor**, and it is enormous.
    this project's most distinctive practice and completely invisible from outside.
 3. **Small labelled issues.** Several already exist in this file.
 
-## Going public (recorded 2026-11-16 by M11.3) → ✅ steps 0–3 done 2026-11-20 (before M11.5, the author's call — `grep -n 'Going public: the history' docs/JOURNAL.md`); step 4 open
+## Going public (recorded 2026-11-16 by M11.3) → ✅ DONE 2026-11-20 (before M11.5, the author's call — `grep -n 'Going public: the history' docs/JOURNAL.md`)
 
 The repository goes public once **all** of Phase 11 is done. The steps, from the M11.3 spec
 (`docs/superpowers/specs/2026-11-14-m11.3-readme-and-contributor-docs-design.md`, *Going public*):

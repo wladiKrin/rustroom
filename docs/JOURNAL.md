@@ -215,6 +215,11 @@ author first ("not essential for the first version").
   none of the strings (control: `wladiKrin` found). On the public repository the old ids answer "No commit found".
 - ⚠⚠ **Not a flip of the old repository:** GitHub keeps force-pushed-over commits reachable by id (and the old release,
   Actions logs) — so the old one was renamed `wladiKrin/rustroom-private` (kept, private) and a new `rustroom` created.
+- **Step 4:** Discussions on (its default categories include the forms' `q-a` and `ideas`); every link the README, the
+  release notes and the forms use answers anonymously (the badges: GPL-3.0, v0.1.0, CI passing — CI's first run on the
+  new repository green, `44783030207`); four starter issues filed, #1–#4 (the libstdc++ floor, the camera's own USB node,
+  a minimal install's FUSE/libusb, X11's empty `WM_CLASS` instance) — a fifth, printing to a real printer, dropped at the
+  author's word. The local copies of the old history deleted; `wladiKrin/rustroom-private` KEPT for now, the author's call.
 - ⚠⚠ **Commit as the no-reply address** — set per clone; the global git email is still the Gmail. The Mac and Windows
   need a fresh clone and the same setting.
 
