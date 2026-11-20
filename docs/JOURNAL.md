@@ -195,6 +195,10 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ### 2026-11-20 — M11.4 `v0.1` piece 3c: the Linux AppImage (branch `v0.1-appimage`)
 
+✅ **`v0.1.0` tagged and PUBLISHED 2026-11-20** — the tag on `af40da4f` (the README's last placeholder, the graphics
+sentence), Release run `44736200110` green on all three, the draft's notes written from the README (the printer line
+left out at the author's word), published by the author. The repository is still private: going public is after M11.5.
+
 ✅ **The release workflow's first run with a `linux` job, 2026-11-20:** the first (`44720213267`) stopped at the
 licence map — "no licence text for libopenjp2.so.7": libheif-sys links EVERY codec cmake finds, and GitHub's
 ubuntu-22.04 image ships OpenJPEG's `-dev` among its preinstalled packages. ⚠⚠ The job now builds inside
