@@ -195,6 +195,13 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ### 2026-11-20 — M11.4 `v0.1` piece 3c: the Linux AppImage (branch `v0.1-appimage`)
 
+✅ **The release workflow's first run with a `linux` job, 2026-11-20:** the first (`44720213267`) stopped at the
+licence map — "no licence text for libopenjp2.so.7": libheif-sys links EVERY codec cmake finds, and GitHub's
+ubuntu-22.04 image ships OpenJPEG's `-dev` among its preinstalled packages. ⚠⚠ The job now builds inside
+`in-docker.sh`'s clean image (`fix-release-linux`, `543a483c`) — never on the runner itself. The second
+(`44729546617`) green: linux 30 min (the image built first), windows 25, macos 5; "needs glibc 2.35", "HEIC decoded
+through the AppImage's libheif and libde265: 10 tests"; `release` skipped (no tag).
+
 ✅ **Merged 2026-11-20 (`17f4cc3c`), the author: "works, merge and push".** Gate on the tip (`5f99dac0`, Arch):
 fmt, clippy, **4,785** passed, 0 failed, 32 ignored. The final review (a fresh reviewer): no critical; two important
 fixed — a HEIC now DECODED through the packed AppImage by the build, and a journal overclaim; four minors left open
