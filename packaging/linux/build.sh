@@ -80,13 +80,17 @@ only_dir() {
 gphoto_lib="$(pkg-config --variable=libdir libgphoto2)" || fail "pkg-config knows no libgphoto2"
 cam_src="$(only_dir "$gphoto_lib/libgphoto2")"
 io_src="$(only_dir "$gphoto_lib/libgphoto2_port")"
+shopt -s nullglob
 for f in "$cam_src"/*.so; do
     case "$(basename "$f")" in
         ax203.so | st2205.so | tp6801.so | docupen.so | lumix.so) continue ;;
     esac
     cp "$f" "$camlibs/"
 done
-cp "$io_src"/*.so "$iolibs/"
+io_files=("$io_src"/*.so)
+shopt -u nullglob
+[ ${#io_files[@]} -gt 0 ] || fail "no port drivers in $io_src"
+cp "${io_files[@]}" "$iolibs/"
 [ -f "$camlibs/ptp2.so" ] && [ -f "$iolibs/usb1.so" ] || fail "no ptp2 camlib or usb1 iolib - libgphoto2's drivers are incomplete"
 
 # The libraries every Linux has — AppImage's list, pinned — and never the graphics stack: wgpu and winit load
@@ -98,10 +102,14 @@ is_excluded() { grep -qxF "$1" <<<"$excluded"; }
 
 # Every file in the AppDir that is an ELF — the binary, the libraries, the drivers.
 elves() {
-    local f
-    while IFS= read -r -d '' f; do
-        if [ "$(head -c 4 "$f" | od -An -c | tr -d ' ')" = '177ELF' ]; then echo "$f"; fi
-    done < <(find "$appdir" -type f -print0)
+    local f files magic
+    # ⚠ Captured, never `< <(find …)`: a substitution's exit status is lost, and the callers' `|| fail` with it.
+    files="$(find "$appdir" -type f)" || return 1
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        magic="$(od -An -N4 -c "$f")" || return 1
+        if [ "$(tr -d ' ' <<<"$magic")" = '177ELF' ]; then echo "$f"; fi
+    done <<<"$files"
     # ⚠ Explicitly: the loop's status is its last test's, which a non-ELF file found last would make a failure (a
     # sabotage found it, 2026-11-18).
     return 0
@@ -128,7 +136,8 @@ needed() {
     sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' <<<"$out"
 }
 queue=()
-while IFS= read -r f; do queue+=("$f"); done < <(elves)
+listed="$(elves)" || fail "cannot list the AppDir"
+while IFS= read -r f; do [ -n "$f" ] && queue+=("$f"); done <<<"$listed"
 [ ${#queue[@]} -gt 2 ] || fail "the AppDir holds almost no ELF files before the walk"
 while [ ${#queue[@]} -gt 0 ]; do
     f="${queue[0]}"
@@ -321,8 +330,25 @@ mkdir -p "$check"
 appdir_was="$appdir"
 appdir="$check/squashfs-root"
 packed="$(elves)" || fail "cannot list the extracted AppImage"
-[ "$(wc -l <<<"$packed")" -eq "$(wc -l <<<"$all")" ] || fail "the AppImage holds a different set of ELF files than its AppDir"
+[ "$(sed "s|^$check/squashfs-root/||" <<<"$packed" | sort)" = "$(sed "s|^$appdir_was/||" <<<"$all" | sort)" ] ||
+    fail "the AppImage holds a different set of ELF files than its AppDir"
 check_inside "$appdir" "$packed"
+
+# A HEIC DECODED through what was packed — a linked libde265 is not proof (the design's anti-goal): image-decode's
+# HEIF tests, built with the AppImage's libheif, run against the extracted usr/lib and must check real pixels.
+built="$(cargo test --release -p image-decode --features embedded-libheif --target-dir "$target_dir" --no-run 2>&1)" ||
+    fail "image-decode's tests did not build: $built"
+tests_bin="$(sed -n 's|.*Executable unittests src/lib.rs (\(.*\))$|\1|p' <<<"$built")"
+[ -n "$tests_bin" ] || fail "cannot find image-decode's test binary in: $built"
+case "$tests_bin" in /*) ;; *) tests_bin="$root/$tests_bin" ;; esac
+linked="$(LD_LIBRARY_PATH="$appdir/usr/lib" ldd "$tests_bin")" || fail "ldd failed on $tests_bin"
+grep -q "libde265.so.0 => $appdir/usr/lib/libde265.so.0" <<<"$linked" ||
+    fail "the HEIC test does not use the AppImage's libde265: $(grep de265 <<<"$linked")"
+ran="$(LD_LIBRARY_PATH="$appdir/usr/lib" LIBHEIF_PLUGIN_PATH="$appdir/usr/lib/libheif/plugins" \
+    "$tests_bin" heif 2>&1)" || fail "a HEIC does not decode through the AppImage's libraries: $ran"
+passed="$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' <<<"$ran")"
+[ "${passed:-0}" -ge 10 ] || fail "${passed:-no} HEIF tests ran, 10 were measured (2026-11-20) - the filter matched too little: $ran"
+echo "HEIC decoded through the AppImage's libheif and libde265: $passed tests"
 appdir="$appdir_was"
 rm -rf "$check"
 

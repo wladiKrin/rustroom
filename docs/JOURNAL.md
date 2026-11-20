@@ -244,7 +244,9 @@ the camera's node stripped of its ACL (`setfacl -b`, then `root:root 0664`, chec
   (`tether::usb_access`), never from libgphoto2's text, which does not carry it.
 - ⚠ **On a systemd desktop a PTP camera is reachable WITHOUT libgphoto2's rules:** systemd's `70-uaccess.rules`
   tags any `*:060101:*` interface `uaccess` (line 14), which is where the author's `user:me:rw-` came from. The
-  permission sentence is for distributions without it, non-PTP cameras, and seatless (SSH) sessions.
+  permission sentence is for PTP cameras on distributions without it, and seatless (SSH) sessions — ⚠ NOT for a
+  non-PTP camera: `usb_access` looks only at interface class `06`, so a blocked vendor-class camera still reads
+  "disconnected" (the final review, 2026-11-20).
 - ⚠ The X-T4 re-enumerates (a new device number) every ~2 min with auto power off on — two first attempts stripped
   a node that no longer existed, and a `[ -w ]` on the missing file read as "not writable". Assert the node EXISTS.
 
