@@ -1992,7 +1992,7 @@ The repository goes public once **all** of Phase 11 is done. The steps, from the
    the file per OS, minimum OS versions, bundled libraries, signing, the graphics-card requirement —
    ✅ Windows' row and CONTRIBUTING's Windows steps filled by `v0.1` pieces 2 and 3a, 2026-11-17; ✅ the Mac row and
    CONTRIBUTING's Mac build by 3b, 2026-11-18 — its first-launch paragraph checked against a real download; ✅ the Linux
-   row, its paragraph and CONTRIBUTING's AppImage build by 3c, 2026-11-20 — the graphics-card requirement still open); check every feature claim per OS (as of 2026-11-16:
+   row, its paragraph and CONTRIBUTING's AppImage build by 3c, 2026-11-20 — ✅ the graphics-card sentence 2026-11-20); check every feature claim per OS (as of 2026-11-16:
    printing on Windows is to a PDF only, tethering not on Windows (switched off there, and it says so), printing to a printer never
    seen working — the README offers PDF only until it is); add plugins if M11.5 shipped
    them; measure the test count again.

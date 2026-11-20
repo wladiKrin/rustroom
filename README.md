@@ -180,7 +180,8 @@ except what every desktop already has — the graphics driver, which it uses as 
   unplug the camera and plug it in again.
 - **Immich keys** are kept in your desktop's keyring (GNOME Keyring or KDE Wallet), which must be running.
 
-<!-- fill at v0.1: the graphics card requirement -->
+**Graphics.** Rustroom edits on your graphics card — through Metal on a Mac, DirectX 12 on Windows and Vulkan on
+Linux — and where none of them is available it edits on the processor instead, more slowly.
 
 **Cameras.** Raw files from Canon (CR2, CR3, CRW), Nikon (NEF, NRW), Sony (ARW, SR2, SRF), Fujifilm (RAF),
 OM System and Olympus (ORF), Panasonic (RW2, RAW), Pentax (PEF), Leica (RWL, RAW), Samsung (SRW), Hasselblad
