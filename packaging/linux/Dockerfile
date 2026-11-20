@@ -1,7 +1,7 @@
 # The AppImage's build image (v0.1, piece 3c): Ubuntu 22.04 — glibc 2.35, the AppImage's floor — with deps.txt, Rust
-# stable and cargo-about. Used by packaging/linux/in-docker.sh; the release workflow installs the same list on its
-# ubuntu-22.04 runner instead. clippy and rustfmt because rust-toolchain.toml names them: rustup would otherwise
-# fetch them at run time, into a folder the build (the caller's user) cannot write.
+# stable and cargo-about. Used by packaging/linux/in-docker.sh, locally and in the release workflow alike — a clean
+# image, because libheif-sys links every codec cmake finds. clippy and rustfmt because rust-toolchain.toml names
+# them: rustup would otherwise fetch them at run time, into a folder the build (the caller's user) cannot write.
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 COPY deps.txt /tmp/deps.txt
