@@ -80,19 +80,20 @@ jobs:
 
   linux:
     # v0.1 (piece 3c): the AppImage, built on Ubuntu 22.04 — its glibc, 2.35, is the floor, and `--floor 2.35` fails
-    # the build if anything bundled asks for more. The packages are deps.txt's, the list the local Docker build uses.
+    # the build if anything bundled asks for more. ⚠ Inside packaging/linux/in-docker.sh's container, never on the
+    # runner itself: libheif-sys links every codec cmake finds, and the runner image's preinstalled -dev packages put
+    # OpenJPEG into the first release run (2026-11-20, stopped by build.sh's licence map). The container holds
+    # deps.txt and nothing else — the same image a local build uses.
     needs: version
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install the libraries and tools
-        run: sudo apt-get update && grep -v '^#' packaging/linux/deps.txt | xargs sudo apt-get install -y --no-install-recommends
-      - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-about
-        run: cargo install cargo-about --locked --features cli
+        with:
+          workspaces: ". -> target/linux-docker/target"
+          cache-directories: target/linux-docker/cargo-home
       - name: Build the AppImage
-        run: packaging/linux/build.sh --floor 2.35
+        run: packaging/linux/in-docker.sh --floor 2.35
       - uses: actions/upload-artifact@v4
         with:
           name: linux

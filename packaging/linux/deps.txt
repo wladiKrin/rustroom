@@ -1,5 +1,6 @@
-# The Ubuntu 22.04 packages the AppImage is built from (v0.1, piece 3c) — read by packaging/linux/Dockerfile and the
-# release workflow's linux job, so a local build and a release cannot differ. One package per line.
+# The Ubuntu 22.04 packages the AppImage is built from (v0.1, piece 3c) — read by packaging/linux/Dockerfile, whose
+# image both a local build and the release workflow's linux job use (in-docker.sh), so the two cannot differ. One
+# package per line.
 # ⚠ No codec's -dev package but libde265-dev: libheif-sys's own build links every codec cmake finds.
 appstream
 build-essential
