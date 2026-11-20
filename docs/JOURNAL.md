@@ -195,6 +195,12 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ### 2026-11-20 — M11.4 `v0.1` piece 3c: the Linux AppImage (branch `v0.1-appimage`)
 
+✅ **Merged 2026-11-20 (`17f4cc3c`), the author: "works, merge and push".** Gate on the tip (`5f99dac0`, Arch):
+fmt, clippy, **4,785** passed, 0 failed, 32 ignored. The final review (a fresh reviewer): no critical; two important
+fixed — a HEIC now DECODED through the packed AppImage by the build, and a journal overclaim; four minors left open
+(the libstdc++ floor unmeasured, a second blocked PTP device, FUSE/libusb unmentioned in the README, the Docker
+image's Rust version).
+
 `Rustroom-0.1.0-linux-x86_64.AppImage`, **41 MB** (+ a 141 KB `.zsync`), by `packaging/linux/build.sh` on Ubuntu
 22.04 — the release's `linux` job, or `packaging/linux/in-docker.sh` on any Linux. Spec
 `docs/superpowers/specs/2026-11-18-v0.1-appimage-design.md`, plan `docs/superpowers/plans/2026-11-18-v0.1-appimage.md`.
