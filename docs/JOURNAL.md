@@ -193,6 +193,31 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-20 — Going public: the history rewritten once, a new `wladiKrin/rustroom`, public
+
+✅ **Public 2026-11-20**, the author's flip; `v0.1.0` re-released from the new repository (Release run `44782588786`,
+started by hand on the tag — the first push to a new repository started no workflow). ⏸ M11.5 plugins deferred by the
+author first ("not essential for the first version").
+
+- **What the history carried, measured before the rewrite** (every blob ever committed, every message, the tag): the
+  work and Gmail addresses on all 2,966 commits and the tagger; the Immich server's Tailscale host in three spellings
+  (~1,000 hits — host, URL, the cache folder's slug); the home path (`/Users/wladi` 1,787, `-Users-wladi-`, `user:wladi:`);
+  the surname in one example's fixture. None: the work domain in any file, IP addresses, keys or tokens (pattern scan +
+  gitleaks), GPS / serials / owners in the 183 images (exiftool), private details in the six README screenshots (looked
+  at), a serial in `m27q.edid` (zero).
+- **The rewrite** (`git-filter-repo`, on a throwaway bare clone of `main` + `v0.1.0` only): `--mailmap` to
+  `115639331+wladiKrin@users.noreply.github.com` (authors, committers, the tagger), `--replace-text` / `--replace-message`
+  (host → `immich.example`, home → `~`, surname dropped). Then one docs commit remapping 56 quoted commit ids from
+  filter-repo's `commit-map` (docs only — checked, no digest or code touched).
+- **Proven after:** each removed string 0 in every object and every message, the same count on the original in the
+  hundreds or thousands (the control); gitleaks clean; TruffleHog 23,928 chunks, 0 — ⚠ its first "0" was a run that
+  never happened (a bare repository: "failed to stat .git"), caught by reading its log. The rebuilt AppImage's files hold
+  none of the strings (control: `wladiKrin` found). On the public repository the old ids answer "No commit found".
+- ⚠⚠ **Not a flip of the old repository:** GitHub keeps force-pushed-over commits reachable by id (and the old release,
+  Actions logs) — so the old one was renamed `wladiKrin/rustroom-private` (kept, private) and a new `rustroom` created.
+- ⚠⚠ **Commit as the no-reply address** — set per clone; the global git email is still the Gmail. The Mac and Windows
+  need a fresh clone and the same setting.
+
 ### 2026-11-20 — M11.4 `v0.1` piece 3c: the Linux AppImage (branch `v0.1-appimage`)
 
 ✅ **`v0.1.0` tagged and PUBLISHED 2026-11-20** — the tag on `9fe971f8` (the README's last placeholder, the graphics
