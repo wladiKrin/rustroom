@@ -193,6 +193,45 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-20 — M11.4 `v0.1` piece 3c: the Linux AppImage (branch `v0.1-appimage`)
+
+`Rustroom-0.1.0-linux-x86_64.AppImage`, **41 MB** (+ a 141 KB `.zsync`), by `packaging/linux/build.sh` on Ubuntu
+22.04 — the release's `linux` job, or `packaging/linux/in-docker.sh` on any Linux. Spec
+`docs/superpowers/specs/2026-11-18-v0.1-appimage-design.md`, plan `docs/superpowers/plans/2026-11-18-v0.1-appimage.md`.
+
+- **The floor is measured, 2.35** — the highest `GLIBC_x.y` any bundled ELF needs, the binary's own; `--floor 2.35`
+  fails the build above it (sabotaged with `--floor 2.30`: refused; `--floor abc`: rejected).
+- **Bundled:** libgphoto2 2.5.27 + port, libexif, libltdl, libjpeg-turbo, LittleCMS 2.12, libde265, libxml2, ICU 70,
+  liblzma — 15 camlibs (Ubuntu ships 20: the four libgd-only non-camera drivers out as on the Mac, and **`lumix`**,
+  the Wi-Fi driver, which pulls in libcurl, TLS and Kerberos). libheif 1.23 is compiled in statically
+  (`libheif-sys`'s `embedded-libheif`, feature `appimage`; Ubuntu 22.04's is 1.12), checked by its libde265 symbol
+  (`de265_new_decoder` in `objdump -T` — a `strings` check was unreliable, the plugin's name is inlined).
+- **The walk is each file's OWN `NEEDED`, never `ldd`'s flat closure** — the closure bundled libudev, a dependency of
+  the excluded libusb. Excluded names are AppImage's pinned `excludelist` (`19e30b27`); a library in neither list
+  stops the build, and so does one without an entry in the licence map. Sabotaged: an rpath removed → "reaches
+  outside"; a libvulkan dropped in → "graphics stack".
+- ⚠ **Arch's ldd and pkg-config differ from Ubuntu's** (the loader named by its full path; `driverdir` is the port
+  folder) — the script was first written against Arch and both were fixed; run it in the container.
+- **Seen by the author on Arch:** under X11 (i3) and **Wayland (Plasma)** — a native Wayland window (not in XWayland's
+  client list), app id `io.github.wladikrin.Rustroom` read from KWin; integrated by hand (Gear Lever's AUR package
+  would not download), the aperture icon in the launcher, the taskbar and Alt-Tab. A RAW and a HEIC opened; the GPU
+  path on NVIDIA (`libnvidia-*` mapped, `gpu chain true`, no CPU stage: drag frames 4–26 ms at the 1600 rung);
+  Immich's keys read from the keyring under i3 AND under Plasma's KDE Wallet; Settings → Display → Automatic and
+  `display_probe` both "M27Q's own colours"; **tethering the X-T4 through the bundle's 2.5.27**, its drivers mapped
+  from the AppImage's mount.
+- ⚠⚠ **A tether "Unspecified error" was the CAMERA, not 2.5.27:** the X-T4 was left in a half-open PTP session by
+  the morning's permission experiments ("Session Already Opened", "Device Busy" in `--debug`), and Arch's 2.5.34
+  failed identically. Power-cycled, 2.5.27 shot and downloaded RAF + JPEG. ⚠ Separate `gphoto2` runs back to back
+  then wedged it again (one session each) — Rustroom keeps one session, and that worked. Power-cycle before
+  blaming a library.
+- ⚠ **eframe's app id is X11's `WM_CLASS` too** (`"", "io.github.wladikrin.Rustroom"`, the instance empty — egui-winit
+  passes it through winit's shared `with_name`); `StartupWMClass` was `Rustroom` and matched nothing — fixed to the
+  app id. The "Spotify" label the author saw in i3's bar was his own workspace's name, not the window's.
+- **Seen and unexplained:** the author felt editing "slightly slower" than on the Mac and Windows, unsure; the
+  render log shows nothing slow. Not chased for `v0.1`; an i3 / NVIDIA presentation question if it comes back.
+- **Unseen:** an Ubuntu 22.04 desktop itself (the floor is measured, the container ran the checks); Gear Lever's
+  own integration and in-place update (the zsync line is inert until the releases are public).
+
 ### 2026-11-18 — piece 3c: libgphoto2 without USB permission, CAPTURED on Arch (branch `v0.1-appimage`)
 
 Captured, not constructed — the author's X-T4 (`04cb:02e6`, interface class `060101`) on Arch, libgphoto2 2.5.32,

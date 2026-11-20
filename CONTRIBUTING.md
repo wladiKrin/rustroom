@@ -62,6 +62,19 @@ sudo pacman -S base-devel clang lcms2 libheif libgphoto2 pkgconf
 cargo run --release -p app
 ```
 
+**The AppImage** (`target/linux/Rustroom-<version>-linux-x86_64.AppImage` and its `.zsync`) is built by one script,
+`packaging/linux/build.sh`, the same one the release workflow runs — on Ubuntu 22.04, whose glibc sets the oldest Linux
+it runs on. On any other Linux, run it inside an Ubuntu 22.04 container (Docker, the packages from
+`packaging/linux/deps.txt`):
+
+```bash
+packaging/linux/in-docker.sh --floor 2.35
+```
+
+The AppImage carries its own libgphoto2 and drivers, LittleCMS and a libheif compiled in with its HEVC decoder (the
+`appimage` feature — Ubuntu 22.04's libheif is too old), and never the graphics stack: a library the script has not
+been told to bundle or to leave to the system stops the build.
+
 **Windows** (in PowerShell, with [winget](https://learn.microsoft.com/windows/package-manager/winget/)):
 
 ```powershell

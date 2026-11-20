@@ -147,6 +147,9 @@ Only what stays true after a milestone closes belongs here; each story is in `do
   `Settings::effective_display` (the OS matching colour → sRGB); the GPU converts through `Display::gpu_table()` into the texture's own plane, the sRGB plane staying the histogram's; ⚠ a table's grid is spaced by a SQUARE ROOT, CPU and shader alike (evenly, a gamma-2.2 profile was 4.66 steps off).
 - ⚠ Big data lives in `Catalog::library_dir` (`%LOCALAPPDATA%` on Windows, never Roaming). A package is built by its
   `packaging/<os>/` script (the release workflow only calls it); icons come from `rustroom.svg` via `render.py`; ⚠⚠ the installer's `AppId` never changes.
+  ⚠⚠ The AppImage NEVER bundles the graphics stack (Vulkan, GL, Mesa, X, Wayland) — `packaging/linux/build.sh` stops on
+  any library in neither its bundle nor AppImage's `excludelist`; its `appimage` feature compiles libheif in, so
+  `--all-features` on Linux needs `cmake` and `libde265-dev` (CI's clippy has them).
 - ⚠⚠ **A test's directory comes from `test_dir::TempDir` (deleted on drop) or `test_dir::path` (kept,
   swept by the next run)** — unique per test and per run under `rustroom-tests/<pid>/`. A sweep in
   `test-dir` fails on `env::temp_dir()` anywhere else; the export staging directory is the one allowed

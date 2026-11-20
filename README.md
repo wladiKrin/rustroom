@@ -152,7 +152,7 @@ Get Rustroom for your system from the
 |---|---|---|
 | macOS | `Rustroom-<version>-macos-arm64.dmg` — open it and drag Rustroom into Applications | macOS 15 or later, Apple Silicon |
 | Windows | `Rustroom-<version>-windows-x64-setup.exe` — installs for you alone, no administrator needed | Windows 10 or 11, 64-bit |
-| Linux | <!-- fill at v0.1: package format --> | <!-- fill at v0.1: distributions, bundled libraries --> |
+| Linux | `Rustroom-<version>-linux-x86_64.AppImage` — one file: make it executable and run it | 64-bit PC; Ubuntu 22.04, Debian 12, Fedora 36, Linux Mint 21 or later, or any distribution as new |
 
 The Windows installer is not signed yet: Windows says "Windows protected your PC" — choose **More info**, then
 **Run anyway**.
@@ -160,6 +160,25 @@ The Windows installer is not signed yet: Windows says "Windows protected your PC
 The Mac app is not notarised yet: the first time you open it, macOS says "“Rustroom” Not Opened" — choose **Done**,
 then open **System Settings → Privacy & Security**, choose **Open Anyway** beside Rustroom, and confirm with an
 administrator's Touch ID or password. From then on it opens as usual.
+
+On Linux, after downloading:
+
+```bash
+chmod +x Rustroom-*-linux-x86_64.AppImage
+./Rustroom-*-linux-x86_64.AppImage
+```
+
+Or mark the file executable in its **Properties** and double-click it. Everything Rustroom needs is inside the file,
+except what every desktop already has — the graphics driver, which it uses as it is, and the system's basic libraries.
+
+- **A menu entry and an icon:** an AppImage does not install itself. [Gear Lever](https://github.com/mijorus/gearlever)
+  or [AppImageLauncher](https://github.com/TheAssassin/AppImageLauncher) adds it to your applications menu; until then,
+  on Wayland, its window shows a generic icon.
+- **Tethered shooting:** on most desktops a camera on USB is yours to use as soon as you are logged in. If Rustroom
+  says *"Linux does not allow Rustroom to use this camera"*, install your distribution's libgphoto2 package, which
+  brings the rules that allow it — `libgphoto2` on Arch and Fedora, `libgphoto2-6` on Debian and Ubuntu — then
+  unplug the camera and plug it in again.
+- **Immich keys** are kept in your desktop's keyring (GNOME Keyring or KDE Wallet), which must be running.
 
 <!-- fill at v0.1: the graphics card requirement -->
 
