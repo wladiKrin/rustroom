@@ -156,11 +156,17 @@ fn main() -> eframe::Result<()> {
     let (rgba, width, height) = rustroom_app::app_icon::rgba();
     let mut native_options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
-        viewport: egui::ViewportBuilder::default().with_icon(egui::IconData {
-            rgba,
-            width,
-            height,
-        }),
+        // The app id is the Wayland app id AND X11's `WM_CLASS` class (winit's `with_name`; seen on
+        // i3: `WM_CLASS = "", "io.github.wladikrin.Rustroom"`, the instance left empty by egui-winit),
+        // which the desktop file's `StartupWMClass` matches; eframe's other use of it, the persistence
+        // folder, is off (no `persistence` feature).
+        viewport: egui::ViewportBuilder::default()
+            .with_icon(egui::IconData {
+                rgba,
+                width,
+                height,
+            })
+            .with_app_id(rustroom_app::app_icon::APP_ID),
         ..Default::default()
     };
     // ⚠ MEASUREMENT SWITCH (2026-09-29): `RUSTROOM_DEBUG_WINDOW=1440x875` opens the window at that

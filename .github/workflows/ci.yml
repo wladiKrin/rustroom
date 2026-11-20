@@ -24,8 +24,9 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
             /opt/hostedtoolcache/CodeQL /usr/local/share/boost
           df -h /
+      # cmake and libde265-dev: clippy's `--all-features` compiles the AppImage's own libheif (`app`'s `appimage`).
       - name: Install system deps
-        run: sudo apt-get update && sudo apt-get install -y libraw-dev liblcms2-dev libgphoto2-dev libheif-dev libheif-plugin-libde265 pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libraw-dev liblcms2-dev libgphoto2-dev libheif-dev libheif-plugin-libde265 pkg-config cmake libde265-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt

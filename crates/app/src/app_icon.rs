@@ -1,6 +1,11 @@
 //! The app's icon in its window — the title bar, the taskbar, Alt-Tab (v0.1): the master's committed 256 px raster
 //! (`packaging/icons/`), decoded for eframe's viewport. ⚠ No egui here: `main` wraps the pixels in `IconData`.
 
+/// The app's id, fixed forever (v0.1, piece 3b): the Mac bundle's identifier, the Linux desktop file's and AppStream
+/// metadata's name, and the window's Wayland app id — which the compositor matches to the INSTALLED desktop file to
+/// find the icon (a bare AppImage shows a generic one until it is integrated; accepted for v0.1).
+pub const APP_ID: &str = "io.github.wladikrin.Rustroom";
+
 /// `packaging/icons/png/rustroom-256.png`, made from `rustroom.svg` by `packaging/icons/render.py`.
 const PNG: &[u8] = include_bytes!("../../../packaging/icons/png/rustroom-256.png");
 

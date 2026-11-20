@@ -14,6 +14,7 @@ pub mod hold;
 pub mod name;
 pub mod session;
 pub mod trouble;
+pub mod usb_access;
 
 pub use hold::Hold;
 pub use name::free_name;

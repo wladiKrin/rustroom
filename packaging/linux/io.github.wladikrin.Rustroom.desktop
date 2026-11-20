@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Rustroom
+GenericName=RAW Photo Editor
+Comment=Sort, edit and export your RAW photos
+Exec=Rustroom
+Icon=io.github.wladikrin.Rustroom
+Terminal=false
+Categories=Graphics;Photography;
+Keywords=RAW;photo;editor;catalog;darkroom;
+StartupWMClass=io.github.wladikrin.Rustroom
