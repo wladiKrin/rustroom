@@ -15,7 +15,7 @@ test-only seams take the tolerance as a parameter (`transmission_with`, `apply_w
 **Tech Stack:** Rust, rayon, the `pipeline` golden harness (`UPDATE_GOLDEN=1`).
 
 Spec: `docs/superpowers/specs/2026-09-08-dehaze-bright-tolerance-design.md`. Branch
-`m7.6-dehaze-bright` (exists; spec committed as `f70ec82`).
+`m7.6-dehaze-bright` (exists; spec committed as `acf84c3`).
 
 ⚠⚠ **Standing conventions, and they override the harness's own default:** commit messages carry
 **no `Co-Authored-By` trailer** (the repo owner's explicit preference — the session attribution

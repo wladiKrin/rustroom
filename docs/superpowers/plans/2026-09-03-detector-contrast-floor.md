@@ -62,7 +62,7 @@ is unrepresentable at the boundary — `LensCorrectionStage`'s reasoning for bui
 
 ## Task 1: rebase C onto main and get it green
 
-⚠⚠ **Do this first and do not skip it.** Track C branched from `f8a0490`; `main` is now 23 commits
+⚠⚠ **Do this first and do not skip it.** Track C branched from `f6cf14e`; `main` is now 23 commits
 ahead, including W4's B and D and five follow-ups that touch three of C's files. Tuning a constant
 on a branch that does not build against current `main` would be measuring the wrong thing.
 

@@ -433,7 +433,7 @@ Expected: all three **0**, the **74 goldens unmoved**.
 - [ ] **Step 3: Verify no scripted edit ate anything**
 
 ```bash
-git diff eaaad60 -- crates/app/src | grep '^-' | grep -v '^---' | grep '///'
+git diff d751faf -- crates/app/src | grep '^-' | grep -v '^---' | grep '///'
 ```
 
 Expected: only doc lines you deliberately replaced (`MAX_SIZE`'s, and the ghost's `max` block).

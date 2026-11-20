@@ -17,7 +17,7 @@ Visualize Spots; it never reaches `Edits`.
 **Tech Stack:** Rust, rayon, egui 0.35 headless harness (`test_ui` / `test_app`).
 
 Spec: `docs/superpowers/specs/2026-09-08-grade-range-view-design.md`. Branch
-`m7.6-grade-range-view` (already created, spec committed as `e8b237f`).
+`m7.6-grade-range-view` (already created, spec committed as `0007512`).
 
 ⚠⚠ **Standing conventions, and they override the harness's own default:** commit messages carry
 **no `Co-Authored-By` trailer** (the repo owner's explicit preference — the session attribution

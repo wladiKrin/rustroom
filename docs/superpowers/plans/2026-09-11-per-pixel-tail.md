@@ -2,7 +2,7 @@
 
 > **⚠ Conventions, not negotiable:** commit messages carry **no `Co-Authored-By` trailer**;
 > **never push** — the user pushes to `github.com/wladiKrin/rustroom` himself. Branch
-> `m8.3e-per-pixel-tail`, already created from `main` at `22f2fc6`.
+> `m8.3e-per-pixel-tail`, already created from `main` at `993b7d8`.
 >
 > **For agentic workers:** REQUIRED SUB-SKILL — superpowers:executing-plans.
 >

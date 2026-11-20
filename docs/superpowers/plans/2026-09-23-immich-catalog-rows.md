@@ -432,7 +432,7 @@ Expected: all **0**, the **74 goldens unmoved** — this touches no pipeline sta
 - [ ] **Step 5: Verify no scripted edit ate anything**
 
 ```bash
-git diff db60469 -- crates/app/src | grep '^-' | grep -v '^---' | grep '///'
+git diff b2947b6 -- crates/app/src | grep '^-' | grep -v '^---' | grep '///'
 ```
 
 Expected: empty.

@@ -332,7 +332,7 @@ The expensive ones — each cost a real bug; full stories in `docs/JOURNAL.md`.
   NaN**, so a `fold(0.0, f32::max)` parity check reads an all-NaN output as a perfect 0 — every GPU-vs-CPU check
   must fail on a non-finite value FIRST (M10.16b2; its real 0 was then proven by a sabotage, 3.4e18). ⚠⚠ **It applies to shell
   checks, and it cost an invented milestone (M10.1, now M11.1) on 2026-09-25:** `ls | grep -i license` returned
-  nothing, so I reported no `LICENSE` — it had been committed since `e71330d`. **`ls` here is aliased to
+  nothing, so I reported no `LICENSE` — it had been committed since `f40290b`. **`ls` here is aliased to
   `eza --long`, which prints NOTHING to a pipe unless given a path argument**, exiting 0 with empty
   stderr. Use `/bin/ls` or `git ls-files` for anything you will act on, and **prove a negative with a
   positive control**: the same command must find something known to be there. ⚠⚠ **And a sweep that CLICKS

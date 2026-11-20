@@ -1,6 +1,6 @@
 # The pipeline's layers: a review, and the version that should replace it
 
-**Date:** 2026-09-26 · **Branch read:** `main` at `4336daa` (checked out as `m5.1c-parametric-curve`, level with `main`) · **Status:** analysis, nothing built, nothing measured by me
+**Date:** 2026-09-26 · **Branch read:** `main` at `2bfa478` (checked out as `m5.1c-parametric-curve`, level with `main`) · **Status:** analysis, nothing built, nothing measured by me
 
 This document reads the prefix, the tail, the checkpoints, the region-scoped path, the GPU seams,
 the geometry stage, masks and spot removal as they exist in the tree today, and then proposes the

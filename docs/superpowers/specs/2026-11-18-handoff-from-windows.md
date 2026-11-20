@@ -15,7 +15,7 @@
     paths, a Straighten drag on the author's M27Q 149.5 → 24.7 ms (`grep -n 'colours on the GPU'`). On the way the
     colour table became **root-spaced** (a gamma-2.2 profile was 4.66 steps off near black).
   - **No test writes into the user's own cache** — `rustroom_app::user_cache::base` (`grep -n "user's own cache"`).
-- **The gate on Windows:** fmt, clippy, **4,773 passed**, 0 failed, 32 ignored, no GPU test skipped (`d239d241`'s code;
+- **The gate on Windows:** fmt, clippy, **4,773 passed**, 0 failed, 32 ignored, no GPU test skipped (`e4b3b994`'s code;
   the commits after it are docs and one comment).
 - **The Windows part is closed.** Seen by the author there: the build, the installer, the colours, the in-window menu bar
   (clicked through). Not seeable there: two monitors (no second one).

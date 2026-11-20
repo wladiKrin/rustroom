@@ -525,7 +525,7 @@ above. Only *anchoring* wants the forward map.
   2026-09-08: this bullet outlived the code by six days and was copied into a "still open" list.
 - ~~**Clarity has no halo suppressor**; the midtone weight is the mitigation. A `Detail`-style
   suppressor is a contained follow-up.~~ ✅ **2026-09-02, W3 track D** (`halo_suppression`,
-  `169984b`). Same lapse as the bullet above.
+  `9c0557b`). Same lapse as the bullet above.
 - ~~**No output/print sharpening** for resized exports.~~ ✅ **M6.1d, 2026-09-01** — in the file's display space, deliberately.
 - ✅ **Brush strokes shift when lens corrections are toggled.** → **M10.12c**, fixed 2026-11-12 (the entry above). Strokes are anchored in
   "pre-geometry" coordinates, which means *the input to `GeometryStage`* — and lens correction now
@@ -786,7 +786,7 @@ exists — all 40 sidecars in `~/Pictures/fuji` now hold ONE `Luminance` mask be
 
 ### A GPU-side mask coverage cache — worth re-measuring once M8.11 is in use (recorded 2026-09-15, at M8.11 — user's call)
 
-> **2026-09-29:** the serial u8→u32 repack below is ✅ **fixed** (`0064ff2`, 2026-09-17 — a chunked scan);
+> **2026-09-29:** the serial u8→u32 repack below is ✅ **fixed** (`5242d52`, 2026-09-17 — a chunked scan);
 > the download half is the **u8 coverage wire**, ✅ **M10.14g** (2026-11-12). The cache itself stays declined.
 
 > **✅ MEASURED DIRECTLY 2026-09-16 (`crates/gpu-pipeline/examples/coverage_transfer_probe.rs`).
@@ -1167,7 +1167,7 @@ was not pursued.
 ---
 
 **▶ AGREED TO FIX (user's call, 2026-09-06).** ✅ **The measurement is done and committed** —
-`cb96916`, a masked-exposure row plus the three other mask kinds and a decomposition of
+`3784b8e`, a masked-exposure row plus the three other mask kinds and a decomposition of
 `MaskStage::apply`. The first commit was a number, as this entry demanded.
 
 **Reported in use**, and reported carefully: *"the exposure dragging does stutter a bit, but it also

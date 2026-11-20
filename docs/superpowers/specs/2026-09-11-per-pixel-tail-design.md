@@ -1,6 +1,6 @@
 # M8.3e — the per-pixel tail on the GPU
 
-**Status:** design, 2026-09-11. Branch `m8.3e-per-pixel-tail`, from `main` at `22f2fc6`.
+**Status:** design, 2026-09-11. Branch `m8.3e-per-pixel-tail`, from `main` at `993b7d8`.
 
 ## 1. What this is
 

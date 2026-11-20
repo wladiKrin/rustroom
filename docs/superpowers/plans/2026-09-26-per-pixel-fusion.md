@@ -2176,7 +2176,7 @@ Expected: `FMT=0 CLIPPY=0 TEST=0`, 78 goldens unmoved.
 
 - [ ] **Step 2: Measure, before and after, on a quiet machine**
 
-Before is the `gpu-timestamps` branch tip (`aba6d24`); after is this branch. On each, on DSCF6263 at rung 3200 and on a photo with the full tail active:
+Before is the `gpu-timestamps` branch tip (`b16625a`); after is this branch. On each, on DSCF6263 at rung 3200 and on a photo with the full tail active:
 
 ```bash
 RUSTROOM_DEBUG_RENDER=1 RUSTROOM_DEBUG_XFER=1 cargo run --release -p app --example probe_straighten_drag ~/Pictures/fuji/DSCF6263.RAF 3200 2>&1 | grep -E '^median wall|^CHAIN' | tail -4

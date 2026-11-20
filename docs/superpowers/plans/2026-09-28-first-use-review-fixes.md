@@ -1,6 +1,6 @@
 # First-use review fixes — plan
 
-**Branch:** `first-use-fixes` from `main` `1abb9ff`, **merged 2026-09-28** after the author's use.
+**Branch:** `first-use-fixes` from `main` `c1863b3`, **merged 2026-09-28** after the author's use.
 **Input:** the two reviews in `docs/reviews/` (untracked, transient, deleted at the merge; ids A-nn
 and P-nn — their milestone-sized findings are carried in `docs/BACKLOG.md`, "First-session reviews"). Small items, knocked off in groups that share files so
 each group is one gate run and one commit.
