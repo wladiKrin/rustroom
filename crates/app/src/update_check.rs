@@ -98,9 +98,99 @@ pub fn may_check(switch_on: bool) -> bool {
     COMPILED_IN && switch_on && !updated_elsewhere()
 }
 
+/// GitHub's newest published release — never a draft or a prerelease.
+pub const LATEST_URL: &str = "https://api.github.com/repos/wladiKrin/rustroom/releases/latest";
+
+/// One request for the release reply's body.
+pub type Fetch = Box<dyn FnOnce() -> Result<String, String> + Send>;
+
+/// The network request: ureq, Rustroom's User-Agent (GitHub requires one), 10 s at most, 1 MiB at most.
+pub fn live_fetch() -> Fetch {
+    Box::new(|| {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .user_agent(crate::place_search::USER_AGENT)
+            .timeout_global(Some(std::time::Duration::from_secs(10)))
+            .build()
+            .into();
+        let mut r = agent
+            .get(LATEST_URL)
+            .header("Accept", "application/vnd.github+json")
+            .call()
+            .map_err(|e| e.to_string())?;
+        r.body_mut()
+            .with_config()
+            .limit(1 << 20)
+            .read_to_string()
+            .map_err(|e| e.to_string())
+    })
+}
+
+/// What a check found. ⚠ Every failure is `Nothing` — offline, an error status, a reply that is not a version:
+/// the notice is silent about all of them.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Found(Version),
+    Nothing,
+}
+
+/// One check running on its own thread; the UI only polls it.
+pub struct Checker {
+    rx: std::sync::mpsc::Receiver<Outcome>,
+}
+
+impl Checker {
+    /// Runs `fetch` on a thread named `update-check`, then calls `on_done` (a repaint).
+    pub fn start(fetch: Fetch, on_done: Box<dyn FnOnce() + Send>) -> Checker {
+        let (tx, rx) = std::sync::mpsc::channel();
+        // ⚠ A thread that cannot be spawned drops the sender, so `poll` answers `Nothing`: no check, silent.
+        let _ = std::thread::Builder::new()
+            .name("update-check".into())
+            .spawn(move || {
+                let outcome = fetch()
+                    .ok()
+                    .and_then(|body| latest_from_reply(&body))
+                    .map_or(Outcome::Nothing, Outcome::Found);
+                let _ = tx.send(outcome);
+                on_done();
+            });
+        Checker { rx }
+    }
+
+    /// The answer, once it is in; never waits.
+    pub fn poll(&self) -> Option<Outcome> {
+        match self.rx.try_recv() {
+            Ok(o) => Some(o),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Outcome::Nothing),
+        }
+    }
+}
+
+/// A check started at launch — `None` unless this copy may check ([`may_check`]) and one is due ([`is_due`]).
+/// `fetch` is a factory, so no request is even built when none runs.
+pub fn start_if_due(
+    s: &crate::settings::Settings,
+    now: u64,
+    fetch: impl FnOnce() -> Fetch,
+    on_done: Box<dyn FnOnce() + Send>,
+) -> Option<Checker> {
+    (may_check(s.check_updates) && is_due(s.update_checked_at, now))
+        .then(|| Checker::start(fetch(), on_done))
+}
+
+/// Keeps a finished check in the settings: its time always (a failure counts, so an offline machine is not asked
+/// at every launch), the version only when one was found.
+pub fn record(s: &mut crate::settings::Settings, outcome: &Outcome, now: u64) {
+    s.update_checked_at = now;
+    if let Outcome::Found(v) = outcome {
+        s.update_latest = Some(v.to_string());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::Settings;
 
     #[test]
     fn versions_compare_as_numbers() {
@@ -166,6 +256,127 @@ mod tests {
             shown(v010, Some("v0.3.0"), Some("v0.2.0")),
             Some(Version(0, 3, 0))
         );
+    }
+
+    fn settings(on: bool, checked_at: u64) -> Settings {
+        Settings {
+            check_updates: on,
+            update_checked_at: checked_at,
+            ..Settings::default()
+        }
+    }
+
+    /// A fetch answering `reply`, and a repaint that does nothing.
+    fn answering(reply: Result<String, String>) -> impl FnOnce() -> Fetch {
+        move || Box::new(move || reply)
+    }
+
+    /// Polls until the checker answers, under the 120 s ceiling against a hang (`AGENTS.md`).
+    fn wait(c: &Checker) -> Outcome {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            if let Some(o) = c.poll() {
+                return o;
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "the check never answered"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    const NOW: u64 = 1_763_900_000;
+
+    #[test]
+    fn no_check_when_switched_off() {
+        let built = std::cell::Cell::new(false);
+        let c = start_if_due(
+            &settings(false, 0),
+            NOW,
+            || {
+                built.set(true);
+                answering(Ok(String::new()))()
+            },
+            Box::new(|| {}),
+        );
+        assert!(c.is_none());
+        assert!(!built.get(), "no request was even built");
+    }
+
+    #[test]
+    fn no_check_within_a_day() {
+        let c = start_if_due(
+            &settings(true, NOW - 60),
+            NOW,
+            answering(Ok(String::new())),
+            Box::new(|| {}),
+        );
+        assert!(c.is_none());
+    }
+
+    #[test]
+    fn a_check_finds_the_release() {
+        let c = start_if_due(
+            &settings(true, 0),
+            NOW,
+            answering(Ok(r#"{"tag_name":"v9.0.0"}"#.into())),
+            Box::new(|| {}),
+        )
+        .expect("fixture check: a check is due, on, compiled in and not a Flatpak");
+        let outcome = wait(&c);
+        assert_eq!(outcome, Outcome::Found(Version(9, 0, 0)));
+        let mut s = settings(true, 0);
+        record(&mut s, &outcome, NOW);
+        assert_eq!(s.update_latest.as_deref(), Some("9.0.0"));
+        assert_eq!(s.update_checked_at, NOW);
+    }
+
+    #[test]
+    fn a_failed_check_still_counts_as_a_check() {
+        let c = start_if_due(
+            &settings(true, 0),
+            NOW,
+            answering(Err("offline".into())),
+            Box::new(|| {}),
+        )
+        .expect("fixture check: a check is due");
+        let outcome = wait(&c);
+        assert_eq!(outcome, Outcome::Nothing);
+        let mut s = Settings {
+            update_latest: Some("0.2.0".into()),
+            ..settings(true, 0)
+        };
+        record(&mut s, &outcome, NOW);
+        assert_eq!(
+            s.update_checked_at, NOW,
+            "not asked again at the next launch"
+        );
+        assert_eq!(
+            s.update_latest.as_deref(),
+            Some("0.2.0"),
+            "what was known stays"
+        );
+    }
+
+    #[test]
+    fn the_pump_never_blocks() {
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let c = start_if_due(
+            &settings(true, 0),
+            NOW,
+            move || {
+                Box::new(move || {
+                    held.recv().ok();
+                    Ok(r#"{"tag_name":"v9.0.0"}"#.into())
+                })
+            },
+            Box::new(|| {}),
+        )
+        .expect("fixture check: a check is due");
+        assert_eq!(c.poll(), None, "the request is still held");
+        release.send(()).unwrap();
+        assert_eq!(wait(&c), Outcome::Found(Version(9, 0, 0)));
     }
 
     #[test]

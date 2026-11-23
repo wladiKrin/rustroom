@@ -300,6 +300,7 @@ impl RustroomApp {
             // ⚠ Empty until a photo opens: the looks directory is scanned once per photo in
             // `session_flow`, never at startup and never per frame.
             looks: Default::default(),
+            update_checker: None,
         };
         // ⚠⚠ After construction rather than in the literal: it reads the settings the struct now
         // holds, and it may **request a fetch** on the worker the struct now owns. ⚠ Cheap when the
@@ -316,6 +317,8 @@ impl RustroomApp {
         app.report_unread_keys();
         // M10.13d: the camera's colour, learned in the background from the catalog's Fuji RAFs.
         app.start_camera_learning();
+        // Piece 4: the new-version check, once a day at most, in the background.
+        app.start_update_check(ctx);
         app
     }
 }

@@ -262,6 +262,8 @@ pub fn for_test() -> RustroomApp {
         // the developer's own `.cube` files would pass or fail depending on whose machine it ran
         // on. Panel tests that need a look install one into their own temp directory.
         looks: Default::default(),
+        // ⚠ Never a check in a test: `start_update_check` runs only from `bootstrap`.
+        update_checker: None,
     }
 }
 
