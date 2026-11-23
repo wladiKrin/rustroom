@@ -493,6 +493,11 @@ fn settings_round_trip_carries_the_export_options() {
         ai_subject_model: ai_mask::SubjectModel::BiRefNetLite,
         // Non-default: Automatic is on unless chosen otherwise (2026-11-18).
         display_auto: false,
+        // Non-default, all four (piece 4).
+        check_updates: false,
+        update_checked_at: 1_763_900_000,
+        update_latest: Some("0.2.0".into()),
+        update_dismissed: Some("0.2.0".into()),
     };
     store.save(&s).unwrap();
     assert_eq!(store.load(), s);
@@ -1128,4 +1133,15 @@ fn a_manual_display_space_from_before_automatic_is_kept() {
         written.display_auto,
         "a file with the field is read as written"
     );
+}
+
+/// Piece 4: a settings file from before the update check loads with the check ON and nothing known yet.
+#[test]
+fn a_settings_file_from_before_the_update_check_still_loads() {
+    let json = r#"{"pan_drag":"Secondary","erase_drag":"Middle"}"#;
+    let s: Settings = serde_json::from_str(json).expect("an older settings file must load");
+    assert_eq!(s.erase_drag, EraseDrag::Middle, "the stored value survived");
+    assert!(s.check_updates, "the check is on by default");
+    assert_eq!(s.update_checked_at, 0, "never checked");
+    assert!(s.update_latest.is_none() && s.update_dismissed.is_none());
 }

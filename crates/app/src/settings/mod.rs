@@ -501,6 +501,16 @@ pub struct Settings {
     /// gives `true` — and a file from before that chose P3 or Adobe RGB by hand is put back to manual on load
     /// (`SettingsStore`), so nobody's choice is overridden.
     pub display_auto: bool,
+    /// Settings → Behaviour's **Check for new versions** (piece 4): on by default — the author's call. Read through
+    /// `update_check::may_check`, which also honours a build compiled without the check and a Flatpak.
+    pub check_updates: bool,
+    /// When the last update check FINISHED, in Unix seconds; `0` = never. A failed check counts too, so an offline
+    /// machine is not asked again at every launch.
+    pub update_checked_at: u64,
+    /// The newest version a check found (`0.2.0`), kept so a second launch within the day still shows it.
+    pub update_latest: Option<String>,
+    /// The version the user hid with the status line's Hide — quiet until a newer one exists.
+    pub update_dismissed: Option<String>,
 }
 
 /// How many photos a batch export decodes at once, out of the box.
@@ -599,6 +609,10 @@ impl Default for Settings {
             show_welcome: true,
             last_place: None,
             display_auto: true,
+            check_updates: true,
+            update_checked_at: 0,
+            update_latest: None,
+            update_dismissed: None,
         }
     }
 }
