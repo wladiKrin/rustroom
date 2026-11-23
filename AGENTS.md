@@ -150,6 +150,8 @@ Only what stays true after a milestone closes belongs here; each story is in `do
   ⚠⚠ The AppImage NEVER bundles the graphics stack (Vulkan, GL, Mesa, X, Wayland) — `packaging/linux/build.sh` stops on
   any library in neither its bundle nor AppImage's `excludelist`; its `appimage` feature compiles libheif in, so
   `--all-features` on Linux needs `cmake` and `libde265-dev` (CI's clippy has them).
+  ⚠ The new-version check (piece 4) is the ONE request Rustroom makes unasked — only through `rustroom_app::update_check`,
+  which uses nothing from the reply but a version; a build with `RUSTROOM_NO_UPDATE_CHECK` set compiles it off.
 - ⚠⚠ **A test's directory comes from `test_dir::TempDir` (deleted on drop) or `test_dir::path` (kept,
   swept by the next run)** — unique per test and per run under `rustroom-tests/<pid>/`. A sweep in
   `test-dir` fails on `env::temp_dir()` anywhere else; the export staging directory is the one allowed
