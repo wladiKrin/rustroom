@@ -264,6 +264,7 @@ pub fn for_test() -> RustroomApp {
         looks: Default::default(),
         // ⚠ Never a check in a test: `start_update_check` runs only from `bootstrap`.
         update_checker: None,
+        update_hidden: false,
     }
 }
 

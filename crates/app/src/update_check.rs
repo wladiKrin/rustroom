@@ -52,12 +52,10 @@ pub fn is_due(last_checked: u64, now: u64) -> bool {
     last_checked == 0 || now < last_checked || now - last_checked >= DAY_SECS
 }
 
-/// The version the status line offers: the newest a check found, if newer than the running build and newer than
-/// the one the user hid.
-pub fn shown(current: Version, latest: Option<&str>, dismissed: Option<&str>) -> Option<Version> {
+/// The version the status line offers: the newest a check found, if newer than the running build.
+pub fn shown(current: Version, latest: Option<&str>) -> Option<Version> {
     let latest = parse_version(latest?)?;
-    let hidden = dismissed.and_then(parse_version);
-    (latest > current && hidden.is_none_or(|h| latest > h)).then_some(latest)
+    (latest > current).then_some(latest)
 }
 
 #[derive(Deserialize)]
@@ -243,25 +241,15 @@ mod tests {
     #[test]
     fn a_newer_release_shows() {
         assert_eq!(
-            shown(Version(0, 1, 0), Some("v0.2.0"), None),
+            shown(Version(0, 1, 0), Some("v0.2.0")),
             Some(Version(0, 2, 0))
         );
     }
 
     #[test]
     fn an_older_release_shows_nothing() {
-        assert_eq!(shown(Version(0, 2, 0), Some("v0.1.0"), None), None);
-        assert_eq!(shown(Version(0, 2, 0), Some("v0.2.0"), None), None);
-    }
-
-    #[test]
-    fn a_dismissed_version_stays_quiet_until_a_newer_one() {
-        let v010 = Version(0, 1, 0);
-        assert_eq!(shown(v010, Some("v0.2.0"), Some("v0.2.0")), None);
-        assert_eq!(
-            shown(v010, Some("v0.3.0"), Some("v0.2.0")),
-            Some(Version(0, 3, 0))
-        );
+        assert_eq!(shown(Version(0, 2, 0), Some("v0.1.0")), None);
+        assert_eq!(shown(Version(0, 2, 0), Some("v0.2.0")), None);
     }
 
     fn settings(on: bool, checked_at: u64) -> Settings {

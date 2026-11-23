@@ -509,8 +509,6 @@ pub struct Settings {
     pub update_checked_at: u64,
     /// The newest version a check found (`0.2.0`), kept so a second launch within the day still shows it.
     pub update_latest: Option<String>,
-    /// The version the user hid with the status line's Hide — quiet until a newer one exists.
-    pub update_dismissed: Option<String>,
 }
 
 /// How many photos a batch export decodes at once, out of the box.
@@ -612,7 +610,6 @@ impl Default for Settings {
             check_updates: true,
             update_checked_at: 0,
             update_latest: None,
-            update_dismissed: None,
         }
     }
 }

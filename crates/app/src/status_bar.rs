@@ -757,24 +757,47 @@ mod tests {
         if !rustroom_app::update_check::may_check(true) {
             return;
         }
-        let wide = both_rows_knowing(1440.0, 12, "12 photos", Some("10.10.10"));
+        // ⚠ A status longer than the room kept for it, so a squeeze shows: "12 photos" alone is narrower than
+        // `STATUS_BESIDE` with nothing beside it, and read as squeezed at every width.
+        const STATUS: &str = "12 photos · 3 selected · 2 flagged · 1 rejected";
+        let wide = both_rows_knowing(1440.0, 12, STATUS, Some("10.10.10"));
         assert!(
             wide.iter()
                 .any(|(l, _)| l == "Rustroom 10.10.10 is available"),
             "fixture check: wide, the notice shows: {wide:?}"
         );
-        let found = both_rows_knowing(480.0, 12, "12 photos", Some("10.10.10"));
-        let status = found
+        let natural = wide
             .iter()
-            .find(|(l, _)| l == "12 photos")
-            .unwrap_or_else(|| panic!("no status at 480: {found:?}"));
-        if found.iter().any(|(l, _)| l.starts_with("Rustroom ")) {
-            assert!(
-                status.1.width() >= crate::update_flow::STATUS_BESIDE - 0.5,
-                "the notice squeezed the status to {:.0} pt: {found:?}",
-                status.1.width()
-            );
+            .find(|(l, _)| l == STATUS)
+            .expect("status drawn")
+            .1
+            .width();
+        assert!(
+            natural > crate::update_flow::STATUS_BESIDE + 20.0,
+            "fixture check: the status is longer than the room kept ({natural:.0} pt)"
+        );
+        // ⚠ Swept, not one width: the guard must count every part of the notice, and a part it misses shows only
+        // in the band of widths where the rest fits.
+        let mut drawn_somewhere = false;
+        for width in (440..=1200).step_by(8).map(|w| w as f32) {
+            let found = both_rows_knowing(width, 12, STATUS, Some("10.10.10"));
+            let status = found
+                .iter()
+                .find(|(l, _)| l == STATUS)
+                .unwrap_or_else(|| panic!("no status at {width}: {found:?}"));
+            if found.iter().any(|(l, _)| l.starts_with("Rustroom ")) {
+                drawn_somewhere = true;
+                assert!(
+                    status.1.width() >= crate::update_flow::STATUS_BESIDE - 0.5,
+                    "at {width} the notice squeezed the status to {:.0} pt: {found:?}",
+                    status.1.width()
+                );
+            }
         }
+        assert!(
+            drawn_somewhere,
+            "fixture check: the sweep reaches widths that draw it"
+        );
     }
 
     #[test]

@@ -301,6 +301,7 @@ impl RustroomApp {
             // `session_flow`, never at startup and never per frame.
             looks: Default::default(),
             update_checker: None,
+            update_hidden: false,
         };
         // ⚠⚠ After construction rather than in the literal: it reads the settings the struct now
         // holds, and it may **request a fetch** on the worker the struct now owns. ⚠ Cheap when the
