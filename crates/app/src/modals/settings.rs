@@ -1161,18 +1161,18 @@ mod tests {
         assert!(!saved.reopen_last && saved.show_welcome, "and it was saved");
     }
 
-    /// Piece 4: the switch below is drawn only when the check is compiled in — so this must hold, or that test
-    /// would assert on a switch the build never draws.
-    #[test]
-    fn the_test_build_has_the_check() {
-        assert!(rustroom_app::update_check::COMPILED_IN);
-    }
-
-    /// Piece 4: Check for new versions, on by default, lands on Apply.
+    /// Piece 4: Check for new versions, on by default, lands on Apply — and in a build with
+    /// `RUSTROOM_NO_UPDATE_CHECK` set, is not drawn at all.
     #[test]
     fn behaviour_has_the_update_check_switch() {
         let (ctx, mut app) = open_settings();
         settle(&ctx, &mut app);
+        if !rustroom_app::update_check::COMPILED_IN {
+            assert!(
+                test_ui::find(&ctx, "Check for new versions", |_| show(&mut app, &ctx)).is_none()
+            );
+            return;
+        }
         assert!(
             app.settings.check_updates,
             "fixture check: the check starts on"

@@ -459,6 +459,42 @@ pub fn right_click(ctx: &egui::Context, label: &str, mut body: impl FnMut(&mut e
     right_click_at(ctx, at, body);
 }
 
+/// [`click`], returning the commands the frames handed the integration — an opened URL, a copy.
+pub fn click_commands(
+    ctx: &egui::Context,
+    label: &str,
+    mut body: impl FnMut(&mut egui::Ui),
+) -> Vec<egui::OutputCommand> {
+    let at = find(ctx, label, &mut body)
+        .unwrap_or_else(|| panic!("no widget labelled {label:?} was drawn"));
+    assert!(
+        screen().contains(at),
+        "{label:?} is drawn outside the harness screen"
+    );
+    let mut commands = Vec::new();
+    for pass in 0..2 {
+        let events = vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: pass == 0,
+                modifiers: Default::default(),
+            },
+        ];
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen()),
+                events,
+                ..Default::default()
+            },
+            &mut body,
+        );
+        commands.extend(out.platform_output.commands);
+    }
+    commands
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -531,40 +567,4 @@ mod tests {
         });
         assert_eq!((first, second), (0, 1));
     }
-}
-
-/// [`click`], returning the commands the frames handed the integration — an opened URL, a copy.
-pub fn click_commands(
-    ctx: &egui::Context,
-    label: &str,
-    mut body: impl FnMut(&mut egui::Ui),
-) -> Vec<egui::OutputCommand> {
-    let at = find(ctx, label, &mut body)
-        .unwrap_or_else(|| panic!("no widget labelled {label:?} was drawn"));
-    assert!(
-        screen().contains(at),
-        "{label:?} is drawn outside the harness screen"
-    );
-    let mut commands = Vec::new();
-    for pass in 0..2 {
-        let events = vec![
-            egui::Event::PointerMoved(at),
-            egui::Event::PointerButton {
-                pos: at,
-                button: egui::PointerButton::Primary,
-                pressed: pass == 0,
-                modifiers: Default::default(),
-            },
-        ];
-        let out = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(screen()),
-                events,
-                ..Default::default()
-            },
-            &mut body,
-        );
-        commands.extend(out.platform_output.commands);
-    }
-    commands
 }
