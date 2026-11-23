@@ -800,6 +800,47 @@ mod tests {
         );
     }
 
+    /// The room kept is what the status NEEDS, at most `STATUS_BESIDE`: beside a short "12 photos" the notice shows in
+    /// rows too narrow for it beside a long status — the author's half-screen window, 2026-11-24, lost it otherwise.
+    #[test]
+    fn a_short_status_leaves_the_notice_more_room() {
+        if !rustroom_app::update_check::may_check(true) {
+            return;
+        }
+        let drawn = |width: f32, status: &str| {
+            let found = both_rows_knowing(width, 12, status, Some("10.10.10"));
+            let status_w = found
+                .iter()
+                .find(|(l, _)| l == status)
+                .unwrap_or_else(|| panic!("no status at {width}: {found:?}"))
+                .1
+                .width();
+            let notice = found.iter().any(|(l, _)| l.starts_with("Rustroom "));
+            if notice {
+                let natural = both_rows_knowing(1440.0, 12, status, None)
+                    .into_iter()
+                    .find(|(l, _)| l == status)
+                    .expect("status drawn")
+                    .1
+                    .width();
+                assert!(
+                    status_w >= natural.min(crate::update_flow::STATUS_BESIDE) - 0.5,
+                    "at {width} {status:?} squeezed to {status_w:.0} of {natural:.0} pt"
+                );
+            }
+            notice
+        };
+        let long = "12 photos · 3 selected · 2 flagged · 1 rejected";
+        let short_only = (440..=1200)
+            .step_by(8)
+            .map(|w| w as f32)
+            .find(|&w| drawn(w, "12 photos") && !drawn(w, long));
+        assert!(
+            short_only.is_some(),
+            "no width shows the notice beside a short status but not beside a long one"
+        );
+    }
+
     #[test]
     fn nothing_in_either_library_row_overlaps() {
         // ⚠⚠ The bug the two rows exist to fix: at 1440 pt the count ran under the search field

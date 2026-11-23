@@ -38,8 +38,8 @@ impl RustroomApp {
     }
 }
 
-/// The room the status line keeps beside the notice; narrower, the notice is not drawn (the row's rule: nothing
-/// placed where it merely hopes to fit).
+/// The most room the status line keeps beside the notice — a shorter status keeps only its own width; narrower, the
+/// notice is not drawn (the row's rule: nothing placed where it merely hopes to fit).
 pub(crate) const STATUS_BESIDE: f32 = 120.0;
 
 const DONT_SHOW: &str = "Don't show again";
@@ -47,7 +47,7 @@ const DONT_SHOW: &str = "Don't show again";
 /// In the status line when no job runs: "Rustroom 0.2.0 is available" (a click opens its release page), then Hide
 /// and Don't show again.
 /// ⚠ Plain text, not the accent — DESIGN.md §4.2 gives the accent two jobs and this is neither (§7.12).
-/// ⚠ Drawn only where the status line keeps [`STATUS_BESIDE`] beside it, and both buttons always read AFTER the line, Hide first —
+/// ⚠ Drawn only where the status line keeps its own width, at most [`STATUS_BESIDE`], beside it, and both buttons always read AFTER the line, Hide first —
 /// in Develop's right-to-left corner the first widget lands rightmost, so they are added in reverse there.
 pub(crate) fn notice(app: &mut RustroomApp, ui: &mut egui::Ui) {
     let s = &app.settings;
@@ -71,7 +71,8 @@ pub(crate) fn notice(app: &mut RustroomApp, ui: &mut egui::Ui) {
         + button("Hide")
         + button(DONT_SHOW)
         + 3.0 * ui.spacing().item_spacing.x;
-    if ui.available_width() < needed + STATUS_BESIDE {
+    let status = width(&app.status, egui::FontId::proportional(tokens::CAPTION)).min(STATUS_BESIDE);
+    if ui.available_width() < needed + status {
         return;
     }
     if ui.layout().prefer_right_to_left() {
@@ -167,7 +168,7 @@ mod tests {
         false
     }
 
-    /// The row's width: the notice keeps [`STATUS_BESIDE`] beside it, which the harness's 400 pt screen cannot.
+    /// The row's width: the notice and its two buttons need more than the harness's 400 pt screen.
     fn screen() -> egui::Rect {
         egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 200.0))
     }

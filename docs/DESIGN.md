@@ -358,8 +358,8 @@ When no job runs and a newer Rustroom is known, the left side leads with **the u
 available" in Caption `text` (one step brighter than the information beside it — not the accent, which is for state)
 with the hand cursor, opening the release page, then two buttons of the Cancel's form: **Hide** (until Rustroom next
 starts, nothing saved) and **Don't show again** (turns Settings → Behaviour's switch off). It reads line, Hide, Don't
-show again in either row, and gives way rather than push: it is drawn only where the information keeps 120 pt beside it
-(`update_flow::STATUS_BESIDE`).
+show again in either row, and gives way rather than push: it is drawn only where the information keeps its own width
+beside it, at most 120 pt (`update_flow::STATUS_BESIDE`).
 
 ### 7.13 Menus
 `panel` with 12 radius and shadow, rows 28, Body, shortcut in Caption `text2` at the right,
