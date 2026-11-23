@@ -707,11 +707,22 @@ mod tests {
 
     /// A Library of `n` with a status line, drawn through both rows at `width`.
     fn both_rows(width: f32, n: usize, status: &str) -> Vec<(String, egui::Rect)> {
+        both_rows_knowing(width, n, status, None)
+    }
+
+    /// [`both_rows`], with the settings knowing of a newer version (`latest`) — the update notice drawn.
+    fn both_rows_knowing(
+        width: f32,
+        n: usize,
+        status: &str,
+        latest: Option<&str>,
+    ) -> Vec<(String, egui::Rect)> {
         let ctx = crate::test_ui::ctx();
         crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
         let mut app = crate::test_app::for_test();
         app.library = Some(crate::test_app::library_of(n));
         app.status = status.to_owned();
+        app.settings.update_latest = latest.map(str::to_owned);
         crate::test_ui::labelled_rects_on(
             &ctx,
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 400.0)),
@@ -737,6 +748,35 @@ mod tests {
         assert!(!labels.contains(&"Reindex"), "{labels:?}");
     }
 
+    /// Piece 4: the update notice gives way when the status line would keep less than
+    /// `update_flow::STATUS_BESIDE` beside it — tested below the 800-pt floor, where it must.
+    #[test]
+    fn the_update_notice_gives_way_to_the_status_when_narrow() {
+        // ⚠ A build without the check, or a Flatpak, draws no notice — nothing to give way (`update_flow`'s tests
+        // assert the absence).
+        if !rustroom_app::update_check::may_check(true) {
+            return;
+        }
+        let wide = both_rows_knowing(1440.0, 12, "12 photos", Some("10.10.10"));
+        assert!(
+            wide.iter()
+                .any(|(l, _)| l == "Rustroom 10.10.10 is available"),
+            "fixture check: wide, the notice shows: {wide:?}"
+        );
+        let found = both_rows_knowing(480.0, 12, "12 photos", Some("10.10.10"));
+        let status = found
+            .iter()
+            .find(|(l, _)| l == "12 photos")
+            .unwrap_or_else(|| panic!("no status at 480: {found:?}"));
+        if found.iter().any(|(l, _)| l.starts_with("Rustroom ")) {
+            assert!(
+                status.1.width() >= crate::update_flow::STATUS_BESIDE - 0.5,
+                "the notice squeezed the status to {:.0} pt: {found:?}",
+                status.1.width()
+            );
+        }
+    }
+
     #[test]
     fn nothing_in_either_library_row_overlaps() {
         // ⚠⚠ The bug the two rows exist to fix: at 1440 pt the count ran under the search field
@@ -748,20 +788,27 @@ mod tests {
             // beside the cluster at 800 and so passed against a status that was never truncated.
             let long =
                 "12 photos · 24 files — a status line long enough to reach across ".repeat(6);
-            let found = both_rows(width, 12, &long);
-            assert!(found.len() > 6, "sample at {width}: {found:?}");
-            for (i, (a, ra)) in found.iter().enumerate() {
-                for (b, rb) in found.iter().skip(i + 1) {
-                    // ⚠ One widget can report two nodes with one label (a menu button and its
-                    // text); two nodes of the same name are the same control, not a collision.
-                    if a == b {
-                        continue;
+            // Piece 4: and with the update notice in the row, which must not push either.
+            for latest in [None, Some("10.10.10")] {
+                let found = both_rows_knowing(width, 12, &long, latest);
+                assert!(found.len() > 6, "sample at {width}: {found:?}");
+                assert!(
+                    found.iter().any(|(l, _)| l.starts_with("12 photos")),
+                    "at {width} with {latest:?} the status line was pushed out: {found:?}"
+                );
+                for (i, (a, ra)) in found.iter().enumerate() {
+                    for (b, rb) in found.iter().skip(i + 1) {
+                        // ⚠ One widget can report two nodes with one label (a menu button and its
+                        // text); two nodes of the same name are the same control, not a collision.
+                        if a == b {
+                            continue;
+                        }
+                        let overlap = ra.intersect(*rb);
+                        assert!(
+                            overlap.width() <= 0.5 || overlap.height() <= 0.5,
+                            "at {width}: {a:?} {ra:?} overlaps {b:?} {rb:?}"
+                        );
                     }
-                    let overlap = ra.intersect(*rb);
-                    assert!(
-                        overlap.width() <= 0.5 || overlap.height() <= 0.5,
-                        "at {width}: {a:?} {ra:?} overlaps {b:?} {rb:?}"
-                    );
                 }
             }
         }

@@ -93,9 +93,14 @@ pub fn updated_elsewhere() -> bool {
     }
 }
 
-/// Whether this copy may ask at all: compiled in, switched on, and nothing else updating it.
+/// Whether a copy may ask at all: compiled in, switched on, and nothing else updating it.
+pub fn checks(compiled_in: bool, switch_on: bool, elsewhere: bool) -> bool {
+    compiled_in && switch_on && !elsewhere
+}
+
+/// [`checks`] for this copy — this build, this switch, this machine.
 pub fn may_check(switch_on: bool) -> bool {
-    COMPILED_IN && switch_on && !updated_elsewhere()
+    checks(COMPILED_IN, switch_on, updated_elsewhere())
 }
 
 /// GitHub's newest published release — never a draft or a prerelease.
@@ -166,16 +171,17 @@ impl Checker {
     }
 }
 
-/// A check started at launch — `None` unless this copy may check ([`may_check`]) and one is due ([`is_due`]).
-/// `fetch` is a factory, so no request is even built when none runs.
+/// A check started at launch — `None` unless this copy may check (`may`: [`may_check`]'s answer, handed in so a
+/// test does not depend on how it was built) and one is due ([`is_due`]). `fetch` is a factory, so no request is
+/// even built when none runs.
 pub fn start_if_due(
-    s: &crate::settings::Settings,
+    may: bool,
+    last_checked: u64,
     now: u64,
     fetch: impl FnOnce() -> Fetch,
     on_done: Box<dyn FnOnce() + Send>,
 ) -> Option<Checker> {
-    (may_check(s.check_updates) && is_due(s.update_checked_at, now))
-        .then(|| Checker::start(fetch(), on_done))
+    (may && is_due(last_checked, now)).then(|| Checker::start(fetch(), on_done))
 }
 
 /// Keeps a finished check in the settings: its time always (a failure counts, so an offline machine is not asked
@@ -289,10 +295,19 @@ mod tests {
     const NOW: u64 = 1_763_900_000;
 
     #[test]
+    fn a_copy_checks_only_when_compiled_in_switched_on_and_not_updated_elsewhere() {
+        assert!(checks(true, true, false));
+        assert!(!checks(false, true, false), "compiled off");
+        assert!(!checks(true, false, false), "switched off");
+        assert!(!checks(true, true, true), "a Flatpak");
+    }
+
+    #[test]
     fn no_check_when_switched_off() {
         let built = std::cell::Cell::new(false);
         let c = start_if_due(
-            &settings(false, 0),
+            false,
+            0,
             NOW,
             || {
                 built.set(true);
@@ -307,7 +322,8 @@ mod tests {
     #[test]
     fn no_check_within_a_day() {
         let c = start_if_due(
-            &settings(true, NOW - 60),
+            true,
+            NOW - 60,
             NOW,
             answering(Ok(String::new())),
             Box::new(|| {}),
@@ -318,7 +334,8 @@ mod tests {
     #[test]
     fn a_check_finds_the_release() {
         let c = start_if_due(
-            &settings(true, 0),
+            true,
+            0,
             NOW,
             answering(Ok(r#"{"tag_name":"v9.0.0"}"#.into())),
             Box::new(|| {}),
@@ -335,7 +352,8 @@ mod tests {
     #[test]
     fn a_failed_check_still_counts_as_a_check() {
         let c = start_if_due(
-            &settings(true, 0),
+            true,
+            0,
             NOW,
             answering(Err("offline".into())),
             Box::new(|| {}),
@@ -363,7 +381,8 @@ mod tests {
     fn the_pump_never_blocks() {
         let (release, held) = std::sync::mpsc::channel::<()>();
         let c = start_if_due(
-            &settings(true, 0),
+            true,
+            0,
             NOW,
             move || {
                 Box::new(move || {

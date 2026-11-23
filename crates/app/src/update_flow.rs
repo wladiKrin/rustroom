@@ -19,7 +19,8 @@ impl RustroomApp {
     pub(crate) fn start_update_check(&mut self, ctx: &egui::Context) {
         let ctx = ctx.clone();
         self.update_checker = update_check::start_if_due(
-            &self.settings,
+            update_check::may_check(self.settings.check_updates),
+            self.settings.update_checked_at,
             now(),
             update_check::live_fetch,
             Box::new(move || ctx.request_repaint()),
@@ -37,8 +38,14 @@ impl RustroomApp {
     }
 }
 
-/// In the status line when no job runs: "Rustroom 0.2.0 is available" (a click opens its release page) and Hide.
-/// ⚠ Plain text, not the accent — DESIGN.md §4.2 gives the accent two jobs and this is neither.
+/// The room the status line keeps beside the notice; narrower, the notice is not drawn (the row's rule: nothing
+/// placed where it merely hopes to fit).
+pub(crate) const STATUS_BESIDE: f32 = 120.0;
+
+/// In the status line when no job runs: "Rustroom 0.2.0 is available" (a click opens its release page), then Hide.
+/// ⚠ Plain text, not the accent — DESIGN.md §4.2 gives the accent two jobs and this is neither (§7.12).
+/// ⚠ Drawn only where the status line keeps [`STATUS_BESIDE`] beside it, and Hide always reads AFTER the line —
+/// in Develop's right-to-left corner the first widget lands rightmost, so Hide is added first there.
 pub(crate) fn notice(app: &mut RustroomApp, ui: &mut egui::Ui) {
     let s = &app.settings;
     if !update_check::may_check(s.check_updates) {
@@ -52,10 +59,34 @@ pub(crate) fn notice(app: &mut RustroomApp, ui: &mut egui::Ui) {
         return;
     };
     let text = format!("Rustroom {v} is available");
+    let width = |t: &str, font: egui::FontId| {
+        ui.painter()
+            .layout_no_wrap(t.to_owned(), font, egui::Color32::PLACEHOLDER)
+            .size()
+            .x
+    };
+    let needed = width(&text, egui::FontId::proportional(tokens::CAPTION))
+        + width("Hide", egui::TextStyle::Button.resolve(ui.style()))
+        + 2.0 * ui.spacing().button_padding.x
+        + 2.0 * ui.spacing().item_spacing.x;
+    if ui.available_width() < needed + STATUS_BESIDE {
+        return;
+    }
+    if ui.layout().prefer_right_to_left() {
+        hide_button(app, ui, v);
+        line(ui, &text, v);
+    } else {
+        line(ui, &text, v);
+        hide_button(app, ui, v);
+    }
+}
+
+/// The notice's text; a click opens the release page.
+fn line(ui: &mut egui::Ui, text: &str, v: update_check::Version) {
     let line = ui
         .add(
             egui::Label::new(
-                egui::RichText::new(&text)
+                egui::RichText::new(text)
                     .size(tokens::CAPTION)
                     .color(theme::tokens::of(ui).text),
             )
@@ -68,8 +99,12 @@ pub(crate) fn notice(app: &mut RustroomApp, ui: &mut egui::Ui) {
         ui.ctx()
             .open_url(egui::OpenUrl::new_tab(update_check::release_page(v)));
     }
+}
+
+/// Hide — the same button as the row's Cancel (one form per control).
+fn hide_button(app: &mut RustroomApp, ui: &mut egui::Ui, v: update_check::Version) {
     if ui
-        .small_button("Hide")
+        .button("Hide")
         .hover("Hides this version until a newer one comes out")
         .clicked()
     {
@@ -85,10 +120,11 @@ mod tests {
 
     const LINE: &str = "Rustroom 99.0.0 is available";
 
-    /// A Library whose settings know of a newer version, its status row drawn.
+    /// An app whose settings know of a newer version. ⚠ No Library: the harness screen is 400 pt, and the Library's
+    /// right-hand cluster would leave the notice less than it needs — the row's width rule is
+    /// `status_bar`'s `the_update_notice_gives_way_to_the_status_when_narrow`.
     fn app_knowing(on: bool) -> RustroomApp {
         let mut app = crate::test_app::for_test();
-        app.library = Some(crate::test_app::library_of(3));
         app.settings.check_updates = on;
         app.settings.update_latest = Some("99.0.0".into());
         app
@@ -101,6 +137,19 @@ mod tests {
         }
     }
 
+    /// Whether this test build draws the notice at all. ⚠ Built with `RUSTROOM_NO_UPDATE_CHECK`, or run inside a
+    /// Flatpak, it never does — each test then asserts exactly that, so a packager's `cargo test` still passes and
+    /// still checks something.
+    fn drawn_here(ctx: &egui::Context) -> bool {
+        if update_check::may_check(true) {
+            return true;
+        }
+        let mut app = app_knowing(true);
+        let found = labels(ctx, &mut app);
+        assert!(!found.iter().any(|l| l == LINE), "{found:?}");
+        false
+    }
+
     fn labels(ctx: &egui::Context, app: &mut RustroomApp) -> Vec<String> {
         crate::test_ui::labelled_centres(ctx, Vec::new(), row(app))
             .into_iter()
@@ -111,6 +160,9 @@ mod tests {
     #[test]
     fn a_newer_version_shows_in_the_status_line() {
         let ctx = crate::test_ui::ctx();
+        if !drawn_here(&ctx) {
+            return;
+        }
         let mut app = app_knowing(true);
         let found = labels(&ctx, &mut app);
         assert!(found.iter().any(|l| l == LINE), "{found:?}");
@@ -119,6 +171,9 @@ mod tests {
     #[test]
     fn clicking_it_opens_the_release_page() {
         let ctx = crate::test_ui::ctx();
+        if !drawn_here(&ctx) {
+            return;
+        }
         let mut app = app_knowing(true);
         let commands = crate::test_ui::click_commands(&ctx, LINE, row(&mut app));
         let opened: Vec<_> = commands
@@ -134,6 +189,9 @@ mod tests {
     #[test]
     fn hide_dismisses_this_version() {
         let ctx = crate::test_ui::ctx();
+        if !drawn_here(&ctx) {
+            return;
+        }
         let mut app = app_knowing(true);
         crate::test_ui::click(&ctx, "Hide", row(&mut app));
         assert_eq!(app.settings.update_dismissed.as_deref(), Some("99.0.0"));
@@ -146,9 +204,42 @@ mod tests {
         assert!(!found.iter().any(|l| l == LINE), "{found:?}");
     }
 
+    /// Hide reads AFTER the line it hides in either row — Develop's corner lays out right to left.
+    #[test]
+    fn hide_follows_the_line_in_both_rows() {
+        let ctx = crate::test_ui::ctx();
+        if !drawn_here(&ctx) {
+            return;
+        }
+        for develop in [false, true] {
+            let mut app = app_knowing(true);
+            let found = crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+                let ctx = ui.ctx().clone();
+                if develop {
+                    crate::status_bar::develop_row(&mut app, ui);
+                } else {
+                    crate::status_bar::library_row(&mut app, ui, &ctx);
+                }
+            });
+            let at = |label: &str| {
+                found
+                    .iter()
+                    .find(|(l, _)| l == label)
+                    .unwrap_or_else(|| {
+                        panic!("{label:?} not drawn (develop: {develop}): {found:?}")
+                    })
+                    .1
+            };
+            assert!(at("Hide").x > at(LINE).x, "develop: {develop}: {found:?}");
+        }
+    }
+
     #[test]
     fn turning_the_check_off_hides_the_line() {
         let ctx = crate::test_ui::ctx();
+        if !drawn_here(&ctx) {
+            return;
+        }
         let mut on = app_knowing(true);
         assert!(
             labels(&ctx, &mut on).iter().any(|l| l == LINE),
