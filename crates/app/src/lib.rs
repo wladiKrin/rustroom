@@ -155,6 +155,7 @@ pub mod tile_layout;
 pub mod tone_curve_tool;
 pub mod tool;
 pub mod unique;
+pub mod update_check;
 pub mod user_cache;
 pub mod view_region;
 pub mod visualize;
