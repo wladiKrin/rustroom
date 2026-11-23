@@ -273,6 +273,8 @@ fn job_or_status(app: &mut RustroomApp, ui: &mut egui::Ui) {
         tether_controls(app, ui, &line);
         return;
     } else {
+        // Piece 4: a newer version's line, only when nothing runs.
+        crate::update_flow::notice(app, ui);
         (app.status.clone(), None)
     };
     // ⚠ Cancel first in either direction: in the Library's left-to-right text it leads the line,
