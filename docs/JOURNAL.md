@@ -202,6 +202,13 @@ measured, what it retracted, and which sabotages its tests failed to catch.
   messages; the final tree byte-identical), the fix-up commit dropped. ⚠ The earlier branch scans had a second hole: a
   regex for a backslashed path is easy to get wrong — **scan with fixed strings, commit by commit**.
 - **`PRIVACY.md` committed** — the author approved its text ("Approve it as is").
+- ⚠⚠ **A timed test failed the pre-push gate once** — `thumb_loader`'s
+  `a_replaced_want_list_abandons_what_is_no_longer_wanted` slept 10 ms and assumed only two 20-ms loads had started; under
+  the gate's load on Windows six had. Fixed on `fix-thumb-loader-flake`: the abandoned batch's loads wait behind a gate
+  until the list HAS been replaced (two in hand, exactly), the kept path loads, and exactly three loads start — asserted
+  `== 3` where it was `<= 5`. Proven three ways: 100 runs beside three full copies of the app's lib suite, 0 failed —
+  the OLD test under that same load failed 3 of 100 ("7 loads started"), so the stress does reproduce it; and the
+  sabotage (`want` no longer clears the list) fails it at 201 loads.
 - `main` pushed at the author's word (`0f7c7324`, gate 4,816 passed on that tip); the hand-off for the next machine is
   `docs/superpowers/specs/2026-11-24-handoff-from-windows.md` — the stores need no Windows PC from here, but for
   winget's first `wingetcreate submit` and an optional certification-kit run.
