@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+# A template - packaging\winget\manifest.ps1 fills @VERSION@ and @CHECKSUM@. Per user, as a double-clicked installer
+# installs; ProductCode is Inno Setup's uninstall key, the installer's fixed AppId + "_is1".
+
+PackageIdentifier: wladiKrin.Rustroom
+PackageVersion: @VERSION@
+MinimumOSVersion: 10.0.0.0
+InstallerType: inno
+Scope: user
+UpgradeBehavior: install
+ProductCode: '{240EB815-FED8-4E19-84FE-EFE2069F1D00}_is1'
+AppsAndFeaturesEntries:
+- DisplayName: Rustroom
+  Publisher: The Rustroom contributors
+  ProductCode: '{240EB815-FED8-4E19-84FE-EFE2069F1D00}_is1'
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/wladiKrin/rustroom/releases/download/v@VERSION@/Rustroom-@VERSION@-windows-x64-setup.exe
+  InstallerSha256: @CHECKSUM@
+ManifestType: installer
+ManifestVersion: 1.12.0
