@@ -967,48 +967,73 @@ mod tests {
         // `DecodeWorker` and `batch_export` both already make. A scrolled-past request is simply
         // never popped.
         //
-        // Two workers, so at most two of the abandoned batch can already be in hand.
-        static STARTED: AtomicUsize = AtomicUsize::new(0);
-        fn slow(_r: &ThumbRequest) -> Option<Thumbnail> {
-            STARTED.fetch_add(1, Ordering::SeqCst);
-            thread::sleep(std::time::Duration::from_millis(20));
-            None
+        // Two workers, so exactly two of the abandoned batch are in hand when the list is replaced.
+        //
+        // ⚠⚠ **Held, never timed** (2026-11-24): this slept 10 ms and assumed only the first two
+        // 20-ms loads had started by then — under a full gate's load on Windows the sleep outlasted
+        // a whole load and six had ("abandoned work kept going: 6 loads started"). Now every load
+        // of the abandoned batch waits behind a gate until the list HAS been replaced, so exactly
+        // two are in hand at that moment however loaded the machine. Once the gate opens they
+        // return at once, so a loader that ground on would start the other 198 at once.
+        const LONG: std::time::Duration = std::time::Duration::from_secs(120);
+        fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+            let start = std::time::Instant::now();
+            while !done() {
+                assert!(start.elapsed() < LONG, "waited {LONG:?} for {what}");
+                thread::sleep(std::time::Duration::from_millis(2));
+            }
         }
-        STARTED.store(0, Ordering::SeqCst);
+        let started = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let kept = PhotoId::original(PathBuf::from("/nonexistent/kept_a.raf"));
+        let load: LoadFn = {
+            let (started, gate, kept) = (started.clone(), gate.clone(), kept.clone());
+            Arc::new(move |r: &ThumbRequest| {
+                started.fetch_add(1, Ordering::SeqCst);
+                if r.id != kept {
+                    let (open, cv) = &*gate;
+                    let mut open = open.lock().unwrap();
+                    let since = std::time::Instant::now();
+                    while !*open && since.elapsed() < LONG {
+                        open = cv.wait_timeout(open, LONG).unwrap().0;
+                    }
+                }
+                None
+            })
+        };
         let loader = ThumbLoader::with_loader(
-            Arc::new(slow),
+            load,
             2,
             color::Display::Space(color::OutputSpace::Srgb),
             || {},
         );
         loader.want(&paths(200));
-        thread::sleep(std::time::Duration::from_millis(10));
+        wait_until("both workers to take an abandoned load", || {
+            started.load(Ordering::SeqCst) == 2
+        });
         let keep = vec![ThumbRequest {
-            id: PhotoId::original(PathBuf::from("/nonexistent/kept_a.raf")),
+            id: kept.clone(),
             edits: Edits::default(),
         }];
         loader.want(&keep);
+        let (open, cv) = &*gate;
+        *open.lock().unwrap() = true;
+        cv.notify_all();
         // ⚠ Wait for *this* path, not merely for the first result to arrive. The paths already in
         // flight when the list was replaced finish first, so `collect(&loader, 1)` returns one of
         // those and the assertion below would be false about perfectly correct code.
         let mut results = Vec::new();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while std::time::Instant::now() < deadline {
+        wait_until("the newly wanted path to load", || {
             results.extend(loader.drain());
-            if results.iter().any(|r| r.key.id == keep[0].id) {
-                break;
-            }
-            thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert!(
-            results.iter().any(|r| r.key.id == keep[0].id),
-            "the newly wanted path never loaded"
-        );
-        // The abandoned batch must not grind on: only what was already in hand may finish.
+            results.iter().any(|r| r.key.id == kept)
+        });
+        // The abandoned batch must not grind on: only the two in hand and the kept path start.
+        // ⚠ This pause can only let a wrong loader slip past, never fail a right one: correct code
+        // starts exactly three however long it is watched.
         thread::sleep(std::time::Duration::from_millis(80));
-        let started = STARTED.load(Ordering::SeqCst);
-        assert!(
-            started <= 5,
+        let started = started.load(Ordering::SeqCst);
+        assert_eq!(
+            started, 3,
             "abandoned work kept going: {started} loads started"
         );
     }
