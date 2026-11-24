@@ -79,16 +79,26 @@ pub fn release_page(v: Version) -> String {
 pub const COMPILED_IN: bool = option_env!("RUSTROOM_NO_UPDATE_CHECK").is_none();
 
 /// Whether something else updates this copy: a Flatpak. (The Store's package identity joins it with the Store
-/// build — piece 4's goal 2.)
+/// build — piece 4's goal 2.) ⚠ Looked up ONCE per run: the status row asks every frame, and a copy does not become a
+/// Flatpak while it runs.
 pub fn updated_elsewhere() -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        std::path::Path::new("/.flatpak-info").exists() || std::env::var_os("FLATPAK_ID").is_some()
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        false
-    }
+    static ELSEWHERE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    remembered(&ELSEWHERE, || {
+        #[cfg(target_os = "linux")]
+        {
+            std::path::Path::new("/.flatpak-info").exists()
+                || std::env::var_os("FLATPAK_ID").is_some()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    })
+}
+
+/// `memo`'s answer, asking `probe` only the first time.
+fn remembered(memo: &std::sync::OnceLock<bool>, probe: impl FnOnce() -> bool) -> bool {
+    *memo.get_or_init(probe)
 }
 
 /// Whether a copy may ask at all: compiled in, switched on, and nothing else updating it.
@@ -281,6 +291,20 @@ mod tests {
     }
 
     const NOW: u64 = 1_763_900_000;
+
+    /// The status row asks every frame; the disk is looked at once (a `stat` of `/.flatpak-info` per frame before).
+    #[test]
+    fn updated_elsewhere_looks_once() {
+        let memo = std::sync::OnceLock::new();
+        let looks = std::cell::Cell::new(0);
+        let probe = || {
+            looks.set(looks.get() + 1);
+            true
+        };
+        assert!(remembered(&memo, probe));
+        assert!(remembered(&memo, probe), "the first answer is kept");
+        assert_eq!(looks.get(), 1, "one look, not one per question");
+    }
 
     #[test]
     fn a_copy_checks_only_when_compiled_in_switched_on_and_not_updated_elsewhere() {
