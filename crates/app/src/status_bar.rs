@@ -96,9 +96,13 @@ fn plan_library(app: &RustroomApp, ui: &egui::Ui, avail: f32) -> Shown {
     } else {
         0.0
     };
-    // ⚠ egui never draws a combo narrower than `combo_width` (100 pt): counted at 56, the compact form left the row
-    // 44 pt short and the update notice out (2026-11-24).
+    // ⚠ egui never draws a combo narrower than `combo_width` (100 pt) unless told: the full form keeps that floor, the
+    // compact one is drawn at its content (`sort_combo`) — the glyph, the arrow and their spacing.
     let combo = ui.spacing().combo_width;
+    let sort_compact = text_w(ui, &icons::SORT.to_string(), &body)
+        + ui.spacing().icon_spacing
+        + ui.spacing().icon_width
+        + pad;
     let sort_full = (text_w(
         ui,
         &format!("{} {}", icons::SORT, app.settings.library_sort.label()),
@@ -122,7 +126,7 @@ fn plan_library(app: &RustroomApp, ui: &egui::Ui, avail: f32) -> Shown {
         Item {
             priority: 80,
             full: sort_full,
-            compact: Some((pad + 40.0).max(combo)),
+            compact: Some(sort_compact),
             hideable: false,
         },
         Item {
@@ -404,6 +408,9 @@ const READOUT_SWATCH: f32 = 14.0;
 /// The size slider's rail.
 const SIZE_SLIDER: f32 = 80.0;
 
+/// The size slider's thickness — its knob is two fifths of it.
+const SLIM_SLIDER: f32 = 20.0;
+
 /// ⋯ — the Library row's rare actions and whatever the plan folded out of the row.
 ///
 /// ⚠⚠ **A menu again, and on purpose** (Reindex was taken out of one on 2026-09-23 because it
@@ -482,7 +489,11 @@ fn sort_combo(app: &mut RustroomApp, ui: &mut egui::Ui, compact: bool) {
     } else {
         format!("{} {}", icons::SORT, order.label())
     };
-    egui::ComboBox::from_id_salt("library_sort")
+    let combo = egui::ComboBox::from_id_salt("library_sort");
+    // ⚠ Without its label the combo is the glyph and the arrow: egui's default minimum, `combo_width`, left an empty
+    // 100-pt box (the author, 2026-11-24). Its menu still widens to its entries. `plan_library` measures the same.
+    let combo = if compact { combo.width(0.0) } else { combo };
+    combo
         .selected_text(shown)
         .show_ui(ui, |ui| {
             for o in catalog::SortOrder::ALL {
@@ -512,9 +523,15 @@ fn sort_combo(app: &mut RustroomApp, ui: &mut egui::Ui, compact: bool) {
 fn grid_size_slider(app: &mut RustroomApp, ui: &mut egui::Ui) {
     let (lo, hi) = rustroom_app::settings::CELL_RANGE;
     let mut cell = app.settings.clamped_cell() as u32;
-    ui.spacing_mut().slider_width = 80.0;
+    // ⚠ Scoped: egui's slider is as thick as `interact_size.y` and its knob two fifths of that — a control row's
+    // 28 pt made the knob larger than the row's Caption text around it (the author, 2026-11-24).
     let r = ui
-        .add(egui::Slider::new(&mut cell, lo..=hi).show_value(false))
+        .scope(|ui| {
+            ui.spacing_mut().slider_width = 80.0;
+            ui.spacing_mut().interact_size.y = SLIM_SLIDER;
+            ui.add(egui::Slider::new(&mut cell, lo..=hi).show_value(false))
+        })
+        .inner
         .hover("Sets the thumbnail size");
     if r.changed() {
         app.settings.library_cell = cell;
@@ -932,6 +949,56 @@ mod tests {
         assert!(
             seen_out,
             "fixture check: the sweep reaches widths too narrow for it"
+        );
+    }
+
+    /// The thumbnail-size slider's knob is smaller than a control row's (the author, 2026-11-24): its row is 20 pt
+    /// tall where egui's default thickness is `CONTROL_ROW` — and the knob is two fifths of it.
+    #[test]
+    fn the_size_slider_is_slim() {
+        let ctx = crate::test_ui::ctx();
+        crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+        let mut app = crate::test_app::for_test();
+        app.library = Some(crate::test_app::library_of(12));
+        let nodes = crate::test_ui::nodes_on(
+            &ctx,
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 400.0)),
+            |ui| {
+                let ctx = ui.ctx().clone();
+                library_row(&mut app, ui, &ctx);
+            },
+        );
+        let slider = nodes
+            .iter()
+            .find(|n| n.role == egui::accesskit::Role::Slider)
+            .expect("fixture check: the size slider is drawn at 1440");
+        assert!(
+            slider.rect.height() <= 20.0,
+            "{:.1} pt",
+            slider.rect.height()
+        );
+    }
+
+    /// The sort combo without its label is the glyph and the arrow, never an empty 100-pt box (the author's
+    /// half-screen window, 2026-11-24) — swept, at every width where it is drawn compact.
+    #[test]
+    fn the_compact_sort_combo_is_just_the_glyph_and_the_arrow() {
+        let sort = icons::SORT.to_string();
+        let mut compact_seen = false;
+        for width in (440..=1200).step_by(8).map(|w| w as f32) {
+            let found = both_rows_knowing(width, 12, "12 photos", None);
+            if let Some((_, r)) = found.iter().find(|(l, _)| *l == sort) {
+                compact_seen = true;
+                assert!(
+                    r.width() <= 64.0,
+                    "at {width} the compact combo is {:.0} pt wide",
+                    r.width()
+                );
+            }
+        }
+        assert!(
+            compact_seen,
+            "fixture check: the sweep reaches the compact form"
         );
     }
 

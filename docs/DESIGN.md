@@ -199,7 +199,9 @@ control never changes shape on hover (the existing rule).
   format chips, Download / Remove downloads (Immich sources with a selection), the sort, the size
   slider and ⋯ (Reindex, Expand all / Stack all, and anything folded). Develop: the readout swatch
   and numbers at the left; "Full resolution ready" or the running job at the right. Folding
-  order: chips first, then the Immich buttons, then the size slider; the sort drops its label.
+  order: chips first, then the Immich buttons, then the size slider; the sort drops its label and
+  narrows to the glyph and its arrow. The size slider is 20 pt thick, its knob smaller than a
+  control row's (the author, 2026-11-24).
   ⚠ The first draft put the chips at the left and a zoom percentage in Develop's row; the chips
   sit with the view settings they are, and the zoom percentage was not built. ⚠ The first build
   also named the photo in the Library's status row; the name moved back to the top row so it does
