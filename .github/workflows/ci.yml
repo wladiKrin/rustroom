@@ -16,7 +16,7 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The runner image ships .NET, Android, Haskell and CodeQL toolchains this build never
       # touches — about 25 GB. Removing them is the other half of the disk fix.
       - name: Free runner disk
@@ -49,13 +49,13 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # `libheif-sys` reads libheif from vcpkg on MSVC, unconditionally: the runner's own vcpkg, decoder only, built
       # with the static C runtime the workspace links (`.cargo/config.toml`; CONTRIBUTING.md). The key is fixed, so a
       # newer runner vcpkg rebuilds it until the key is bumped.
       - name: Point the vcpkg crate at the runner's vcpkg
         run: '"VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append'
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~\AppData\Local\vcpkg\archives
           key: vcpkg-libheif-x64-windows-static-v1

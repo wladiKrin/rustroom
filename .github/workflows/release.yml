@@ -19,7 +19,7 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: v
         run: |
           version=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name == "app") | .version')
@@ -33,11 +33,11 @@ jobs:
     needs: version
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # libheif from the runner's own vcpkg, decoder only, with the static C runtime (`.cargo/config.toml`).
       - name: Point the vcpkg crate at the runner's vcpkg
         run: '"VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append'
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~\AppData\Local\vcpkg\archives
           key: vcpkg-libheif-x64-windows-static-v1
@@ -51,7 +51,7 @@ jobs:
         run: cargo install cargo-about --locked --features cli
       - name: Build the installer
         run: ./packaging/windows/build.ps1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: target/installer/Rustroom-*-windows-x64-setup.exe
@@ -63,7 +63,7 @@ jobs:
     needs: version
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install the libraries
         run: brew install little-cms2 libheif libgphoto2 pkgconf
       - uses: dtolnay/rust-toolchain@stable
@@ -72,7 +72,7 @@ jobs:
         run: cargo install cargo-about --locked --features cli
       - name: Build the disk image
         run: packaging/macos/build.sh --floor 15.0
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos
           path: target/macos/Rustroom-*-macos-arm64.dmg
@@ -87,14 +87,14 @@ jobs:
     needs: version
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target/linux-docker/target"
           cache-directories: target/linux-docker/cargo-home
       - name: Build the AppImage
         run: packaging/linux/in-docker.sh --floor 2.35
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux
           path: |
@@ -109,7 +109,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
