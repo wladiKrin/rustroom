@@ -459,8 +459,9 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         .hover("Opens what the Library last showed when Rustroom starts");
                     ui.checkbox(&mut d.show_welcome, "Show the welcome on the start page")
                         .hover("Shows what each part of the window is for on the start page");
-                    // Piece 4: with the other two, since it too runs at launch; absent from a build without the check.
-                    if rustroom_app::update_check::COMPILED_IN {
+                    // Piece 4: with the other two, since it too runs at launch; absent from a build without the
+                    // check and from a copy the Store or Flatpak updates.
+                    if rustroom_app::update_check::switch_shown() {
                         ui.checkbox(&mut d.check_updates, "Check for new versions")
                             .hover("Asks GitHub once a day whether a newer Rustroom is out");
                     }
@@ -1162,12 +1163,12 @@ mod tests {
     }
 
     /// Piece 4: Check for new versions, on by default, lands on Apply — and in a build with
-    /// `RUSTROOM_NO_UPDATE_CHECK` set, is not drawn at all.
+    /// `RUSTROOM_NO_UPDATE_CHECK` set, or a copy the Store or Flatpak updates, is not drawn at all.
     #[test]
     fn behaviour_has_the_update_check_switch() {
         let (ctx, mut app) = open_settings();
         settle(&ctx, &mut app);
-        if !rustroom_app::update_check::COMPILED_IN {
+        if !rustroom_app::update_check::switch_shown() {
             assert!(
                 test_ui::find(&ctx, "Check for new versions", |_| show(&mut app, &ctx)).is_none()
             );

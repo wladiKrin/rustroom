@@ -78,9 +78,9 @@ pub fn release_page(v: Version) -> String {
 /// Flatpak, which something else updates. The Settings switch is hidden then too.
 pub const COMPILED_IN: bool = option_env!("RUSTROOM_NO_UPDATE_CHECK").is_none();
 
-/// Whether something else updates this copy: a Flatpak. (The Store's package identity joins it with the Store
-/// build — piece 4's goal 2.) ⚠ Looked up ONCE per run: the status row asks every frame, and a copy does not become a
-/// Flatpak while it runs.
+/// Whether something else updates this copy: a Flatpak, or the Microsoft Store's package (piece 4's goal 2 — the
+/// installer's very exe, which only its package identity tells apart). ⚠ Looked up ONCE per run: the status row asks
+/// every frame, and a copy does not change how it was installed while it runs.
 pub fn updated_elsewhere() -> bool {
     static ELSEWHERE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     remembered(&ELSEWHERE, || {
@@ -89,11 +89,41 @@ pub fn updated_elsewhere() -> bool {
             std::path::Path::new("/.flatpak-info").exists()
                 || std::env::var_os("FLATPAK_ID").is_some()
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            packaged()
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
         {
             false
         }
     })
+}
+
+/// Whether the Settings switch is drawn: not in a build compiled without the check, nor in a copy something else
+/// updates, where it would turn nothing off.
+pub fn switch_shown() -> bool {
+    COMPILED_IN && !updated_elsewhere()
+}
+
+/// What Windows answers this process's package identity: `APPMODEL_ERROR_NO_PACKAGE` for an ordinary exe; anything
+/// else — `ERROR_INSUFFICIENT_BUFFER` for this empty buffer — for one running from an MSIX package.
+#[cfg(windows)]
+fn package_status() -> u32 {
+    let mut length = 0u32;
+    // SAFETY: a zero length with a null buffer is the documented way to ask only for the length.
+    unsafe {
+        windows_sys::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName(
+            &mut length,
+            std::ptr::null_mut(),
+        )
+    }
+}
+
+/// Whether this process runs from an MSIX package — on Windows, only the Store build does.
+#[cfg(windows)]
+fn packaged() -> bool {
+    package_status() != windows_sys::Win32::Foundation::APPMODEL_ERROR_NO_PACKAGE
 }
 
 /// `memo`'s answer, asking `probe` only the first time.
@@ -304,6 +334,19 @@ mod tests {
         assert!(remembered(&memo, probe));
         assert!(remembered(&memo, probe), "the first answer is kept");
         assert_eq!(looks.get(), 1, "one look, not one per question");
+    }
+
+    /// The Store probe's ordinary answer, exactly — not merely `false`, which any failed call would also give. The
+    /// other answer is seen only from the sideloaded package (`packaging/windows/msix.ps1 -Test`).
+    #[cfg(windows)]
+    #[test]
+    fn a_test_process_has_no_package_identity() {
+        assert_eq!(
+            package_status(),
+            windows_sys::Win32::Foundation::APPMODEL_ERROR_NO_PACKAGE
+        );
+        assert!(!packaged());
+        assert!(!updated_elsewhere(), "a test process is updated by nothing");
     }
 
     #[test]
