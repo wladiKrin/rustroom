@@ -120,6 +120,7 @@ mod theme;
 mod thumb;
 mod transfer;
 mod undo;
+mod update_flow;
 
 use modals::Modal;
 

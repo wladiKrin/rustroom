@@ -26,6 +26,9 @@ pub const HEIGHT: f32 = 32.0;
 /// Room the left-hand text keeps before anything on the right is allowed to push into it.
 const STATUS_MIN: f32 = 200.0;
 
+/// The space between the Library row's left-hand text and its right-hand cluster.
+const CLUSTER_GAP: f32 = 12.0;
+
 /// The frame both rows share — and a service view's Publish band — the panel surface, a hairline, 12 pt either side.
 pub(crate) fn frame(style: &egui::Style) -> egui::Frame {
     egui::Frame::side_top_panel(style).inner_margin(egui::Margin {
@@ -93,12 +96,22 @@ fn plan_library(app: &RustroomApp, ui: &egui::Ui, avail: f32) -> Shown {
     } else {
         0.0
     };
-    let sort_full = text_w(
-        ui,
-        &format!("{} {}", icons::SORT, app.settings.library_sort.label()),
-        &body,
-    ) + pad
-        + 24.0;
+    // ⚠ egui never draws a combo narrower than `combo_width` (100 pt) unless told: the full form keeps that floor, the
+    // compact one is drawn at its content (`sort_combo`) — the glyph, the arrow and their spacing.
+    let combo = ui.spacing().combo_width;
+    let sort_compact = text_w(ui, &icons::SORT.to_string(), &body)
+        + ui.spacing().icon_spacing
+        + ui.spacing().icon_width
+        + pad;
+    let sort_full = (text_w(ui, &icons::SORT.to_string(), &body)
+        + text_w(
+            ui,
+            &format!(" {}", app.settings.library_sort.label()),
+            &caption,
+        )
+        + pad
+        + 24.0)
+        .max(combo);
     let items = [
         Item {
             priority: 40,
@@ -115,7 +128,7 @@ fn plan_library(app: &RustroomApp, ui: &egui::Ui, avail: f32) -> Shown {
         Item {
             priority: 80,
             full: sort_full,
-            compact: Some(pad + 40.0),
+            compact: Some(sort_compact),
             hideable: false,
         },
         Item {
@@ -160,7 +173,11 @@ fn chip_labels(app: &RustroomApp) -> Vec<String> {
 /// The Library row. `pub(crate)` for the shell's tests, which draw it without the panel.
 pub(crate) fn library_row(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let row = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), HEIGHT));
-    let shown = plan_library(app, ui, (row.width() - STATUS_MIN).max(0.0));
+    // Piece 4: a pending update notice asks for its room, so the chips go into ⋯ before it is left out.
+    // ⚠ With the gap before the cluster counted: without it the notice missed its room by 3 pt at 840 (2026-11-24).
+    let left = crate::update_flow::wanted_room(app, ui)
+        .map_or(STATUS_MIN, |n| (n + CLUSTER_GAP).max(STATUS_MIN));
+    let shown = plan_library(app, ui, (row.width() - left).max(0.0));
     let has_library = app.library.is_some();
     // ── the right-hand cluster, rightmost first ──
     let cluster = ui
@@ -187,7 +204,7 @@ pub(crate) fn library_row(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::
         )
         .inner;
     let right = if cluster.is_finite() {
-        cluster - 12.0
+        cluster - CLUSTER_GAP
     } else {
         row.right()
     };
@@ -273,6 +290,8 @@ fn job_or_status(app: &mut RustroomApp, ui: &mut egui::Ui) {
         tether_controls(app, ui, &line);
         return;
     } else {
+        // Piece 4: a newer version's line, only when nothing runs.
+        crate::update_flow::notice(app, ui);
         (app.status.clone(), None)
     };
     // ⚠ Cancel first in either direction: in the Library's left-to-right text it leads the line,
@@ -391,6 +410,9 @@ const READOUT_SWATCH: f32 = 14.0;
 /// The size slider's rail.
 const SIZE_SLIDER: f32 = 80.0;
 
+/// The size slider's thickness — its knob is two fifths of it.
+const SLIM_SLIDER: f32 = 20.0;
+
 /// ⋯ — the Library row's rare actions and whatever the plan folded out of the row.
 ///
 /// ⚠⚠ **A menu again, and on purpose** (Reindex was taken out of one on 2026-09-23 because it
@@ -464,12 +486,28 @@ fn reindex_hover(app: &RustroomApp) -> &'static str {
 /// ⚠ `compact`: the glyph alone, its order named on hover — the status row's narrow form.
 fn sort_combo(app: &mut RustroomApp, ui: &mut egui::Ui, compact: bool) {
     let mut order = app.settings.library_sort;
-    let shown = if compact {
-        icons::SORT.to_string()
-    } else {
-        format!("{} {}", icons::SORT, order.label())
+    // The glyph at its own size, the order's name in Caption like the rest of the row (the author, 2026-11-24).
+    // `PLACEHOLDER` takes the combo's own text colour.
+    let mut shown = egui::text::LayoutJob::default();
+    let section = |size: f32| egui::TextFormat {
+        font_id: egui::FontId::proportional(size),
+        color: egui::Color32::PLACEHOLDER,
+        valign: egui::Align::Center,
+        ..Default::default()
     };
-    egui::ComboBox::from_id_salt("library_sort")
+    shown.append(&icons::SORT.to_string(), 0.0, section(tokens::BODY));
+    if !compact {
+        shown.append(
+            &format!(" {}", order.label()),
+            0.0,
+            section(tokens::CAPTION),
+        );
+    }
+    let combo = egui::ComboBox::from_id_salt("library_sort");
+    // ⚠ Without its label the combo is the glyph and the arrow: egui's default minimum, `combo_width`, left an empty
+    // 100-pt box (the author, 2026-11-24). Its menu still widens to its entries. `plan_library` measures the same.
+    let combo = if compact { combo.width(0.0) } else { combo };
+    combo
         .selected_text(shown)
         .show_ui(ui, |ui| {
             for o in catalog::SortOrder::ALL {
@@ -499,9 +537,15 @@ fn sort_combo(app: &mut RustroomApp, ui: &mut egui::Ui, compact: bool) {
 fn grid_size_slider(app: &mut RustroomApp, ui: &mut egui::Ui) {
     let (lo, hi) = rustroom_app::settings::CELL_RANGE;
     let mut cell = app.settings.clamped_cell() as u32;
-    ui.spacing_mut().slider_width = 80.0;
+    // ⚠ Scoped: egui's slider is as thick as `interact_size.y` and its knob two fifths of that — a control row's
+    // 28 pt made the knob larger than the row's Caption text around it (the author, 2026-11-24).
     let r = ui
-        .add(egui::Slider::new(&mut cell, lo..=hi).show_value(false))
+        .scope(|ui| {
+            ui.spacing_mut().slider_width = 80.0;
+            ui.spacing_mut().interact_size.y = SLIM_SLIDER;
+            ui.add(egui::Slider::new(&mut cell, lo..=hi).show_value(false))
+        })
+        .inner
         .hover("Sets the thumbnail size");
     if r.changed() {
         app.settings.library_cell = cell;
@@ -705,11 +749,22 @@ mod tests {
 
     /// A Library of `n` with a status line, drawn through both rows at `width`.
     fn both_rows(width: f32, n: usize, status: &str) -> Vec<(String, egui::Rect)> {
+        both_rows_knowing(width, n, status, None)
+    }
+
+    /// [`both_rows`], with the settings knowing of a newer version (`latest`) — the update notice drawn.
+    fn both_rows_knowing(
+        width: f32,
+        n: usize,
+        status: &str,
+        latest: Option<&str>,
+    ) -> Vec<(String, egui::Rect)> {
         let ctx = crate::test_ui::ctx();
         crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
         let mut app = crate::test_app::for_test();
         app.library = Some(crate::test_app::library_of(n));
         app.status = status.to_owned();
+        app.settings.update_latest = latest.map(str::to_owned);
         crate::test_ui::labelled_rects_on(
             &ctx,
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 400.0)),
@@ -735,6 +790,285 @@ mod tests {
         assert!(!labels.contains(&"Reindex"), "{labels:?}");
     }
 
+    /// Piece 4: the update notice gives way when the status line would keep less than
+    /// `update_flow::STATUS_BESIDE` beside it — tested below the 800-pt floor, where it must.
+    #[test]
+    fn the_update_notice_gives_way_to_the_status_when_narrow() {
+        // ⚠ A build without the check, or a Flatpak, draws no notice — nothing to give way (`update_flow`'s tests
+        // assert the absence).
+        if !rustroom_app::update_check::may_check(true) {
+            return;
+        }
+        // ⚠ A status longer than the room kept for it, so a squeeze shows: "12 photos" alone is narrower than
+        // `STATUS_BESIDE` with nothing beside it, and read as squeezed at every width.
+        const STATUS: &str = "12 photos · 3 selected · 2 flagged · 1 rejected";
+        let wide = both_rows_knowing(1440.0, 12, STATUS, Some("10.10.10"));
+        assert!(
+            wide.iter()
+                .any(|(l, _)| l == "Rustroom 10.10.10 is available"),
+            "fixture check: wide, the notice shows: {wide:?}"
+        );
+        let natural = wide
+            .iter()
+            .find(|(l, _)| l == STATUS)
+            .expect("status drawn")
+            .1
+            .width();
+        assert!(
+            natural > crate::update_flow::STATUS_BESIDE + 20.0,
+            "fixture check: the status is longer than the room kept ({natural:.0} pt)"
+        );
+        // ⚠ Swept, not one width: the guard must count every part of the notice, and a part it misses shows only
+        // in the band of widths where the rest fits.
+        let mut drawn_somewhere = false;
+        for width in (440..=1200).step_by(8).map(|w| w as f32) {
+            let found = both_rows_knowing(width, 12, STATUS, Some("10.10.10"));
+            let status = found
+                .iter()
+                .find(|(l, _)| l == STATUS)
+                .unwrap_or_else(|| panic!("no status at {width}: {found:?}"));
+            if found.iter().any(|(l, _)| l.starts_with("Rustroom ")) {
+                drawn_somewhere = true;
+                assert!(
+                    status.1.width() >= crate::update_flow::STATUS_BESIDE - 0.5,
+                    "at {width} the notice squeezed the status to {:.0} pt: {found:?}",
+                    status.1.width()
+                );
+            }
+        }
+        assert!(
+            drawn_somewhere,
+            "fixture check: the sweep reaches widths that draw it"
+        );
+    }
+
+    /// The room kept is what the status NEEDS, at most `STATUS_BESIDE`: beside a short "12 photos" the notice shows in
+    /// rows too narrow for it beside a long status — the author's half-screen window, 2026-11-24, lost it otherwise.
+    #[test]
+    fn a_short_status_leaves_the_notice_more_room() {
+        if !rustroom_app::update_check::may_check(true) {
+            return;
+        }
+        let drawn = |width: f32, status: &str| {
+            let found = both_rows_knowing(width, 12, status, Some("10.10.10"));
+            let status_w = found
+                .iter()
+                .find(|(l, _)| l == status)
+                .unwrap_or_else(|| panic!("no status at {width}: {found:?}"))
+                .1
+                .width();
+            let notice = found.iter().any(|(l, _)| l.starts_with("Rustroom "));
+            if notice {
+                let natural = both_rows_knowing(1440.0, 12, status, None)
+                    .into_iter()
+                    .find(|(l, _)| l == status)
+                    .expect("status drawn")
+                    .1
+                    .width();
+                assert!(
+                    status_w >= natural.min(crate::update_flow::STATUS_BESIDE) - 0.5,
+                    "at {width} {status:?} squeezed to {status_w:.0} of {natural:.0} pt"
+                );
+            }
+            notice
+        };
+        let long = "12 photos · 3 selected · 2 flagged · 1 rejected";
+        let short_only = (440..=1200)
+            .step_by(8)
+            .map(|w| w as f32)
+            .find(|&w| drawn(w, "12 photos") && !drawn(w, long));
+        assert!(
+            short_only.is_some(),
+            "no width shows the notice beside a short status but not beside a long one"
+        );
+    }
+
+    /// While the notice shows, the format chips go into ⋯ to make room for it — the author's pick, 2026-11-24, after
+    /// it vanished in a half-screen window beside HEIC · JPG · RAF.
+    #[test]
+    fn the_notice_moves_the_chips_into_more() {
+        if !rustroom_app::update_check::may_check(true) {
+            return;
+        }
+        let has = |found: &[(String, egui::Rect)], f: &dyn Fn(&str) -> bool| {
+            found.iter().any(|(l, _)| f(l))
+        };
+        let chip = |l: &str| l == "RAF 12";
+        let notice = |l: &str| l.starts_with("Rustroom ");
+        let wide = both_rows_knowing(1440.0, 12, "12 photos", None);
+        assert!(
+            has(&wide, &chip),
+            "fixture check: the chip is drawn: {wide:?}"
+        );
+        let made_room = (440..=1200).step_by(8).map(|w| w as f32).find(|&w| {
+            let without = both_rows_knowing(w, 12, "12 photos", None);
+            let with = both_rows_knowing(w, 12, "12 photos", Some("10.10.10"));
+            has(&without, &chip) && has(&with, &notice) && !has(&with, &chip)
+        });
+        assert!(
+            made_room.is_some(),
+            "no width where the chips gave way to the notice"
+        );
+    }
+
+    /// The notice is left out only once nothing else in the row can give way — swept over widths with the author's
+    /// three formats. ⚠ The planner had counted the compact sort combo at 56 pt where egui draws it at its
+    /// `combo_width`, 100, so in his window the chips stayed and the notice went.
+    #[test]
+    fn the_notice_is_left_out_only_when_nothing_else_can_give_way() {
+        if !rustroom_app::update_check::may_check(true) {
+            return;
+        }
+        let names: Vec<String> = (0..10)
+            .map(|i| match i {
+                0 => "a0.HEIC".to_owned(),
+                1..=6 => format!("b{i}.JPG"),
+                _ => format!("c{i}.RAF"),
+            })
+            .collect();
+        let draw = |width: f32| {
+            let ctx = crate::test_ui::ctx();
+            crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+            let mut app = crate::test_app::for_test();
+            app.library = Some(crate::test_app::library_of_names(
+                &names.iter().map(String::as_str).collect::<Vec<_>>(),
+            ));
+            app.status = "10 photos".to_owned();
+            app.settings.update_latest = Some("10.10.10".into());
+            crate::test_ui::labelled_rects_on(
+                &ctx,
+                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 400.0)),
+                |ui| {
+                    let ctx = ui.ctx().clone();
+                    library_row(&mut app, ui, &ctx);
+                },
+            )
+        };
+        let wide = draw(1440.0);
+        assert!(
+            wide.iter().any(|(l, _)| l == "HEIC 1"),
+            "fixture check: the chips are drawn: {wide:?}"
+        );
+        let mut seen_out = false;
+        for width in (440..=1200).step_by(4).map(|w| w as f32) {
+            let found = draw(width);
+            if !found.iter().any(|(l, _)| l.starts_with("Rustroom ")) {
+                seen_out = true;
+                assert!(
+                    !found.iter().any(|(l, _)| l == "HEIC 1"),
+                    "at {width} the chips stayed and the notice went: {found:?}"
+                );
+            }
+        }
+        assert!(
+            seen_out,
+            "fixture check: the sweep reaches widths too narrow for it"
+        );
+    }
+
+    /// The thumbnail-size slider's knob is smaller than a control row's (the author, 2026-11-24): its row is 20 pt
+    /// tall where egui's default thickness is `CONTROL_ROW` — and the knob is two fifths of it.
+    #[test]
+    fn the_size_slider_is_slim() {
+        let ctx = crate::test_ui::ctx();
+        crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+        let mut app = crate::test_app::for_test();
+        app.library = Some(crate::test_app::library_of(12));
+        let nodes = crate::test_ui::nodes_on(
+            &ctx,
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 400.0)),
+            |ui| {
+                let ctx = ui.ctx().clone();
+                library_row(&mut app, ui, &ctx);
+            },
+        );
+        let slider = nodes
+            .iter()
+            .find(|n| n.role == egui::accesskit::Role::Slider)
+            .expect("fixture check: the size slider is drawn at 1440");
+        assert!(
+            slider.rect.height() <= 20.0,
+            "{:.1} pt",
+            slider.rect.height()
+        );
+    }
+
+    /// The sort combo without its label is the glyph and the arrow, never an empty 100-pt box (the author's
+    /// half-screen window, 2026-11-24) — swept, at every width where it is drawn compact.
+    #[test]
+    fn the_compact_sort_combo_is_just_the_glyph_and_the_arrow() {
+        let sort = icons::SORT.to_string();
+        let mut compact_seen = false;
+        for width in (440..=1200).step_by(8).map(|w| w as f32) {
+            let found = both_rows_knowing(width, 12, "12 photos", None);
+            if let Some((_, r)) = found.iter().find(|(l, _)| *l == sort) {
+                compact_seen = true;
+                assert!(
+                    r.width() <= 64.0,
+                    "at {width} the compact combo is {:.0} pt wide",
+                    r.width()
+                );
+            }
+        }
+        assert!(
+            compact_seen,
+            "fixture check: the sweep reaches the compact form"
+        );
+    }
+
+    /// The sort order's name is Caption, like everything else in the row (the author, 2026-11-24) — read off the
+    /// painted text itself, the galley's own font.
+    #[test]
+    fn the_sort_name_is_caption_sized() {
+        let ctx = crate::test_ui::ctx();
+        crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+        let mut app = crate::test_app::for_test();
+        app.library = Some(crate::test_app::library_of(12));
+        let name = app.settings.library_sort.label();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 400.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let ctx = ui.ctx().clone();
+                library_row(&mut app, ui, &ctx);
+            },
+        );
+        let sizes: Vec<f32> = out
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) => Some(t.galley.clone()),
+                _ => None,
+            })
+            .flat_map(|g| {
+                let text = g.job.text.clone();
+                g.job
+                    .sections
+                    .iter()
+                    .filter(|s| text[s.byte_range.start.0..s.byte_range.end.0].contains(name))
+                    .map(|s| s.format.font_id.size)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert!(!sizes.is_empty(), "fixture check: {name:?} is painted");
+        assert!(
+            sizes.iter().all(|&s| s == crate::theme::tokens::CAPTION),
+            "{name:?} painted at {sizes:?}"
+        );
+    }
+
+    /// The more menu's three dots stand upright — Phosphor's `dots-three-vertical`, U+E208 (the author, 2026-11-24).
+    #[test]
+    fn the_more_menu_shows_upright_dots() {
+        let found = both_rows_knowing(1440.0, 12, "12 photos", None);
+        assert!(found.iter().any(|(l, _)| l == "\u{e208}"), "{found:?}");
+    }
+
     #[test]
     fn nothing_in_either_library_row_overlaps() {
         // ⚠⚠ The bug the two rows exist to fix: at 1440 pt the count ran under the search field
@@ -746,20 +1080,27 @@ mod tests {
             // beside the cluster at 800 and so passed against a status that was never truncated.
             let long =
                 "12 photos · 24 files — a status line long enough to reach across ".repeat(6);
-            let found = both_rows(width, 12, &long);
-            assert!(found.len() > 6, "sample at {width}: {found:?}");
-            for (i, (a, ra)) in found.iter().enumerate() {
-                for (b, rb) in found.iter().skip(i + 1) {
-                    // ⚠ One widget can report two nodes with one label (a menu button and its
-                    // text); two nodes of the same name are the same control, not a collision.
-                    if a == b {
-                        continue;
+            // Piece 4: and with the update notice in the row, which must not push either.
+            for latest in [None, Some("10.10.10")] {
+                let found = both_rows_knowing(width, 12, &long, latest);
+                assert!(found.len() > 6, "sample at {width}: {found:?}");
+                assert!(
+                    found.iter().any(|(l, _)| l.starts_with("12 photos")),
+                    "at {width} with {latest:?} the status line was pushed out: {found:?}"
+                );
+                for (i, (a, ra)) in found.iter().enumerate() {
+                    for (b, rb) in found.iter().skip(i + 1) {
+                        // ⚠ One widget can report two nodes with one label (a menu button and its
+                        // text); two nodes of the same name are the same control, not a collision.
+                        if a == b {
+                            continue;
+                        }
+                        let overlap = ra.intersect(*rb);
+                        assert!(
+                            overlap.width() <= 0.5 || overlap.height() <= 0.5,
+                            "at {width}: {a:?} {ra:?} overlaps {b:?} {rb:?}"
+                        );
                     }
-                    let overlap = ra.intersect(*rb);
-                    assert!(
-                        overlap.width() <= 0.5 || overlap.height() <= 0.5,
-                        "at {width}: {a:?} {ra:?} overlaps {b:?} {rb:?}"
-                    );
                 }
             }
         }

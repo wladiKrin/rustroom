@@ -199,7 +199,9 @@ control never changes shape on hover (the existing rule).
   format chips, Download / Remove downloads (Immich sources with a selection), the sort, the size
   slider and ⋯ (Reindex, Expand all / Stack all, and anything folded). Develop: the readout swatch
   and numbers at the left; "Full resolution ready" or the running job at the right. Folding
-  order: chips first, then the Immich buttons, then the size slider; the sort drops its label.
+  order: chips first, then the Immich buttons, then the size slider; the sort drops its label and
+  narrows to the glyph and its arrow. The size slider is 20 pt thick, its knob smaller than a
+  control row's (the author, 2026-11-24).
   ⚠ The first draft put the chips at the left and a zoom percentage in Develop's row; the chips
   sit with the view settings they are, and the zoom percentage was not built. ⚠ The first build
   also named the photo in the Library's status row; the name moved back to the top row so it does
@@ -354,6 +356,14 @@ accent tint; name on hover.
 32 tall, hairline above, on `panel`. Left: information in Caption `text2`; a running job
 replaces it with a quiet Cancel and the progress line. Right: view settings as combos, a size
 slider (110 wide) and ⋯. It exists in Library and Develop at the same place.
+When no job runs and a newer Rustroom is known, the left side leads with **the update notice**: "Rustroom 0.2.0 is
+available" in Caption `text` (one step brighter than the information beside it — not the accent, which is for state)
+with the hand cursor, opening the release page, then two small buttons in Caption (the Cancel's Body-sized form read
+too large beside the row's Caption text — the author, 2026-11-24): **Hide** (until Rustroom next starts, nothing
+saved) and **Don't show again** (turns Settings → Behaviour's switch off). It reads line, Hide, Don't show again in
+either row, and gives way rather than push: it is drawn only where the information keeps its own width beside it, at
+most 120 pt (`update_flow::STATUS_BESIDE`). While it is pending the Library row plans its right-hand side around it,
+so the format chips go into ⋯ first (the author's pick, 2026-11-24).
 
 ### 7.13 Menus
 `panel` with 12 radius and shadow, rows 28, Body, shortcut in Caption `text2` at the right,
@@ -513,3 +523,4 @@ data in the lib crate and testable headless; only the drawing lives in the bin m
 | 2026-10-26 | The **HDR merge preview** (M10.17a): a Wide dialog whose body is a preview well on the `canvas` surface — the canvas's own idiom inside it (a spinner before the first picture, the last one under `theme::stale_dim()` while the next is made) — beside a 220-pt options column; its merge runs in the status row's job slot with Cancel, as an export | — |
 | 2026-11-02 | A **publish service's band** above its grid (M10.18d, the author's pick of three): the name, the counts and **Publish N**; the New dot and Modified ring over a thumbnail in a dark rim (`theme::mark_rim`) | Publish N and the counts in the status row; the marks without a rim |
 | 2026-11-03 | **Print** as a dialog (M10.18e, my call — the author skipped the questions): the page preview left (white paper, `theme::paper`; a caption shown as a grey line, `theme::paper_ink`), the settings right in the order a print is thought about — layout, paper, quality, destination; the footer reads **Print** with a listed printer chosen, else **Save PDF…** | A third module beside Library and Develop, Lightroom's shape |
+| 2026-11-23 | **The update notice** in the status row (piece 4, my call within the author's "on, with a switch to turn it off"): Caption `text`, a click opening the release page, Hide for this run and Don't show again as small Caption buttons (the author's split, 2026-11-24); the switch **Check for new versions** in Settings → Behaviour, with the two launch switches | the accent for the line; a dialog or a toast at launch; Body-sized buttons (too large beside Caption, the author); a saved Hide per version |

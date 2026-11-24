@@ -519,4 +519,8 @@ pub(crate) struct RustroomApp {
     /// ⚠ Cached rather than rescanned per frame, exactly like `camera_profiles_cache` and for the
     /// same reason. Refreshed when a photo opens.
     pub(crate) looks: rustroom_app::looks::LooksState,
+    /// The new-version check started at launch, until it answers (piece 4, `update_flow`).
+    pub(crate) update_checker: Option<rustroom_app::update_check::Checker>,
+    /// The status line's Hide pressed: no notice until the next start — never saved (`update_flow`).
+    pub(crate) update_hidden: bool,
 }

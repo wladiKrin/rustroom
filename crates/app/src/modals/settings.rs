@@ -33,6 +33,7 @@ pub struct SettingsDraft {
     /// M11.4: reopen what the Library last showed; show the start page's welcome.
     reopen_last: bool,
     show_welcome: bool,
+    check_updates: bool,
     camera_rendering: bool,
     /// M10.13d: learn the camera's colour and match new photos to it.
     camera_match: bool,
@@ -119,6 +120,7 @@ impl SettingsDraft {
             auto_advance: s.auto_advance,
             reopen_last: s.reopen_last,
             show_welcome: s.show_welcome,
+            check_updates: s.check_updates,
             camera_rendering: s.default_rendering == edit_model::Rendering::Camera,
             camera_match: s.camera_match,
             relearn: false,
@@ -239,6 +241,10 @@ impl SettingsDraft {
         }
         if self.show_welcome != app.settings.show_welcome {
             app.settings.show_welcome = self.show_welcome;
+            plain = true;
+        }
+        if self.check_updates != app.settings.check_updates {
+            app.settings.check_updates = self.check_updates;
             plain = true;
         }
         // ⚠⚠ Applied plainly, **not** through `set_connection`. That accessor owns the *browse*
@@ -453,6 +459,11 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         .hover("Opens what the Library last showed when Rustroom starts");
                     ui.checkbox(&mut d.show_welcome, "Show the welcome on the start page")
                         .hover("Shows what each part of the window is for on the start page");
+                    // Piece 4: with the other two, since it too runs at launch; absent from a build without the check.
+                    if rustroom_app::update_check::COMPILED_IN {
+                        ui.checkbox(&mut d.check_updates, "Check for new versions")
+                            .hover("Asks GitHub once a day whether a newer Rustroom is out");
+                    }
                     ui.separator();
                     ui.checkbox(&mut d.confirm, "Confirm before deleting a preset")
                         .hover("Asks before a preset is deleted");
@@ -1148,5 +1159,27 @@ mod tests {
         assert!(app.settings.show_welcome);
         let saved = app.settings_store.load();
         assert!(!saved.reopen_last && saved.show_welcome, "and it was saved");
+    }
+
+    /// Piece 4: Check for new versions, on by default, lands on Apply — and in a build with
+    /// `RUSTROOM_NO_UPDATE_CHECK` set, is not drawn at all.
+    #[test]
+    fn behaviour_has_the_update_check_switch() {
+        let (ctx, mut app) = open_settings();
+        settle(&ctx, &mut app);
+        if !rustroom_app::update_check::COMPILED_IN {
+            assert!(
+                test_ui::find(&ctx, "Check for new versions", |_| show(&mut app, &ctx)).is_none()
+            );
+            return;
+        }
+        assert!(
+            app.settings.check_updates,
+            "fixture check: the check starts on"
+        );
+        test_ui::click(&ctx, "Check for new versions", |_| show(&mut app, &ctx));
+        test_ui::click(&ctx, "Apply", |_| show(&mut app, &ctx));
+        assert!(!app.settings.check_updates);
+        assert!(!app.settings_store.load().check_updates, "and it was saved");
     }
 }

@@ -178,6 +178,7 @@ impl RustroomApp {
         // ⚠ Beside the other pumps, so an album list or a finished download lands on the next
         // frame rather than waiting for whatever the user does next.
         self.pump_immich(ctx);
+        self.pump_update_check();
     }
 
     /// The top panel: the in-window menu bar and the top bar, with their command and rename applied

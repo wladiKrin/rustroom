@@ -351,7 +351,17 @@ pub fn find(
     label: &str,
     body: impl FnMut(&mut egui::Ui),
 ) -> Option<egui::Pos2> {
-    labelled_centres(ctx, Vec::new(), body)
+    find_on(ctx, screen(), label, body)
+}
+
+/// [`find`] on a screen of the caller's size.
+pub fn find_on(
+    ctx: &egui::Context,
+    screen_rect: egui::Rect,
+    label: &str,
+    body: impl FnMut(&mut egui::Ui),
+) -> Option<egui::Pos2> {
+    labelled_centres_on(ctx, screen_rect, Vec::new(), body)
         .into_iter()
         .find(|(l, _)| l == label)
         .map(|(_, p)| p)
@@ -365,11 +375,21 @@ pub fn find(
 ///
 /// ⚠ Panicking on a missing label is deliberate. A silent miss is how a test ends up asserting
 /// that nothing happened when nothing was clicked.
-pub fn click(ctx: &egui::Context, label: &str, mut body: impl FnMut(&mut egui::Ui)) {
-    let at = find(ctx, label, &mut body)
+pub fn click(ctx: &egui::Context, label: &str, body: impl FnMut(&mut egui::Ui)) {
+    click_on(ctx, screen(), label, body);
+}
+
+/// [`click`] on a screen of the caller's size — the status row's update notice wants a wider one.
+pub fn click_on(
+    ctx: &egui::Context,
+    screen_rect: egui::Rect,
+    label: &str,
+    mut body: impl FnMut(&mut egui::Ui),
+) {
+    let at = find_on(ctx, screen_rect, label, &mut body)
         .unwrap_or_else(|| panic!("no widget labelled {label:?} was drawn"));
     assert!(
-        screen().contains(at),
+        screen_rect.contains(at),
         "{label:?} is drawn at {at:?}, outside the harness screen — the click would do nothing"
     );
     for pass in 0..2 {
@@ -384,7 +404,7 @@ pub fn click(ctx: &egui::Context, label: &str, mut body: impl FnMut(&mut egui::U
         ];
         let _ = ctx.run_ui(
             egui::RawInput {
-                screen_rect: Some(screen()),
+                screen_rect: Some(screen_rect),
                 events,
                 ..Default::default()
             },
@@ -457,6 +477,43 @@ pub fn right_click(ctx: &egui::Context, label: &str, mut body: impl FnMut(&mut e
     let at = find(ctx, label, &mut body)
         .unwrap_or_else(|| panic!("no widget labelled {label:?} was drawn"));
     right_click_at(ctx, at, body);
+}
+
+/// [`click`], returning the commands the frames handed the integration — an opened URL, a copy.
+pub fn click_commands_on(
+    ctx: &egui::Context,
+    screen_rect: egui::Rect,
+    label: &str,
+    mut body: impl FnMut(&mut egui::Ui),
+) -> Vec<egui::OutputCommand> {
+    let at = find_on(ctx, screen_rect, label, &mut body)
+        .unwrap_or_else(|| panic!("no widget labelled {label:?} was drawn"));
+    assert!(
+        screen_rect.contains(at),
+        "{label:?} is drawn outside the harness screen"
+    );
+    let mut commands = Vec::new();
+    for pass in 0..2 {
+        let events = vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: pass == 0,
+                modifiers: Default::default(),
+            },
+        ];
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen_rect),
+                events,
+                ..Default::default()
+            },
+            &mut body,
+        );
+        commands.extend(out.platform_output.commands);
+    }
+    commands
 }
 
 #[cfg(test)]

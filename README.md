@@ -38,7 +38,8 @@ your folders.
   shown before it is fetched. The AI never sends a photo anywhere.
 - **Rustroom goes online only for what you ask of it:** the AI models above, the Map's tiles from
   OpenStreetMap, a place name you look up (through OpenStreetMap's Nominatim), and your Immich
-  server if you connect one. A photo leaves your computer only when you upload or publish it to
+  server if you connect one — and, once a day, GitHub, to see whether a newer Rustroom is out (it says so in the
+  status bar and installs nothing; Settings → Behaviour → **Check for new versions** turns it off). A photo leaves your computer only when you upload or publish it to
   your own Immich server.
 - **Locations and people's names live in Rustroom's catalog**, never in your originals or their
   sidecars, and people's names never leave Rustroom. A location does travel with an **export** — and
