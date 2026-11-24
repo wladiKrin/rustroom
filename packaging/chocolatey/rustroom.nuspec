@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Rustroom's Chocolatey package (piece 4 goal 3) - a template: packaging\chocolatey\pack.ps1 fills @VERSION@ (and the
+  install script's URL and checksum) for one release and packs it. The package holds no binary: its install script
+  downloads the release's own installer from GitHub and checks its SHA-256.
+-->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>rustroom</id>
+    <version>@VERSION@</version>
+    <title>Rustroom</title>
+    <authors>The Rustroom contributors</authors>
+    <projectUrl>https://github.com/wladiKrin/rustroom</projectUrl>
+    <projectSourceUrl>https://github.com/wladiKrin/rustroom</projectSourceUrl>
+    <packageSourceUrl>https://github.com/wladiKrin/rustroom/tree/main/packaging/chocolatey</packageSourceUrl>
+    <docsUrl>https://github.com/wladiKrin/rustroom#readme</docsUrl>
+    <bugTrackerUrl>https://github.com/wladiKrin/rustroom/issues</bugTrackerUrl>
+    <licenseUrl>https://github.com/wladiKrin/rustroom/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <iconUrl>https://cdn.jsdelivr.net/gh/wladiKrin/rustroom@v@VERSION@/packaging/icons/png/rustroom-256.png</iconUrl>
+    <tags>rustroom photo photography raw editor darkroom catalog foss cross-platform</tags>
+    <summary>A RAW photo editor with a catalog - open source, no subscription, no account</summary>
+    <description><![CDATA[Rustroom is a complete darkroom for your RAW files: a **Library** to import, sort, rate and find your photos,
+and **Develop** to edit them - with masks, AI selections, retouching, HDR and panorama merges, a map, print and export.
+It runs on Windows, macOS and Linux.
+
+- Edits happen in scene-referred linear light in a wide colour space, in 32-bit floating point, on your graphics card.
+- Your originals are never changed: every edit is kept in a small sidecar file beside the photo.
+- No account, no cloud, no telemetry. Every AI feature runs on your computer.
+- Open source, GPL-3.0-or-later.
+
+This package installs Rustroom for all users into Program Files. Each user's catalog, previews and settings stay in
+their own profile, and uninstalling leaves them there.
+]]></description>
+    <releaseNotes>https://github.com/wladiKrin/rustroom/releases/tag/v@VERSION@</releaseNotes>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>
