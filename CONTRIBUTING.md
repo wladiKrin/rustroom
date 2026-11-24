@@ -111,6 +111,9 @@ Then, in a new terminal (so it sees `cargo` and `VCPKG_ROOT`), `cargo run --rele
   powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
   ```
 
+  The Microsoft Store's package is made from that same build by `packaging\windows\msix.ps1` (see
+  [Releasing](#6-releasing)); `msix.ps1 -Test` makes one with a fake identity, signed to install on your own PC.
+
 **Always use `--release` for real use.** RAW decoding, previews and thumbnails are many times faster
 than in a debug build.
 
@@ -180,3 +183,44 @@ In PowerShell the clippy line is `$env:CARGO_TARGET_DIR = "target/clippy"; cargo
 - **Say what you did not check** — a platform you could not test, a camera you do not own.
 - **Licence:** Rustroom is GPL-3.0-or-later, and your contribution is under the same licence. There is
   no separate agreement to sign.
+
+## 6. Releasing
+
+For the maintainer. A tag `v<version>`, equal to the app crate's version, runs the release workflow: it builds the
+Windows installer, the Mac disk image and the AppImage, each with its own script under `packaging/`, and drafts a
+GitHub release with them and `SHA256SUMS`. The draft is published by hand.
+
+### The Microsoft Store
+
+The Store's package is an artifact of the same run, `windows-store`, never a release asset: the Store signs it, and
+only Partner Center takes it. ⚠ It declares the restricted capability `unvirtualizedResources`, so that it shares the
+installer's catalog and settings (`packaging/windows/AppxManifest.xml` says why); Microsoft meant that capability for
+certain games, and certification may refuse it.
+
+The first submission, once:
+
+1. Register a free individual developer account in Partner Center (it checks your identity).
+2. Reserve the name **Rustroom** (Apps and games → New product → MSIX or PWA app).
+3. From the product's **Product identity** page, set three repository variables (Settings → Secrets and variables →
+   Actions → Variables): `MSIX_IDENTITY_NAME` (Package/Identity/Name), `MSIX_PUBLISHER` (Package/Identity/Publisher,
+   `CN=…`) and `MSIX_PUBLISHER_DISPLAY_NAME` (Package/Properties/PublisherDisplayName). Until they are set, the
+   workflow says so and makes no package.
+4. Run the release workflow (the tag, or Actions → Release → Run workflow) and download its `windows-store` artifact.
+5. In the submission: **Packages** — the `.msix`; **Pricing** — free; **Properties** — Photo & video, the privacy
+   policy `https://github.com/wladiKrin/rustroom/blob/main/PRIVACY.md`; **Age ratings** — the questionnaire;
+   **Store listing** — the description and screenshots; **Submission options** — the two restricted capabilities,
+   each with its reason (drafts below, to edit).
+6. Every later release: that run's `windows-store` artifact, uploaded as a new submission.
+
+Draft reasons for the restricted capabilities:
+
+- **runFullTrust** — Rustroom is a desktop photo editor, also distributed as an ordinary Windows installer. It opens
+  RAW photos from any folder, memory card or network drive the user picks, writes each photo's edits and metadata in
+  files beside it, exports to folders the user chooses and drives the GPU for its editing pipeline — the access of
+  a classic desktop app. It is open source (GPL-3.0-or-later): https://github.com/wladiKrin/rustroom
+- **unvirtualizedResources** — Rustroom keeps the user's catalog (a database of their photo library with every edit,
+  rating, keyword and collection) and its previews in `%LOCALAPPDATA%\rustroom`, and its settings and presets in
+  `%APPDATA%\rustroom`. The same app is installed by its installer, winget and Chocolatey, and users move between
+  them. Virtualized, the Store version would start with an empty catalog, and uninstalling it would delete the
+  user's catalog and years of edits with it. The package excludes exactly those two folders from virtualization
+  (flexible virtualization's `ExcludedDirectories`) and nothing else.
