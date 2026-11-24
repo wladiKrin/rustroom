@@ -1,0 +1,81 @@
+name: Publish
+# Piece 4 goal 3: a release the author publishes (the Release workflow only drafts) goes to winget and Chocolatey. Nothing
+# here builds — both registries get the release's own installer, checked against its own SHA256SUMS. Each registry's job
+# says so and does nothing until the author has set its secret (WINGET_TOKEN, CHOCOLATEY_API_KEY). A manual run takes a
+# tag, to publish a release again or for the first time after a secret was added.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release's tag, e.g. v0.2.0
+        required: true
+permissions:
+  contents: read
+jobs:
+  release:
+    # A prerelease is never published to a registry.
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      sha256: ${{ steps.check.outputs.sha256 }}
+    steps:
+      - id: check
+        name: The installer, checked against SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          version="${TAG#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$TAG is not a release tag (v<x.y.z>)"
+            exit 1
+          fi
+          installer="Rustroom-$version-windows-x64-setup.exe"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --pattern "$installer"
+          sha=$(awk -v f="$installer" '$2 == f || $2 == "*" f { print $1 }' SHA256SUMS)
+          if [ -z "$sha" ]; then
+            echo "::error::$installer is not in the release's SHA256SUMS"
+            exit 1
+          fi
+          echo "$sha  $installer" | sha256sum --check
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+
+  winget:
+    needs: release
+    runs-on: windows-latest
+    steps:
+      # wingetcreate carries the listed manifest forward to the new version; the first listing was submitted by hand
+      # (packaging/winget/README.md).
+      - name: Submit to winget
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          if (-not $env:WINGET_TOKEN) { "No WINGET_TOKEN secret - nothing submitted to winget"; exit 0 }
+          $url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/v$env:VERSION/Rustroom-$env:VERSION-windows-x64-setup.exe"
+          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          ./wingetcreate.exe update wladiKrin.Rustroom --version $env:VERSION --urls $url --submit --token $env:WINGET_TOKEN
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+  chocolatey:
+    needs: release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Pack and push to Chocolatey
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+          VERSION: ${{ needs.release.outputs.version }}
+          SHA256: ${{ needs.release.outputs.sha256 }}
+        run: |
+          if (-not $env:CHOCOLATEY_API_KEY) { "No CHOCOLATEY_API_KEY secret - nothing pushed to Chocolatey"; exit 0 }
+          # v0.1.0's installer predates /ALLUSERS: Chocolatey would install it into the elevated account's profile.
+          if ($env:VERSION -eq '0.1.0') { "v0.1.0's installer cannot install for all users - not pushed"; exit 0 }
+          ./packaging/chocolatey/pack.ps1 -Version $env:VERSION -Checksum $env:SHA256
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          choco push "target/chocolatey/rustroom.$env:VERSION.nupkg" --source https://push.chocolatey.org/ --api-key $env:CHOCOLATEY_API_KEY
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
