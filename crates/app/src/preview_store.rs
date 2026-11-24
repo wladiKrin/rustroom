@@ -35,12 +35,10 @@ impl PreviewStore {
         }
     }
 
-    /// `previews/` beside the catalog and `thumbs`, in `catalog::db::Catalog::library_dir`.
+    /// `previews/` beside the catalog and `thumbs`, in `catalog::db::Catalog::library_dir`. ⚠ Through
+    /// [`crate::user_library::dir`], so a test process never writes into the user's own previews.
     pub fn user_default(budget_bytes: u64) -> Self {
-        Self::new(
-            catalog::db::Catalog::library_dir().join("previews"),
-            budget_bytes,
-        )
+        Self::new(crate::user_library::dir().join("previews"), budget_bytes)
     }
 
     pub fn dir(&self) -> &Path {
