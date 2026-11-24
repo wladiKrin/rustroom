@@ -160,7 +160,9 @@ fn chip_labels(app: &RustroomApp) -> Vec<String> {
 /// The Library row. `pub(crate)` for the shell's tests, which draw it without the panel.
 pub(crate) fn library_row(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let row = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), HEIGHT));
-    let shown = plan_library(app, ui, (row.width() - STATUS_MIN).max(0.0));
+    // Piece 4: a pending update notice asks for its room, so the chips go into ⋯ before it is left out.
+    let left = crate::update_flow::wanted_room(app, ui).map_or(STATUS_MIN, |n| n.max(STATUS_MIN));
+    let shown = plan_library(app, ui, (row.width() - left).max(0.0));
     let has_library = app.library.is_some();
     // ── the right-hand cluster, rightmost first ──
     let cluster = ui
@@ -838,6 +840,34 @@ mod tests {
         assert!(
             short_only.is_some(),
             "no width shows the notice beside a short status but not beside a long one"
+        );
+    }
+
+    /// While the notice shows, the format chips go into ⋯ to make room for it — the author's pick, 2026-11-24, after
+    /// it vanished in a half-screen window beside HEIC · JPG · RAF.
+    #[test]
+    fn the_notice_moves_the_chips_into_more() {
+        if !rustroom_app::update_check::may_check(true) {
+            return;
+        }
+        let has = |found: &[(String, egui::Rect)], f: &dyn Fn(&str) -> bool| {
+            found.iter().any(|(l, _)| f(l))
+        };
+        let chip = |l: &str| l == "RAF 12";
+        let notice = |l: &str| l.starts_with("Rustroom ");
+        let wide = both_rows_knowing(1440.0, 12, "12 photos", None);
+        assert!(
+            has(&wide, &chip),
+            "fixture check: the chip is drawn: {wide:?}"
+        );
+        let made_room = (440..=1200).step_by(8).map(|w| w as f32).find(|&w| {
+            let without = both_rows_knowing(w, 12, "12 photos", None);
+            let with = both_rows_knowing(w, 12, "12 photos", Some("10.10.10"));
+            has(&without, &chip) && has(&with, &notice) && !has(&with, &chip)
+        });
+        assert!(
+            made_room.is_some(),
+            "no width where the chips gave way to the notice"
         );
     }
 

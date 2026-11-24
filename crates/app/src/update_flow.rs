@@ -50,31 +50,13 @@ const DONT_SHOW: &str = "Don't show again";
 /// ⚠ Drawn only where the status line keeps its own width, at most [`STATUS_BESIDE`], beside it, and both buttons always read AFTER the line, Hide first —
 /// in Develop's right-to-left corner the first widget lands rightmost, so they are added in reverse there.
 pub(crate) fn notice(app: &mut RustroomApp, ui: &mut egui::Ui) {
-    let s = &app.settings;
-    if app.update_hidden || !update_check::may_check(s.check_updates) {
+    let Some((v, needs)) = pending(app, ui) else {
+        return;
+    };
+    if ui.available_width() < needs {
         return;
     }
-    let Some(v) = update_check::shown(update_check::current(), s.update_latest.as_deref()) else {
-        return;
-    };
-    let text = format!("Rustroom {v} is available");
-    let width = |t: &str, font: egui::FontId| {
-        ui.painter()
-            .layout_no_wrap(t.to_owned(), font, egui::Color32::PLACEHOLDER)
-            .size()
-            .x
-    };
-    let button = |t: &str| {
-        width(t, egui::TextStyle::Button.resolve(ui.style())) + 2.0 * ui.spacing().button_padding.x
-    };
-    let needed = width(&text, egui::FontId::proportional(tokens::CAPTION))
-        + button("Hide")
-        + button(DONT_SHOW)
-        + 3.0 * ui.spacing().item_spacing.x;
-    let status = width(&app.status, egui::FontId::proportional(tokens::CAPTION)).min(STATUS_BESIDE);
-    if ui.available_width() < needed + status {
-        return;
-    }
+    let text = text(v);
     if ui.layout().prefer_right_to_left() {
         dont_show_button(app, ui);
         hide_button(app, ui);
@@ -84,6 +66,43 @@ pub(crate) fn notice(app: &mut RustroomApp, ui: &mut egui::Ui) {
         hide_button(app, ui);
         dont_show_button(app, ui);
     }
+}
+
+/// The room the left of the Library row wants while the notice is pending — the line, its two buttons and the status
+/// beside them — so the row's planner moves the format chips into ⋯ for it (the author's pick, 2026-11-24).
+/// ⚠ Asked whether a job runs or not: while one does, the chips stay in ⋯ too — the job's line is the longer one.
+pub(crate) fn wanted_room(app: &RustroomApp, ui: &egui::Ui) -> Option<f32> {
+    pending(app, ui).map(|(_, needs)| needs)
+}
+
+fn text(v: update_check::Version) -> String {
+    format!("Rustroom {v} is available")
+}
+
+/// The version to offer and the width it needs with the status beside it, if one is to be offered.
+fn pending(app: &RustroomApp, ui: &egui::Ui) -> Option<(update_check::Version, f32)> {
+    let s = &app.settings;
+    if app.update_hidden || !update_check::may_check(s.check_updates) {
+        return None;
+    }
+    let v = update_check::shown(update_check::current(), s.update_latest.as_deref())?;
+    let width = |t: &str, font: egui::FontId| {
+        ui.painter()
+            .layout_no_wrap(t.to_owned(), font, egui::Color32::PLACEHOLDER)
+            .size()
+            .x
+    };
+    let caption = egui::FontId::proportional(tokens::CAPTION);
+    let button = |t: &str| {
+        width(t, egui::TextStyle::Button.resolve(ui.style())) + 2.0 * ui.spacing().button_padding.x
+    };
+    let status = width(&app.status, caption.clone()).min(STATUS_BESIDE);
+    let needs = width(&text(v), caption)
+        + button("Hide")
+        + button(DONT_SHOW)
+        + 3.0 * ui.spacing().item_spacing.x
+        + status;
+    Some((v, needs))
 }
 
 /// The notice's text; a click opens the release page.
