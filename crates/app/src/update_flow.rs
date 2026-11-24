@@ -94,7 +94,7 @@ fn pending(app: &RustroomApp, ui: &egui::Ui) -> Option<(update_check::Version, f
     };
     let caption = egui::FontId::proportional(tokens::CAPTION);
     let button = |t: &str| {
-        width(t, egui::TextStyle::Button.resolve(ui.style())) + 2.0 * ui.spacing().button_padding.x
+        width(t, egui::TextStyle::Small.resolve(ui.style())) + 2.0 * ui.spacing().button_padding.x
     };
     let status = width(&app.status, caption.clone()).min(STATUS_BESIDE);
     let needs = width(&text(v), caption)
@@ -125,11 +125,16 @@ fn line(ui: &mut egui::Ui, text: &str, v: update_check::Version) {
     }
 }
 
-/// Hide — the same button as the row's Cancel (one form per control). For this run only: nothing is saved, and the
-/// next start shows the line again (the author's call, 2026-11-24).
+/// A small button in Caption, the row's size. ⚠ egui 0.35's `small_button` only drops the vertical padding — its
+/// text stays Body — so the size is given here, and `pending` measures it in `TextStyle::Small`.
+fn caption_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.add(egui::Button::new(egui::RichText::new(text).text_style(egui::TextStyle::Small)).small())
+}
+
+/// Hide — for this run only: nothing is saved, and the next start shows the line again (the author's call,
+/// 2026-11-24).
 fn hide_button(app: &mut RustroomApp, ui: &mut egui::Ui) {
-    if ui
-        .button("Hide")
+    if caption_button(ui, "Hide")
         .hover("Hides the notice until Rustroom starts again")
         .clicked()
     {
@@ -139,8 +144,7 @@ fn hide_button(app: &mut RustroomApp, ui: &mut egui::Ui) {
 
 /// Don't show again — turns Settings → Behaviour's Check for new versions off, saved; that switch turns it back on.
 fn dont_show_button(app: &mut RustroomApp, ui: &mut egui::Ui) {
-    if ui
-        .button(DONT_SHOW)
+    if caption_button(ui, DONT_SHOW)
         .hover("Stops checking for new versions, as the switch in Settings does")
         .clicked()
     {
@@ -293,6 +297,26 @@ mod tests {
             };
             assert!(at("Hide").x > at(LINE).x, "develop: {develop}: {found:?}");
             assert!(at(DONT).x > at("Hide").x, "develop: {develop}: {found:?}");
+        }
+    }
+
+    /// The buttons are Caption-sized, like everything else in the row — no taller than a format chip (20 pt). The
+    /// author found Body-sized ones too large beside it, 2026-11-24.
+    #[test]
+    fn the_buttons_are_caption_sized() {
+        let ctx = crate::test_ui::ctx();
+        if !drawn_here(&ctx) {
+            return;
+        }
+        crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+        let mut app = app_knowing(true);
+        let found = crate::test_ui::labelled_rects_on(&ctx, screen(), row(&mut app));
+        for label in ["Hide", DONT] {
+            let (_, r) = found
+                .iter()
+                .find(|(l, _)| l == label)
+                .unwrap_or_else(|| panic!("{label:?} not drawn: {found:?}"));
+            assert!(r.height() <= 20.0, "{label:?} is {:.1} pt tall", r.height());
         }
     }
 
