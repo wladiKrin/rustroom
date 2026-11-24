@@ -193,6 +193,34 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-24 — No test writes into the user's own thumbnails or previews (branch `fix-test-library-folder`)
+
+⏳ **Not merged yet.** Found on Windows: each full `cargo test --workspace` left six new `.rthm` files in the author's
+`%LOCALAPPDATA%\rustroom\thumbs` with Rustroom closed. 2026-11-18's fix moved only `user_cache::base`; this leak went
+through `Catalog::library_dir()`, which had no test redirect. ⚠ The same derivation on macOS and Linux
+(`<config dir>/rustroom/thumbs`), so it most likely happens there too.
+
+- **Which tests:** an entry's header holds its photo's path, so the leaked files named their tests themselves:
+  `people_view`'s `crops_get_their_pictures_after_switching_folders` (four, `people-switch-a/-b`) and `publish_flow`'s
+  `a_service_view_shows_publish_in_a_band_above_the_grid` (two, `publish-src-band`). Both are bin tests that open a folder of
+  real JPEGs through `open_folder_at`, whose `ThumbLoader` wrote through `ThumbStore::user_default`. **78 such files
+  (4.2 MB)** sat in the real cache, six from each of 13 full runs since the first Windows gate (2026-11-17 17:52); left
+  for the author to remove. Other tests only DERIVED the real folder (`library_of_names`'s loader, the Settings dialog's
+  readouts, the lib's own `ThumbLoader` tests) without writing.
+- **The fix:** `rustroom_app::user_library::dir`, `user_cache`'s shape: `Catalog::library_dir()` in production, a test
+  folder for the lib's own tests by themselves, and the bin's tests point it away in `test_app` (`user_folders_away`,
+  beside the cache; also called by `library_of_names`, which builds a loader without `for_test`). `ThumbStore`'s
+  `user_default`/`immich_default` and `PreviewStore::user_default` go through it. The catalog's own path
+  (`Catalog::user_default_path`) is reached only from `bootstrap`, never in a test.
+- **Guards:** `this_librarys_tests_keep_thumbnails_and_previews_inside_the_test_folder` (lib) and
+  `a_test_apps_thumbnails_and_previews_stay_inside_the_test_folder` (bin), on the three stores' derived folders against
+  `test_dir`'s run folder. Sabotaged (the bin's redirect out, the lib's test default back to `Catalog::library_dir()`):
+  both red, printing the real `%LOCALAPPDATA%\rustroom\thumbs`.
+- **Proven by the whole suite:** every file under `%LOCALAPPDATA%\rustroom` and `%APPDATA%\rustroom` listed (path,
+  size, creation and write times) before and after a full `cargo test --workspace` (4,815 passed, 0 failed, 32 ignored,
+  1m57s): identical, mtimes included, so no entry was even read. Positive control: the two tests alone put the same six
+  thumbnails into the run's own `rustroom-tests/<pid>/user-library-1/thumbs`, the real listing again unchanged.
+
 ### 2026-11-24 — piece 4 goal 1: the update notice (branch `update-notice`)
 
 ✅ **Merged 2026-11-24** (`474db1ba`, the author: "works, merge"), seen in his half-screen window. Design
