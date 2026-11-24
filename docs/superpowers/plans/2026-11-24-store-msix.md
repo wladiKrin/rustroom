@@ -129,3 +129,23 @@ survive PowerShell untouched), `packaging/windows/msix.ps1`.
 
 - [ ] The gate on the tip (fmt, clippy, test — each exit code on its own); the journal's section; hand to the author
       to try. On "works, merge": merge `--no-ff`, delete the branch, `CLAUDE.local.md`, `docs/BACKLOG.md`.
+
+## The shared-catalog proof — run 2026-11-24 on the Windows PC (Windows 11 26H2, build 26300)
+
+The installer's stage exe and the package's exe were byte-identical (this branch's release build, 0.1.0 + the probe);
+the package `Rustroom.Test`, signed with the throwaway certificate, sideloaded with both restricted capabilities and
+no approval. The author's data was backed up first and restored after, file for file.
+
+- **Positive control:** `update_latest: "9.9.9"` written into the shared settings — the unpackaged exe showed
+  "Rustroom 9.9.9 is available" with Hide and Don't show again; **the packaged exe, the same file, showed no line**:
+  the identity probe answered "packaged" for real.
+- **Same data:** the packaged exe opened the same catalog (495 photos, the same folders, people and selection) and
+  reached the Immich server with the keys in Credential Manager.
+- **New files** (what virtualization redirects — edits of existing files pass through regardless), made from inside the
+  package (`Invoke-CommandInDesktopPackage`): one in `%APPDATA%\rustroom` and one in `%LOCALAPPDATA%\rustroom` landed
+  in the REAL folders; the control, one in a non-excluded `%APPDATA%\rustroom-proof-control`, went to the package's
+  `LocalCache\Roaming` — virtualization was on, and only the two folders were let through.
+- **Uninstall:** the package and its private folder (the control with it) went; both real folders stayed, every file,
+  `catalog.db` byte-identical to the backup.
+- Not seen: Settings → Behaviour without its switch in the package (the same predicate as the silent line); the
+  Store's own certification of `unvirtualizedResources`.
