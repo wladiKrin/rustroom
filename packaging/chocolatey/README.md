@@ -7,7 +7,7 @@ SHA-256. Nothing here holds a binary.
 |---|---|
 | `rustroom.nuspec` | the package's description, `@VERSION@` filled per release |
 | `tools/chocolateyinstall.ps1` | downloads and runs the installer silently with `/ALLUSERS` |
-| `tools/chocolateyuninstall.ps1` | runs the uninstaller of the all-users install only — never a user's own copy |
+| `tools/chocolateyuninstall.ps1` | runs the uninstaller of the all-users install only (by its key under HKLM; Inno names it "Rustroom (All users)") — never a user's own copy |
 | `pack.ps1` | fills the three for one release and runs `choco pack` into `target\chocolatey` |
 
 **For all users, on purpose.** Chocolatey runs elevated, often as another account, so a per-user install would land in

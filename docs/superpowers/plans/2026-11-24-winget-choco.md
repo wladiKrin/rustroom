@@ -93,3 +93,22 @@ points at them once both are merged.
 
 - [ ] The gate on the tip; the journal; hand to the author. README's Windows section gains `winget install` and
       `choco install` only once each is listed — not on this branch.
+
+## Local tests — run 2026-11-24 on the Windows PC, with the author's yes
+
+- **winget:** `manifest.ps1 -Version 0.1.0` (the checksum read from the release's `SHA256SUMS`) → `winget validate`
+  "Manifest validation succeeded"; a sabotaged copy (scope `everyone`, a mismatched version) failed it.
+- **A double-click (this branch's installer, no switch, non-elevated):** the log says "User privileges: None",
+  "Administrative install mode: No"; it upgraded the existing per-user install in place (one HKCU entry, the exe now
+  this build's), nothing under HKLM or Program Files.
+- **Chocolatey (elevated, `choco install rustroom --source target\chocolatey`, the package packed against this
+  installer by `file:///`):** an HKLM entry, `C:\Program Files\Rustroom`, the all-users Start menu entry;
+  `choco uninstall` removed all three. ⚠ Found by the test: Inno names the all-users entry **"Rustroom (All users)"**
+  (the per-user one stays "Rustroom"), so the first uninstall script, matching the name "Rustroom" and filtered to
+  HKLM, found only the user's HKCU copy, refused it, and left the work to Chocolatey's auto-uninstaller. The script
+  now opens the HKLM key by its fixed name (AppId + `_is1`); on the re-run it uninstalled, and the auto-uninstaller
+  reported "uninstalled already by other means". The per-user install and the catalog came through both runs untouched.
+- **The publish workflow's checksum step,** dry-run against `v0.1.0` (`curl` in place of `gh release download`, absent
+  here): it read the installer's SHA-256 and checked the download; one byte appended to the installer failed the check.
+- Not run: the workflow itself on GitHub (only a published release or a manual run starts it), `wingetcreate`, a real
+  `choco push`.
