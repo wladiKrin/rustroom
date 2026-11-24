@@ -76,13 +76,10 @@ pub const FILTER: char = '\u{e266}';
 pub const SORT: char = '\u{e444}';
 /// `export` — the Develop toolbar's Export button.
 pub const EXPORT: char = '\u{eaf0}';
-/// `dots-three` — a "more" menu.
-///
-/// ⚠ **Nothing draws this as of 2026-09-23.** It held the ⋯ menu that wrapped Reindex, which became a
-/// button of its own once it was clear the menu never held anything else. Kept, glyph and all, because
-/// the next Library action wanting that corner will want the menu back — and because `ALL`'s coverage
-/// sweep is what proves the glyph is in the bundled font.
-pub const MORE: char = '\u{e1fe}';
+/// `dots-three-vertical` — the Library status row's more menu, ⋮ (the author's pick over the level `dots-three`,
+/// 2026-11-24). ⚠ The bundled TTF has no glyph names, so the codepoint was checked by RENDERING E1FE–E20B from it:
+/// E1FE level dots, E202 / E206 the circled and outlined upright ones, E208 the plain upright three.
+pub const MORE: char = '\u{e208}';
 /// `arrows-out-simple` — the thumbnail-size slider's glyph.
 pub const THUMB_SIZE: char = '\u{e0a6}';
 /// `gear` — edit a smart collection's rule.

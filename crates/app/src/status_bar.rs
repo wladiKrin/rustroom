@@ -103,11 +103,13 @@ fn plan_library(app: &RustroomApp, ui: &egui::Ui, avail: f32) -> Shown {
         + ui.spacing().icon_spacing
         + ui.spacing().icon_width
         + pad;
-    let sort_full = (text_w(
-        ui,
-        &format!("{} {}", icons::SORT, app.settings.library_sort.label()),
-        &body,
-    ) + pad
+    let sort_full = (text_w(ui, &icons::SORT.to_string(), &body)
+        + text_w(
+            ui,
+            &format!(" {}", app.settings.library_sort.label()),
+            &caption,
+        )
+        + pad
         + 24.0)
         .max(combo);
     let items = [
@@ -484,11 +486,23 @@ fn reindex_hover(app: &RustroomApp) -> &'static str {
 /// ⚠ `compact`: the glyph alone, its order named on hover — the status row's narrow form.
 fn sort_combo(app: &mut RustroomApp, ui: &mut egui::Ui, compact: bool) {
     let mut order = app.settings.library_sort;
-    let shown = if compact {
-        icons::SORT.to_string()
-    } else {
-        format!("{} {}", icons::SORT, order.label())
+    // The glyph at its own size, the order's name in Caption like the rest of the row (the author, 2026-11-24).
+    // `PLACEHOLDER` takes the combo's own text colour.
+    let mut shown = egui::text::LayoutJob::default();
+    let section = |size: f32| egui::TextFormat {
+        font_id: egui::FontId::proportional(size),
+        color: egui::Color32::PLACEHOLDER,
+        valign: egui::Align::Center,
+        ..Default::default()
     };
+    shown.append(&icons::SORT.to_string(), 0.0, section(tokens::BODY));
+    if !compact {
+        shown.append(
+            &format!(" {}", order.label()),
+            0.0,
+            section(tokens::CAPTION),
+        );
+    }
     let combo = egui::ComboBox::from_id_salt("library_sort");
     // ⚠ Without its label the combo is the glyph and the arrow: egui's default minimum, `combo_width`, left an empty
     // 100-pt box (the author, 2026-11-24). Its menu still widens to its entries. `plan_library` measures the same.
@@ -1000,6 +1014,59 @@ mod tests {
             compact_seen,
             "fixture check: the sweep reaches the compact form"
         );
+    }
+
+    /// The sort order's name is Caption, like everything else in the row (the author, 2026-11-24) — read off the
+    /// painted text itself, the galley's own font.
+    #[test]
+    fn the_sort_name_is_caption_sized() {
+        let ctx = crate::test_ui::ctx();
+        crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+        let mut app = crate::test_app::for_test();
+        app.library = Some(crate::test_app::library_of(12));
+        let name = app.settings.library_sort.label();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 400.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let ctx = ui.ctx().clone();
+                library_row(&mut app, ui, &ctx);
+            },
+        );
+        let sizes: Vec<f32> = out
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) => Some(t.galley.clone()),
+                _ => None,
+            })
+            .flat_map(|g| {
+                let text = g.job.text.clone();
+                g.job
+                    .sections
+                    .iter()
+                    .filter(|s| text[s.byte_range.start.0..s.byte_range.end.0].contains(name))
+                    .map(|s| s.format.font_id.size)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert!(!sizes.is_empty(), "fixture check: {name:?} is painted");
+        assert!(
+            sizes.iter().all(|&s| s == crate::theme::tokens::CAPTION),
+            "{name:?} painted at {sizes:?}"
+        );
+    }
+
+    /// The more menu's three dots stand upright — Phosphor's `dots-three-vertical`, U+E208 (the author, 2026-11-24).
+    #[test]
+    fn the_more_menu_shows_upright_dots() {
+        let found = both_rows_knowing(1440.0, 12, "12 photos", None);
+        assert!(found.iter().any(|(l, _)| l == "\u{e208}"), "{found:?}");
     }
 
     #[test]
