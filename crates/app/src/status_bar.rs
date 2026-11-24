@@ -26,6 +26,9 @@ pub const HEIGHT: f32 = 32.0;
 /// Room the left-hand text keeps before anything on the right is allowed to push into it.
 const STATUS_MIN: f32 = 200.0;
 
+/// The space between the Library row's left-hand text and its right-hand cluster.
+const CLUSTER_GAP: f32 = 12.0;
+
 /// The frame both rows share — and a service view's Publish band — the panel surface, a hairline, 12 pt either side.
 pub(crate) fn frame(style: &egui::Style) -> egui::Frame {
     egui::Frame::side_top_panel(style).inner_margin(egui::Margin {
@@ -93,12 +96,16 @@ fn plan_library(app: &RustroomApp, ui: &egui::Ui, avail: f32) -> Shown {
     } else {
         0.0
     };
-    let sort_full = text_w(
+    // ⚠ egui never draws a combo narrower than `combo_width` (100 pt): counted at 56, the compact form left the row
+    // 44 pt short and the update notice out (2026-11-24).
+    let combo = ui.spacing().combo_width;
+    let sort_full = (text_w(
         ui,
         &format!("{} {}", icons::SORT, app.settings.library_sort.label()),
         &body,
     ) + pad
-        + 24.0;
+        + 24.0)
+        .max(combo);
     let items = [
         Item {
             priority: 40,
@@ -115,7 +122,7 @@ fn plan_library(app: &RustroomApp, ui: &egui::Ui, avail: f32) -> Shown {
         Item {
             priority: 80,
             full: sort_full,
-            compact: Some(pad + 40.0),
+            compact: Some((pad + 40.0).max(combo)),
             hideable: false,
         },
         Item {
@@ -161,7 +168,9 @@ fn chip_labels(app: &RustroomApp) -> Vec<String> {
 pub(crate) fn library_row(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let row = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), HEIGHT));
     // Piece 4: a pending update notice asks for its room, so the chips go into ⋯ before it is left out.
-    let left = crate::update_flow::wanted_room(app, ui).map_or(STATUS_MIN, |n| n.max(STATUS_MIN));
+    // ⚠ With the gap before the cluster counted: without it the notice missed its room by 3 pt at 840 (2026-11-24).
+    let left = crate::update_flow::wanted_room(app, ui)
+        .map_or(STATUS_MIN, |n| (n + CLUSTER_GAP).max(STATUS_MIN));
     let shown = plan_library(app, ui, (row.width() - left).max(0.0));
     let has_library = app.library.is_some();
     // ── the right-hand cluster, rightmost first ──
@@ -189,7 +198,7 @@ pub(crate) fn library_row(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::
         )
         .inner;
     let right = if cluster.is_finite() {
-        cluster - 12.0
+        cluster - CLUSTER_GAP
     } else {
         row.right()
     };
@@ -868,6 +877,61 @@ mod tests {
         assert!(
             made_room.is_some(),
             "no width where the chips gave way to the notice"
+        );
+    }
+
+    /// The notice is left out only once nothing else in the row can give way — swept over widths with the author's
+    /// three formats. ⚠ The planner had counted the compact sort combo at 56 pt where egui draws it at its
+    /// `combo_width`, 100, so in his window the chips stayed and the notice went.
+    #[test]
+    fn the_notice_is_left_out_only_when_nothing_else_can_give_way() {
+        if !rustroom_app::update_check::may_check(true) {
+            return;
+        }
+        let names: Vec<String> = (0..10)
+            .map(|i| match i {
+                0 => "a0.HEIC".to_owned(),
+                1..=6 => format!("b{i}.JPG"),
+                _ => format!("c{i}.RAF"),
+            })
+            .collect();
+        let draw = |width: f32| {
+            let ctx = crate::test_ui::ctx();
+            crate::theme::apply(&ctx, &rustroom_app::settings::Settings::default());
+            let mut app = crate::test_app::for_test();
+            app.library = Some(crate::test_app::library_of_names(
+                &names.iter().map(String::as_str).collect::<Vec<_>>(),
+            ));
+            app.status = "10 photos".to_owned();
+            app.settings.update_latest = Some("10.10.10".into());
+            crate::test_ui::labelled_rects_on(
+                &ctx,
+                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 400.0)),
+                |ui| {
+                    let ctx = ui.ctx().clone();
+                    library_row(&mut app, ui, &ctx);
+                },
+            )
+        };
+        let wide = draw(1440.0);
+        assert!(
+            wide.iter().any(|(l, _)| l == "HEIC 1"),
+            "fixture check: the chips are drawn: {wide:?}"
+        );
+        let mut seen_out = false;
+        for width in (440..=1200).step_by(4).map(|w| w as f32) {
+            let found = draw(width);
+            if !found.iter().any(|(l, _)| l.starts_with("Rustroom ")) {
+                seen_out = true;
+                assert!(
+                    !found.iter().any(|(l, _)| l == "HEIC 1"),
+                    "at {width} the chips stayed and the notice went: {found:?}"
+                );
+            }
+        }
+        assert!(
+            seen_out,
+            "fixture check: the sweep reaches widths too narrow for it"
         );
     }
 
