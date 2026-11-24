@@ -220,7 +220,7 @@ Draft reasons for the restricted capabilities:
   a classic desktop app. It is open source (GPL-3.0-or-later): https://github.com/wladiKrin/rustroom
 - **unvirtualizedResources** — Rustroom keeps the user's catalog (a database of their photo library with every edit,
   rating, keyword and collection) and its previews in `%LOCALAPPDATA%\rustroom`, and its settings and presets in
-  `%APPDATA%\rustroom`. The same app is installed by its installer, winget and Chocolatey, and users move between
-  them. Virtualized, the Store version would start with an empty catalog, and uninstalling it would delete the
+  `%APPDATA%\rustroom`. The same app is also distributed as an ordinary installer, and users move between the
+  two. Virtualized, the Store version would start with an empty catalog, and uninstalling it would delete the
   user's catalog and years of edits with it. The package excludes exactly those two folders from virtualization
   (flexible virtualization's `ExcludedDirectories`) and nothing else.
