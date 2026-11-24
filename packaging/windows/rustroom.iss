@@ -1,6 +1,6 @@
 ; Rustroom's Windows installer (v0.1, piece 3a) — compiled by packaging\windows\build.ps1, which passes /DVersion,
 ; /DStage (the folder holding Rustroom.exe and the licences) and /DOutput. Per user: no admin prompt, installed into
-; %LOCALAPPDATA%\Programs\Rustroom. Uninstalling never touches the catalog, previews or settings (%LOCALAPPDATA%\rustroom,
+; %LOCALAPPDATA%\Programs\Rustroom — or, with /ALLUSERS (Chocolatey's), into Program Files. Uninstalling never touches the catalog, previews or settings (%LOCALAPPDATA%\rustroom,
 ; %APPDATA%\rustroom) — they are not in {app}.
 ;
 ; ⚠⚠ AppId is FIXED FOREVER: an upgrade finds the earlier install by it, and a new one would orphan every install made.
@@ -27,6 +27,11 @@ VersionInfoVersion={#Version}
 DefaultDirName={autopf}\Rustroom
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
+; Piece 4 goal 3: Chocolatey runs elevated, often as another account, so it passes /ALLUSERS and installs into Program
+; Files (administrative mode, {autopf} = {commonpf}). Without a switch Setup stays per user and asks for no admin, as
+; before. Only the command line may override — never a dialog in front of everyone — so UsePreviousPrivileges stays
+; inert: a double-click beside a Chocolatey install adds a per-user copy; `choco upgrade` is how that one is updated.
+PrivilegesRequiredOverridesAllowed=commandline
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
