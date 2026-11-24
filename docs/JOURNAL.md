@@ -193,6 +193,35 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-24 — piece 4 goal 1: the update notice (branch `update-notice`)
+
+✅ **Merged 2026-11-24** (`474db1ba`, the author: "works, merge"), seen in his half-screen window. Design
+`docs/superpowers/specs/2026-11-23-v0.1-piece4-updates-and-stores-design.md`, plan `docs/superpowers/plans/2026-11-23-update-notice.md`;
+goals 2–3 continue on the Windows PC from `2026-11-23-handoff-from-arch.md`.
+
+- **What it does:** once a day at launch `rustroom_app::update_check` asks GitHub's `releases/latest` (ureq, 10 s, 1 MiB)
+  and keeps only a version; the status row then shows "Rustroom x.y.z is available" (a click opens the release page,
+  derived from the version, never the reply's `html_url`), **Hide** (this run only) and **Don't show again** (turns
+  Settings → Behaviour's **Check for new versions** off). Compiled off by `RUSTROOM_NO_UPDATE_CHECK`, silent in a
+  Flatpak; a failed check counts as a check. Seen live against GitHub (found 0.1.0, no line) and with a faked 9.9.9.
+- **The author's changes after seeing it:** Hide was a saved per-version dismissal → session-only plus Don't show again
+  (`update_dismissed` dropped; a file carrying it still loads); the buttons Caption-sized (⚠ egui 0.35's
+  `small_button` keeps BODY text — only the vertical padding goes); the format chips give way to the notice; the size
+  slider 20 pt thick (smaller knob); the compact sort combo just its glyph and arrow (`ComboBox::width(0)`, it was an
+  empty 100-pt box); the sort name in Caption; the more menu's dots upright (`icons::MORE` U+E208 — Phosphor's TTF has
+  no glyph names, so the codepoint was found by rendering E1FE–E20B).
+- ⚠⚠ **The status row's planner had not measured what it drew** — the compact sort combo counted 56 pt where egui
+  drew `combo_width` (100), and the 12-pt gap before the cluster not counted, so in the author's window the chips stayed
+  and the notice was left out. `the_notice_is_left_out_only_when_nothing_else_can_give_way` sweeps 440–1200 pt with his
+  three formats; it failed at 800, then at 840 after the first fix.
+- ⚠ **A width test on a SHORT status proves nothing:** "12 photos" is 49 pt wide with nothing beside it, so "the status
+  keeps ≥ 120 pt" read as squeezed at every width once swept. The sweep uses a status longer than the room kept.
+- Review (a fresh reviewer before the author's changes): an off build failed 3 lib tests, the notice squeezed the status
+  to 11 pt, Hide sat left of the line in Develop — each fixed RED→GREEN. Deferred minors: `/.flatpak-info` stat'd every
+  frame; a Flatpak built without the variable shows a switch that does nothing; `the_pump_never_blocks` would hang
+  rather than fail; the README's new line overruns its wrap.
+- Gate on `main` after the merge: 4,817 passed, 0 failed, 32 ignored.
+
 ### 2026-11-20 — Going public: the history rewritten once, a new `wladiKrin/rustroom`, public
 
 ✅ **Public 2026-11-20**, the author's flip; `v0.1.0` re-released from the new repository (Release run `44782588786`,

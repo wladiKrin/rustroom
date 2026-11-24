@@ -2020,7 +2020,7 @@ the keychain's password prompt after every update (the Team ID; M10.15a). Not a 
 Homebrew's main casks (notarised apps only since September 2026), telling users to `xattr -dr com.apple.quarantine`.
 ⛔ **Declined at piece 4 by the author (2026-11-23): "I don't want to pay, let's only do the free stuff"** — the Mac
 stays unsigned. Piece 4 is the free routes (`docs/superpowers/specs/2026-11-23-v0.1-piece4-updates-and-stores-design.md`):
-the update notice (goal 1), the Microsoft Store, winget and Chocolatey (goals 2–3, on the Windows PC), Flathub's side
+the update notice (goal 1 ✅ merged 2026-11-24, `grep -n 'the update notice (branch' docs/JOURNAL.md`), the Microsoft Store, winget and Chocolatey (goals 2–3, on the Windows PC), Flathub's side
 of the author's own submission (goal 4).
 
 **Gaps found while writing the README (2026-11-16), for v0.1 — ✅ both closed 2026-11-17 (`v0.1-gaps`):**
