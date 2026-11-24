@@ -36,7 +36,7 @@ pub struct TestDir(pub std::path::PathBuf);
 
 impl TestDir {
     pub fn new(tag: &str) -> Self {
-        user_cache_away();
+        user_folders_away();
         Self(test_dir::path(&format!("testapp-{tag}")))
     }
 }
@@ -44,8 +44,12 @@ impl TestDir {
 /// ⚠⚠ Every per-user cache path of this process — Immich's downloads and lists, the map's tiles — into a test folder
 /// (`rustroom_app::user_cache`), before any test can derive one: a test app once created
 /// `<cache>/rustroom/immich/https___example_invalid` in the author's own cache (2026-11-18).
-fn user_cache_away() {
+///
+/// ⚠⚠ And the library folder's thumbnails and previews (`rustroom_app::user_library`): a test that opened a folder
+/// of real photos left their thumbnails in the author's own `thumbs` on every full run (2026-11-24).
+fn user_folders_away() {
     rustroom_app::user_cache::redirect_for_tests(|| test_dir::path("user-cache"));
+    rustroom_app::user_library::redirect_for_tests(|| test_dir::path("user-library"));
 }
 
 impl Drop for TestDir {
@@ -384,6 +388,8 @@ pub fn library_of(n: usize) -> Library {
 /// ⚠ The entries are grouped by `stack::group` with stacking **on**, which is the default, so a
 /// fixture naming a pair behaves as the real Library does.
 pub fn library_of_names(names: &[&str]) -> Library {
+    // ⚠ Its `ThumbLoader` derives the thumbnail store's folder, and a test may build this without `for_test`.
+    user_folders_away();
     let scan: Vec<catalog::CatalogEntry> = names
         .iter()
         .map(|n| catalog::CatalogEntry {
@@ -477,4 +483,39 @@ pub fn fake_decode() -> std::sync::Arc<Decoded> {
         profile: Default::default(),
         scene_referred: true,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    /// ⚠⚠ The app's tests derive the thumbnail and preview folders inside the run's test folder — `test_dir`'s,
+    /// asserted on the paths the stores derive once a test app exists (`AGENTS.md`: never an absolute path of the
+    /// host's). Two tests that open a folder of real photos had left six thumbnails in the author's own `thumbs` on
+    /// every full run (2026-11-24). The cache's twin is `immich_flow`'s `the_test_apps_immich_cache_is_in_the_test_folder`.
+    #[test]
+    fn a_test_apps_thumbnails_and_previews_stay_inside_the_test_folder() {
+        let _app = super::for_test();
+        let run = test_dir::path("probe");
+        let run = run
+            .parent()
+            .expect("a test folder sits in its run's folder");
+        let derived = [
+            rustroom_app::thumb_store::ThumbStore::user_default(u64::MAX)
+                .dir()
+                .to_path_buf(),
+            rustroom_app::thumb_store::ThumbStore::immich_default(u64::MAX)
+                .dir()
+                .to_path_buf(),
+            rustroom_app::preview_store::PreviewStore::user_default(u64::MAX)
+                .dir()
+                .to_path_buf(),
+        ];
+        for path in &derived {
+            assert!(
+                path.starts_with(run),
+                "{} is outside {}",
+                path.display(),
+                run.display()
+            );
+        }
+    }
 }

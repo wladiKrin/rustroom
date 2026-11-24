@@ -157,6 +157,7 @@ pub mod tool;
 pub mod unique;
 pub mod update_check;
 pub mod user_cache;
+pub mod user_library;
 pub mod view_region;
 pub mod visualize;
 pub mod watermark_store;

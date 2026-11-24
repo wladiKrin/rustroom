@@ -207,9 +207,10 @@ impl ThumbStore {
         }
     }
 
-    /// `thumbs/` beside the catalog, in `catalog::db::Catalog::library_dir` — Local AppData on Windows.
+    /// `thumbs/` beside the catalog, in `catalog::db::Catalog::library_dir` — Local AppData on Windows. ⚠ Through
+    /// [`crate::user_library::dir`], so a test process never writes into the user's own cache.
     fn user_dir() -> PathBuf {
-        catalog::db::Catalog::library_dir().join("thumbs")
+        crate::user_library::dir().join("thumbs")
     }
 
     /// The local thumbnail cache.

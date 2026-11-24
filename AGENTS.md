@@ -156,6 +156,9 @@ Only what stays true after a milestone closes belongs here; each story is in `do
   swept by the next run)** — unique per test and per run under `rustroom-tests/<pid>/`. A sweep in
   `test-dir` fails on `env::temp_dir()` anywhere else; the export staging directory is the one allowed
   site. Two gates at once are safe since M10.7c (on the old code they failed *and* hung).
+  ⚠⚠ A per-user folder is reached only through `user_cache::base` (caches) or `user_library::dir` (thumbnails,
+  previews), which a test process points into a test folder — the lib's tests by themselves, the bin's in `test_app`;
+  tests had written into the author's own cache and `thumbs` (2026-11-18, 2026-11-24).
 - ⚠⚠ **A test that waits for a background job waits on the EVENT, under a long ceiling (120 s) against a hang —
   never a fixed time budget.** The denoise worker's 1 s and 6 s budgets lost the race on a loaded full gate and
   failed `main` twice (fixed 2026-10-22, `denoise_worker.rs`'s `LONG` and its `Held` network, which holds a tile
