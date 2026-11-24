@@ -72,6 +72,11 @@ flate2 = "1.1"
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
 
+# Piece 4 goal 2: the Store package's identity (`GetCurrentPackageFullName`) silences the update notice — see
+# `update_check::updated_elsewhere`. Already in the tree (`cargo tree -i windows-sys@0.61.2`), so no new crate.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_Packaging_Appx"] }
+
 # ⚠ macOS only, on purpose: muda's Linux backend needs GTK, which eframe/winit does not
 # provide. Linux CI therefore never builds it — see `native_menu.rs`.
 [target.'cfg(target_os = "macos")'.dependencies]

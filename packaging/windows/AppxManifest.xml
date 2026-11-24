@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Rustroom's Store package (piece 4 goal 2) - a template filled in by packaging\windows\msix.ps1, which replaces each
+  @NAME@-style placeholder. The identity is what Partner Center assigned when the name was reserved, never invented.
+
+  ⚠⚠ The two excluded directories are the point of this file: an MSIX app's NEW files under %APPDATA% and
+  %LOCALAPPDATA% otherwise go to a per-package folder that an uninstall deletes, so the Store build would start with an
+  empty catalog and take it away again. Excluded, it opens the same catalog, previews and settings as the installer
+  build, and an uninstall leaves them. That needs the restricted capability unvirtualizedResources (the author's call,
+  2026-11-24, knowing certification may refuse it) and Windows 11: older systems ignore these declarations, hence
+  MinVersion 10.0.22000.0. Every file Rustroom keeps is under one of the two: `dirs::config_dir()` (Roaming) or
+  `dirs::data_local_dir()` / `dirs::cache_dir()` (both Local on Windows), each joined with "rustroom" - checked
+  2026-11-24 at every `dirs::` call site; a new one outside them would be virtualized again.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:virtualization="http://schemas.microsoft.com/appx/manifest/virtualization/windows10"
+  IgnorableNamespaces="uap rescap virtualization">
+
+  <Identity Name="@NAME@" Publisher="@PUBLISHER@" Version="@VERSION@" ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Rustroom</DisplayName>
+    <PublisherDisplayName>@PUBLISHER_DISPLAY_NAME@</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <virtualization:FileSystemWriteVirtualization>
+      <virtualization:ExcludedDirectories>
+        <virtualization:ExcludedDirectory>$(KnownFolder:RoamingAppData)\rustroom</virtualization:ExcludedDirectory>
+        <virtualization:ExcludedDirectory>$(KnownFolder:LocalAppData)\rustroom</virtualization:ExcludedDirectory>
+      </virtualization:ExcludedDirectories>
+    </virtualization:FileSystemWriteVirtualization>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22000.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="Rustroom" Executable="Rustroom.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Rustroom"
+        Description="Sort, edit and export your RAW photos"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
+  </Capabilities>
+</Package>

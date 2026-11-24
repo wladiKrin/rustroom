@@ -56,6 +56,20 @@ jobs:
           name: windows
           path: target/installer/Rustroom-*-windows-x64-setup.exe
           if-no-files-found: error
+      # Piece 4 goal 2: the Store's package from the installer's own stage, for the author to upload to Partner Center
+      # — an artifact only, never a release asset (the release job takes the three named artifacts). Until he sets the
+      # identity Partner Center gave him as repository variables, the script says so and makes nothing.
+      - name: Build the Store package
+        env:
+          RUSTROOM_MSIX_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
+          RUSTROOM_MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+          RUSTROOM_MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
+        run: ./packaging/windows/msix.ps1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-store
+          path: target/msix/Rustroom-*-windows-x64.msix
+          if-no-files-found: ignore
 
   macos:
     # v0.1 (piece 3b): Apple Silicon, built from Homebrew's macOS 15 libraries — the app's floor. `--floor 15.0` fails
@@ -109,10 +123,22 @@ jobs:
     permissions:
       contents: write
     steps:
+      # ⚠ By name, never every artifact of the run: `windows-store` is the Store's package, uploaded by hand, never a
+      # release asset nor in SHA256SUMS.
       - uses: actions/download-artifact@v8
         with:
+          name: windows
           path: dist
-          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: macos
+          path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux
+          path: dist
+      - name: No Store package among the assets
+        run: test -z "$(find dist -iname '*.msix')"
       - name: Draft the release
         env:
           GH_TOKEN: ${{ github.token }}

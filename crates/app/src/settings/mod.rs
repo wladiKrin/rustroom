@@ -502,7 +502,7 @@ pub struct Settings {
     /// (`SettingsStore`), so nobody's choice is overridden.
     pub display_auto: bool,
     /// Settings → Behaviour's **Check for new versions** (piece 4): on by default — the author's call. Read through
-    /// `update_check::may_check`, which also honours a build compiled without the check and a Flatpak.
+    /// `update_check::may_check`, which also honours a build compiled without the check, a Flatpak and the Store.
     pub check_updates: bool,
     /// When the last update check FINISHED, in Unix seconds; `0` = never. A failed check counts too, so an offline
     /// machine is not asked again at every launch.
