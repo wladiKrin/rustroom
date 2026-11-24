@@ -193,6 +193,19 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-24 — The push: no home path, the unpushed chain rebuilt; `PRIVACY.md`; the hand-off
+
+- ⚠⚠ **The pre-push scan found a home path in ONE commit** — the library-folder fix's journal entry quoted the folder
+  its sabotaged test printed, with the author's Windows user folder in it. A later commit had replaced the line, so the
+  NET diff was clean, but the first commit would still have published it. Nothing was pushed yet: the three commits
+  from that entry on were rebuilt with the line corrected (plumbing — `git commit-tree`, same authors, dates and
+  messages; the final tree byte-identical), the fix-up commit dropped. ⚠ The earlier branch scans had a second hole: a
+  regex for a backslashed path is easy to get wrong — **scan with fixed strings, commit by commit**.
+- **`PRIVACY.md` committed** — the author approved its text ("Approve it as is").
+- `main` pushed at the author's word (`0f7c7324`, gate 4,816 passed on that tip); the hand-off for the next machine is
+  `docs/superpowers/specs/2026-11-24-handoff-from-windows.md` — the stores need no Windows PC from here, but for
+  winget's first `wingetcreate submit` and an optional certification-kit run.
+
 ### 2026-11-24 — piece 4 goal 3: winget and Chocolatey (branch `winget-choco`)
 
 ✅ **Merged 2026-11-24** (`b549931a`, the author: "Merge all three"), on the Windows PC. Plan
