@@ -190,6 +190,10 @@ For the maintainer. A tag `v<version>`, equal to the app crate's version, runs t
 Windows installer, the Mac disk image and the AppImage, each with its own script under `packaging/`, and drafts a
 GitHub release with them and `SHA256SUMS`. The draft is published by hand.
 
+Publishing it starts `.github/workflows/publish.yml`, which hands the Windows installer to winget and Chocolatey
+once their secrets exist — the first listing of each is by hand: `packaging/winget/README.md`,
+`packaging/chocolatey/README.md`.
+
 ### The Microsoft Store
 
 The Store's package is an artifact of the same run, `windows-store`, never a release asset: the Store signs it, and

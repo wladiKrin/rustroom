@@ -193,9 +193,75 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
+### 2026-11-24 — piece 4 goal 3: winget and Chocolatey (branch `winget-choco`)
+
+✅ **Merged 2026-11-24** (`b549931a`, the author: "Merge all three"), on the Windows PC. Plan
+`docs/superpowers/plans/2026-11-24-winget-choco.md` (its *Local tests* hold the details).
+
+- **What it does:** the installer takes `/ALLUSERS` on its command line (`PrivilegesRequiredOverridesAllowed=commandline`)
+  and installs into Program Files — Chocolatey runs elevated, often as another account; a double-click stays per user
+  with no prompt, the `AppId` unchanged. `packaging/chocolatey/` (id `rustroom`, free) downloads the release's installer,
+  checks its SHA-256 and runs it `/ALLUSERS`; `pack.ps1` fills it per release, reading the checksum from the release's
+  `SHA256SUMS`. `packaging/winget/` (id `wladiKrin.Rustroom`, free) holds the three manifests (schema 1.12.0, `inno`,
+  user scope, `ProductCode` = AppId + `_is1`), rendered per release by `manifest.ps1` for `winget validate` and the
+  author's first `wingetcreate submit`. `.github/workflows/publish.yml` on `release: published` (or by hand with a tag)
+  checks the installer against `SHA256SUMS`, then `wingetcreate update --submit` and `choco push` — each job says so and
+  does nothing until its secret (`WINGET_TOKEN`, `CHOCOLATEY_API_KEY`) exists. The maintainer's steps are in the two
+  READMEs beside the packages.
+- **Seen on the PC (the author's yes):** `winget validate` passed on `v0.1.0` and failed a sabotaged copy; a silent run
+  with no switch from a normal shell logged "Administrative install mode: No" and upgraded his per-user install in
+  place; `choco install` from the packed folder made the HKLM entry, `C:\Program Files\Rustroom` and the all-users Start
+  menu entry, and `choco uninstall` removed them, his per-user copy and catalog untouched.
+- ⚠⚠ **Inno names the all-users entry "Rustroom (All users)"** (a per-user one stays "Rustroom") — found only by the
+  local install: the first uninstall script matched the name "Rustroom", found only his HKCU copy, refused it (the HKLM
+  filter held), and Chocolatey's auto-uninstaller did the work. The script now opens the HKLM key by its fixed name.
+- ⚠ **`v0.1.0`'s installer predates `/ALLUSERS`** — the first Chocolatey package is the next release's (the workflow
+  skips 0.1.0); winget can list 0.1.0. `UsePreviousPrivileges` stays inert with `commandline` only: a double-click on a
+  machine with a Chocolatey install adds a per-user copy (accepted — `choco upgrade` updates that one).
+- Not run: the workflow on GitHub, `wingetcreate`, a real push. Gate on the tip (`2ea19b15`): 4,813 passed.
+
+### 2026-11-24 — piece 4 goal 2: the Microsoft Store package (branch `store-msix`)
+
+✅ **Merged 2026-11-24** (`460e0a8e`, the author: "Merge all three"), on the Windows PC. Plan
+`docs/superpowers/plans/2026-11-24-store-msix.md` (its proof section holds the details).
+
+- ⚠⚠ **The data question went to the author, as the hand-off said it must:** an MSIX app's NEW files under AppData go to
+  a per-package folder its uninstall deletes, and only the restricted capability `unvirtualizedResources` writes the real
+  ones — which Microsoft lists for "certain types of desktop PC games", with developers reporting refusals. Offered:
+  park the Store, move the data out of AppData (~28 `dirs::` call sites and a migration), or try it. **He chose to try
+  it.** Flexible virtualization's `ExcludedDirectories` — exactly `%APPDATA%\rustroom` and `%LOCALAPPDATA%\rustroom` —
+  which needs **Windows 11** (`MinVersion 10.0.22000.0`; older systems ignore it and would give the package its own
+  catalog). If certification refuses it, the question returns to him.
+- **What it does:** `packaging/windows/msix.ps1` wraps the installer's own stage (`build.ps1`'s — the same bytes) in a
+  full-trust MSIX from `AppxManifest.xml`, with 25 logos rendered by `render.py` (`packaging/icons/msix/`) and a
+  `makepri` index; unsigned for the Store, `-Test` signs a fake identity with a throwaway certificate in `target\msix`.
+  The release workflow builds it as the `windows-store` artifact once the author's three identity variables exist.
+  `update_check::updated_elsewhere` asks `GetCurrentPackageFullName` (`windows-sys` 0.61, already in the tree) — the
+  Store build shows no update line, and `switch_shown()` hides Settings → Behaviour's switch there and in a Flatpak.
+  `CONTRIBUTING.md` §6 holds the first submission's checklist and draft reasons for both capabilities.
+- **The shared-catalog proof (with the author's yes and his UAC clicks):** the stage's and the package's exes were
+  byte-identical. With `update_latest: "9.9.9"` written into the shared settings, the unpackaged exe showed the line and
+  the packaged exe did not; the packaged exe opened his catalog (495 photos) and reached Immich with the keys in
+  Credential Manager; new files made from inside the package (`Invoke-CommandInDesktopPackage`) in both Rustroom
+  folders landed in the REAL ones while a control in a non-excluded folder went to the package's `LocalCache`;
+  uninstalling left every file, `catalog.db` byte-identical to the backup taken first.
+- ⚠⚠ **The release job took EVERY artifact into the release** (`download-artifact` with `merge-multiple` and no name)
+  — a Store package would have been published beside the installer. It now downloads the three by name and fails on
+  any `.msix` in `dist`.
+- ⚠ **Edits of EXISTING files pass through virtualization regardless** — the thumbnails the Store build rewrote proved
+  nothing about the exclusions; only new files do, hence the probe with a control.
+- ⚠ A sabotage restored with `git checkout <file>` would have discarded the uncommitted probe itself (the auto-mode
+  classifier refused the command): commit first, sabotage and restore by edit. The probe's test asserts the raw code is
+  exactly 15700; inverting the comparison turned it red.
+- ⚠ `PRIVACY.md` is drafted and NOT committed — it waits for the author's approval of its text. Checked against the code,
+  the first draft was wrong twice: Immich and the model downloads send ureq's own User-Agent, not Rustroom's, and the
+  Immich keys fall back to the settings file when the credential store refuses them.
+- Not seen: the switch's absence in the package, `msix.ps1` under PowerShell 7 (CI's), the Store's certification.
+  Gates: the fresh clone 4,813 passed (Windows; tethering is off here); the branch tip 4,814.
+
 ### 2026-11-24 — No test writes into the user's own thumbnails or previews (branch `fix-test-library-folder`)
 
-⏳ **Not merged yet.** Found on Windows: each full `cargo test --workspace` left six new `.rthm` files in the author's
+✅ **Merged 2026-11-24** (`ce0c223a`, the author: "Merge all three"). Found on Windows: each full `cargo test --workspace` left six new `.rthm` files in the author's
 `%LOCALAPPDATA%\rustroom\thumbs` with Rustroom closed. 2026-11-18's fix moved only `user_cache::base`; this leak went
 through `Catalog::library_dir()`, which had no test redirect. ⚠ The same derivation on macOS and Linux
 (`<config dir>/rustroom/thumbs`), so it most likely happens there too.
