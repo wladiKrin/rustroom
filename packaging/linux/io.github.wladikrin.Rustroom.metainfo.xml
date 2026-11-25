@@ -28,6 +28,11 @@
   </categories>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.1" date="2026-11-24">
+      <description>
+        <p>Rustroom now tells you when a newer version is out, in the status bar. Hide it for this run, or turn the check off for good with Don't show again or in Settings, Behaviour. The status bar's controls fit a narrow window better.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-11-18"/>
   </releases>
 </component>
