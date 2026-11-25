@@ -214,6 +214,13 @@ measured, what it retracted, and which sabotages its tests failed to catch.
   outran. Fixed on Arch (`fix-removal-worker-wait`): `wait` stops at the `n`-th result under a 120-s `LONG`, as every
   other worker's tests do. The sabotage (the factory sleeping 11 s) failed the old helper at 10.03 s and passes the new
   at 11.21 s; gate 4,820 passed.
+- **`v0.1.1` prepared and merged on Arch (2026-11-25, "merge and push")** — the app crate 0.1.1 (the tag must equal it),
+  the AppStream `<release>` dated the tag's day, the bug form's example; the other crates stay 0.1.0 (only the app's
+  version is checked). The release notes and the Store listing were drafted outside the repository for the author.
+  Before the tag: the author's Partner Center identity in the three `MSIX_*` repository variables, `CHOCOLATEY_API_KEY`
+  a secret (⚠ first entered as a VARIABLE — readable in plain text and not read by `publish.yml`; regenerated and moved),
+  winget's first listing `v0.1.0` submitted from the browser (microsoft/winget-pkgs#489500, validation passed, awaiting a
+  moderator; `WINGET_TOKEN` only after it merges — the manifests rendered on Linux by `sed`, as `manifest.ps1` does).
 - `main` pushed at the author's word (`0f7c7324`, gate 4,816 passed on that tip); the hand-off for the next machine is
   `docs/superpowers/specs/2026-11-24-handoff-from-windows.md` — the stores need no Windows PC from here, but for
   winget's first `wingetcreate submit` and an optional certification-kit run.
