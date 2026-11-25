@@ -209,6 +209,11 @@ measured, what it retracted, and which sabotages its tests failed to catch.
   `== 3` where it was `<= 5`. Proven three ways: 100 runs beside three full copies of the app's lib suite, 0 failed —
   the OLD test under that same load failed 3 of 100 ("7 loads started"), so the stress does reproduce it; and the
   sabotage (`want` no longer clears the list) fails it at 201 loads.
+- ⚠ **And CI on `0f7c7324` failed once** — `removal_worker`'s `a_network_that_does_not_load_fails_with_its_reason`
+  read 0 of its 2 failures: the tests' `wait` gave up after a fixed 10 s, a budget a loaded runner's 113-s lib suite
+  outran. Fixed on Arch (`fix-removal-worker-wait`): `wait` stops at the `n`-th result under a 120-s `LONG`, as every
+  other worker's tests do. The sabotage (the factory sleeping 11 s) failed the old helper at 10.03 s and passes the new
+  at 11.21 s; gate 4,820 passed.
 - `main` pushed at the author's word (`0f7c7324`, gate 4,816 passed on that tip); the hand-off for the next machine is
   `docs/superpowers/specs/2026-11-24-handoff-from-windows.md` — the stores need no Windows PC from here, but for
   winget's first `wingetcreate submit` and an optional certification-kit run.

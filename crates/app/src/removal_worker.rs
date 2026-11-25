@@ -190,11 +190,14 @@ mod tests {
         ))
     }
 
-    /// Every result there is within ten seconds.
+    /// A ceiling against a hang, never a time budget — ten seconds lost the race on a loaded CI runner (2026-11-24).
+    const LONG: std::time::Duration = std::time::Duration::from_secs(120);
+
+    /// The first `n` results, waited for up to [`LONG`].
     fn wait(w: &RemovalWorker, n: usize) -> Vec<RemovalResult> {
         let mut got = Vec::new();
         let start = std::time::Instant::now();
-        while got.len() < n && start.elapsed() < std::time::Duration::from_secs(10) {
+        while got.len() < n && start.elapsed() < LONG {
             got.extend(w.poll());
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
